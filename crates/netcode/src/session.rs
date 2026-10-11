@@ -24,13 +24,7 @@ pub struct Session {
 
 impl Session {
     pub fn new(world: World, content: ContentManifest) -> Result<Self, String> {
-        let id: content::ContentId = content
-            .map_id
-            .parse()
-            .map_err(|e| format!("invalid map content id: {e}"))?;
-        if id.kind != content::ContentKind::Map {
-            return Err("content id is not a map".into());
-        }
+        content.validate()?;
         if !sim::TICK_RATE_RANGE.contains(&world.tick_rate) {
             return Err("unsupported tick rate".into());
         }
@@ -69,7 +63,10 @@ impl Session {
             return reject("incompatible protocol version");
         }
         if content != self.content {
-            return reject("map or weapon content differs from the server");
+            return ServerControl::ContentRequired {
+                version: VERSION,
+                content: self.content.clone(),
+            };
         }
         let name = name.trim();
         if name.is_empty() || name.len() > 64 || name.chars().any(char::is_control) {
@@ -78,6 +75,9 @@ impl Session {
         let player = match self.peers.get(&client) {
             Some(p) => p.player,
             None => {
+                if self.world.players.len() >= 64 {
+                    return reject("server player slots are full");
+                }
                 let player = self.world.add_player(name, team);
                 self.peers.insert(
                     client,
@@ -267,8 +267,8 @@ mod tests {
         ContentManifest {
             map_id: "csgo_map_test".into(),
             map_name: "test".into(),
-            map_hash: "map".into(),
-            catalog_hash: "catalog".into(),
+            map_hash: "0".repeat(40),
+            catalog_hash: "1".repeat(40),
         }
     }
     fn session() -> Session {
@@ -324,7 +324,10 @@ mod tests {
         if let ClientControl::Hello { content, .. } = &mut h {
             content.map_hash = "other".into();
         }
-        assert!(matches!(s.join(10, h), ServerControl::Rejected { .. }));
+        assert!(matches!(
+            s.join(10, h),
+            ServerControl::ContentRequired { .. }
+        ));
         assert!(s.input(10, InputBatch(vec![command(1)])).is_err());
         assert!(s.world.players.is_empty());
     }
@@ -341,6 +344,39 @@ mod tests {
         assert_eq!(s.snapshot_for(10).unwrap().acknowledged_input, 0);
         assert_eq!(s.snapshot_for(20).unwrap().acknowledged_input, 1);
         assert!(s.input(20, InputBatch(vec![command(5000)])).is_err());
+    }
+    #[test]
+    fn future_view_ticks_and_invalid_tracking_cannot_poison_the_world() {
+        let mut s = session();
+        s.join(10, hello());
+        let mut future = command(1);
+        future.view_tick = 1;
+        assert!(s.input(10, InputBatch(vec![future])).is_err());
+        let mut invalid = command(1);
+        invalid.input.tracked = Some(sim::TrackedPose {
+            head: sim::Pose {
+                position: glam::Vec3::ZERO,
+                rotation: glam::Quat::from_xyzw(1e30, 1e30, 1e30, 1e30),
+            },
+            ..Default::default()
+        });
+        assert!(s.input(10, InputBatch(vec![invalid])).is_err());
+        s.step();
+        assert_eq!(s.snapshot_for(10).unwrap().acknowledged_input, 0);
+        assert!(s.world.players[0].movement.origin.is_finite());
+    }
+    #[test]
+    fn input_backlog_is_bounded_and_a_stall_does_not_grant_extra_ticks() {
+        let mut s = session();
+        s.join(10, hello());
+        for start in (1..=64).step_by(8) {
+            s.input(10, InputBatch((start..start + 8).map(command).collect()))
+                .unwrap();
+        }
+        assert_eq!(s.peers[&10].pending.len(), MAX_PENDING);
+        s.step();
+        assert_eq!(s.world.tick, 1);
+        assert_eq!(s.snapshot_for(10).unwrap().acknowledged_input, 33);
     }
     #[test]
     fn stalled_input_stops_movement_and_disconnect_removes_ownership() {

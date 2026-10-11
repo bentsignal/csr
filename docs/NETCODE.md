@@ -14,6 +14,12 @@ send gameplay state. Admission checks the protocol version, the map's stable
 already have matching content. Required pack downloads are a later layer;
 there is no asset transfer in this protocol.
 
+A content mismatch returns typed `ContentRequired` metadata through
+`Client::required_content()`. Content ids, map filenames and hashes are
+validated, including rejection of host paths. The front end must resolve
+the id against its supported registry and perform a cancellable load before
+reconnecting. Receiving the manifest does not mount or download anything.
+
 The wire format is postcard. Channels are:
 
 | Channel | Delivery | Contents |
@@ -43,10 +49,22 @@ State messages omit events so a client cannot replay a shot when the next
 snapshot arrives. Clients discard stale state ticks and expose reliable
 events separately. Snapshot and channel queues have explicit memory limits;
 the full-state foundation is intentionally bandwidth-heavy until deltas land.
+Channels are directional: a client may send only control and input messages.
+Before exposing state, the client checks the assigned player, unique player
+ids, finite movement, entity limits, server tick rate and input acknowledgements.
 
 ## Transport choice
 
-We use pinned Renet 2.0.0 and renet_netcode 2.0.0. Renet supplies
+We use Renet 2.0.0 and renet_netcode 2.0.0 pinned to the owner fork revision
+`833a5deea2c22771db665fdf982b37b1ddbe484b`. The
+[verified integration patch](https://github.com/bentsignal/renet/pull/1)
+validates fragment indices/counts and allocation arithmetic, preserves the
+original MIT/Apache-2.0 notices, and adds bounded UDP polling. Each host
+update reads at most 1024 datagrams; each client reads at most 256. Pending
+hello slots expire after five seconds. Per-peer decoded message work and
+input queues are bounded. This is not a complete internet abuse/identity
+layer; bandwidth admission/rate limiting remains future host work.
+Renet supplies
 [reliable ordered and unreliable channels](https://docs.rs/renet/2.0.0/renet/struct.ChannelConfig.html)
 and message fragmentation independently of Bevy. Quinn provides
 [reliable streams and unreliable datagrams](https://quinn-rs.github.io/quinn/quinn/data-transfer.html),

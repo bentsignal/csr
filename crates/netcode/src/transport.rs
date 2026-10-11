@@ -38,6 +38,9 @@ impl Server {
         if max_clients == 0 || max_clients > 64 {
             return Err("max clients must be from 1 to 64".into());
         }
+        if session.world().players.len() + max_clients > 64 {
+            return Err("server supports at most 64 total player slots".into());
+        }
         let socket = UdpSocket::bind(address).map_err(|e| e.to_string())?;
         let actual = socket.local_addr().map_err(|e| e.to_string())?;
         let transport = NetcodeServerTransport::new(
@@ -77,7 +80,7 @@ impl Server {
         self.elapsed = self.elapsed.saturating_add(elapsed);
         self.connection.update(elapsed);
         self.transport
-            .update(elapsed, &mut self.connection)
+            .update_with_packet_limit(elapsed, &mut self.connection, 1024)
             .map_err(|e| e.to_string())?;
         while let Some(event) = self.connection.get_event() {
             match event {
@@ -188,6 +191,7 @@ pub struct Client {
     pending: VecDeque<InputCommand>,
     sequence: u64,
     latest_tick: Option<u64>,
+    latest_ack: u64,
     latest: Option<StateUpdate>,
     events: VecDeque<EventBatch>,
     failure: Option<String>,
@@ -201,6 +205,7 @@ impl Client {
         content: ContentManifest,
         catalog: Arc<weapons::Catalog>,
     ) -> Result<Self, String> {
+        content.validate()?;
         let bind = if server.is_ipv4() {
             "0.0.0.0:0"
         } else {
@@ -236,6 +241,7 @@ impl Client {
             pending: VecDeque::new(),
             sequence: 0,
             latest_tick: None,
+            latest_ack: 0,
             latest: None,
             events: VecDeque::new(),
             failure: None,
@@ -246,6 +252,14 @@ impl Client {
     }
     pub fn failure(&self) -> Option<&str> {
         self.failure.as_deref()
+    }
+    /// A validated metadata request. The front end checks its content registry
+    /// and loads supported content before reconnecting; this never mounts data.
+    pub fn required_content(&self) -> Option<&ContentManifest> {
+        match &self.welcome {
+            Some(ServerControl::ContentRequired { content, .. }) => Some(content),
+            _ => None,
+        }
     }
     pub fn player(&self) -> Option<sim::PlayerId> {
         match &self.welcome {
@@ -263,6 +277,9 @@ impl Client {
     /// One call per local simulation tick; batches repeat unacknowledged input
     /// so isolated lost datagrams do not lose jump/buy/drop commands.
     pub fn send_input(&mut self, input: TickInput, view_tick: u64) -> Result<u64, String> {
+        if let Some(reason) = &self.failure {
+            return Err(reason.clone());
+        }
         if self.player().is_none() {
             return Err("not admitted to match".into());
         }
@@ -296,7 +313,7 @@ impl Client {
     fn poll(&mut self, elapsed: Duration) -> Result<(), String> {
         self.connection.update(elapsed);
         self.transport
-            .update(elapsed, &mut self.connection)
+            .update_with_packet_limit(elapsed, &mut self.connection, 256)
             .map_err(|e| e.to_string())?;
         if self.connection.is_connected() && !self.sent_hello {
             self.connection.send_message(CONTROL, encode(&self.hello)?);
@@ -306,6 +323,14 @@ impl Client {
             let reply: ServerControl = decode(&bytes)?;
             match &reply {
                 ServerControl::Rejected { reason } => return Err(reason.clone()),
+                ServerControl::ContentRequired { version, content } => {
+                    if *version != VERSION {
+                        return Err("incompatible content request protocol".into());
+                    }
+                    content.validate()?;
+                    self.welcome = Some(reply);
+                    return Err("server requires different map or weapon content".into());
+                }
                 ServerControl::Welcome {
                     version,
                     content,
@@ -334,7 +359,14 @@ impl Client {
             {
                 continue;
             }
+            validate_state(
+                &state,
+                self.welcome.as_ref(),
+                self.sequence,
+                self.latest_ack,
+            )?;
             self.latest_tick = Some(state.snapshot.state.tick);
+            self.latest_ack = state.acknowledged_input;
             self.pending
                 .retain(|command| command.sequence > state.acknowledged_input);
             self.latest = Some(state);
@@ -360,6 +392,49 @@ impl Drop for Client {
     }
 }
 
+fn validate_state(
+    state: &StateUpdate,
+    welcome: Option<&ServerControl>,
+    sent: u64,
+    last_ack: u64,
+) -> Result<(), String> {
+    let Some(ServerControl::Welcome {
+        player, tick_rate, ..
+    }) = welcome
+    else {
+        return Err("state before admission".into());
+    };
+    let world = &state.snapshot.state;
+    if world.tick_rate != *tick_rate
+        || state.acknowledged_input > sent
+        || state.acknowledged_input < last_ack
+    {
+        return Err("invalid snapshot rate or input acknowledgement".into());
+    }
+    if world.players.len() > 64
+        || world.items.len() > 4096
+        || world.projectiles.len() > 4096
+        || world.utility_fields.len() > 4096
+    {
+        return Err("snapshot entity limit exceeded".into());
+    }
+    let mut ids = std::collections::HashSet::new();
+    for actor in &world.players {
+        if actor.id == 0
+            || !ids.insert(actor.id)
+            || !actor.movement.origin.is_finite()
+            || !actor.movement.velocity.is_finite()
+            || !actor.view_angles.is_finite()
+        {
+            return Err("invalid snapshot player state".into());
+        }
+    }
+    if *player == 0 || !ids.contains(player) {
+        return Err("snapshot omits assigned player".into());
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -368,9 +443,91 @@ mod tests {
         ContentManifest {
             map_id: "csgo_map_loopback".into(),
             map_name: "loopback".into(),
-            map_hash: "fixture".into(),
-            catalog_hash: "fixture".into(),
+            map_hash: "0".repeat(40),
+            catalog_hash: "1".repeat(40),
         }
+    }
+    #[test]
+    fn malformed_fragment_indices_and_inconsistent_counts_disconnect_without_panicking() {
+        let mut client = RenetClient::new(channels());
+        client.set_connected();
+        let mut packet = vec![3, 0, SNAPSHOT, 0, 2, 2, 0x44, 0xb0];
+        packet.extend([0; 1200]);
+        client.process_packet(&packet);
+        assert!(client.is_disconnected());
+        let mut client = RenetClient::new(channels());
+        client.set_connected();
+        let mut first = vec![2, 0, CONTROL, 0, 0, 2, 0x44, 0xb0];
+        first.extend([0; 1200]);
+        client.process_packet(&first);
+        assert!(!client.is_disconnected());
+        let mut changed = vec![2, 1, CONTROL, 0, 1, 3, 0x44, 0xb0];
+        changed.extend([0; 1200]);
+        client.process_packet(&changed);
+        assert!(client.is_disconnected());
+    }
+    #[test]
+    fn client_cannot_send_snapshot_or_event_channels_to_authority() {
+        for channel in [SNAPSHOT, EVENTS] {
+            let mut server = RenetServer::new(channels());
+            server.add_connection(7);
+            // Forged unreliable message on a server-to-client channel.
+            server
+                .process_packet_from(&[1, 0, channel, 0, 1, 1, 0], 7)
+                .unwrap();
+            assert!(!server.is_connected(7));
+        }
+    }
+    #[test]
+    fn snapshot_acknowledgements_and_ownership_are_validated_before_restore() {
+        let mut world = World::new(Arc::new(collision::CollisionWorld::new()));
+        let id = world.add_player("Player", Team::CounterTerrorist);
+        let welcome = ServerControl::Welcome {
+            version: VERSION,
+            player: id,
+            tick_rate: 128,
+            server_tick: 0,
+            content: manifest(),
+        };
+        let mut state = StateUpdate {
+            acknowledged_input: 1,
+            snapshot: world.snapshot(),
+        };
+        assert!(validate_state(&state, Some(&welcome), 1, 0).is_ok());
+        assert!(validate_state(&state, Some(&welcome), 0, 0).is_err());
+        state.snapshot.state.tick_rate = 0;
+        assert!(validate_state(&state, Some(&welcome), 1, 0).is_err());
+        state.snapshot.state.tick_rate = 128;
+        state.snapshot.state.players.clear();
+        assert!(validate_state(&state, Some(&welcome), 1, 0).is_err());
+    }
+    #[test]
+    fn udp_content_negotiation_reports_a_safe_manifest_without_admitting_a_player() {
+        let world = World::new(Arc::new(collision::CollisionWorld::new()));
+        let catalog = world.catalog.clone();
+        let session = Session::new(world, manifest()).unwrap();
+        let mut server = Server::bind("127.0.0.1:0".parse().unwrap(), session, 4).unwrap();
+        let mut different = manifest();
+        different.map_name = "other".into();
+        let mut client = Client::connect(
+            server.address(),
+            "Player".into(),
+            Team::CounterTerrorist,
+            different,
+            catalog,
+        )
+        .unwrap();
+        let dt = Duration::from_secs_f64(1. / 128.);
+        for _ in 0..128 {
+            if client.update(dt).is_err() {
+                break;
+            }
+            server.update(dt).unwrap();
+            std::thread::yield_now();
+        }
+        assert_eq!(client.required_content(), Some(&manifest()));
+        assert!(client.player().is_none());
+        assert!(server.session.world().players.is_empty());
     }
     #[test]
     fn reliable_control_and_events_survive_loss_and_do_not_replay() {

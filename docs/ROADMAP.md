@@ -26,8 +26,8 @@ Minecraft code need work before multiplayer and public releases.
 | `third_party/minecraftoss` + `minecraft_terrain` (~154k lines) | Ported from decompiled Minecraft, no licence files, hard dependency of `level` and `client`; release zip also bundled Minecraft assets | **Removed** (decision 1) |
 | VR | `TickInput` carries tracked head/hand poses and an aim ray; hitscan uses the aim ray. Cameras are still single-view | **Seam in place, build later** |
 
-Tests: 194 passing tests, with two installed-data tests ignored by default
-(sound-foundation verification, 2026-10-11), mostly on synthetic data.
+Tests: 213 passing tests, with two installed-data tests ignored by default
+(UDP-foundation verification, 2026-10-11), mostly on synthetic data.
 Real-data checks are the `csr probe` / `csr sim` commands.
 
 ## Phase 0: take ownership

@@ -4200,8 +4200,7 @@ checksum = "19b30a45b0cd0bcca8037f3d0dc3421eaf95327a17cad11964fb8179b4fc4832"
 [[package]]
 name = "renet"
 version = "2.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8535f2f4b5afe5e31fc37be4b8a1f167e61177f356b1c6ee8456b7045d6c74c0"
+source = "git+https://github.com/bentsignal/renet?rev=833a5deea2c22771db665fdf982b37b1ddbe484b#833a5deea2c22771db665fdf982b37b1ddbe484b"
 dependencies = [
  "bytes",
  "log",
@@ -4211,8 +4210,7 @@ dependencies = [
 [[package]]
 name = "renet_netcode"
 version = "2.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c9479f1355a92d5aa04a0339ad341878fa572492cb9be09db7b34954bdb13a30"
+source = "git+https://github.com/bentsignal/renet?rev=833a5deea2c22771db665fdf982b37b1ddbe484b#833a5deea2c22771db665fdf982b37b1ddbe484b"
 dependencies = [
  "log",
  "renet",
@@ -4222,8 +4220,7 @@ dependencies = [
 [[package]]
 name = "renetcode"
 version = "2.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "76bed9d6d190d20804b5645511932fef803145520ef4eb76d5e4b5a841980eac"
+source = "git+https://github.com/bentsignal/renet?rev=833a5deea2c22771db665fdf982b37b1ddbe484b#833a5deea2c22771db665fdf982b37b1ddbe484b"
 dependencies = [
  "chacha20poly1305",
  "log",

@@ -14,8 +14,8 @@ movement.workspace = true
 glam.workspace = true
 serde.workspace = true
 postcard.workspace = true
-renet = "=2.0.0"
-renet_netcode = "=2.0.0"
+renet = { git = "https://github.com/bentsignal/renet", rev = "833a5deea2c22771db665fdf982b37b1ddbe484b" }
+renet_netcode = { git = "https://github.com/bentsignal/renet", rev = "833a5deea2c22771db665fdf982b37b1ddbe484b" }
 
 [dev-dependencies]
 collision.workspace = true
