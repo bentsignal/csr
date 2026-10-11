@@ -17,7 +17,7 @@ use ruffle_core::backend::navigator::{
     ErrorResponse, NavigationMethod, NavigatorBackend, NullExecutor, NullSpawner, OwnedFuture,
     Request, SuccessResponse, create_fetch_error,
 };
-use ruffle_core::events::{MouseButton as RuffleButton, MouseWheelDelta, PlayerEvent};
+use ruffle_core::events::{KeyDescriptor, KeyLocation, LogicalKey, NamedKey, PhysicalKey, MouseButton as RuffleButton, MouseWheelDelta, PlayerEvent};
 use ruffle_core::external::{ExternalInterfaceProvider, Value as ExtValue};
 use ruffle_core::indexmap::IndexMap;
 use ruffle_core::loader::Error as LoadError;
@@ -68,6 +68,9 @@ impl Files {
         // supplies pictures, every avatar is a neutral tile.
         if rel.starts_with("img://avatar_") {
             return Some(Rc::new(solid_png(64, 64, [58, 64, 72])));
+        }
+        if rel.split(['/', '\\']).any(|part| part == "..") || rel.contains(':') || rel.starts_with('/') {
+            return None;
         }
         let Some(raw) = self.vfs.read(&format!("resource/flash/{rel}")) else {
             tracing::debug!("scaleform: no file {rel}");
@@ -266,6 +269,7 @@ impl Host {
                 .and_then(|b| Localization::from_bytes(&b).map_err(|e| e.to_string()))?,
         );
         let fontlib = fs.read("resource/flash/fontlib.swf").ok_or("resource/flash/fontlib.swf not found")?;
+        tracing::info!("scaleform: {} localization tokens", loc.len());
         let mapping = fs.read_string("resource/flash/fontmapping.cfg").ok_or("fontmapping.cfg not found")?;
         let mut cache = HashMap::new();
         cache.insert(SHIM_NAME.to_string(), Rc::new(compile_shim()?));
@@ -418,6 +422,8 @@ impl Host {
             Input::MouseWheel { lines } => PlayerEvent::MouseWheel { delta: MouseWheelDelta::Lines(lines) },
             Input::MouseLeave => PlayerEvent::MouseLeave,
             Input::Key { name, vkey, down } => {
+                let key = flash_key(&name, vkey);
+                self.player.lock().unwrap().handle_event(if down { PlayerEvent::KeyDown { key } } else { PlayerEvent::KeyUp { key } });
                 self.key(&name, vkey, down);
                 return;
             }
@@ -457,6 +463,32 @@ impl Host {
     }
 }
 
+// The Scaleform callbacks are separate from Flash's Key state/listeners.
+// Send both, so editable fields and Key.isDown see the same transitions.
+fn flash_key(name: &str, vkey: u32) -> KeyDescriptor {
+    use NamedKey::*;
+    let named = match vkey {
+        8 => Some(Backspace), 9 => Some(Tab), 13 => Some(Enter),
+        16 | 160 | 161 => Some(Shift), 17 | 162 | 163 => Some(Control),
+        18 | 164 | 165 => Some(Alt), 27 => Some(Escape),
+        33 => Some(PageUp), 34 => Some(PageDown), 35 => Some(End), 36 => Some(Home),
+        37 => Some(ArrowLeft), 38 => Some(ArrowUp), 39 => Some(ArrowRight), 40 => Some(ArrowDown),
+        45 => Some(Insert), 46 => Some(Delete),
+        _ => None,
+    };
+    let logical_key = named.map(LogicalKey::Named).unwrap_or_else(|| match vkey {
+        32 | 48..=57 => LogicalKey::Character(char::from_u32(vkey).unwrap()),
+        65..=90 => LogicalKey::Character(char::from_u32(vkey + 32).unwrap()),
+        96..=105 => LogicalKey::Character(char::from_u32(vkey - 96 + 48).unwrap()),
+        _ => LogicalKey::Unknown,
+    });
+    let key_location = if name.starts_with("KEY_PAD_") { KeyLocation::Numpad }
+        else if matches!(name, "KEY_LSHIFT" | "KEY_LCONTROL" | "KEY_LALT") { KeyLocation::Left }
+        else if matches!(name, "KEY_RSHIFT" | "KEY_RCONTROL" | "KEY_RALT") { KeyLocation::Right }
+        else { KeyLocation::Standard };
+    KeyDescriptor { physical_key: PhysicalKey::Unknown, logical_key, key_location }
+}
+
 /// Compiles the bridge shim (our own ActionScript 2) with rascal.
 fn compile_shim() -> Result<Vec<u8>, Error> {
     struct Source;
@@ -479,4 +511,24 @@ fn compile_shim() -> Result<Vec<u8>, Error> {
     let program = builder.build().map_err(|e| format!("compiling the bridge shim: {e:?}"))?;
     let swf_options = rascal::SwfOptions::default().with_frame_rate(30.0).with_stage_size(0.0, 0.0, 1280.0, 720.0);
     program.compile().to_swf(&swf_options).map_err(|e| format!("writing the bridge shim: {e}"))
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn flash_keys_preserve_navigation_and_key_location() {
+        use ruffle_core::events::{LogicalKey, NamedKey, KeyLocation};
+        assert_eq!(super::flash_key("KEY_ESCAPE", 27).logical_key, LogicalKey::Named(NamedKey::Escape));
+        assert_eq!(super::flash_key("KEY_A", 65).logical_key, LogicalKey::Character('a'));
+        assert_eq!(super::flash_key("KEY_PAD_7", 103).logical_key, LogicalKey::Character('7'));
+        assert_eq!(super::flash_key("KEY_PAD_ENTER", 13).key_location, KeyLocation::Numpad);
+        assert_eq!(super::flash_key("KEY_RCONTROL", 17).key_location, KeyLocation::Right);
+    }
+
+    #[test]
+    fn bridge_shim_compiles_with_the_key_table_and_callbacks() {
+        let swf = super::compile_shim().unwrap();
+        assert!(swf.starts_with(b"FWS") || swf.starts_with(b"CWS"));
+        assert_eq!(swf[3], 10);
+    }
 }

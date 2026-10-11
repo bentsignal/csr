@@ -63,6 +63,12 @@ pub(crate) fn call(object: &str, method: &str, args: &[Value]) -> Option<Value> 
         ("Store", "BStoreDisabledInBetaMode") => b(false),
         ("Store", "GetBannerEntryCount") => n(0.0),
         ("Inventory", "GetCacheTypeElementsCount") => n(0.0),
+        ("Inventory", "GetSortMethodsCount") => n(0.0),
+        ("Inventory", "GetInventoryCount") => n(0.0),
+        // Enumeration APIs require typed count/string answers. An undefined
+        // count made inventorypanel spin until the VM timeout.
+        ("Inventory", "GetSortMethodByIndex") => s(""),
+        ("Inventory", "GetInventoryItemIDByIndex") => s("0"),
 
         // Friends: signed in, nobody on the list.
         ("SteamOverlay", "BSignedInToFriends") => b(true),

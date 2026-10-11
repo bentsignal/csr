@@ -127,7 +127,7 @@ pub enum Input {
     MouseWheel { lines: f64 },
     MouseLeave,
     /// A key as CS:GO's `_global.KeyDownEvent` expected: the Source key name
-    /// (`"ESCAPE"`, `"ENTER"`, `"A"`...) and its Windows virtual-key code.
+    /// (`"KEY_ESCAPE"`, `"KEY_ENTER"`, `"KEY_A"`...) and its Windows virtual-key code.
     Key { name: String, vkey: u32, down: bool },
     Char(char),
     Resize { width: u32, height: u32 },
