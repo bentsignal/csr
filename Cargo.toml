@@ -50,7 +50,9 @@ bevy = { version = "0.19", default-features = false, features = [
     "mp3",
     "vorbis",
 ] }
-glam = "0.32.1"
+glam = { version = "0.32.1", features = ["serde"] }
+serde = { version = "1", features = ["derive"] }
+postcard = { version = "1.1", default-features = false, features = ["alloc"] }
 zip = { version = "6", default-features = false, features = ["deflate"] }
 lzma-rs = "0.3"
 bcdec_rs = "0.2"

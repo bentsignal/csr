@@ -1,7 +1,7 @@
 //! Team knowledge is built from reports and audible shots, never hidden enemy positions.
 use crate::{GameEvent, Player, PlayerId, Team, World};
 use glam::Vec3;
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Economy {
@@ -40,14 +40,14 @@ pub struct Plan {
 #[derive(Clone, Debug, Default)]
 pub struct Coordinator {
     round: u32,
-    pub plans: HashMap<Team, Plan>,
-    pub roles: HashMap<PlayerId, Role>,
-    pub reserve: HashMap<PlayerId, i32>,
+    pub plans: BTreeMap<Team, Plan>,
+    pub roles: BTreeMap<PlayerId, Role>,
+    pub reserve: BTreeMap<PlayerId, i32>,
     pub contacts: Vec<Contact>,
     pub defuser: Option<PlayerId>,
     next_plan: f32,
     last_tick: Option<u64>,
-    pub utility_after: HashMap<Team, f32>,
+    pub utility_after: BTreeMap<Team, f32>,
 }
 impl Coordinator {
     pub fn update(&mut self, world: &World, mesh: Option<&nav::NavMesh>) {

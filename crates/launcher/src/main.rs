@@ -10,7 +10,7 @@
 //!     --bots <n>               enemy bots, teammates get n-1 (5)
 //!     --team <t|ct>            side to play (ct)
 //!     --deathmatch             respawn deathmatch instead of competitive rounds
-//! csr sim [map]                headless movement, combat and round checks
+//! csr sim [map] [--tickrate N] headless movement, combat and round checks
 //! csr probe [map]              load every asset a map references and report
 //! csr weapons                  print the weapon catalog from items_game.txt
 //! csr cases                    list available local cases
@@ -29,7 +29,7 @@ fn main() {
     if args.iter().any(|a| a == "--help" || a == "-h") {
         println!("CSGO Rewrite\n\n\
             csr play [map] [options]  Open the main menu (default: de_dust2)\n\
-            csr sim [map]             Check movement, combat and competitive rounds\n\
+            csr sim [map] [--tickrate N]  Check movement, combat and rounds (default 128 tick)\n\
             csr probe [map]           Validate the map's models and textures\n\
             csr setup                 Choose the CS:GO Legacy folder again\n\
             csr find-csgo             Show the CS:GO installs found on this PC\n\
@@ -74,7 +74,14 @@ fn main() {
         .unwrap_or_else(|| "de_dust2".into());
     let code = match cmd {
         "probe" => probe::run(&map),
-        "sim" => simcheck::run(&map),
+        "sim" => match flag_value(rest, "--tickrate").map(|v| v.parse::<u32>()) {
+            None => simcheck::run(&map, sim::DEFAULT_TICK_RATE),
+            Some(Ok(rate)) if sim::TICK_RATE_RANGE.contains(&rate) => simcheck::run(&map, rate),
+            Some(_) => {
+                eprintln!("error: --tickrate takes a number from {} to {}", sim::TICK_RATE_RANGE.start(), sim::TICK_RATE_RANGE.end());
+                2
+            }
+        },
         "weapons" => weapons_cmd(),
         "cases" | "give-case" | "give-skin" | "give-sticker" | "stickers" | "skins" => cosmetics_cmd(cmd,rest),
         _ => match parse_play(&map, rest) {
@@ -86,6 +93,11 @@ fn main() {
         },
     };
     std::process::exit(code);
+}
+
+/// The value after `--flag`, if given.
+fn flag_value<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
+    args.iter().position(|a| a == flag).and_then(|i| args.get(i + 1)).map(String::as_str)
 }
 
 fn cosmetics_cmd(cmd:&str,args:&[String])->i32 {
