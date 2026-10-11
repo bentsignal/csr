@@ -15,6 +15,7 @@ members = [
     "crates/nav",
     "crates/sim",
     "crates/level",
+    "crates/scaleform",
     "crates/client",
     "crates/launcher",
 ]
@@ -69,6 +70,7 @@ sim = { path = "crates/sim" }
 nav = { path = "crates/nav" }
 level = { path = "crates/level" }
 weapons = { path = "crates/weapons" }
+scaleform = { path = "crates/scaleform" }
 client = { path = "crates/client" }
 
 [profile.dev]
