@@ -121,7 +121,7 @@ impl Plugin for CsgoPlugin {
         embedded_asset!(app, "shaders/world.wgsl");
         app.add_plugins(menu_blur::PostProcessPlugin)
             .add_plugins(MaterialPlugin::<WorldMaterial>::default())
-            .insert_resource(Time::<Fixed>::from_hz(sim::TICK_RATE as f64))
+            .insert_resource(Time::<Fixed>::from_hz(sim::DEFAULT_TICK_RATE as f64))
             .add_systems(Startup, (spawn_level, ui_assets::load, case_ui::setup, hud::setup, hud_art::setup, scope::setup, feedback::setup, utility_fx::setup, menu_scene::setup, menu::setup, hud::mark_roots).chain())
             .add_systems(
                 RunFixedMainLoop,
@@ -143,14 +143,13 @@ impl Plugin for CsgoPlugin {
             .init_resource::<items::GroundInstances>()
             .init_resource::<effects::PendingEvents>()
             .init_resource::<effects::Effects>()
-            .init_resource::<player::BotBrains>()
             .init_resource::<characters::Characters>()
             .init_resource::<viewmodel::ViewModelState>()
             .add_systems(
                 Update,
                 (
                     menu::apply,
-                    (skin_finish::record, skin_finish::assign, effects::process).chain(),
+                    (skin_finish::record, skin_finish::sync_loadout, effects::process).chain(),
                     (feedback::update, utility_fx::update).chain(),
                     sky::follow_camera,
                     visibility::update,
@@ -416,8 +415,13 @@ fn spawn_level(
             }
         }
     }
+    // Deathmatch practice weapons from the saved loadout; finishes and the
+    // knife follow once the cosmetics profile is loaded (skin_finish).
     let inventory = inventory::Inventory::load();
-    if opts.screenshot.is_none() { inventory::apply(&mut world, id, &inventory); }
+    if opts.screenshot.is_none() {
+        world.set_loadout(id, sim::Loadout { practice: inventory.practice(), ..Default::default() });
+        if world.mode == sim::GameMode::Deathmatch { world.respawn(id); }
+    }
     commands.insert_resource(inventory::Collection(level.catalog.clone()));
     let p = world.player(id).expect("player just added");
     let mut local = LocalPlayer::new(id, p.movement.eye_position(), p.view_angles.y);
@@ -499,7 +503,8 @@ fn spawn_level(
         menu_blur::PostProcessSettings::default(),
     ));
     commands.insert_resource(local);
-    commands.insert_resource(player::BotBrains(sim::bots::Bots::with_skill(0.6).with_nav(level.nav.clone())));
+    world.bots = sim::bots::Bots::with_skill(0.6).with_nav(level.nav.clone());
+    commands.insert_resource(Time::<Fixed>::from_hz(world.tick_rate as f64));
     commands.insert_resource(SimWorld(world));
     commands.insert_resource(LoadedLevel(level));
 }
@@ -551,7 +556,7 @@ fn smoke_test(
             let (forward,_,_)=movement::angle_vectors(l.render_angles);
             let start=l.render_eye;
             let tr=level.0.collision.trace_ray(start,start+forward*500.0,collision::contents::MASK_SOLID);
-            if tr.hit() {events.0.push(sim::GameEvent::Impact{pos:tr.end,normal:tr.normal,surface:tr.surface});}
+            if tr.hit() {events.0.push(sim::GameEvent::Impact{player:l.id,pos:tr.end,normal:tr.normal,surface:tr.surface});}
             let pos=start+forward*70.0;
             events.0.push(sim::GameEvent::Damage{attacker:l.id,victim:l.id,health:25,group:sim::weapon::HitGroup::Chest,pos});
         }

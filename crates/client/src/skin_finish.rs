@@ -28,46 +28,48 @@ pub fn tag(commands: &mut Commands, instance: &SkinnedInstance, target: Target) 
         commands.entity(e).insert(target.clone());
     }
 }
-pub fn assign(mut world: ResMut<SimWorld>, local: Res<LocalPlayer>, inventory: Res<Inventory>) {
-    let changed = inventory.is_changed();
-    let definitions = world.0.catalog.clone();
-    for p in &mut world.0.players {
-        for w in &mut p.weapons {
-            if w.cosmetic_owner.is_none()
-                || (changed && w.cosmetic_owner == Some(local.id) && p.id == local.id)
-            {
-                if p.id == local.id {
-                    if w.def.class == weapons::WeaponClass::Knife {
-                        let name = inventory
-                            .active("knife")
-                            .map(|i| i.weapon.as_str())
-                            .unwrap_or(if p.team == sim::Team::Terrorist {
-                                "weapon_knife_t"
-                            } else {
-                                "weapon_knife"
-                            });
-                        if w.def.class_name != name {
-                            if let Some(def) = definitions.get(name) {
-                                w.def = std::sync::Arc::new(def.clone());
-                            }
-                        }
-                    }
-                    w.cosmetic =
-                        inventory
-                            .active(&w.def.class_name)
-                            .map(|i| sim::weapon::Cosmetic {
-                                serial: i.serial,
-                                stattrak: i.stattrak,
-                                souvenir: i.souvenir,
-                                stickers: i.stickers.map(|s| s.map(|s| (s.kit, s.wear))),
-                                paint: i.paint,
-                                seed: i.seed,
-                                wear: i.wear,
-                            });
-                }
-                w.cosmetic_owner = Some(p.id);
-            }
+/// The local player's loadout choices as the sim takes them: the equipped
+/// knife, every equipped finish, and the deathmatch practice weapons.
+/// Gloves are drawn by the client only and are not part of it.
+pub fn local_loadout(skins: &Inventory, practice: &crate::inventory::Inventory) -> sim::Loadout {
+    let mut loadout = sim::Loadout { practice: practice.practice(), ..Default::default() };
+    loadout.knife = skins.active("knife").map(|k| k.weapon.clone());
+    for (slot, serial) in &skins.equipped {
+        if slot == "gloves" {
+            continue;
         }
+        if let Some(skin) = skins.skins.iter().find(|s| s.serial == *serial) {
+            loadout.skins.insert(
+                skin.weapon.clone(),
+                sim::weapon::Cosmetic {
+                    serial: skin.serial,
+                    stattrak: skin.stattrak,
+                    souvenir: skin.souvenir,
+                    stickers: skin.stickers.map(|s| s.map(|s| (s.kit, s.wear))),
+                    paint: skin.paint,
+                    seed: skin.seed,
+                    wear: skin.wear,
+                },
+            );
+        }
+    }
+    loadout
+}
+
+/// Hands the player's loadout to the sim whenever it changes. The sim
+/// equips the knife and finishes (and the practice guns on respawn).
+pub fn sync_loadout(
+    mut world: ResMut<SimWorld>,
+    local: Res<LocalPlayer>,
+    skins: Res<Inventory>,
+    practice: Res<crate::inventory::Inventory>,
+) {
+    if !skins.is_changed() && !practice.is_changed() {
+        return;
+    }
+    let loadout = local_loadout(&skins, &practice);
+    if world.0.player(local.id).is_some_and(|p| p.loadout != loadout) {
+        world.0.set_loadout(local.id, loadout);
     }
 }
 #[allow(clippy::too_many_arguments)]

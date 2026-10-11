@@ -30,11 +30,12 @@ fn angle_lerp(a: f32, b: f32, alpha: f32) -> f32 { a + ((b - a + 180.0).rem_eucl
 #[derive(Resource, Default)]
 pub struct RenderPoses(HashMap<sim::PlayerId, (Pose, Pose)>, HashMap<sim::PlayerId, f32>);
 
-fn stair_offset(offset: f32, rise: f32, grounded: bool, reset: bool) -> f32 {
+/// Eases a stair step out of the camera at 140 units/s (`dt`: seconds per tick).
+fn stair_offset(offset: f32, rise: f32, grounded: bool, reset: bool, dt: f32) -> f32 {
     if reset { return 0.0; }
     let mut offset = offset;
     if grounded && (2.0..=18.1).contains(&rise.abs()) { offset = (offset - rise).clamp(-24.0,24.0); }
-    offset - offset.signum() * offset.abs().min(140.0 * sim::TICK_DT)
+    offset - offset.signum() * offset.abs().min(140.0 * dt)
 }
 impl RenderPoses {
     pub fn capture(&mut self, world: &sim::World) {
@@ -46,7 +47,7 @@ impl RenderPoses {
             let pair = self.0.entry(p.id).or_insert((current, current));
             let reset = round_start || pair.1.alive != current.alive || pair.1.origin.distance(current.origin) > 128.0;
             let offset = self.1.entry(p.id).or_default();
-            *offset = stair_offset(*offset, current.origin.z - pair.1.origin.z, current.on_ground && pair.1.on_ground, reset);
+            *offset = stair_offset(*offset, current.origin.z - pair.1.origin.z, current.on_ground && pair.1.on_ground, reset, world.dt());
             current.eye.z += *offset;
             *pair = (if reset { current } else { pair.1 }, current);
         }
@@ -60,14 +61,17 @@ mod tests {
     use super::*;
     #[test]
     fn stairs_ease_out_but_jumps_and_teleports_do_not_create_offsets() {
-        let first = stair_offset(0.0, 18.0, true, false);
-        assert!(first < -15.0 && first > -18.0);
-        let mut offset = first;
-        // 3/16 s of level ground (12 ticks at 64 Hz) eases the full step out.
-        for _ in 0..12 * sim::TICK_RATE / 64 { offset = stair_offset(offset, 0.0, true, false); }
-        assert_eq!(offset, 0.0);
-        assert_eq!(stair_offset(0.0, 18.0, false, false), 0.0);
-        assert_eq!(stair_offset(-16.0, 150.0, true, true), 0.0);
+        for rate in [64, 128] {
+            let dt = 1.0 / rate as f32;
+            let first = stair_offset(0.0, 18.0, true, false, dt);
+            assert!(first < -15.0 && first > -18.0);
+            let mut offset = first;
+            // 3/16 s of level ground eases the full step out.
+            for _ in 0..12 * rate / 64 { offset = stair_offset(offset, 0.0, true, false, dt); }
+            assert_eq!(offset, 0.0);
+            assert_eq!(stair_offset(0.0, 18.0, false, false, dt), 0.0);
+            assert_eq!(stair_offset(-16.0, 150.0, true, true, dt), 0.0);
+        }
     }
     #[test]
     fn turns_cross_zero_by_the_short_path() {

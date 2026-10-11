@@ -9,11 +9,22 @@
 //! Two rule sets ([`GameMode`]): deathmatch (respawn with a fixed loadout)
 //! and competitive (rounds, money, buy zones, the bomb; see [`rules`]).
 //!
-//! The tick rate matches 128-tick CS:GO community servers. Code that counts
-//! ticks derives the count from [`TICK_RATE`], so the rate can change.
+//! Everything that decides the game runs here, including the bots
+//! ([`World::bots`]) and each player's loadout choices ([`Loadout`]), so a
+//! dedicated server, a listen server and client prediction all run the same
+//! code. A client only produces [`TickInput`]s and draws.
+//!
+//! The tick rate is a per-world setting ([`World::tick_rate`], default
+//! [`DEFAULT_TICK_RATE`], as on 128-tick CS:GO community servers). Code that
+//! counts ticks derives the count from it, so 64 and 128 tick play the same.
+//!
+//! [`state`] makes the replicated state serialisable: it is the network
+//! snapshot, and [`World::state_hash`] checks determinism.
 
 pub mod bots;
+pub mod loadout;
 pub mod objectives;
+pub mod state;
 pub mod rng;
 pub mod rules;
 pub mod weapon;
@@ -23,14 +34,20 @@ pub mod tactics;
 use collision::{contents, CollisionWorld};
 use glam::Vec3;
 use movement::{buttons, MoveConfig, MoveEvents, MoveInput, PlayerMove};
+pub use loadout::Loadout;
 pub use objectives::Objectives;
+pub use state::{Snapshot, WorldState};
+use serde::{Deserialize, Serialize};
 use rng::Rng;
 pub use rules::{BuyError, GameMode, Phase, Purchase, RoundEndReason, RoundState, RulesConfig};
 use std::sync::Arc;
 use weapon::{AccuracyContext, HitGroup, WeaponState, C4};
 
-pub const TICK_RATE: u32 = 128;
-pub const TICK_DT: f32 = 1.0 / TICK_RATE as f32;
+/// Ticks per second unless a server chooses otherwise (128-tick, as on
+/// CS:GO community servers).
+pub const DEFAULT_TICK_RATE: u32 = 128;
+/// The tick rates a world accepts.
+pub const TICK_RATE_RANGE: std::ops::RangeInclusive<u32> = 16..=256;
 /// Seconds before a dead player respawns (deathmatch rules).
 pub const RESPAWN_DELAY: f32 = 2.0;
 /// Knife reach, units.
@@ -49,7 +66,7 @@ pub const BOMB_RADIUS: f32 = 1750.0;
 
 pub type PlayerId = u32;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum Team {
     Terrorist,
     CounterTerrorist,
@@ -70,8 +87,39 @@ impl Team {
     }
 }
 
+/// A rigid transform: position and orientation, Source axes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Pose {
+    pub position: Vec3,
+    pub rotation: glam::Quat,
+}
+
+/// Tracked head and hands of a VR player. Positions are offsets from the
+/// player's origin (the feet) in world axes, so they ride along with
+/// server-side movement. Flat clients never send one.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct TrackedPose {
+    pub head: Pose,
+    pub left_hand: Pose,
+    pub right_hand: Pose,
+}
+
+/// Where a weapon points, separate from where the player looks (a VR gun in
+/// the hand). `origin` is an offset from the player's origin, like
+/// [`TrackedPose`]; `direction` is a world-space vector (normalised by the
+/// sim).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct AimRay {
+    pub origin: Vec3,
+    pub direction: Vec3,
+}
+
+/// How far a tracked aim origin may be from the eye, units. Further offsets
+/// are pulled back so nobody shoots from outside their hull.
+pub const MAX_AIM_OFFSET: f32 = 48.0;
+
 /// Input for one player for one tick.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct TickInput {
     /// Pitch, yaw, roll in degrees.
     pub view_angles: Vec3,
@@ -91,9 +139,14 @@ pub struct TickInput {
     pub drop: bool,
     /// Select a carried grenade by item definition; never grants an item.
     pub utility: u32,
+    /// Tracked head and hands (VR). `None` for flat players.
+    pub tracked: Option<TrackedPose>,
+    /// Weapon aim, when it differs from the view (VR). Shots, knife swings
+    /// and throws use it instead of [`TickInput::view_angles`].
+    pub aim: Option<AimRay>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Player {
     pub id: PlayerId,
     pub name: String,
@@ -121,6 +174,13 @@ pub struct Player {
     pub plant_start: Option<f32>,
     pub last_input: TickInput,
     pub last_events: MoveEvents,
+    /// Tracked head and hands from the latest input (VR), for other
+    /// players to draw.
+    pub tracked: Option<TrackedPose>,
+    /// Weapon aim from the latest input, already clamped (VR).
+    pub aim: Option<AimRay>,
+    /// What this player chose to carry and how it looks.
+    pub loadout: Loadout,
 }
 
 impl Player {
@@ -133,6 +193,20 @@ impl Player {
 
     pub fn eye(&self) -> Vec3 {
         self.movement.eye_position()
+    }
+
+    /// Where shots start and the angles they leave at: the eye and view
+    /// angles, or the tracked aim ray when there is one.
+    pub fn aim_origin_angles(&self) -> (Vec3, Vec3) {
+        match self.aim {
+            Some(aim) => {
+                let d = aim.direction;
+                let yaw = d.y.atan2(d.x).to_degrees();
+                let pitch = -d.z.atan2(d.truncate().length()).to_degrees();
+                (self.movement.origin + aim.origin, Vec3::new(pitch, yaw, 0.0))
+            }
+            None => (self.eye(), self.view_angles),
+        }
     }
 
     /// Recoil offset the camera shows (degrees, pitch/yaw).
@@ -227,21 +301,21 @@ impl Player {
 }
 
 /// A spawn point from the map.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SpawnPoint {
     pub origin: Vec3,
     pub yaw: f32,
     pub team: Team,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum GroundKind {
     Weapon(WeaponState),
     DefuseKit,
 }
 
 /// Something lying on the ground that players pick up by walking over it.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct GroundItem {
     pub id: u32,
     pub kind: GroundKind,
@@ -262,7 +336,7 @@ impl GroundItem {
 }
 
 /// The ticking bomb.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PlantedBomb {
     pub pos: Vec3,
     /// Index into [`Objectives::bomb_sites`].
@@ -274,11 +348,11 @@ pub struct PlantedBomb {
     pub defuser: Option<(PlayerId, f32)>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MeleeHit { Miss, World, Player }
 
 /// Things that happened during a tick, for effects, sounds and the HUD.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum GameEvent {
     StatTrakKill { owner:PlayerId, serial:u64 },
     DecoyShot { player: PlayerId, pos: Vec3 },
@@ -288,7 +362,8 @@ pub enum GameEvent {
     Scope { player: PlayerId, weapon: String, origin: Vec3, level: u8 },
     Fire { player: PlayerId, weapon: String, origin: Vec3 },
     Tracer { player: PlayerId, start: Vec3, end: Vec3 },
-    Impact { pos: Vec3, normal: Vec3, surface: u32 },
+    /// A bullet hit the world. `player` fired it.
+    Impact { player: PlayerId, pos: Vec3, normal: Vec3, surface: u32 },
     Damage { attacker: PlayerId, victim: PlayerId, health: i32, group: HitGroup, pos: Vec3 },
     /// `attacker` is [`WORLD`] for the bomb.
     Kill { attacker: PlayerId, victim: PlayerId, weapon: String, headshot: bool },
@@ -310,6 +385,10 @@ pub enum GameEvent {
     BombExploded { pos: Vec3 },
 }
 
+/// The whole game: map data shared by every copy (`Arc`s), the replicated
+/// state ([`WorldState`]) and the server-side bot brains. `Clone` is cheap
+/// enough to snapshot every tick for rewinds and tests.
+#[derive(Clone)]
 pub struct World {
     pub collision: Arc<CollisionWorld>,
     pub catalog: Arc<weapons::Catalog>,
@@ -325,30 +404,15 @@ pub struct World {
     pub utility_fields: Vec<utility::Field>,
     pub bomb: Option<PlantedBomb>,
     pub tick: u64,
+    /// Ticks per second ([`World::set_tick_rate`]).
+    pub tick_rate: u32,
     /// Events from the most recent step.
     pub events: Vec<GameEvent>,
+    /// AI for the players with `is_bot`. They think at the start of every
+    /// [`World::step`] on whoever runs the authoritative world.
+    pub bots: bots::Bots,
     next_id: PlayerId,
     next_item: u32,
-}
-
-/// Everything a renderer or a remote client needs about one tick.
-#[derive(Clone, Debug, Default)]
-pub struct Snapshot {
-    pub tick: u64,
-    pub players: Vec<PlayerSnapshot>,
-}
-
-#[derive(Clone, Copy, Debug)]
-pub struct PlayerSnapshot {
-    pub id: PlayerId,
-    pub origin: Vec3,
-    pub velocity: Vec3,
-    pub view_angles: Vec3,
-    pub view_offset: f32,
-    pub on_ground: bool,
-    pub ducked: bool,
-    pub alive: bool,
-    pub health: i32,
 }
 
 /// Slab test: entry distance of a ray into an axis-aligned box.
@@ -398,14 +462,36 @@ impl World {
             utility_fields: Vec::new(),
             bomb: None,
             tick: 0,
+            tick_rate: DEFAULT_TICK_RATE,
             events: Vec::new(),
+            bots: bots::Bots::default(),
             next_id: 1,
             next_item: 1,
         }
     }
 
+    /// Sim time in seconds.
     pub fn time(&self) -> f32 {
-        self.tick as f32 * TICK_DT
+        self.tick as f32 / self.tick_rate as f32
+    }
+
+    /// Seconds per tick.
+    pub fn dt(&self) -> f32 {
+        1.0 / self.tick_rate as f32
+    }
+
+    /// Whole ticks in a duration (at least one for any positive duration).
+    pub fn ticks(&self, seconds: f32) -> u64 {
+        ((seconds * self.tick_rate as f32).round() as u64).max((seconds > 0.0) as u64)
+    }
+
+    /// Changes the tick rate (clamped to [`TICK_RATE_RANGE`]), keeping the
+    /// current sim time, so timers already running still end on time.
+    pub fn set_tick_rate(&mut self, rate: u32) {
+        let rate = rate.clamp(*TICK_RATE_RANGE.start(), *TICK_RATE_RANGE.end());
+        let now = self.time() as f64;
+        self.tick_rate = rate;
+        self.tick = (now * rate as f64).round() as u64;
     }
 
     pub fn competitive(&self) -> bool {
@@ -508,6 +594,9 @@ impl World {
             plant_start: None,
             last_input: TickInput::default(),
             last_events: MoveEvents::default(),
+            tracked: None,
+            aim: None,
+            loadout: Loadout::default(),
         });
         match self.mode {
             GameMode::Deathmatch | GameMode::Special => self.respawn(id),
@@ -608,14 +697,20 @@ impl World {
         let special = self.mode == GameMode::Special;
         let loadout = if special {
             self.default_inventory(team)
-        } else { self.loadout(team) };
+        } else {
+            let mut guns = self.loadout(team);
+            if let Some(p) = self.player(id) {
+                p.loadout.practice_weapons(&self.catalog, team, &mut guns);
+            }
+            guns
+        };
         if let Some(p) = self.player_mut(id) {
             p.armor = if special { 0 } else { 100 };
             p.helmet = !special;
             p.defuse_kit = false;
             p.weapons = loadout;
-            p.active = 0;
-            p.last_active = 0;
+            p.active = p.best_weapon();
+            p.last_active = p.active;
         }
     }
 
@@ -1153,8 +1248,23 @@ impl World {
     /// repeat their last one (as a server does for a late packet), minus
     /// one-shot buttons and commands.
     pub fn step(&mut self, inputs: &[(PlayerId, TickInput)]) {
+        // Bots decide first, from last tick's state and events (what they
+        // heard). Explicit inputs win over a bot's own.
+        let with_bots;
+        let inputs = if self.players.iter().any(|p| p.is_bot) {
+            let mut bots = std::mem::take(&mut self.bots);
+            let mut all = bots.think(self);
+            self.bots = bots;
+            all.retain(|(id, _)| !inputs.iter().any(|(h, _)| h == id));
+            all.extend_from_slice(inputs);
+            with_bots = all;
+            &with_bots[..]
+        } else {
+            inputs
+        };
         self.events.clear();
         let time = self.time();
+        let dt = self.dt();
         let collision = self.collision.clone();
 
         match self.mode {
@@ -1186,6 +1296,16 @@ impl World {
                 utility: 0,
                 ..self.players[i].last_input
             });
+            if let Some(aim) = &mut input.aim {
+                aim.direction = aim.direction.try_normalize().unwrap_or(Vec3::X);
+                // Keep the muzzle near the head: no shooting from outside
+                // the hull.
+                let eye = Vec3::Z * self.players[i].movement.view_offset();
+                aim.origin = eye + (aim.origin - eye).clamp_length_max(MAX_AIM_OFFSET);
+                if !aim.origin.is_finite() || !aim.direction.is_finite() {
+                    input.aim = None;
+                }
+            }
 
             // Buying and dropping.
             {
@@ -1265,6 +1385,8 @@ impl World {
             {
                 let p = &mut self.players[i];
                 p.view_angles = input.view_angles;
+                p.tracked = input.tracked;
+                p.aim = input.aim;
                 // Dynamic-world fluids use the same collision sweeps as CS movement.
                 let swimming=collision.dynamic.as_ref().is_some_and(|d|d.point_contents(p.movement.origin+Vec3::Z*32.,contents::WATER)!=0);
                 if swimming {
@@ -1272,9 +1394,9 @@ impl World {
                     p.movement.velocity*=0.97;
                     let vertical=if input.buttons&buttons::JUMP!=0{140.}else if input.buttons&buttons::DUCK!=0{-100.}else{-input.view_angles.x.to_radians().sin()*input.forward_move*0.3-12.};
                     p.movement.velocity.z=vertical;
-                    p.last_events=movement::player_move(&mut p.movement,&move_input,&config,collision.as_ref(),TICK_DT);
+                    p.last_events=movement::player_move(&mut p.movement,&move_input,&config,collision.as_ref(),dt);
                 } else {
-                    p.last_events = movement::player_move(&mut p.movement, &move_input, &self.config, collision.as_ref(), TICK_DT);
+                    p.last_events = movement::player_move(&mut p.movement, &move_input, &self.config, collision.as_ref(), dt);
                 }
                 if p.last_events.jumped {
                     self.events.push(GameEvent::Jump { player: id });
@@ -1321,7 +1443,7 @@ impl World {
                             fire = true;
                         }
                     }
-                    weapon::think(w, time, TICK_DT, ducked, fire);
+                    weapon::think(w, time, dt, ducked, fire);
                 }
             }
             if fire {
@@ -1340,6 +1462,7 @@ impl World {
         if self.competitive() {
             self.check_elimination();
         }
+        self.dress_weapons();
         self.tick += 1;
     }
 
@@ -1347,8 +1470,8 @@ impl World {
         let p = &self.players[shooter];
         let id = p.id;
         let team = p.team;
-        let eye = p.eye();
-        let (dir, _, _) = movement::angle_vectors(p.view_angles);
+        let (eye, aim_angles) = p.aim_origin_angles();
+        let (dir, _, _) = movement::angle_vectors(aim_angles);
         let w = p.active_weapon().unwrap();
         let mut def = (*w.def).clone();
         let first = w.last_melee_attack.is_none_or(|t| time - t > 0.9);
@@ -1397,11 +1520,10 @@ impl World {
     }
 
     fn fire(&mut self, shooter: usize, time: f32) {
-        let tick = self.tick;
         let p = &self.players[shooter];
         let id = p.id;
         let team = p.team;
-        let eye = p.eye();
+        let (eye, aim_angles) = p.aim_origin_angles();
         let Some(w) = p.weapons.get(p.active) else { return };
         let def = w.def.clone();
         let punch = w.aim_punch();
@@ -1412,7 +1534,7 @@ impl World {
         };
         let inacc = weapon::inaccuracy(w, ctx) * 0.001;
         let spread = w.alt_stat("spread", def.accuracy.spread) * 0.001;
-        let angles = p.view_angles
+        let angles = aim_angles
             + Vec3::new(punch[0] * weapon::RECOIL_SCALE, punch[1] * weapon::RECOIL_SCALE, 0.0);
         let (fwd, right, up) = movement::angle_vectors(angles);
         let shot = p.shots;
@@ -1424,7 +1546,9 @@ impl World {
             origin: eye,
         });
 
-        let mut rng = Rng::from_parts(&[tick, id as u64, shot]);
+        // Seeded by the shooter's shot count, not the tick, so a predicting
+        // client draws the same spread the server computes.
+        let mut rng = Rng::from_parts(&[id as u64, shot]);
         for _ in 0..def.bullets.max(1) {
             let r1 = rng.next_f32();
             let a1 = rng.range(0.0, std::f32::consts::TAU);
@@ -1479,6 +1603,7 @@ impl World {
                     if tr.fraction < 1.0 && !self.collision.is_sky(tr.surface) {
                         if let Some(dynamic)=&self.collision.dynamic {dynamic.damage_block(tr.end,tr.normal,def.damage as f32 * def.range_modifier.powf(world_dist/500.0));}
                         self.events.push(GameEvent::Impact {
+                            player: id,
                             pos: tr.end,
                             normal: tr.normal,
                             surface: tr.surface,
@@ -1578,27 +1703,6 @@ impl World {
             headshot,
         });
         self.death_drops(victim);
-    }
-
-    pub fn snapshot(&self) -> Snapshot {
-        Snapshot {
-            tick: self.tick,
-            players: self
-                .players
-                .iter()
-                .map(|p| PlayerSnapshot {
-                    id: p.id,
-                    origin: p.movement.origin,
-                    velocity: p.movement.velocity,
-                    view_angles: p.view_angles,
-                    view_offset: p.movement.view_offset(),
-                    on_ground: p.movement.on_ground,
-                    ducked: p.movement.ducked,
-                    alive: p.alive,
-                    health: p.health,
-                })
-                .collect(),
-        }
     }
 
     /// True if nothing solid blocks the line between two points.

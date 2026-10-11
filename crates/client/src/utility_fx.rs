@@ -186,7 +186,7 @@ pub fn update(
         let Some(asset) = characters.weapons.get(p.kind.name()) else {
             continue;
         };
-        let pos = p.pos + p.velocity * (fixed.overstep_fraction() * sim::TICK_DT);
+        let pos = p.pos + p.velocity * (fixed.overstep_fraction() * world.0.dt());
         let spin = Mat4::from_rotation_translation(
             Quat::from_rotation_y((time - p.born) * 4.0),
             to_bevy(pos),

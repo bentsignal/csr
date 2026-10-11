@@ -11,7 +11,7 @@ fn special_mode_is_solo_without_round_timeouts_and_still_respawns() {
     w.tick=64*60*120;w.step(&[]);
     assert_eq!(w.mode,GameMode::Special);assert_eq!(w.round.round,round);assert!(!w.competitive());assert!(w.player(id).unwrap().alive);
     assert!(!w.events.iter().any(|e|matches!(e,GameEvent::RoundEnd{..}|GameEvent::RoundStart{..})));
-    w.damage_environment(id,1000,"environment");w.tick+=TICK_RATE as u64*10;w.step(&[]);assert!(w.player(id).unwrap().alive);
+    w.damage_environment(id,1000,"environment");w.tick+=w.tick_rate as u64*10;w.step(&[]);assert!(w.player(id).unwrap().alive);
 }
 
 #[test]
@@ -187,7 +187,7 @@ fn duel() -> (World, PlayerId, PlayerId) {
 
 fn run(w: &mut World, seconds: f32, inputs: &[(PlayerId, TickInput)]) -> Vec<GameEvent> {
     let mut events = Vec::new();
-    for _ in 0..(seconds * TICK_RATE as f32) as u32 {
+    for _ in 0..(seconds * w.tick_rate as f32) as u32 {
         w.step(inputs);
         events.extend(w.events.iter().cloned());
     }
@@ -748,3 +748,5 @@ fn dynamic_mob_hits_preserve_bullet_and_knife_contact_positions() {
     assert!(point.is_finite() && (point-from).length()>100.);
     assert!(w.events.iter().any(|e|matches!(e,GameEvent::Tracer{end,..} if (*end-point).length()<0.001)));
 }
+
+mod authority;
