@@ -11,9 +11,12 @@ description = "Feasibility spike: play CS:GO's Scaleform menu movies from the pl
 [workspace]
 
 [dependencies]
-# Pinned Ruffle revision (2026-10-11). Ruffle is not on crates.io.
-ruffle_core = { git = "https://github.com/ruffle-rs/ruffle", rev = "ba92d5af0a9981b322b67c68ef58f59342f843fe", features = ["default_font"] }
-ruffle_render_wgpu = { git = "https://github.com/ruffle-rs/ruffle", rev = "ba92d5af0a9981b322b67c68ef58f59342f843fe" }
+# Ruffle is not on crates.io. Pinned to our fork's `csgo-scaleform` branch:
+# upstream ba92d5af (2026-10-11) plus fixes for ImportAssets inside imported movies,
+# which every CS:GO menu movie relies on (see
+# docs/research/scaleform-spike.md).
+ruffle_core = { git = "https://github.com/bentsignal/ruffle", rev = "bf1f4c8300d705eb6bffcb78bf08ed486d8c90cd", features = ["default_font"] }
+ruffle_render_wgpu = { git = "https://github.com/bentsignal/ruffle", rev = "bf1f4c8300d705eb6bffcb78bf08ed486d8c90cd" }
 # AS2 compiler (used by Ruffle for its own AVM1 globals); compiles our bridge shim.
 rascal = "0.3.5"
 futures = "0.3"

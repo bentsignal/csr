@@ -49,6 +49,14 @@ fn main() -> Result<()> {
             let frames = args.get(2).map(|f| f.parse()).transpose()?.unwrap_or(90);
             render(Path::new(out), frames)
         }
+        "ls" => {
+            let mut fs = vfs::Vfs::new();
+            fs.mount_game_dir(&game_dir()?)?;
+            for p in fs.archive_paths_with_prefix(args.get(1).map_or("resource/flash/", String::as_str)) {
+                println!("{p}");
+            }
+            Ok(())
+        }
         "diff" => {
             let (a, b) = (args.get(1).context("diff <a> <b>")?, args.get(2).context("diff <a> <b>")?);
             diff::run(Path::new(a), Path::new(b), args.get(3).map(Path::new))
@@ -86,11 +94,51 @@ fn render(out: &Path, frames: u32) -> Result<()> {
         }
     }
     tracing::info!("MainMenu loaded after {load_frames} frames ({:?})", start.elapsed());
+
+    // What the engine did once the menu was up: show it, report the game
+    // coordinator connection and the store price sheet, and hand the news
+    // panel its HTML render target (a page rendered offscreen; here a flat
+    // placeholder, since the 2018 blog page is web content, not Scaleform).
+    let menu = "_global.MainMenuMovie";
+    let call = |host: &mut host::Host, path: &str, f: &str, args: Vec<Value>| {
+        let r = host.call_as("csrCall", vec![Value::String(path.into()), Value::String(f.into()), Value::List(args)]);
+        tracing::info!("{path}.{f}() -> {r:?}");
+        r
+    };
+    call(&mut host, menu, "onUIShow", vec![]);
+    for event in ["ScaleformComponent_Store_PriceSheetChanged"] {
+        call(&mut host, menu, event, vec![]);
+    }
+    host.files.insert("img://blog", host::solid_png(1024, 1024, [27, 31, 36]));
+    let blog = "_global.MainMenuMovie.Panel.Blog";
+    call(&mut host, blog, "InitChromeHTMLRenderTarget", vec![Value::String("img://blog".into())]);
+    call(&mut host, blog, "setPageLoadState", vec![Value::Bool(false)]);
     let start = std::time::Instant::now();
     for _ in 0..frames {
         host.step();
     }
     tracing::info!("{frames} more frames in {:?}", start.elapsed());
+    // SPIKE_CLICKS="x,y;x,y": click each point (window pixels), 30 frames apart.
+    if let Ok(clicks) = std::env::var("SPIKE_CLICKS") {
+        for point in clicks.split(';').filter(|p| !p.is_empty()) {
+            let (x, y) = point.split_once(',').context("SPIKE_CLICKS: x,y;x,y")?;
+            let (x, y): (f64, f64) = (x.trim().parse()?, y.trim().parse()?);
+            tracing::info!("click {x},{y}");
+            host.click(x, y);
+            for _ in 0..30 {
+                host.step();
+            }
+        }
+    }
+    // Steady-state cost of one frame: advance, render, read back to the CPU
+    // (what a Bevy integration through an offscreen copy would pay).
+    let _ = host.capture()?;
+    let start = std::time::Instant::now();
+    for _ in 0..10 {
+        host.step();
+        let _ = host.capture()?;
+    }
+    tracing::info!("tick + render + readback: {:?} per frame", start.elapsed() / 10);
     let image = host.capture()?;
     image.save(out).with_context(|| format!("saving {}", out.display()))?;
     println!("wrote {} ({}x{})", out.display(), image.width(), image.height());

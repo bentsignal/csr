@@ -42,7 +42,13 @@ impl Localization {
     }
 
     pub fn get(&self, token: &str) -> Option<&str> {
-        self.tokens.get(&token.trim_start_matches('#').to_ascii_lowercase()).map(String::as_str)
+        let key = token.trim_start_matches('#').to_ascii_lowercase();
+        self.tokens
+            .get(&key)
+            // The 2023 file renamed a few 2018 tokens with a "_1" suffix
+            // (SFUI_Elevated_Status_Confirmed -> SFUI_Elevated_Status_Confirmed_1).
+            .or_else(|| self.tokens.get(&format!("{key}_1")))
+            .map(String::as_str)
     }
 
     /// Translates a whole-string token (`#SFUI_X`), as Scaleform's translator did.

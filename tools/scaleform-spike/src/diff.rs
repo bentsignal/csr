@@ -14,12 +14,35 @@ pub struct Metrics {
     pub over_32: f64,
 }
 
-pub fn compare(a: &image::RgbaImage, b: &image::RgbaImage) -> Result<Metrics> {
+/// Rectangles `(x0, y0, x1, y1)` left out of the metric.
+pub type Mask = Vec<(u32, u32, u32, u32)>;
+
+/// Parses `x0,y0,x1,y1;x0,y0,x1,y1`.
+pub fn parse_mask(s: &str) -> Result<Mask> {
+    s.split(';')
+        .filter(|r| !r.trim().is_empty())
+        .map(|r| {
+            let v: Vec<u32> = r.split(',').map(|n| n.trim().parse()).collect::<Result<_, _>>()?;
+            match v[..] {
+                [x0, y0, x1, y1] => Ok((x0, y0, x1, y1)),
+                _ => bail!("mask rectangle needs x0,y0,x1,y1: {r}"),
+            }
+        })
+        .collect()
+}
+
+pub fn compare(a: &image::RgbaImage, b: &image::RgbaImage, mask: &Mask) -> Result<Metrics> {
     if a.dimensions() != b.dimensions() {
         bail!("size mismatch: {:?} vs {:?}", a.dimensions(), b.dimensions());
     }
-    let (mut sum, mut sq, mut over) = (0f64, 0f64, 0usize);
-    for (pa, pb) in a.pixels().zip(b.pixels()) {
+    let masked = |x: u32, y: u32| mask.iter().any(|&(x0, y0, x1, y1)| x >= x0 && x < x1 && y >= y0 && y < y1);
+    let (mut sum, mut sq, mut over, mut count) = (0f64, 0f64, 0usize, 0usize);
+    for (x, y, pa) in a.enumerate_pixels() {
+        if masked(x, y) {
+            continue;
+        }
+        count += 1;
+        let pb = b.get_pixel(x, y);
         let mut worst = 0i32;
         for c in 0..3 {
             let d = (pa[c] as i32 - pb[c] as i32).abs();
@@ -31,7 +54,7 @@ pub fn compare(a: &image::RgbaImage, b: &image::RgbaImage) -> Result<Metrics> {
             over += 1;
         }
     }
-    let n = (a.width() * a.height()) as f64;
+    let n = count.max(1) as f64;
     let mse = sq / (n * 3.0);
     Ok(Metrics {
         mae: sum / (n * 3.0),
@@ -44,14 +67,20 @@ pub fn compare(a: &image::RgbaImage, b: &image::RgbaImage) -> Result<Metrics> {
 pub fn run(a: &Path, b: &Path, heatmap: Option<&Path>) -> Result<()> {
     let ia = image::open(a).with_context(|| a.display().to_string())?.to_rgba8();
     let ib = image::open(b).with_context(|| b.display().to_string())?.to_rgba8();
-    let m = compare(&ia, &ib)?;
-    println!(
-        "MAE {:.2}  RMSE {:.2}  PSNR {:.2} dB  pixels off by >32: {:.1}%",
-        m.mae,
-        m.rmse,
-        m.psnr,
-        m.over_32 * 100.0
-    );
+    let print = |label: &str, m: &Metrics| {
+        println!(
+            "{label}: MAE {:.2}  RMSE {:.2}  PSNR {:.2} dB  pixels off by >32: {:.1}%",
+            m.mae,
+            m.rmse,
+            m.psnr,
+            m.over_32 * 100.0
+        )
+    };
+    print("full frame", &compare(&ia, &ib, &Mask::new())?);
+    if let Ok(spec) = std::env::var("SPIKE_DIFF_MASK") {
+        let mask = parse_mask(&spec)?;
+        print(&format!("masked ({} rects)", mask.len()), &compare(&ia, &ib, &mask)?);
+    }
     // Per-region breakdown on a 4x3 grid, so a diff points at a panel.
     let (w, h) = ia.dimensions();
     for gy in 0..3 {

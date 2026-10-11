@@ -66,10 +66,6 @@ impl Files {
         })
     }
 
-    pub fn read(&self, path: &str) -> Option<Vec<u8>> {
-        self.vfs.read(path)
-    }
-
     fn get(&self, url: &str) -> Option<Rc<Vec<u8>>> {
         let path = url.split(['?', '#']).next().unwrap_or(url);
         let lower = path.to_ascii_lowercase();
@@ -82,6 +78,11 @@ impl Files {
         self.fetched.borrow_mut().push(rel.clone());
         if let Some(data) = self.cache.borrow().get(&rel) {
             return Some(data.clone());
+        }
+        // Engine image cache (`img://avatar_<xuid>`, `img://inventory_<id>`):
+        // the spike has no Steam avatars, so every avatar is a flat tile.
+        if rel.starts_with("img://avatar_") {
+            return Some(Rc::new(solid_png(64, 64, [58, 64, 72])));
         }
         let Some(raw) = self.vfs.read(&format!("resource/flash/{rel}")) else {
             self.missing.borrow_mut().push(rel);
@@ -107,6 +108,14 @@ impl Files {
     pub fn insert(&self, rel: &str, data: Vec<u8>) {
         self.cache.borrow_mut().insert(rel.to_ascii_lowercase(), Rc::new(data));
     }
+}
+
+pub fn solid_png(width: u32, height: u32, rgb: [u8; 3]) -> Vec<u8> {
+    let tile = image::RgbaImage::from_pixel(width, height, image::Rgba([rgb[0], rgb[1], rgb[2], 255]));
+    let mut png = Vec::new();
+    tile.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .expect("encoding a PNG in memory");
+    png
 }
 
 struct MemResponse {
@@ -261,6 +270,14 @@ impl Host {
         self.executor.run();
     }
 
+    pub fn click(&mut self, x: f64, y: f64) {
+        use ruffle_core::events::{MouseButton, PlayerEvent};
+        let mut player = self.player.lock().unwrap();
+        player.handle_event(PlayerEvent::MouseMove { x, y });
+        player.handle_event(PlayerEvent::MouseDown { x, y, button: MouseButton::Left, index: None });
+        player.handle_event(PlayerEvent::MouseUp { x, y, button: MouseButton::Left });
+    }
+
     pub fn call_as(&mut self, callback: &str, args: Vec<Value>) -> Value {
         self.player.lock().unwrap().call_internal_interface(callback, args)
     }
@@ -288,7 +305,7 @@ fn compile_shim() -> Result<Vec<u8>> {
             path == "shim.as"
         }
     }
-    let options = rascal::CompileOptions::default().with_swf_version(8);
+    let options = rascal::CompileOptions::default().with_swf_version(10);
     let mut builder = rascal::ProgramBuilder::new(Source).with_compile_options(options);
     builder.add_script("shim.as");
     let program = builder.build().map_err(|e| anyhow!("compiling shim: {e:?}"))?;
