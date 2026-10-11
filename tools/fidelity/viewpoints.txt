@@ -1,0 +1,15 @@
+# Fidelity viewpoints: name map eye_x eye_y eye_z pitch yaw
+# Eye positions in Source units (what `getpos` prints, i.e. origin + 64.06).
+# Chosen to cover sunlit, shaded and indoor lighting, the 3D sky, props,
+# displacements and blend materials.
+ct_garage      de_dust2   382   2102   -44.9   10    90
+ct_spawn_mid   de_dust2   250   2300   -40     5   180
+a_site         de_dust2  1134   2500   150     15  -135
+a_long         de_dust2  1418   1100    40     5    90
+long_doors     de_dust2   638    532    30     0    90
+outside_long   de_dust2   638    148    40     0   -90
+mid_top        de_dust2  -325    486    40     5    90
+upper_tunnel   de_dust2 -1810   1169    72     5    90
+b_site         de_dust2 -1697   2305    90     15    45
+t_spawn        de_dust2  -697   -833   220     5    60
+sky_a          de_dust2  1134   2500   150    -35   -45

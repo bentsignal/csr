@@ -84,9 +84,12 @@ installs may still use the 730 `csgo_legacy` beta in
   the same resolution (1920x1080 for the home screen).
 - Audio: `cargo run -p launcher --example soundcheck` decodes every weapon
   sound (Bevy panics on undecodable audio).
+- Fidelity against the real game (screenshot pairs, sound logs):
+  `tools/fidelity/fidelity.ps1`, see [docs/FIDELITY.md](docs/FIDELITY.md).
 
 Debug switches: `CSR_WATCH_BOT=n` (camera on bot n), `CSR_AUTOFIRE=1`,
-`CSR_NO_PROPS`, `CSR_NO_HUD`, `CSR_NO_CULL=world|props|all`,
+`CSR_NO_PROPS`, `CSR_NO_HUD`, `CSR_NO_SELF` (hide own body from the noclip camera),
+`CSR_NO_CULL=world|props|all`,
 `CSR_PRESENT=immediate|mailbox|fifo`, `CSR_FRAME_LOG=ms` (log slow frames),
 `CSR_TEST_WEAPON=weapon_x` with `CSR_TEST_RELOAD=frame`, `CSR_WEAPON_TRACE=1`.
 

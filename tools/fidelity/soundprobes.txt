@@ -1,0 +1,82 @@
+# Scripted real-game sound probes for `fidelity.ps1 sounds`.
+# `[name]` starts a scenario; other lines are console commands, except
+# `wait <ms>`. Each scenario's `snd_showstart` output is saved separately.
+# Positions are player origins (setpos), not eye positions.
+
+[ak47_fire_reload]
+setpos 382 2102 -109
+setang 0 180 0
+give weapon_ak47
+slot1
+wait 1500
++attack
+wait 450
+-attack
+wait 800
++reload
+wait 100
+-reload
+wait 3500
+
+[deploy_each_slot]
+slot3
+wait 1200
+slot2
+wait 1200
+slot1
+wait 1200
+
+[run_gravel_knife]
+setpos 382 2102 -109
+setang 0 180 0
+slot3
+wait 800
++forward
+wait 2500
+-forward
+wait 800
+
+[walk_gravel_knife]
+setpos 382 2102 -109
+setang 0 180 0
+wait 500
++speed
++forward
+wait 2500
+-forward
+-speed
+wait 800
+
+[crouch_walk]
+setpos 382 2102 -109
+setang 0 180 0
+wait 500
++duck
++forward
+wait 2500
+-forward
+-duck
+wait 800
+
+[jump_land]
+setpos 382 2102 -109
+wait 800
++jump
+wait 100
+-jump
+wait 1500
+
+[impacts_ct_spawn]
+setpos 382 2102 -109
+setang 20 90 0
+slot1
+wait 800
++attack
+wait 120
+-attack
+wait 600
+setang 30 0 0
++attack
+wait 120
+-attack
+wait 1000
