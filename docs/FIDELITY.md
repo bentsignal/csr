@@ -20,11 +20,22 @@ powershell -ExecutionPolicy Bypass -File tools\fidelity\fidelity.ps1 all      # 
 powershell -ExecutionPolicy Bypass -File tools\fidelity\fidelity.ps1 ours     # re-render ours only
 powershell -ExecutionPolicy Bypass -File tools\fidelity\fidelity.ps1 compare  # metrics for existing pairs
 powershell -ExecutionPolicy Bypass -File tools\fidelity\fidelity.ps1 sounds   # real-game sound logs
+powershell -ExecutionPolicy Bypass -File tools\fidelity\fidelity.ps1 sounds-ours # matching client sound logs
 powershell -ExecutionPolicy Bypass -File tools\fidelity\fidelity.ps1 quit     # close the game, clean up
 ```
 
 `-Only name1,name2` limits a run to some viewpoints or sound probes;
 `-KeepGame` leaves the game running between runs.
+`-Csr target\play\csr.exe` selects the day-to-day build. Sound probes use
+isolated player data under the output folder, ordinary `TickInput`s and a
+simulation-time capture deadline. `CSR_SOUND_PROBE` is ignored in interactive
+sessions. Console commands are acknowledged before a probe's waits begin;
+the real game restarts after freeze-time settings are applied.
+
+The harness records its process ID/start time and the existing byproduct
+paths before launch. It closes only its own game process, preserves existing
+files, skips junctions and removes new known byproducts without recursive
+directory deletion. `test-session.ps1` checks this on a temporary fixture in CI.
 
 How it works:
 
@@ -179,3 +190,41 @@ Observations that shape the model:
 - Pitch and volume ranges (`"100, 105"`, `"0.1, 0.6"`) are drawn per play.
 - A source in front at 30-400 u is 5 dB quieter per ear than the same sound
   at the listener (stereo panning of a centred source).
+
+### Track D sound foundation review (2026-10-11)
+
+The client now reads soundscript mixing parameters and MDL sound events,
+resolves surface properties for steps and impacts, and plays jump/landing
+foley. Footsteps and animation-event scheduling follow simulation ticks,
+including ticks processed together in one rendered frame. Initial weapon
+deployment is audible too. Channel limits discard finished entities instead
+of assuming a fixed lifetime.
+
+Matched Dust II probes from Legacy 1.38.8.1 and the client are reproducible
+with `sounds` / `sounds-ours`. Private evidence is outside the repository
+under `%USERPROFILE%\csr-fidelity\sound-final`; an earlier comparison is in
+`sound-reviewed`. The earlier comparison measured:
+
+| Probe | Legacy | Client |
+|---|---|---|
+| AK reload | Clipout → Clipin 0.696 s; Clipin → BoltPull 0.666 s | Same files, 0.693 / 0.660 s (within one 128 Hz tick) |
+| Running over CT-spawn gravel | Alternating gravel steps, mean period 0.297 s | Alternating `CT_Gravel` entries, mean period 0.299 s |
+| Walking / crouching | No gravel steps | No gravel steps |
+| Jump / land | `sand5.wav`, `land_gravel_*`, CT suit landing | Same file families and events |
+| CT-spawn impacts | Concrete and sand bullet-impact families | Material surface properties select the same families |
+
+Two backend corrections have tests against **actual rodio samples**: with
+its inverse-square falloff bypassed, rodio 0.22's distance-difference panner
+boosts the farther virtual ear, requiring exchanged ear positions; its
+spatial downmix sums channels without averaging, requiring division by the
+input channel count. Local stereo is preserved. Audio is validated with the
+decoder before creating a Bevy source. `soundcheck` now covers weapons,
+feedback and foley: 1,425 files decode, none are unsupported or fail.
+
+This lands a sound foundation, not a claim of 1:1 audio parity. Draw-to-foley
+timing still differs (P2000 slide-back 0.277 s versus 0.219 s, AK bolt 0.367 s
+versus 0.322 s in that comparison); first-step onset also differs and needs
+controlled movement measurements. The fixture can produce an initial
+landing after teleporting above the floor. Gain curves are approximate fits;
+DSP, occlusion, ricochets/near misses, soundscape integration and music remain
+open. The raw-wave/fade helpers are groundwork, not an ambient implementation.

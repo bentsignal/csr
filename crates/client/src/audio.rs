@@ -29,6 +29,13 @@ const PAN_ONLY_SCALE: f32 = 1.0 / 100_000.0;
 /// by this.
 const RODIO_FRONT: f32 = 0.75;
 
+/// Adapter for rodio's distance-difference panner. With attenuation disabled,
+/// rodio 0.22 boosts the *farther* ear; exchange its virtual ears so a source
+/// on the right is heard on the right. Positions stay in Source inches.
+pub fn spatial_listener() -> SpatialListener {
+    SpatialListener { left_ear_offset: Vec3::X * 8.0, right_ear_offset: Vec3::X * -8.0 }
+}
+
 /// How an entry is mixed: which measured gains and distance curve apply.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Category {
@@ -62,7 +69,9 @@ impl Category {
             Category::Weapon | Category::Foley => 1.0,
             // The local player's own steps use the quiet "PlayerFootsteps" mix.
             Category::Footsteps | Category::Suit => if local { 0.18 } else { 1.0 },
-            Category::Impacts => 0.29,
+            // Land_<surface> uses the physics stack, but the local player's
+            // landing measures 10.93 / (16.83 / 0.9), rather than impact gain.
+            Category::Impacts => if local { 0.58 } else { 0.29 },
             Category::Announcer | Category::Ui => 0.58,
             Category::Voice => 0.29,
             // soundmixers.txt: Ambient 0.25 against Weapons1 0.7.
@@ -244,13 +253,12 @@ struct Playing {
     owner: u32,
     channel: u8,
     entry: String,
-    started: f64,
 }
 
 #[derive(Resource, Default)]
 pub struct SoundLibrary {
     entries: HashMap<String, Entry>,
-    loaded: HashMap<String, Option<Handle<AudioSource>>>,
+    loaded: HashMap<String, Option<(Handle<AudioSource>, u16)>>,
     playing: Vec<Playing>,
     rng: u64,
     clock: f64,
@@ -261,12 +269,13 @@ pub struct SoundLibrary {
     pub master_volume: f32,
 }
 
-/// Returns bytes Bevy's decoder is guaranteed to accept, or `None`.
+/// Unwraps supported audio containers, or returns `None`.
 ///
 /// Bevy panics on undecodable audio, so every file is checked first:
 /// PCM (8/16/24/32-bit int, 32-bit float) WAVs pass through, MP3-in-WAV
 /// (format 0x55, common in Valve content) is unwrapped to its raw MP3
 /// frames, bare MP3s pass through, anything else is skipped.
+/// This identifies the container; `source` also validates it with the decoder.
 pub fn playable(bytes: Vec<u8>) -> Option<Vec<u8>> {
     if bytes.starts_with(b"ID3") || (bytes.len() > 2 && bytes[0] == 0xFF && bytes[1] & 0xE0 == 0xE0) {
         return Some(bytes);
@@ -304,6 +313,19 @@ pub fn playable(bytes: Vec<u8>) -> Option<Vec<u8>> {
         _ => None,
     }
 }
+
+fn decoded_audio(bytes: Vec<u8>) -> Option<(Vec<u8>, u16)> {
+    use rodio::Source;
+    let bytes = playable(bytes)?;
+    let decoder = rodio::Decoder::builder().with_byte_len(bytes.len() as u64)
+        .with_data(std::io::Cursor::new(bytes.clone())).build().ok()?;
+    let channels = decoder.channels().get();
+    Some((bytes, channels))
+}
+
+// rodio 0.22 ChannelVolume sums input channels without applying its intended
+// average. Compensate only for spatial playback; local stereo stays intact.
+fn spatial_normalization(channels: u16) -> f32 { 1.0 / channels.max(1) as f32 }
 
 fn strip_flags(wave: &str) -> String {
     let w = wave.trim_start_matches(|c: char| "*#@><^)}$!?&~`+%(".contains(c));
@@ -481,12 +503,12 @@ impl SoundLibrary {
         (self.rng.wrapping_mul(0x2545_F491_4F6C_DD1D) >> 40) as f32 / (1u64 << 24) as f32
     }
 
-    fn source(&mut self, fs: &vfs::Vfs, sources: &mut Assets<AudioSource>, path: &str) -> Option<Handle<AudioSource>> {
+    fn source(&mut self, fs: &vfs::Vfs, sources: &mut Assets<AudioSource>, path: &str) -> Option<(Handle<AudioSource>, u16)> {
         self.loaded
             .entry(path.to_string())
             .or_insert_with(|| {
-                let bytes = playable(fs.read(path)?)?;
-                Some(sources.add(AudioSource { bytes: Arc::from(bytes) }))
+                let (bytes, channels) = decoded_audio(fs.read(path)?)?;
+                Some((sources.add(AudioSource { bytes: Arc::from(bytes) }), channels))
             })
             .clone()
     }
@@ -521,7 +543,7 @@ impl SoundLibrary {
             self.play_with(commands, fs, sources, distant, emit);
         }
         let pick = ((self.random() * entry.waves.len() as f32) as usize).min(entry.waves.len() - 1);
-        let Some(handle) = self.source(fs, sources, &entry.waves[pick]) else { return };
+        let Some((handle, channels)) = self.source(fs, sources, &entry.waves[pick]) else { return };
         let mut lerp = |(low, high): (f32, f32)| low + (high - low) * self.random();
         let volume = lerp(entry.volume).clamp(0.0, 1.0);
         let speed = (lerp(entry.pitch) / 100.0).clamp(0.25, 4.0);
@@ -540,7 +562,7 @@ impl SoundLibrary {
             Some(pos) => {
                 let emitter = Emitter {
                     pos: to_bevy(pos),
-                    base: volume * entry.category.field(),
+                    base: volume * entry.category.field() * spatial_normalization(channels),
                     category: entry.category,
                     soundlevel: entry.soundlevel,
                     gunfire: (entry.category == Category::Weapon && (entry.distant.is_some() || entry.distant_layer)).then_some(entry.distant_layer),
@@ -573,15 +595,12 @@ impl SoundLibrary {
             }
         };
         if let Some(owner) = emit.owner {
-            self.playing.push(Playing { entity, owner, channel: entry.channel, entry: key, started: self.clock });
+            self.playing.push(Playing { entity, owner, channel: entry.channel, entry: key });
         }
     }
 
     /// Channel stealing and per-entry instance limits for one owner.
     fn steal(&mut self, commands: &mut Commands, owner: u32, entry: &Entry, key: &str) {
-        let clock = self.clock;
-        // Sounds this old have finished (and despawned) in any case.
-        self.playing.retain(|p| clock - p.started < 15.0);
         let single_channel = !matches!(entry.channel, 0 | 6);
         let mut same: Vec<usize> = Vec::new();
         let mut stop: Vec<usize> = Vec::new();
@@ -642,7 +661,7 @@ impl SoundLibrary {
     /// can fade it out later.
     pub fn play_raw(&mut self, commands: &mut Commands, fs: &vfs::Vfs, sources: &mut Assets<AudioSource>, wave: &str, raw: Raw) -> Option<Entity> {
         let path = strip_flags(wave);
-        let handle = self.source(fs, sources, &path)?;
+        let (handle, channels) = self.source(fs, sources, &path)?;
         let category = Category::Ambient;
         let base = PlaybackSettings { mode: if raw.looping { bevy::audio::PlaybackMode::Loop } else { bevy::audio::PlaybackMode::Despawn }, ..PlaybackSettings::DESPAWN }
             .with_speed((raw.pitch / 100.0).clamp(0.25, 4.0));
@@ -653,7 +672,7 @@ impl SoundLibrary {
         }
         let mut e = match raw.at {
             Some(pos) => {
-                let emitter = Emitter { pos: to_bevy(pos), base: raw.volume * category.field(), category, soundlevel: raw.soundlevel, gunfire: None };
+                let emitter = Emitter { pos: to_bevy(pos), base: raw.volume * category.field() * spatial_normalization(channels), category, soundlevel: raw.soundlevel, gunfire: None };
                 let gain = emitter.gain(emitter.pos.distance(self.listener)) * start;
                 commands.spawn((
                     AudioPlayer(handle),
@@ -691,7 +710,9 @@ pub fn update(
     ears: Query<&GlobalTransform, With<SpatialListener>>,
     mut spatial: Query<(&Emitter, Option<&Fade>, &mut SpatialAudioSink)>,
     mut faded: Query<(Entity, &SoundGain, &Fade, Option<&mut AudioSink>, Has<Emitter>)>,
+    active: Query<(), With<AudioPlayer>>,
 ) {
+    sounds.playing.retain(|p| active.contains(p.entity));
     sounds.clock += time.delta_secs_f64();
     if let Some(ear) = ears.iter().next() {
         listener.0 = ear.translation();
@@ -717,6 +738,42 @@ pub fn update(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn malformed_mp3_is_rejected_before_bevy_decodes_it() {
+        assert!(decoded_audio(vec![0xFF, 0xFB, 1, 2]).is_none());
+    }
+
+    #[test]
+    fn stereo_and_mono_spatial_samples_have_the_same_gain() {
+        let ears = spatial_listener();
+        let front = [0.0, 0.0, -0.01];
+        let samples = |channels: u16| {
+            let input = rodio::buffer::SamplesBuffer::new(channels.try_into().unwrap(), 44100.try_into().unwrap(), vec![1.0; channels as usize]);
+            let mut source = rodio::source::Spatial::new(input, front,
+                (ears.left_ear_offset * PAN_ONLY_SCALE).to_array(), (ears.right_ear_offset * PAN_ONLY_SCALE).to_array());
+            source.next().unwrap() * spatial_normalization(channels)
+        };
+        assert_eq!(samples(1), samples(2));
+        assert_eq!(samples(1), samples(4));
+    }
+
+    #[test]
+    fn actual_spatial_samples_pan_to_the_correct_ear_without_extra_falloff() {
+        let ears = spatial_listener();
+        let samples = |position: Vec3| {
+            let input = rodio::buffer::SamplesBuffer::new(1.try_into().unwrap(), 44100.try_into().unwrap(), vec![1.0]);
+            let mut source = rodio::source::Spatial::new(input, (position * PAN_ONLY_SCALE).to_array(),
+                (ears.left_ear_offset * PAN_ONLY_SCALE).to_array(), (ears.right_ear_offset * PAN_ONLY_SCALE).to_array());
+            (source.next().unwrap(), source.next().unwrap())
+        };
+        let front = samples(Vec3::new(0.0, 0.0, -4000.0));
+        assert!((front.0 - RODIO_FRONT).abs() < 0.001 && (front.1 - RODIO_FRONT).abs() < 0.001);
+        let right = samples(Vec3::new(1000.0, 0.0, 0.0));
+        assert!(right.1 > right.0 * 1.9, "right-hand source has wrong pan: {right:?}");
+        let left = samples(Vec3::new(-1000.0, 0.0, 0.0));
+        assert!(left.0 > left.1 * 1.9, "left-hand source has wrong pan: {left:?}");
+    }
 
     fn wav(tag: u16, bits: u16, data: &[u8]) -> Vec<u8> {
         let mut fmt = Vec::new();

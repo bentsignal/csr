@@ -32,7 +32,6 @@ pub fn step_period(speed: f32) -> f32 {
 
 #[derive(Default)]
 struct PlayerFoley {
-    seen: bool,
     weapon: String,
     reloading: bool,
     shell_stage: Option<Option<i32>>,
@@ -53,6 +52,7 @@ struct Queued {
 pub struct Foley {
     players: HashMap<sim::PlayerId, PlayerFoley>,
     queue: Vec<Queued>,
+    last_tick: Option<u64>,
 }
 
 impl Foley {
@@ -104,13 +104,14 @@ pub fn update(
     views: Res<ViewModels>,
     props: Res<SurfaceProps>,
     level: Res<LoadedLevel>,
-    time: Res<Time>,
     mut sounds: ResMut<SoundLibrary>,
     mut sources: ResMut<Assets<AudioSource>>,
     mut foley: ResMut<Foley>,
 ) {
     let now = world.0.time();
-    let dt = time.delta_secs();
+    if foley.last_tick == Some(world.0.tick) { return; }
+    foley.last_tick = Some(world.0.tick);
+    let dt = world.0.dt();
     let fs = &level.0.vfs;
     let foley = &mut *foley;
     for p in &world.0.players {
@@ -121,19 +122,14 @@ pub fn update(
             foley.queue.retain(|q| q.player != p.id);
             continue;
         }
-        let first = !st.seen;
-        st.seen = true;
-
         // Deploy: the draw sequence's sounds, at its own speed.
         if weapon != st.weapon {
             st.weapon = weapon.clone();
             st.reloading = false;
             st.shell_stage = None;
             foley.queue.retain(|q| q.player != p.id);
-            if !first {
-                if let Some((duration, events)) = views.activity_sounds(&weapon, "ACT_VM_DRAW") {
-                    foley.schedule(p.id, &weapon, now, duration, &events, false);
-                }
+            if let Some((duration, events)) = views.activity_sounds(&weapon, "ACT_VM_DRAW") {
+                foley.schedule(p.id, &weapon, now, duration, &events, false);
             }
         }
 
@@ -186,6 +182,7 @@ pub fn update(
                 let left = st.left;
                 let step = surface_step(&level.0, &props, p.movement.origin, left);
                 let entry = step_entry(&sounds, p.team, &step, left);
+                if std::env::var_os("CSR_SOUND_LOG").is_some() { info!("footstep sim {now:.3} player {} {entry} speed {speed:.1}", p.id); }
                 let emit = emit_for(p, &local, p.movement.origin);
                 sounds.play_with(&mut commands, fs, &mut sources, &entry, emit);
                 sounds.play_with(&mut commands, fs, &mut sources, &format!("{}Default.Suit", team_prefix(p.team)), emit);
