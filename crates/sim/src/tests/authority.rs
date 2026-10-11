@@ -119,6 +119,63 @@ fn snapshots_and_inputs_round_trip() {
     assert!(other.decode::<WorldState>(&w.encode_state()).is_err());
 }
 
+#[test]
+fn firing_snapshot_round_trip_ignores_derived_recoil_cache() {
+    let (mut a, shooter, _) = aim_setup();
+    let mut definitions = a.catalog.weapons.clone();
+    let rifle = definitions.iter_mut().find(|def| def.class_name == "weapon_ak47").unwrap();
+    rifle.recoil.magnitude = 30.0;
+    a.player_mut(shooter).unwrap().active_weapon_mut().unwrap().set_def(Arc::new(rifle.clone()));
+    a.catalog = Arc::new(weapons::Catalog { weapons: definitions });
+    a.step(&[(shooter, TickInput { buttons: buttons::ATTACK, ..Default::default() })]);
+    let gun = a.player(shooter).unwrap().active_weapon().unwrap();
+    assert!(gun.recoil_index > 0.0);
+    let punch = gun.aim_punch(); // Populate the server's derived cache.
+    assert!(punch[0] < 0.0, "the snapshot contains active recoil");
+    let snap = a.snapshot();
+    let decoded: Snapshot = a.decode(&state::encode(&snap)).unwrap();
+    assert_eq!(decoded, snap, "cache population must not change state equality");
+
+    let mut b = world();
+    b.catalog = a.catalog.clone();
+    b.restore(decoded.state);
+    assert_eq!(b.player(shooter).unwrap().active_weapon().unwrap().aim_punch(), punch);
+    for _ in 0..a.ticks(0.5) {
+        let inputs = [(shooter, TickInput { buttons: buttons::ATTACK, ..Default::default() })];
+        a.step(&inputs);
+        b.step(&inputs);
+        assert_eq!(a.state(), b.state());
+        assert_eq!(a.events, b.events);
+    }
+}
+
+#[test]
+fn same_tick_drop_keeps_the_original_owners_finish() {
+    for scenario in ["spawn", "respawn", "buy"] {
+        let mut w = world();
+        let owner = w.add_player("owner", Team::Terrorist);
+        let mut loadout = Loadout::default();
+        loadout.skins.insert("weapon_ak47".into(), weapon::Cosmetic {
+            serial: 42, paint: 44, seed: 1, wear: 0.2,
+            stattrak: Some(0), souvenir: None, stickers: [None; 4],
+        });
+        w.set_loadout(owner, loadout);
+        if scenario == "respawn" { w.respawn(owner); }
+        let buy = if scenario == "buy" {
+            w.set_mode(GameMode::Competitive, rules());
+            w.player_mut(owner).unwrap().money = 8000;
+            Purchase::Weapon(7)
+        } else { Purchase::None };
+        w.step(&[(owner, TickInput { buy, drop: true, ..Default::default() })]);
+        let dropped = w.items.iter().find_map(|item| match &item.kind {
+            GroundKind::Weapon(gun) if gun.def.class_name == "weapon_ak47" => Some(gun),
+            _ => None,
+        }).expect("the rifle was dropped");
+        assert_eq!(dropped.cosmetic_owner, Some(owner), "{scenario}");
+        assert_eq!(dropped.cosmetic.map(|skin| skin.serial), Some(42), "{scenario}");
+    }
+}
+
 /// Measurements that must not depend on the tick rate: run speed, jump
 /// height, recoil after a short spray, firing-inaccuracy decay, recoil
 /// recovery time and reload time.

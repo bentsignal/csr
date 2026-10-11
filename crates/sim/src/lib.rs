@@ -983,7 +983,12 @@ impl World {
         let p = &mut self.players[i];
         let id = p.id;
         let yaw = p.view_angles.y;
-        let w = p.take(index, time);
+        let mut w = p.take(index, time);
+        // A gun can leave its holder in the same tick it was bought or
+        // spawned. Assign its finish before it enters the ground inventory.
+        if w.cosmetic_owner.is_none() {
+            p.loadout.dress(id, p.team, &self.catalog, &mut w);
+        }
         let name = w.def.class_name.clone();
         self.new_item(GroundKind::Weapon(w), pos, yaw, id, time + 1.0);
         self.events.push(GameEvent::Dropped { player: id, item: name, pos });
@@ -1281,6 +1286,9 @@ impl World {
             }
             GameMode::Competitive => self.update_round(time),
         }
+        // Newly spawned knives must use the selected definition on their
+        // very first attack, before processing this tick's input.
+        self.dress_weapons();
         let frozen = self.competitive() && self.round.phase == Phase::Freeze;
 
         for i in 0..self.players.len() {

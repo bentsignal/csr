@@ -9,9 +9,11 @@
 //!
 //! A [`Snapshot`] is one tick as a client receives it: the state after the
 //! tick plus the [`GameEvent`]s it produced. Restoring a snapshot into a
-//! world built from the same map gives a world that steps identically to
-//! the server's (`tests::restored_state_steps_identically`), which is what
-//! client prediction relies on.
+//! world built from the same map gives a world that steps identically when
+//! given the same player inputs (`tests::restored_state_steps_identically`).
+//! Bot brains are server-only: replaying a match with bots also requires
+//! their authoritative inputs or a clone of the server's brains. A snapshot
+//! alone does not reproduce their decisions.
 //!
 //! Encoding is [postcard](https://docs.rs/postcard) (compact, varint
 //! integers, raw IEEE floats, so the bytes are deterministic). Weapon

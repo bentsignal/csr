@@ -74,7 +74,10 @@ input (a listen server of one); online the server does.
   `GameEvent`s. It is encoded with postcard; weapon definitions travel as
   their `ContentId` and resolve against the receiver's catalog. What both
   ends load from the map (collision, spawns, objectives, the catalog) and
-  the server-only bot brains are not part of it.
+  the server-only bot brains are not part of it. Replaying a match with
+  bots requires their authoritative inputs or cloned bot brains; clients
+  must not regenerate server AI from a snapshot. Prediction and
+  reconciliation remain in Track A2.
 - **VR seam.** `TickInput` carries an optional `TrackedPose` (head and both
   hands, as offsets from the player's origin) and an `AimRay`. Shots, knife
   swings and throws use the aim ray when there is one, with its origin

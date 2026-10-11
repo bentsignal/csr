@@ -36,6 +36,15 @@ impl Cosmetic {
     }
 }
 
+/// Derived data is excluded from both the wire state and state equality.
+/// Reading aim punch may fill the cache without changing the weapon.
+#[derive(Clone, Debug, Default)]
+struct RecoilPatternCache(OnceLock<Arc<Vec<[f32; 2]>>>);
+
+impl PartialEq for RecoilPatternCache {
+    fn eq(&self, _other: &Self) -> bool { true }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct WeaponState {
     #[serde(with = "crate::state::weapon_def")]
@@ -66,7 +75,7 @@ pub struct WeaponState {
     /// Cumulative recoil offsets (pitch, yaw) in degrees, computed from
     /// `def` on first use (not replicated: both sides derive it).
     #[serde(skip)]
-    pattern: OnceLock<Arc<Vec<[f32; 2]>>>,
+    pattern: RecoilPatternCache,
 }
 
 impl WeaponState {
@@ -91,18 +100,18 @@ impl WeaponState {
             last_melee_attack: None,
             accuracy_penalty: 0.0,
             recoil_index: 0.0,
-            pattern: OnceLock::new(),
+            pattern: RecoilPatternCache::default(),
         }
     }
 
     /// Swaps the definition (a knife model choice), keeping the state.
     pub fn set_def(&mut self, def: Arc<WeaponDefinition>) {
         self.def = def;
-        self.pattern = OnceLock::new();
+        self.pattern = RecoilPatternCache::default();
     }
 
     fn pattern(&self) -> &[[f32; 2]] {
-        self.pattern.get_or_init(|| Arc::new(recoil_pattern(&self.def)))
+        self.pattern.0.get_or_init(|| Arc::new(recoil_pattern(&self.def)))
     }
 
     pub fn zoom_levels(&self) -> u8 {

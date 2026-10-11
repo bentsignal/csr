@@ -86,9 +86,9 @@ fn main() {
     let code = match cmd {
         "probe" => probe::run(&map),
         "sim" => match flag_value(rest, "--tickrate").map(|v| v.parse::<u32>()) {
-            None => simcheck::run(&map, sim::DEFAULT_TICK_RATE),
+            None if !rest.iter().any(|a| a == "--tickrate") => simcheck::run(&map, sim::DEFAULT_TICK_RATE),
             Some(Ok(rate)) if sim::TICK_RATE_RANGE.contains(&rate) => simcheck::run(&map, rate),
-            Some(_) => {
+            Some(_) | None => {
                 eprintln!("error: --tickrate takes a number from {} to {}", sim::TICK_RATE_RANGE.start(), sim::TICK_RATE_RANGE.end());
                 2
             }

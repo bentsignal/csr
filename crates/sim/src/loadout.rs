@@ -90,7 +90,7 @@ impl World {
         p.loadout = loadout;
         let team = p.team;
         for w in &mut p.weapons {
-            if w.cosmetic_owner == Some(id) {
+            if w.cosmetic_owner.is_none() || w.cosmetic_owner == Some(id) {
                 p.loadout.dress(id, team, &catalog, w);
             }
         }
