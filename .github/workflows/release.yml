@@ -29,6 +29,7 @@ jobs:
         shell: powershell
     steps:
       - uses: actions/checkout@v5
+      - run: Add-Content $env:GITHUB_PATH "$env:USERPROFILE\.cargoin"
       - run: cargo test --workspace --locked
       - name: Package
         run: ./tools/package-release.ps1
