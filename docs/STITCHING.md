@@ -33,3 +33,11 @@ This page records what has been done so far to keep that possible.
    the seam: IW4L's clipmap can implement it too.
 5. **One app.** A launcher that adds `CsgoPlugin` and IW4L's plugins and
    switches maps and rulesets from a menu.
+
+## Delivery
+
+Crossed-in content reaches players as content packs (`.csrpack`, see
+ROADMAP Track E): recipe packs read assets from the player's own install of
+the other game; private asset packs cover friends who do not own it. Code
+from other rewrites is compiled in, because Rust has no stable plugin ABI.
+The first target is the MW2 Intervention.
