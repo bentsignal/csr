@@ -116,19 +116,21 @@ byte-identical to 2018.
 
 - [ ] New UI layer with an app state machine (menu ↔ loading ↔ match ↔
       server browser) instead of relaunching the process.
-- [ ] **Spike: play Valve's own SWFs with [Ruffle](https://github.com/ruffle-rs/ruffle)**
-      (Rust Flash player, MIT/Apache, wgpu) inside the Bevy app, read from
-      the player's install at runtime. Stub the Scaleform game API the
-      ActionScript calls and feed it our local profile, friends, inventory
-      and server data. If it works, the menu is pixel-exact by construction
-      and nothing of Valve's is shipped. Risks: CS:GO-specific Scaleform
-      extensions, and Ruffle's wgpu version versus Bevy's (fallback: render
-      Ruffle offscreen and copy the frame).
-- [ ] Fallback if the spike fails: a native Bevy layout measured against the
-      references, pulling shapes, bitmaps and fonts out of the SWFs at
-      runtime with the `swf` crate (nothing redrawn or committed).
+- [x] **Spike: play Valve's own SWFs with [Ruffle](https://github.com/ruffle-rs/ruffle)**
+      (Rust Flash player, MIT/Apache, wgpu), read from the player's install
+      at runtime, with the Scaleform game API stubbed. It works: the home
+      screen renders within 6.0/255 mean error of the reference outside web
+      content and avatars. Decision and evidence:
+      [research/scaleform-spike.md](research/scaleform-spike.md). Needs three
+      Ruffle fixes (fork `bentsignal/ruffle`, branch `csgo-scaleform`).
+- [ ] Integrate Ruffle as the menu layer (`crates/scaleform`), bridge the
+      game API to our real data, replace `client::menu`.
+- The fallback (a native Bevy layout built from the SWFs with the `swf`
+  crate) is not needed.
 - [ ] Screenshot-diff harness: render the menu at 1920x1080 and diff it
-      against the reference images.
+      against the reference images. The spike tool has it
+      (`tools/scaleform-spike diff`); move it into the client's screenshot
+      mode with the integration.
 - [ ] Case opening as in `menu-2018-case-opening.png`, with its original
       sounds (`UI.CrateOpen`, `UI.CrateItemScroll`, `UI.CrateDisplay`). Reel
       timing comes from `inventorypanel.swf` running, or frame counts from
