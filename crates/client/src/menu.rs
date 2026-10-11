@@ -91,28 +91,8 @@ pub(crate) fn setup(
     level: Res<crate::LoadedLevel>,
     mut clock: ResMut<Time<Virtual>>,
 ) {
-    let mut maps: Vec<String> = std::fs::read_dir(level.0.game_dir.join("maps"))
-        .into_iter()
-        .flatten()
-        .filter_map(Result::ok)
-        .filter_map(|e| e.path().file_name()?.to_str().map(str::to_string))
-        .filter_map(|n| n.strip_suffix(".bsp").map(str::to_string))
-        .collect();
-    maps.extend(
-        level
-            .0
-            .vfs
-            .archive_paths_with_prefix("maps/")
-            .iter()
-            .filter_map(|p| {
-                p.strip_prefix("maps/")?
-                    .strip_suffix(".bsp")
-                    .map(str::to_string)
-            }),
-    );
-    maps.retain(|p| !p.contains('/') && (p.starts_with("de_") || p.starts_with("cs_")));
-    maps.sort();
-    maps.dedup();
+    // Installed maps plus old Workshop versions (fetched on first load).
+    let mut maps: Vec<String> = level::maps::list(&level.0.game_dir, &level.0.vfs).into_iter().map(|m| m.name).collect();
     if maps.is_empty() {
         maps.push(opts.0.map.clone());
     }
@@ -1011,11 +991,7 @@ pub fn draw(
             let width = ((size.x - 168.0 - (cols - 1.0) * 12.0 - 20.0) / cols).floor();
             let card_height = if size.y < 800.0 { 88.0 } else { 118.0 };
             for (i, name) in menu.maps.iter().enumerate() {
-                let title = name
-                    .trim_start_matches("de_")
-                    .trim_start_matches("cs_")
-                    .replace('_', " ")
-                    .to_uppercase();
+                let title = level::maps::title(name).to_uppercase();
                 let c = card(
                     &mut commands,
                     grid,
@@ -1025,7 +1001,7 @@ pub fn draw(
                     width,
                     card_height,
                 );
-                if let Some(img) = art.image(&format!("map-{name}")) {
+                if let Some(img) = art.image(&format!("map-{name}")).or_else(|| art.image(&format!("map-{}", level::maps::base(name)))) {
                     // Crop the installed 640×360 image to fill the short map card.
                     let crop = 640.0 * (card_height - 32.0) / (width - 4.0);
                     let banner = commands

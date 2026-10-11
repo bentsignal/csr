@@ -19,6 +19,8 @@
 /userdata/
 /config/paths.cfg
 /logs/
+# Old maps fetched from Valve's Workshop (never commit them)
+/workshop/
 
 # Agent worktrees and local tool state
 /.claude/
