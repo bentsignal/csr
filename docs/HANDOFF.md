@@ -1,6 +1,6 @@
 # Handoff
 
-> **Status: OPEN, not yet picked up.**
+> **Status: HANDED OFF on 2026-10-11 to OpenAI Codex / T3 Code session.**
 >
 > If you are the agent picking this up: **before doing anything else**, change
 > the line above to `Status: HANDED OFF on <date> to <thread or session
