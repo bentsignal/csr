@@ -101,6 +101,58 @@ impl WeaponDefinition {
         self.attributes.get(key).and_then(|v| kv::parse_f32(v))
     }
 
+    /// Recomputes the stats (price, damage, accuracy, recoil...) from
+    /// [`Self::attributes`], which use items_game.txt's attribute names.
+    pub fn apply_attributes(&mut self) {
+        let attributes = std::mem::take(&mut self.attributes);
+        let a = |k: &str| attributes.get(k).and_then(|v| kv::parse_f32(v));
+        let ai = |k: &str| a(k).map(|v| v as i32);
+        self.price = ai("in game price").unwrap_or(0);
+        self.damage = a("damage").unwrap_or(0.0);
+        self.armor_ratio = a("armor ratio").unwrap_or(1.0);
+        self.penetration = a("penetration").unwrap_or(1.0);
+        self.range = a("range").unwrap_or(8192.0);
+        self.range_modifier = a("range modifier").unwrap_or(0.98);
+        self.cycle_time = a("cycletime").unwrap_or(0.15);
+        self.full_auto = a("is full auto").is_some_and(|v| v != 0.0);
+        self.bullets = a("bullets").map(|v| v as u32).unwrap_or(1).max(1);
+        self.clip_size = ai("primary clip size").or_else(|| ai("primary default clip size")).unwrap_or(-1);
+        self.reserve_ammo = ai("primary reserve ammo max").unwrap_or(0);
+        self.max_player_speed = a("max player speed").unwrap_or(250.0);
+        self.accuracy = Accuracy {
+            spread: a("spread").unwrap_or(0.0),
+            inaccuracy_stand: a("inaccuracy stand").unwrap_or(0.0),
+            inaccuracy_crouch: a("inaccuracy crouch").unwrap_or(0.0),
+            inaccuracy_move: a("inaccuracy move").unwrap_or(0.0),
+            inaccuracy_jump: a("inaccuracy jump").unwrap_or(0.0),
+            inaccuracy_land: a("inaccuracy land").unwrap_or(0.0),
+            inaccuracy_fire: a("inaccuracy fire").unwrap_or(0.0),
+            recovery_time_stand: a("recovery time stand").unwrap_or(0.0),
+            recovery_time_crouch: a("recovery time crouch").unwrap_or(0.0),
+        };
+        self.recoil = Recoil {
+            angle: a("recoil angle").unwrap_or(0.0),
+            angle_variance: a("recoil angle variance").unwrap_or(0.0),
+            magnitude: a("recoil magnitude").unwrap_or(0.0),
+            magnitude_variance: a("recoil magnitude variance").unwrap_or(0.0),
+            seed: a("recoil seed").map(|v| v as i64).unwrap_or(0),
+        };
+        self.kill_award = ai("kill award").unwrap_or(300);
+        self.attributes = attributes;
+    }
+
+    /// A new weapon based on this one: same class, models and sounds, with
+    /// `overrides` (items_game.txt attribute names) applied to the stats.
+    pub fn variant(&self, id: ContentId, overrides: &HashMap<String, String>) -> WeaponDefinition {
+        let mut w = self.clone();
+        w.id = id;
+        for (k, v) in overrides {
+            w.attributes.insert(k.to_ascii_lowercase(), v.clone());
+        }
+        w.apply_attributes();
+        w
+    }
+
     /// Rounds per minute.
     pub fn rpm(&self) -> f32 {
         if self.cycle_time > 0.0 { 60.0 / self.cycle_time } else { 0.0 }
@@ -233,8 +285,6 @@ fn collect_chain<'a>(b: &'a Block, prefabs: &HashMap<String, &'a Block>, out: &m
 }
 
 fn build(index: &str, class_name: &str, r: &Resolved) -> WeaponDefinition {
-    let a = |k: &str| r.attributes.get(k).and_then(|v| kv::parse_f32(v));
-    let ai = |k: &str| a(k).map(|v| v as i32);
     let f = |k: &str| r.fields.get(k).cloned().unwrap_or_default();
     let short = class_name.trim_start_matches("weapon_");
     let class = classify(class_name, &r.fields);
@@ -246,51 +296,37 @@ fn build(index: &str, class_name: &str, r: &Resolved) -> WeaponDefinition {
         (false, true) => Side::CounterTerrorist,
         _ => Side::Both,
     };
-    WeaponDefinition {
+    let mut w = WeaponDefinition {
         id: ContentId::csgo(ContentKind::Weapon, short),
         class_name: class_name.to_string(),
         def_index: index.parse().unwrap_or(0),
         name_token: f("item_name"),
         class,
         side,
-        price: ai("in game price").unwrap_or(0),
-        damage: a("damage").unwrap_or(0.0),
-        armor_ratio: a("armor ratio").unwrap_or(1.0),
-        penetration: a("penetration").unwrap_or(1.0),
-        range: a("range").unwrap_or(8192.0),
-        range_modifier: a("range modifier").unwrap_or(0.98),
-        cycle_time: a("cycletime").unwrap_or(0.15),
-        full_auto: a("is full auto").is_some_and(|v| v != 0.0),
-        bullets: a("bullets").map(|v| v as u32).unwrap_or(1).max(1),
-        clip_size: ai("primary clip size").or_else(|| ai("primary default clip size")).unwrap_or(-1),
-        reserve_ammo: ai("primary reserve ammo max").unwrap_or(0),
-        max_player_speed: a("max player speed").unwrap_or(250.0),
-        accuracy: Accuracy {
-            spread: a("spread").unwrap_or(0.0),
-            inaccuracy_stand: a("inaccuracy stand").unwrap_or(0.0),
-            inaccuracy_crouch: a("inaccuracy crouch").unwrap_or(0.0),
-            inaccuracy_move: a("inaccuracy move").unwrap_or(0.0),
-            inaccuracy_jump: a("inaccuracy jump").unwrap_or(0.0),
-            inaccuracy_land: a("inaccuracy land").unwrap_or(0.0),
-            inaccuracy_fire: a("inaccuracy fire").unwrap_or(0.0),
-            recovery_time_stand: a("recovery time stand").unwrap_or(0.0),
-            recovery_time_crouch: a("recovery time crouch").unwrap_or(0.0),
-        },
-        recoil: Recoil {
-            angle: a("recoil angle").unwrap_or(0.0),
-            angle_variance: a("recoil angle variance").unwrap_or(0.0),
-            magnitude: a("recoil magnitude").unwrap_or(0.0),
-            magnitude_variance: a("recoil magnitude variance").unwrap_or(0.0),
-            seed: a("recoil seed").map(|v| v as i64).unwrap_or(0),
-        },
         view_model: f("model_player"),
         world_model: f("model_world"),
         fire_sound: f("visuals/sound_single_shot"),
         zoom_in_sound: f("zoom_in_sound"),
         zoom_out_sound: f("zoom_out_sound"),
-        kill_award: ai("kill award").unwrap_or(300),
         attributes: r.attributes.clone(),
-    }
+        price: 0,
+        damage: 0.0,
+        armor_ratio: 0.0,
+        penetration: 0.0,
+        range: 0.0,
+        range_modifier: 0.0,
+        cycle_time: 0.0,
+        full_auto: false,
+        bullets: 1,
+        clip_size: -1,
+        reserve_ammo: 0,
+        max_player_speed: 0.0,
+        accuracy: Accuracy::default(),
+        recoil: Recoil::default(),
+        kill_award: 0,
+    };
+    w.apply_attributes();
+    w
 }
 
 fn classify(class_name: &str, fields: &HashMap<String, String>) -> WeaponClass {

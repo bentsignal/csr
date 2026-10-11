@@ -1,0 +1,16 @@
+[package]
+name = "packs"
+description = "Content packs (.csrpack): the first cut of the connection layer for mods and crossed-in content"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+content.workspace = true
+vfs.workspace = true
+weapons.workspace = true
+zip.workspace = true
+sha2.workspace = true
+serde = { version = "1", features = ["derive"] }
+toml = { version = "1", default-features = false, features = ["parse", "serde", "std"] }
