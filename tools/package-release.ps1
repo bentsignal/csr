@@ -25,7 +25,8 @@ $zip = Join-Path $dist "$name-$version-windows-x64.zip"
 # --- Build -----------------------------------------------------------------
 $cargo = (Get-Command cargo -ErrorAction SilentlyContinue).Source
 if (-not $cargo) { $cargo = Join-Path $env:USERPROFILE '.cargo\bin\cargo.exe' }
-$targetDir = Join-Path $root 'target\dist'
+# crt-static changes every crate's flags, so keep it apart from normal builds.
+$targetDir = if ($env:CARGO_TARGET_DIR) { Join-Path $env:CARGO_TARGET_DIR 'dist' } else { Join-Path $root 'target\dist' }
 if (-not $SkipBuild) {
     Write-Host "Building release $version (static C runtime, thin LTO). This takes a while..."
     $env:RUSTFLAGS = '-C target-feature=+crt-static'
