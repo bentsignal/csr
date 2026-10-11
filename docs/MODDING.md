@@ -81,7 +81,7 @@ No importer instructions can access arbitrary filesystem paths.
 ZIP entries use slash-separated ASCII relative paths. Traversal, drive paths,
 alternate streams, device names, links, dot segments and case aliases are
 refused. Only stored/deflate compression is accepted. Default limits are
-256 MiB compressed, 256 MiB per entry, 512 MiB expanded, 8192 entries and
+512 MiB compressed, 512 MiB per entry, 1 GiB expanded, 8192 entries and
 256 KiB manifest. CRC, exact expanded length and hashes are checked before
 anything is mounted or installed. These checks bound the container, not a
 complete audit of all inherited BSP/model/audio parsers.

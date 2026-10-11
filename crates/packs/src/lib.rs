@@ -34,9 +34,9 @@ pub struct Limits {
 impl Default for Limits {
     fn default() -> Self {
         Self {
-            archive: 256 << 20,
-            entry: 256 << 20,
-            expanded: 512 << 20,
+            archive: 512 << 20,
+            entry: 512 << 20,
+            expanded: 1024 << 20,
             entries: 8192,
             manifest: 256 << 10,
         }
