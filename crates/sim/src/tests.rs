@@ -20,6 +20,24 @@ fn disconnected_competitive_player_leaves_bomb_and_cancels_defusing() {
 }
 
 #[test]
+fn prediction_preserves_bot_metadata_without_inventing_ai_or_replaying_events() {
+    let mut w = world();
+    let local = w.add_player("local", Team::CounterTerrorist);
+    let bot = w.add_bot("remote bot", Team::Terrorist);
+    w.player_mut(local).unwrap().movement.on_ground = true;
+    let mut authority = w.clone();
+    let input = TickInput { forward_move: 450., buttons: buttons::JUMP, ..Default::default() };
+    w.step_prediction(&[(local, input)]);
+    assert!(w.player(bot).unwrap().is_bot);
+    assert_eq!(w.player(bot).unwrap().last_input, TickInput::default());
+    assert!(w.events.is_empty());
+    authority.step(&[(local, input)]);
+    assert!(authority.events.iter().any(|event| matches!(event, GameEvent::Jump { player } if *player == local)));
+    assert_ne!(authority.player(bot).unwrap().last_input, TickInput::default());
+    assert_eq!(w.player(local).unwrap().movement, authority.player(local).unwrap().movement);
+}
+
+#[test]
 fn special_mode_is_solo_without_round_timeouts_and_still_respawns() {
     let mut w=world();let id=w.add_player("player",Team::CounterTerrorist);w.add_bot("bot",Team::Terrorist);
     w.set_mode(GameMode::Special, RulesConfig{round_time:1.,max_rounds:1,..rules()});

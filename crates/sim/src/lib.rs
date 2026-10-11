@@ -1267,10 +1267,23 @@ impl World {
     /// repeat their last one (as a server does for a late packet), minus
     /// one-shot buttons and commands.
     pub fn step(&mut self, inputs: &[(PlayerId, TickInput)]) {
+        self.step_internal(inputs, true);
+    }
+
+    /// Replays client inputs through the same simulation without inventing
+    /// server-only bot decisions. Replicated bot metadata remains intact.
+    /// Prediction never exposes GameEvents: authoritative reliable events
+    /// drive effects, so a correction cannot replay a sound or notification.
+    pub fn step_prediction(&mut self, inputs: &[(PlayerId, TickInput)]) {
+        self.step_internal(inputs, false);
+        self.events.clear();
+    }
+
+    fn step_internal(&mut self, inputs: &[(PlayerId, TickInput)], think_bots: bool) {
         // Bots decide first, from last tick's state and events (what they
         // heard). Explicit inputs win over a bot's own.
         let with_bots;
-        let inputs = if self.players.iter().any(|p| p.is_bot) {
+        let inputs = if think_bots && self.players.iter().any(|p| p.is_bot) {
             let mut bots = std::mem::take(&mut self.bots);
             let mut all = bots.think(self);
             self.bots = bots;
