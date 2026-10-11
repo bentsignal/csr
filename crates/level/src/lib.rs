@@ -1,5 +1,7 @@
 //! Map loading shared by the headless simulation and the renderer.
 
+pub mod maps;
+
 use collision::{CollisionWorld, MapCollisionOptions};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -46,7 +48,27 @@ pub fn mount_game(game_dir: Option<&Path>) -> Result<(PathBuf, vfs::Vfs), LoadEr
     };
     let mut fs = vfs::Vfs::new();
     fs.mount_game_dir(&game_dir).map_err(|e| LoadError::Io(format!("mounting {}: {e}", game_dir.display())))?;
+    // Old map versions in the player's data folder (lowest priority).
+    workshop::Store::current().mount(&mut fs);
     Ok((game_dir, fs))
+}
+
+/// Fetches an old map version on first use (from a Steam library, or from
+/// Valve's CDN), printing progress.
+fn fetch_old_map(map: &workshop::OldMap) -> Result<(), LoadError> {
+    eprintln!("Fetching {} ({}, Workshop item {})...", map.title, map.name, map.workshop_id);
+    let mut last = (None, 0u64);
+    workshop::Store::current()
+        .fetch(map, &mut |p| {
+            let tenth = if p.total > 0 { p.done * 10 / p.total } else { 0 };
+            if last != (Some(p.stage), tenth) {
+                last = (Some(p.stage), tenth);
+                eprintln!("  {:?} {}%", p.stage, tenth * 10);
+            }
+            true
+        })
+        .map(|_| ())
+        .map_err(|e| LoadError::Io(format!("{}: {e}", map.name)))
 }
 
 impl Level {
@@ -59,6 +81,11 @@ impl Level {
 
         let t = Instant::now();
         let map_path = format!("maps/{name}.bsp");
+        if !fs.exists(&map_path) {
+            if let Some(old) = workshop::find(name) {
+                fetch_old_map(old)?;
+            }
+        }
         let bytes = fs.read(&map_path).ok_or_else(|| LoadError::Io(format!("{map_path} not found")))?;
         let bsp = bsp::Bsp::parse(&bytes).map_err(|e| LoadError::Io(format!("{map_path}: {e}")))?;
         drop(bytes);

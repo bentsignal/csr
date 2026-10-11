@@ -1,0 +1,14 @@
+[package]
+name = "workshop"
+description = "Old map versions: Valve's own Steam Workshop snapshots, found in Steam or fetched from Valve's CDN"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+vfs.workspace = true
+ureq.workspace = true
+sha1.workspace = true
+serde_json.workspace = true
+zip.workspace = true
