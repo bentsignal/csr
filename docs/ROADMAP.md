@@ -26,8 +26,8 @@ Minecraft code need work before multiplayer and public releases.
 | `third_party/minecraftoss` + `minecraft_terrain` (~154k lines) | Ported from decompiled Minecraft, no licence files, hard dependency of `level` and `client`; release zip also bundled Minecraft assets | **Removed** (decision 1) |
 | VR | `TickInput` carries tracked head/hand poses and an aim ray; hitscan uses the aim ray. Cameras are still single-view | **Seam in place, build later** |
 
-Tests: 185 passing tests, with two installed-data tests ignored by default
-(archive-loader verification, 2026-10-11), mostly on synthetic data.
+Tests: 194 passing tests, with two installed-data tests ignored by default
+(sound-foundation verification, 2026-10-11), mostly on synthetic data.
 Real-data checks are the `csr probe` / `csr sim` commands.
 
 ## Phase 0: take ownership
@@ -180,7 +180,13 @@ thing is uncanny. Fidelity is measured, never eyeballed:
 - [ ] Grenades: HE, flash, smoke, molotov/incendiary, decoy.
 - [ ] Wall penetration (surface properties) and hit groups from the models'
       real hitboxes.
-- [ ] Footsteps, reload/deploy event sounds, impact sounds.
+- [x] Footsteps, reload/deploy event sounds, surface impact sounds: soundscript
+      mixing and MDL events, fixed-tick foley, matched Legacy/client probes,
+      1,425-file decode audit, and spatial-panning/downmix regression checks.
+      [PR #11](https://github.com/bentsignal/global-offensive/pull/11).
+- [ ] Close remaining audio fidelity gaps: deployment/first-step timing,
+      exact gain curves, DSP/occlusion, ricochets/near misses, map soundscapes
+      and music. Evidence and limits: [FIDELITY.md](FIDELITY.md).
 - [ ] Ragdolls/death animations; burst, suppressor and revolver modes.
 - [ ] Validate the map pool beyond Dust II (Mirage, Inferno, Nuke, Overpass,
       Train, Cache, Vertigo, Office, Italy, ...).

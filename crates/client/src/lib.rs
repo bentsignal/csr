@@ -5,6 +5,9 @@
 //! another Bevy app (the planned multi-game "stitch").
 
 pub mod audio;
+pub mod foley;
+mod sound_probe;
+pub mod surfaces;
 pub mod tracers;
 pub mod inventory;
 pub mod cosmetics;
@@ -142,13 +145,16 @@ impl Plugin for CsgoPlugin {
             .init_resource::<scoreboard::Scoreboard>()
             .init_resource::<items::GroundInstances>()
             .init_resource::<effects::PendingEvents>()
+            .init_resource::<audio::Listener>()
+            .init_resource::<foley::Foley>()
+            .init_resource::<sound_probe::SoundProbe>()
             .init_resource::<effects::Effects>()
             .init_resource::<characters::Characters>()
             .init_resource::<viewmodel::ViewModelState>()
             .add_systems(
                 Update,
                 (
-                    menu::apply,
+                    (menu::apply, audio::update).chain(),
                     (skin_finish::record, skin_finish::sync_loadout, effects::process).chain(),
                     (feedback::update, utility_fx::update).chain(),
                     sky::follow_camera,
@@ -172,7 +178,7 @@ impl Plugin for CsgoPlugin {
                     .chain()
                     .after(player::update_camera),
             )
-            .add_systems(FixedUpdate, player::tick);
+            .add_systems(FixedUpdate, (player::tick, foley::update).chain());
     }
 }
 
@@ -368,6 +374,7 @@ fn spawn_level(
     info!("characters and viewmodels loaded in {:.2}s", t_chars.elapsed().as_secs_f32());
     let localization = localize::Localization::load(&level.vfs);
     let sounds = audio::SoundLibrary::load(&level.vfs);
+    commands.insert_resource(surfaces::SurfaceProps::load(&level.vfs));
     info!(
         "characters: T {}, CT {}, {} weapon world models; {} sound entries; {} weapons",
         character_models.terrorist.is_some(),
@@ -423,6 +430,9 @@ fn spawn_level(
         if world.mode == sim::GameMode::Deathmatch { world.respawn(id); }
     }
     commands.insert_resource(inventory::Collection(level.catalog.clone()));
+    let probe = sound_probe::SoundProbe::from_env(opts.screenshot.is_some());
+    probe.prepare(&mut world, id);
+    commands.insert_resource(probe);
     let p = world.player(id).expect("player just added");
     let mut local = LocalPlayer::new(id, p.movement.eye_position(), p.view_angles.y);
     if let Some((pos, pitch, yaw)) = opts.camera {
@@ -479,7 +489,7 @@ fn spawn_level(
         Tonemapping::None,
         start,
         PlayerCamera,
-        bevy::audio::SpatialListener::new(16.0 / 39.37),
+        audio::spatial_listener(),
     ));
     // Viewmodel camera: drawn last with its own depth buffer and FOV.
     commands.spawn((
@@ -517,6 +527,8 @@ pub fn competitive_rules(level: &level::Level) -> sim::RulesConfig {
 
 fn smoke_test(
     mut frame: Local<u32>,
+    mut probe_frame: Local<Option<u32>>,
+    probe: Res<sound_probe::SoundProbe>,
     mut frame_times: Local<Vec<f32>>,
     real: Res<Time<Real>>,
     options: Res<Options>,
@@ -534,7 +546,9 @@ fn smoke_test(
 
     let opts = &options.0;
     let Some(path) = &opts.screenshot else { return };
-    if *frame > 120 && *frame <= opts.frames { frame_times.push(real.delta_secs() * 1000.0); }
+    if probe.active() && probe_frame.is_none() && world.as_ref().is_some_and(|w| w.0.time() >= probe.duration()) { *probe_frame = Some(*frame); }
+    let capture_frame = if probe.active() { probe_frame.unwrap_or(u32::MAX - 30) } else { opts.frames };
+    if *frame > 120 && *frame <= capture_frame { frame_times.push(real.delta_secs() * 1000.0); }
     // CSR_FRAME_LOG=ms: log every frame slower than that, with renderer stats.
     if let Some(limit) = std::env::var("CSR_FRAME_LOG").ok().and_then(|v| v.parse::<f32>().ok()) {
         let ms = real.delta_secs() * 1000.0;
@@ -542,7 +556,7 @@ fn smoke_test(
             info!("slow frame {}: {ms:.1} ms", *frame);
         }
     }
-    if *frame == opts.frames.saturating_sub(90) && std::env::var_os("CSR_INSPECT").is_some(){inspect.0+=1;}
+    if *frame == capture_frame.saturating_sub(90) && std::env::var_os("CSR_INSPECT").is_some(){inspect.0+=1;}
     // CSR_BUY_MENU=n: show the buy menu on category n (0 = none picked).
     if let Ok(cat) = std::env::var("CSR_BUY_MENU").map(|v| v.parse::<usize>().unwrap_or(0)) {
         menu.open = true;
@@ -551,7 +565,7 @@ fn smoke_test(
     let mut local = local;
     // Explicit screenshot-only fixture, never enabled in interactive play.
     // This checks rendering/event plumbing, not combat accuracy.
-    if *frame == opts.frames.saturating_sub(8) && std::env::var_os("CSR_TEST_FEEDBACK").is_some() {
+    if *frame == capture_frame.saturating_sub(8) && std::env::var_os("CSR_TEST_FEEDBACK").is_some() {
         if let Some(l)=local.as_ref() {
             let (forward,_,_)=movement::angle_vectors(l.render_angles);
             let start=l.render_eye;
@@ -561,10 +575,10 @@ fn smoke_test(
             events.0.push(sim::GameEvent::Damage{attacker:l.id,victim:l.id,health:25,group:sim::weapon::HitGroup::Chest,pos});
         }
     }
-    if *frame == opts.frames.saturating_sub(12) && std::env::var_os("CSR_TEST_DROP").is_some() {
+    if *frame == capture_frame.saturating_sub(12) && std::env::var_os("CSR_TEST_DROP").is_some() {
         if let Some(l)=local.as_mut(){l.pending_drop=true;}
     }
-    if *frame == opts.frames.saturating_sub(10) && std::env::var_os("CSR_TEST_DROP").is_some() {
+    if *frame == capture_frame.saturating_sub(10) && std::env::var_os("CSR_TEST_DROP").is_some() {
         if let Some(l)=local.as_mut(){l.pitch=45.0;}
     }
     // CSR_SLOT=n: switch to weapon slot n early in the run.
@@ -582,7 +596,7 @@ fn smoke_test(
             l.latched |= movement::buttons::RELOAD;
         }
     }
-    if *frame==opts.frames.saturating_sub(90) {
+    if *frame==capture_frame.saturating_sub(90) {
         if let (Some(w),Some(l),Ok(kind))=(world.as_mut(),local.as_ref(),std::env::var("CSR_TEST_UTILITY")) {
             let (forward,_,_)=movement::angle_vectors(glam::Vec3::new(0.0,l.yaw,0.0));
             let now=w.0.time();
@@ -606,7 +620,7 @@ fn smoke_test(
             local.yaw = yaw;
         }
     }
-    if *frame == opts.frames {
+    if *frame == capture_frame {
         let fps = diagnostics
             .get(&FrameTimeDiagnosticsPlugin::FPS)
             .and_then(|d| d.average())
@@ -626,7 +640,7 @@ fn smoke_test(
             .spawn(Screenshot::primary_window())
             .observe(save_to_disk(path.clone()));
     }
-    if *frame == opts.frames + 30 {
+    if *frame == capture_frame + 30 {
         exit.write(AppExit::Success);
     }
 }

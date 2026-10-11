@@ -2,7 +2,7 @@
 //! the kill feed, a hit marker, round announcements, the bomb's beeping
 //! and its explosion.
 
-use crate::audio::SoundLibrary;
+use crate::audio::{Emit, SoundLibrary};
 use crate::coords::to_bevy;
 use crate::player::{LocalPlayer, SimWorld};
 use crate::LoadedLevel;
@@ -70,8 +70,14 @@ pub fn process(
     local: Res<LocalPlayer>,
     level: Res<LoadedLevel>,
     time: Res<Time>,
+    props: Res<crate::surfaces::SurfaceProps>,
 ) {
     let now = time.elapsed_secs();
+    // Own sounds play at the listener; everyone else's in the world.
+    let emit = |player: sim::PlayerId, at: glam::Vec3| {
+        let own = player == local.view_target() && !local.noclip;
+        Emit { at: (!own).then_some(at), owner: Some(player), local: own }
+    };
     let fs = &level.0.vfs;
     for event in pending.0.drain(..) {
         if matches!(event, GameEvent::Damage {..} | GameEvent::Impact {..} | GameEvent::RoundStart {..}) { effects.feedback.push(event.clone()); }
@@ -80,8 +86,7 @@ pub fn process(
                 effects.attack(player, weapon.clone(), "ACT_VM_PRIMARYATTACK", now);
                 let sound = world.0.catalog.get(&weapon).map(|d| d.fire_sound.clone()).unwrap_or_default();
                 if !sound.is_empty() {
-                    let at = if player == local.view_target() && !local.noclip { None } else { Some(origin) };
-                    sounds.play(&mut commands, fs, &mut sources, &sound, at);
+                    sounds.play_with(&mut commands, fs, &mut sources, &sound, emit(player, origin));
                 }
             }
             GameEvent::DecoyShot {pos,..} => {sounds.play(&mut commands,fs,&mut sources,"Weapon_AK47.Single",Some(pos));}
@@ -106,14 +111,12 @@ pub fn process(
                     sim::MeleeHit::Player if secondary => "Weapon_Knife.Stab",
                     sim::MeleeHit::Player => "Weapon_Knife.Hit",
                 };
-                let at = if player == local.view_target() && !local.noclip { None } else { Some(origin) };
-                sounds.play(&mut commands, fs, &mut sources, sound, at);
+                sounds.play_with(&mut commands, fs, &mut sources, sound, emit(player, origin));
             }
             GameEvent::Scope { player, weapon, origin, level } => {
                 if let Some(def) = world.0.catalog.get(&weapon) {
                     let sound = if level == 0 { &def.zoom_out_sound } else { &def.zoom_in_sound };
-                    let at = if player == local.view_target() && !local.noclip { None } else { Some(origin) };
-                    if !sound.is_empty() { sounds.play(&mut commands, fs, &mut sources, sound, at); }
+                    if !sound.is_empty() { sounds.play_with(&mut commands, fs, &mut sources, sound, emit(player, origin)); }
                 }
             }
             GameEvent::Tracer { player, start, end } => {
@@ -121,7 +124,11 @@ pub fn process(
             }
             GameEvent::Impact { pos, surface, .. } => {
                 if !level.0.collision.is_sky(surface) {
-                    sounds.play(&mut commands, fs, &mut sources, crate::feedback::impact_sound(level.0.collision.surface_name(surface)), Some(pos));
+                    // The surface property's bullet impact (via $surfaceprop).
+                    let name = level.0.collision.surface_name(surface);
+                    let sound = props.sounds(fs, name).and_then(|s| s.bullet_impact.clone()).filter(|s| sounds.has(s));
+                    let sound = sound.unwrap_or_else(|| crate::feedback::impact_sound(name).to_string());
+                    sounds.play(&mut commands, fs, &mut sources, &sound, Some(pos));
                 }
 
             }
@@ -133,7 +140,7 @@ pub fn process(
                     _ if target.is_some_and(|p|p.armor>0) => "Player.DamageKevlar",
                     _ => "Flesh.BulletImpact",
                 };
-                sounds.play(&mut commands, fs, &mut sources, sound, if victim==local.view_target(){None}else{Some(pos)});
+                sounds.play_with(&mut commands, fs, &mut sources, sound, emit(victim, pos));
                 if attacker == local.view_target() {
                     effects.last_hit = now;
                     effects.last_hit_headshot = group == sim::weapon::HitGroup::Head;
@@ -161,6 +168,16 @@ pub fn process(
             }
             GameEvent::Purchase { player, .. } if player == local.id => {
                 sounds.play(&mut commands, fs, &mut sources, "uipanorama.buymenu_purchase", None);
+            }
+            GameEvent::Jump { player } => {
+                if let Some(p) = world.0.player(player) {
+                    crate::foley::jump(&mut commands, &mut sounds, &mut sources, &level.0, p, &local);
+                }
+            }
+            GameEvent::Land { player, speed } => {
+                if let Some(p) = world.0.player(player) {
+                    crate::foley::land(&mut commands, &mut sounds, &mut sources, &level.0, &props, p, &local, speed);
+                }
             }
             GameEvent::Pickup { player, item } => {
                 let at = if player == local.id { None } else { world.0.player(player).map(|p| p.movement.origin) };

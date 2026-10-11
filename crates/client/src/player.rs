@@ -257,6 +257,7 @@ pub fn tick(
     settings: Res<crate::settings::Settings>,
     block: Res<InputBlockFrames>,
     mut poses: ResMut<crate::interpolation::RenderPoses>,
+    probe: Res<crate::sound_probe::SoundProbe>,
 ) {
     if front.open() {return;}
     let no_keys = ButtonInput::<KeyCode>::default();
@@ -311,18 +312,23 @@ pub fn tick(
         local.noclip_pos += wish * speed * dt;
         local.curr_eye = local.noclip_pos;
     } else {
+        let input = probe.input(world.0.time()).unwrap_or(TickInput {
+            view_angles: glam::Vec3::new(local.pitch, local.yaw, 0.0),
+            forward_move: forward,
+            side_move: side,
+            buttons: pressed,
+            weapon_slot: slot,
+            buy,
+            drop,
+            ..Default::default()
+        });
+        if probe.active() {
+            local.pitch = input.view_angles.x;
+            local.yaw = input.view_angles.y;
+        }
         inputs.push((
             local.id,
-            TickInput {
-                view_angles: glam::Vec3::new(local.pitch, local.yaw, 0.0),
-                forward_move: forward,
-                side_move: side,
-                buttons: pressed,
-                weapon_slot: slot,
-                buy,
-                drop,
-                ..Default::default()
-            },
+            input,
         ));
     }
     let id = local.id;

@@ -11,6 +11,10 @@ fn main() {
         let zero = s.bone_weights.iter().filter(|w| **w == 0.0).count();
         print!("[weights: {} zero of {}] ", zero, s.bone_weights.len());
         println!("{} act={} flags={:#x} grid {:?} params ({}, {}) {:?}..{:?}: {}", s.name, s.activity, s.flags, s.group_size, pp(s.param_index[0]), pp(s.param_index[1]), s.param_start, s.param_end, anims.join(", "));
+        for e in &s.events {
+            let what = if e.name.is_empty() { e.id.to_string() } else { e.name.clone() };
+            println!("    event @{:.3} {what} {:?}", e.cycle, e.options);
+        }
     }
 }
 #[allow(dead_code)]

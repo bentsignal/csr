@@ -22,3 +22,7 @@ sim.workspace = true
 level.workspace = true
 
 image = { version = "0.25", default-features = false, features = ["png"] }
+
+# Same decoders enabled by Bevy audio; validate before Bevy's panic-on-error
+# decoder, and inspect channel count for rodio's spatial downmix adapter.
+rodio = { version = "0.22", default-features = false, features = ["hound", "mp3", "lewton"] }
