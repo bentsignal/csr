@@ -11,7 +11,11 @@ run the real-data checks.
 |---|---|---|
 | `ci.yml` on every PR and push to `master` | `[self-hosted, csr]` | `cargo test`, `play` build, `csr probe de_dust2`, `csr sim de_dust2` |
 | `ci.yml` asset guard | GitHub (`ubuntu-latest`, seconds) | `tools/check-no-assets.sh` |
-| `release.yml` on a `v*` tag | `[self-hosted, csr]` | tests, `tools/package-release.ps1`, publish the zip to GitHub Releases |
+| `release.yml` on a `v*` tag | `[self-hosted, csr]` | tests, `tools/package-release.ps1 -DeltaFromGitHub` (zip, Velopack installer, full and delta update packages), publish all of it to the GitHub Release (`gh release create`, then `vpk upload github --merge`) |
+
+The release job needs the .NET SDK (8 or newer) on the runner for `vpk`; the
+workflow installs or updates the pinned `vpk` version itself
+(`dotnet tool update -g vpk`).
 
 Jobs queue while the PC is off and start when it is back.
 

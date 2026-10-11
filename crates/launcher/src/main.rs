@@ -18,13 +18,19 @@
 //! ```
 //! Set `CSR_GAME_DIR` if the CS:GO install is not found automatically.
 
+mod art;
+mod dialog;
 mod probe;
 mod setup;
 mod simcheck;
+mod steam;
+mod update;
 
 use std::path::PathBuf;
 
 fn main() {
+    // Installer hooks and pending updates; must run before anything else.
+    update::startup();
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.iter().any(|a| a == "--help" || a == "-h") {
         println!("CSGO Rewrite\n\n\
@@ -33,6 +39,7 @@ fn main() {
             csr probe [map]           Validate the map's models and textures\n\
             csr setup                 Choose the CS:GO Legacy folder again\n\
             csr find-csgo             Show the CS:GO installs found on this PC\n\
+            csr add-to-steam          Add CSGO Rewrite to your Steam library\n\
             csr weapons               List weapons from your CS:GO install\n\n\
             csr cases                 List local cases and their IDs\n\
             csr give-case NAME [N]    Add N local cases (names may contain spaces)\n\n\
@@ -50,9 +57,8 @@ fn main() {
             Set CSR_GAME_DIR to use a specific CS:GO Legacy install.");
         return;
     }
-    if args.first().is_some_and(|a| a == "find-csgo") {
-        setup::print_detected();
-        return;
+    if let Some(code) = setup::early_command(&args) {
+        std::process::exit(code);
     }
     let setup_only = args.first().is_some_and(|a| a == "setup");
     if let Err(e) = setup::prepare(setup_only) {
@@ -63,6 +69,11 @@ fn main() {
         println!("CS:GO Legacy folder: {}", std::env::var("CSR_GAME_DIR").unwrap_or_default());
         return;
     }
+    if args.first().is_some_and(|a| a == "add-to-steam") {
+        steam::offer(&std::env::current_dir().unwrap_or_default(), true);
+        return;
+    }
+    update::check_in_background();
     let (cmd, rest) = match args.first().map(String::as_str) {
         Some("sim") | Some("probe") | Some("play") | Some("weapons") | Some("cases") | Some("give-case") | Some("give-skin") | Some("give-sticker") | Some("stickers") | Some("skins") => (args[0].as_str(), &args[1..]),
         _ => ("play", &args[..]),

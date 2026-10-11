@@ -93,12 +93,24 @@ Debug switches: `CSR_WATCH_BOT=n` (camera on bot n), `CSR_AUTOFIRE=1`,
 ## Player data and releases
 
 - The launcher (`crates/launcher/src/setup.rs`) runs inside the data folder:
-  the repository root for source builds, or `userdata\` beside the exe when
-  a `csgo-rewrite.portable` file sits next to it (release builds). Save
-  paths are relative to it; never use `CARGO_MANIFEST_DIR` for runtime
-  files. `CSR_DATA_DIR` overrides.
+  the repository root for source builds, `%LocalAppData%\CSGO-Rewrite\userdata`
+  for installed copies (outside the app folder that updates replace), or
+  `userdata\` beside the exe when a `csgo-rewrite.portable` file sits next
+  to it (the portable zip). Save paths are relative to it; never use
+  `CARGO_MANIFEST_DIR` for runtime files. `CSR_DATA_DIR` overrides.
 - Releases are built by `.github/workflows/release.yml` on a `v*` tag, using
-  `tools/package-release.ps1` (`Package Release.cmd` runs it locally).
+  `tools/package-release.ps1` (`Package Release.cmd` runs it locally). It
+  makes the portable zip and, with Velopack's `vpk`, the installer and the
+  update packages. Installed copies update themselves from GitHub Releases
+  (`crates/launcher/src/update.rs`); the Velopack pack id `CSGORewrite` must
+  never change. `CSR_NO_UPDATE` disables the check; `CSR_UPDATE_URL` (a
+  GitHub repo, URL or local `vpk` output folder) and
+  `CSR_UPDATE_PRERELEASE=1` test a release before publishing it.
+- "Add to Steam" (`crates/launcher/src/steam.rs`) edits every Steam
+  account's `shortcuts.vdf`. Tests use a fake Steam folder via
+  `CSR_STEAM_DIR`; never test against the real one without a backup.
+- Artwork (icon, Steam library images, installer splash) is drawn in code
+  (`crates/launcher/src/art.rs`, `csr art <folder>`); no image files.
 
 CI runs on the owner's PC (self-hosted runner, real-data checks included): `docs/CI.md`.
 Architecture: `docs/ARCHITECTURE.md`. Multi-game plans: `docs/STITCHING.md`.
