@@ -1,31 +1,144 @@
 //! Install setup: where player data lives and where the game assets are.
 //!
-//! * **Data folder.** A release build ships a `csgo-rewrite.portable` file
-//!   next to the executable; its player data (settings, skins, cases,
-//!   loadouts) then lives in `userdata\` beside it, so a freshly
-//!   unpacked copy starts clean. Source checkouts keep theirs at the
-//!   repository root. `CSR_DATA_DIR` overrides both. The process runs inside the
-//!   data folder, so every relative save path (`config\`) lands there.
-//! * **CS:GO Legacy.** The first run of a release build searches every Steam
-//!   library on the PC (Steam's registry entry, its `libraryfolders.vdf`, and
-//!   the usual library folders on each drive) for CS:GO Legacy (Steam app
-//!   4465480, or the older `csgo_legacy` beta of app 730), asks the player
-//!   to confirm the install it found, and otherwise offers to open Steam's
-//!   installer for it or to browse for `csgo.exe`. The choice is checked and
-//!   remembered in `config\paths.cfg`. `csr setup` asks again;
-//!   `csr find-csgo` prints what the search sees. `CSR_GAME_DIR` overrides.
+//! * **Data folder.** Settings, skins, cases and loadouts live in:
+//!   - installed copies (Setup.exe, see `update.rs`):
+//!     `%LocalAppData%\CSGO-Rewrite\userdata`, outside the app folder that
+//!     every update replaces. The first run copies in the data of an older
+//!     copy if it finds one (a `userdata\` folder in the install folder, or an
+//!     unzipped release on the Desktop, in Downloads or in Documents);
+//!   - unzipped releases (a `csgo-rewrite.portable` file next to the exe):
+//!     `userdata\` beside the exe, so a fresh unzip starts clean;
+//!   - source checkouts: the repository root.
+//!
+//!   `CSR_DATA_DIR` overrides all three. The process runs inside the data
+//!   folder, so every relative save path (`config\`) lands there.
+//! * **CS:GO Legacy.** Player builds (installed or unzipped) search every
+//!   Steam library on the PC (Steam's registry entry, its
+//!   `libraryfolders.vdf`, and the usual library folders on each drive) for
+//!   CS:GO Legacy (Steam app 4465480, or the older `csgo_legacy` beta of app
+//!   730) and use what they find without asking. If it is missing they offer
+//!   to install it through Steam, waiting for the download to finish, or to
+//!   browse for `csgo.exe`. The choice is checked and remembered in
+//!   `config\paths.cfg`. `csr setup` asks again; `csr find-csgo` prints what
+//!   the search sees. `CSR_GAME_DIR` overrides.
 
 use std::path::{Path, PathBuf};
 
+use crate::dialog;
+
 pub const PORTABLE_MARKER: &str = "csgo-rewrite.portable";
 const PATHS_FILE: &str = "config/paths.cfg";
+/// Folder under `%LocalAppData%` holding an installed copy's player data
+/// (Velopack's own install folder is `CSGORewrite`, and is wiped on uninstall).
+const DATA_FOLDER: &str = "CSGO-Rewrite";
+const TITLE: &str = "CSGO Rewrite";
+
+/// Returned by [`prepare`] when the player chose to quit: exit quietly.
+pub const QUIT: &str = "";
 
 fn exe_dir() -> Option<PathBuf> {
     std::env::current_exe().ok()?.parent().map(Path::to_path_buf)
 }
 
-pub fn is_portable() -> bool {
-    exe_dir().is_some_and(|d| d.join(PORTABLE_MARKER).is_file())
+/// How this copy of the game was put on the PC.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Layout {
+    /// Installed with Setup.exe: the Velopack install folder.
+    Installed(PathBuf),
+    /// An unzipped release: the folder holding the exe.
+    Portable(PathBuf),
+    /// Built from a source checkout: the repository root.
+    Source(PathBuf),
+    Unknown,
+}
+
+impl Layout {
+    pub fn current() -> Layout {
+        if let Some(root) = crate::update::installed_root() {
+            return Layout::Installed(root);
+        }
+        if let Some(dir) = exe_dir().filter(|d| d.join(PORTABLE_MARKER).is_file()) {
+            return Layout::Portable(dir);
+        }
+        let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        if repo.join("Cargo.toml").is_file() {
+            return Layout::Source(repo);
+        }
+        Layout::Unknown
+    }
+
+    /// Copies handed to players: they get dialogs, not console prompts.
+    pub fn for_players(&self) -> bool {
+        matches!(self, Layout::Installed(_) | Layout::Portable(_))
+    }
+
+    /// The player data folder, given `%LocalAppData%`.
+    pub fn data_dir(&self, local_app_data: Option<&Path>) -> Option<PathBuf> {
+        match self {
+            Layout::Installed(_) => local_app_data.map(|d| d.join(DATA_FOLDER).join("userdata")),
+            Layout::Portable(dir) => Some(dir.join("userdata")),
+            Layout::Source(repo) => Some(repo.clone()),
+            Layout::Unknown => None,
+        }
+    }
+}
+
+fn copy_dir(from: &Path, to: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(to)?;
+    for entry in std::fs::read_dir(from)? {
+        let entry = entry?;
+        let target = to.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_dir(&entry.path(), &target)?;
+        } else {
+            std::fs::copy(entry.path(), target)?;
+        }
+    }
+    Ok(())
+}
+
+/// Fills a data folder that has never been used from the most recently used
+/// of `candidates` (older copies' data folders). The old data is copied, not
+/// moved. Returns where it came from.
+fn migrate_into(data: &Path, candidates: Vec<PathBuf>) -> Option<PathBuf> {
+    if data.join("config").exists() {
+        return None;
+    }
+    let newest = candidates
+        .into_iter()
+        .filter(|c| c.join("config").is_dir() && c.as_path() != data)
+        .max_by_key(|c| std::fs::metadata(c.join("config")).and_then(|m| m.modified()).ok())?;
+    copy_dir(&newest, data).ok()?;
+    Some(newest)
+}
+
+/// `userdata` folders of unzipped releases up to `depth` folders below `dir`.
+fn portable_copies(dir: &Path, depth: u32) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    let Ok(entries) = std::fs::read_dir(dir) else { return out };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !entry.file_type().is_ok_and(|t| t.is_dir()) {
+            continue;
+        }
+        if path.join(PORTABLE_MARKER).is_file() {
+            out.push(path.join("userdata"));
+        } else if depth > 1 {
+            out.extend(portable_copies(&path, depth - 1));
+        }
+    }
+    out
+}
+
+/// Where an installed copy looks for data from an older copy.
+fn old_copies(install_root: &Path) -> Vec<PathBuf> {
+    let mut out = vec![install_root.join("userdata"), install_root.join(r"current\userdata")];
+    if let Some(home) = std::env::var_os("USERPROFILE").map(PathBuf::from) {
+        for place in ["Desktop", "Downloads", "Documents", r"OneDrive\Desktop", r"OneDrive\Documents"] {
+            out.extend(portable_copies(&home.join(place), 2));
+        }
+    }
+    out
 }
 
 /// The CS:GO game folder (the one holding `gameinfo.txt`) for a folder the
@@ -66,30 +179,6 @@ fn write_paths(data: &Path, entries: &[(String, String)]) -> std::io::Result<()>
     std::fs::write(path, text)
 }
 
-/// Runs a PowerShell snippet (Windows dialogs) and returns its output.
-fn powershell(script: &str) -> Option<String> {
-    let out = std::process::Command::new("powershell")
-        .args(["-NoProfile", "-NonInteractive", "-STA", "-Command"])
-        .arg(format!("[Console]::OutputEncoding=[Text.Encoding]::UTF8; Add-Type -AssemblyName System.Windows.Forms; {script}"))
-        .output()
-        .ok()?;
-    Some(String::from_utf8_lossy(&out.stdout).trim().to_string())
-}
-
-fn ps_quote(s: &str) -> String {
-    format!("'{}'", s.replace('\'', "''"))
-}
-
-fn message(title: &str, text: &str) {
-    let shown = powershell(&format!(
-        "[void][System.Windows.Forms.MessageBox]::Show({}, {})",
-        ps_quote(text),
-        ps_quote(title)
-    ));
-    if shown.is_none() {
-        eprintln!("{title}: {text}");
-    }
-}
 
 /// What a search of this PC found: CS:GO Legacy game folders (the `csgo`
 /// folders holding `gameinfo.txt`) and Counter-Strike 2 installs that have
@@ -180,56 +269,46 @@ fn detect_in(libraries: Vec<PathBuf>) -> Detected {
     found
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Answer {
-    Yes,
-    No,
-    Cancel,
-}
 
-/// Opens a URL (here a `steam://` link) with the system handler.
-fn open_url(url: &str) {
-    if std::process::Command::new("cmd").args(["/C", "start", "", url]).spawn().is_err() {
-        eprintln!("Open this link to continue: {url}");
+/// The CS:GO Legacy game folder in `library` once Steam has finished
+/// installing it there (its app manifest says "fully installed").
+fn finished_install(library: &Path) -> Option<PathBuf> {
+    let acf = std::fs::read(library.join(format!("steamapps/appmanifest_{}.acf", vfs::LEGACY_APP_ID))).ok()?;
+    let manifest = kv::parse_bytes(&acf).ok()?;
+    let state = manifest.block("AppState")?;
+    let flags: u32 = state.str("StateFlags")?.parse().ok()?;
+    if flags & 4 == 0 || flags & 2 != 0 {
+        return None; // not installed yet, or still updating
     }
+    csgo_game_dir(&library.join("steamapps/common").join(state.str("installdir")?)).ok()
 }
 
-/// "Use this folder?" with Yes / No / Cancel.
-fn confirm(game: &Path) -> Answer {
-    let install = game.parent().unwrap_or(game);
-    ask(&format!(
-        "CSGO Rewrite found CS:GO Legacy here:\n\n{}\n\nUse this folder?\n\nYes - use it\nNo - choose a different one\nCancel - quit",
-        install.display()
-    ))
-}
-
-/// A Yes / No / Cancel question, as a dialog or on the console.
-fn ask(text: &str) -> Answer {
-    let script = format!(
-        "$top=New-Object System.Windows.Forms.Form -Property @{{TopMost=$true}}; \
-         [Console]::Out.Write([System.Windows.Forms.MessageBox]::Show($top, {}, 'CSGO Rewrite setup', 'YesNoCancel', 'Question'))",
-        ps_quote(text)
+/// Opens Steam's installer for CS:GO Legacy and waits until it is ready.
+/// `None` if the player gives up.
+fn install_with_steam() -> Option<PathBuf> {
+    dialog::open_url(&format!("steam://install/{}", vfs::LEGACY_APP_ID));
+    let mut window = dialog::Waiting::show(
+        TITLE,
+        "Steam is opening the installer for CS:GO Legacy. Click Install there.\n\n\
+         CSGO Rewrite starts by itself as soon as the download has finished, so you can leave \
+         this window open. It is a big download and can take a while.",
+        "Quit",
     );
-    match powershell(&script).as_deref() {
-        Some("Yes") => Answer::Yes,
-        Some("No") => Answer::No,
-        Some(_) => Answer::Cancel,
-        None => {
-            eprint!("{text}\n[Y]es / [N]o / [C]ancel: ");
-            let mut line = String::new();
-            let _ = std::io::stdin().read_line(&mut line);
-            match line.trim().chars().next().map(|c| c.to_ascii_lowercase()) {
-                Some('y') => Answer::Yes,
-                Some('n') => Answer::No,
-                _ => Answer::Cancel,
-            }
+    loop {
+        std::thread::sleep(std::time::Duration::from_secs(3));
+        if window.dismissed() {
+            return None;
+        }
+        if let Some(game) = steam_libraries().iter().find_map(|lib| finished_install(lib)) {
+            window.close();
+            return Some(game);
         }
     }
 }
 
 /// Asks the player to find `csgo.exe` themselves; `None` if they cancel.
 fn pick_csgo_exe(start: Option<&Path>) -> Option<PathBuf> {
-    let start = start.map(|p| format!("$d.InitialDirectory={};", ps_quote(&p.display().to_string()))).unwrap_or_default();
+    let start = start.map(|p| format!("$d.InitialDirectory={};", dialog::ps_quote(&p.display().to_string()))).unwrap_or_default();
     let script = format!(
         "$d=New-Object System.Windows.Forms.OpenFileDialog; \
          $d.Title='Select csgo.exe in your CS:GO Legacy folder'; \
@@ -237,7 +316,7 @@ fn pick_csgo_exe(start: Option<&Path>) -> Option<PathBuf> {
          $top=New-Object System.Windows.Forms.Form -Property @{{TopMost=$true}}; \
          if($d.ShowDialog($top) -eq [System.Windows.Forms.DialogResult]::OK){{[Console]::Out.Write($d.FileName)}}"
     );
-    match powershell(&script) {
+    match dialog::powershell(&script) {
         Some(p) if !p.is_empty() => Some(PathBuf::from(p)),
         Some(_) => None,
         None => {
@@ -251,37 +330,47 @@ fn pick_csgo_exe(start: Option<&Path>) -> Option<PathBuf> {
     }
 }
 
-/// First-time setup: offers each detected install for confirmation, then
-/// falls back to browsing for `csgo.exe`. `None` if the player cancels.
-fn ask_for_csgo(found: &Detected) -> Option<PathBuf> {
+/// Picks the CS:GO Legacy folder for a player build. The first install found
+/// is used without a question unless `force_ask` (`csr setup`); otherwise
+/// the player confirms one, installs it through Steam or browses for it.
+/// `Err(QUIT)` if they quit.
+fn choose_csgo(found: &Detected, force_ask: bool) -> Result<PathBuf, String> {
+    if !force_ask {
+        if let Some(game) = found.legacy.first() {
+            return Ok(game.clone());
+        }
+    }
     for game in &found.legacy {
-        match confirm(game) {
-            Answer::Yes => return Some(game.clone()),
-            Answer::No => continue,
-            Answer::Cancel => return None,
+        let install = game.parent().unwrap_or(game);
+        let text = format!("CS:GO Legacy is installed here:\n\n{}\n\nPlay with this copy?", install.display());
+        match dialog::choose(TITLE, &text, &["Use this one", "Choose another folder", "Quit"]) {
+            Some(0) => return Ok(game.clone()),
+            Some(1) => continue,
+            _ => return Err(QUIT.into()),
+        }
+    }
+    if found.legacy.is_empty() {
+        let mut text = String::from(
+            "CSGO Rewrite plays using the game files of CS:GO Legacy, which is free on Steam. \
+             In your Steam library it is called \"Counter-Strike: Global Offensive\".\n\n",
+        );
+        text += if found.cs2_only.is_empty() {
+            "It is not installed on this PC yet."
+        } else {
+            "This PC has Counter-Strike 2, but not CS:GO Legacy, which is a separate download."
+        };
+        match dialog::choose(TITLE, &text, &["Install it with Steam", "It is installed somewhere else", "Quit"]) {
+            Some(0) => return install_with_steam().ok_or_else(|| QUIT.to_string()),
+            Some(1) => {}
+            _ => return Err(QUIT.into()),
         }
     }
     let start = found.legacy.first().and_then(|g| g.parent()).or(found.cs2_only.first().map(PathBuf::as_path)).map(Path::to_path_buf);
-    if found.legacy.is_empty() {
-        let text = "CSGO Rewrite needs CS:GO Legacy (\"Counter-Strike: Global Offensive\" in your \
-             Steam library), and could not find it on this PC.\n\n\
-             Yes - open Steam to install it, then start CSGO Rewrite again when it has downloaded\n\
-             No - it is already installed somewhere else; select its csgo.exe\n\
-             Cancel - quit";
-        match ask(text) {
-            Answer::Yes => {
-                open_url(&format!("steam://install/{}", vfs::LEGACY_APP_ID));
-                return None;
-            }
-            Answer::No => {}
-            Answer::Cancel => return None,
-        }
-    }
     loop {
-        let picked = pick_csgo_exe(start.as_deref())?;
+        let picked = pick_csgo_exe(start.as_deref()).ok_or_else(|| QUIT.to_string())?;
         match csgo_game_dir(&picked) {
-            Ok(dir) => return Some(dir),
-            Err(e) => message("CSGO Rewrite setup", &e),
+            Ok(dir) => return Ok(dir),
+            Err(e) => dialog::message(TITLE, &e),
         }
     }
 }
@@ -300,55 +389,97 @@ pub fn print_detected() {
     }
 }
 
-/// Prepares the process before any command runs. `force_ask` re-runs the
-/// CS:GO folder question (`csr setup`).
+
+/// Commands that run before setup: `csr find-csgo`, and `csr art <folder>`
+/// (writes the icon, installer splash and Steam artwork, for packaging).
+pub fn early_command(args: &[String]) -> Option<i32> {
+    match args.first().map(String::as_str) {
+        Some("find-csgo") => {
+            print_detected();
+            Some(0)
+        }
+        Some("art") => {
+            let dir = PathBuf::from(args.get(1).map(String::as_str).unwrap_or("art"));
+            let mut files: Vec<(String, Vec<u8>)> = vec![("icon.ico".into(), crate::art::ico()), ("splash.png".into(), crate::art::splash().png())];
+            for (suffix, image) in crate::art::steam_library() {
+                files.push((format!("steam{suffix}.png"), image.png()));
+            }
+            for (name, bytes) in files {
+                if let Err(e) = std::fs::create_dir_all(&dir).and_then(|_| std::fs::write(dir.join(&name), bytes)) {
+                    eprintln!("error: {}: {e}", dir.join(name).display());
+                    return Some(1);
+                }
+            }
+            println!("Artwork written to {}", dir.display());
+            Some(0)
+        }
+        _ => None,
+    }
+}
+
+/// Prepares the process before any command runs: data folder, CS:GO Legacy
+/// folder, and for installed copies the one-time "Add to Steam" offer.
+/// `force_ask` re-runs the CS:GO folder question (`csr setup`).
 pub fn prepare(force_ask: bool) -> Result<(), String> {
-    let portable = is_portable();
-    let data = match std::env::var_os("CSR_DATA_DIR") {
-        Some(d) => Some(PathBuf::from(d)),
-        None if portable => exe_dir().map(|d| d.join("userdata")),
-        // A source checkout keeps its data at the repository root.
-        None => Some(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")).filter(|r| r.join("Cargo.toml").is_file()),
-    };
+    let layout = Layout::current();
+    if matches!(layout, Layout::Installed(_)) {
+        dialog::hide_own_console();
+    }
+    let data_override = std::env::var_os("CSR_DATA_DIR").map(PathBuf::from);
+    let local_app_data = std::env::var_os("LOCALAPPDATA").map(PathBuf::from);
+    let data = data_override.clone().or_else(|| layout.data_dir(local_app_data.as_deref()));
     if let Some(data) = &data {
+        if let (Layout::Installed(root), None) = (&layout, &data_override) {
+            if let Some(from) = migrate_into(data, old_copies(root)) {
+                eprintln!("Copied your saved data from {}", from.display());
+            }
+        }
         std::fs::create_dir_all(data).map_err(|e| format!("Cannot create {}: {e}", data.display()))?;
         std::env::set_current_dir(data).map_err(|e| format!("Cannot use {}: {e}", data.display()))?;
     }
     let data = std::env::current_dir().map_err(|e| e.to_string())?;
 
-    if std::env::var_os("CSR_GAME_DIR").is_some() && !force_ask {
-        return Ok(());
-    }
-    let mut paths = read_paths(&data);
-    let saved = paths.iter().find(|(k, _)| k == "csgo").map(|(_, v)| PathBuf::from(v));
-    let game = match saved.as_deref().map(csgo_game_dir) {
-        Some(Ok(dir)) if !force_ask => Some(dir),
-        _ => {
-            if !portable && !force_ask {
-                // Source checkouts find the Steam install by themselves.
-                vfs::find_csgo_dir().or_else(|| detect().legacy.into_iter().next())
-            } else {
-                let dir = ask_for_csgo(&detect()).ok_or("Setup cancelled: CSGO Rewrite needs your CS:GO Legacy files to run.")?;
-                paths.retain(|(k, _)| k != "csgo");
-                paths.push(("csgo".into(), dir.display().to_string()));
-                write_paths(&data, &paths).map_err(|e| format!("Cannot save {PATHS_FILE}: {e}"))?;
-                eprintln!("CS:GO Legacy: {}", dir.display());
-                Some(dir)
-            }
+    if std::env::var_os("CSR_GAME_DIR").is_none() || force_ask {
+        if let Some(game) = find_game(&layout, &data, force_ask)? {
+            // SAFETY: single-threaded start-up, before anything reads the environment.
+            unsafe { std::env::set_var("CSR_GAME_DIR", game) };
         }
-    };
-    if let Some(game) = game {
-        // SAFETY: single-threaded start-up, before anything reads the environment.
-        unsafe { std::env::set_var("CSR_GAME_DIR", game) };
+    }
+    if matches!(layout, Layout::Installed(_)) && !force_ask {
+        crate::steam::offer(&data, false);
     }
     Ok(())
 }
 
+fn find_game(layout: &Layout, data: &Path, force_ask: bool) -> Result<Option<PathBuf>, String> {
+    let mut paths = read_paths(data);
+    let saved = paths.iter().find(|(k, _)| k == "csgo").map(|(_, v)| PathBuf::from(v));
+    if let Some(Ok(dir)) = saved.as_deref().map(csgo_game_dir) {
+        if !force_ask {
+            return Ok(Some(dir));
+        }
+    }
+    if !layout.for_players() && !force_ask {
+        // Source checkouts find the Steam install by themselves.
+        return Ok(vfs::find_csgo_dir().or_else(|| detect().legacy.into_iter().next()));
+    }
+    let dir = choose_csgo(&detect(), force_ask)?;
+    paths.retain(|(k, _)| k != "csgo");
+    paths.push(("csgo".into(), dir.display().to_string()));
+    write_paths(data, &paths).map_err(|e| format!("Cannot save {PATHS_FILE}: {e}"))?;
+    eprintln!("CS:GO Legacy: {}", dir.display());
+    Ok(Some(dir))
+}
+
 /// Shows a start-up failure to a player who may not be watching a console.
+/// Quitting on purpose ([`QUIT`]) shows nothing.
 pub fn report(error: &str) {
+    if error.is_empty() {
+        return;
+    }
     eprintln!("error: {error}");
-    if is_portable() {
-        message("CSGO Rewrite", error);
+    if Layout::current().for_players() {
+        dialog::message(TITLE, error);
     }
 }
 
@@ -418,5 +549,65 @@ mod tests {
         let data = temp("paths");
         write_paths(&data, &[("csgo".into(), r"D:\Games\CS:GO\csgo".into())]).unwrap();
         assert_eq!(read_paths(&data), vec![("csgo".to_string(), r"D:\Games\CS:GO\csgo".to_string())]);
+    }
+
+    #[test]
+    fn data_folder_survives_updates_for_installed_copies() {
+        let local = PathBuf::from(r"C:\Users\Friend\AppData\Local");
+        let installed = Layout::Installed(local.join("CSGORewrite"));
+        // Not inside the install folder, which updates replace and uninstall deletes.
+        assert_eq!(installed.data_dir(Some(&local)), Some(local.join(r"CSGO-Rewrite\userdata")));
+        assert_eq!(installed.data_dir(None), None);
+        let unzipped = PathBuf::from(r"D:\Games\CSGO-Rewrite");
+        assert_eq!(Layout::Portable(unzipped.clone()).data_dir(Some(&local)), Some(unzipped.join("userdata")));
+        let repo = PathBuf::from(r"D:\dev\global-offensive");
+        assert_eq!(Layout::Source(repo.clone()).data_dir(Some(&local)), Some(repo));
+        assert!(installed.for_players() && Layout::Portable(unzipped).for_players());
+        assert!(!Layout::Source(PathBuf::new()).for_players());
+    }
+
+    #[test]
+    fn first_run_copies_data_from_an_unzipped_release() {
+        let home = temp("migrate");
+        // An unzipped v0.2.0 in Downloads (the zip nests one folder) and a
+        // stale empty one on the Desktop.
+        let old = home.join(r"Downloads\CSGO-Rewrite-0.2.0-windows-x64\CSGO-Rewrite");
+        std::fs::create_dir_all(old.join(r"userdata\config")).unwrap();
+        std::fs::write(old.join(PORTABLE_MARKER), "").unwrap();
+        std::fs::write(old.join(r"userdata\config\paths.cfg"), "csgo=D:\\csgo\n").unwrap();
+        std::fs::write(old.join(r"userdata\config\cosmetics.cfg"), "case=1\n").unwrap();
+        let empty = home.join(r"Desktop\CSGO-Rewrite");
+        std::fs::create_dir_all(&empty).unwrap();
+        std::fs::write(empty.join(PORTABLE_MARKER), "").unwrap();
+
+        let found: Vec<PathBuf> = ["Desktop", "Downloads"].iter().flat_map(|p| portable_copies(&home.join(p), 2)).collect();
+        assert_eq!(found, vec![empty.join("userdata"), old.join("userdata")]);
+
+        let data = home.join(r"Local\CSGO-Rewrite\userdata");
+        assert_eq!(migrate_into(&data, found.clone()), Some(old.join("userdata")));
+        assert_eq!(std::fs::read_to_string(data.join(r"config\cosmetics.cfg")).unwrap(), "case=1\n");
+        assert!(old.join(r"userdata\config\paths.cfg").is_file(), "the old copy is kept");
+        // Only ever into a fresh folder: later runs keep the player's newer data.
+        std::fs::write(data.join(r"config\cosmetics.cfg"), "case=2\n").unwrap();
+        assert_eq!(migrate_into(&data, found), None);
+        assert_eq!(std::fs::read_to_string(data.join(r"config\cosmetics.cfg")).unwrap(), "case=2\n");
+    }
+
+    #[test]
+    fn waits_for_steam_to_finish_installing() {
+        let lib = temp("acf");
+        let game = lib.join(r"steamapps\common\csgo legacy\csgo");
+        std::fs::create_dir_all(&game).unwrap();
+        std::fs::write(game.join("gameinfo.txt"), "").unwrap();
+        std::fs::write(game.join("pak01_dir.vpk"), "").unwrap();
+        let acf = |flags: u32| {
+            let text = format!("\"AppState\"\n{{\n\t\"appid\"\t\t\"4465480\"\n\t\"StateFlags\"\t\t\"{flags}\"\n\t\"installdir\"\t\t\"csgo legacy\"\n}}\n");
+            std::fs::write(lib.join(r"steamapps\appmanifest_4465480.acf"), text).unwrap();
+        };
+        assert_eq!(finished_install(&lib), None);
+        acf(1026); // downloading
+        assert_eq!(finished_install(&lib), None);
+        acf(4); // fully installed
+        assert_eq!(finished_install(&lib), Some(game));
     }
 }
