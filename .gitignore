@@ -19,3 +19,6 @@
 /userdata/
 /config/paths.cfg
 /logs/
+
+# Agent worktrees and local tool state
+/.claude/
