@@ -47,7 +47,7 @@ impl TraceWorld for collision::CollisionWorld {
 
 /// Tunables, named after the console variables they mirror. Defaults are
 /// CS:GO's competitive values.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct MoveConfig {
     pub gravity: f32,
     pub friction: f32,
@@ -127,7 +127,7 @@ pub struct MoveInput {
 }
 
 /// Movement state of one player.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PlayerMove {
     /// Feet position.
     pub origin: Vec3,
@@ -193,7 +193,7 @@ impl PlayerMove {
 }
 
 /// Events produced by one movement tick.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct MoveEvents {
     pub jumped: bool,
     /// Landed this tick with the given downward speed.

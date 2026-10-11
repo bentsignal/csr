@@ -22,17 +22,21 @@ use crate::{GameMode, Player, PlayerId, Team, TickInput, World};
 use glam::Vec3;
 use movement::buttons;
 use nav::NavMesh;
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
-/// Ticks between perception updates (8 per second).
-const PERCEPTION_INTERVAL: u64 = crate::TICK_RATE as u64 / 8;
-/// Ticks between utility-throw decisions (4 per second).
-const UTILITY_INTERVAL: u64 = crate::TICK_RATE as u64 / 4;
-/// Ticks between checks for fire on the planned path (2 per second).
-const FIRE_CHECK_INTERVAL: u64 = crate::TICK_RATE as u64 / 2;
-/// Ticks without movement before a wandering bot turns away (1/8 s).
-const STUCK_TICKS: u32 = crate::TICK_RATE / 8;
+/// Ticks between events that happen `per_second` times a second.
+fn interval(world: &World, per_second: u32) -> u64 {
+    (world.tick_rate / per_second).max(1) as u64
+}
+/// Perception updates per second.
+const PERCEPTION_RATE: u32 = 8;
+/// Utility-throw decisions per second.
+const UTILITY_RATE: u32 = 4;
+/// Checks for fire on the planned path per second.
+const FIRE_CHECK_RATE: u32 = 2;
+/// A wandering bot that has not moved for this long turns away (1/8 s).
+const STUCK_SECONDS: f32 = 0.125;
 
 #[derive(Clone, Debug, Default)]
 struct Brain {
@@ -94,9 +98,11 @@ impl Brain {
     }
 }
 
+/// Brains are kept in id order so every copy of a world thinks in the same
+/// order (determinism).
 #[derive(Clone, Debug)]
 pub struct Bots {
-    brains: HashMap<PlayerId, Brain>,
+    brains: BTreeMap<PlayerId, Brain>,
     /// 0 (harmless) .. 1 (sharp).
     pub skill: f32,
     /// If false, bots stand still and never shoot (target practice).
@@ -110,7 +116,7 @@ pub struct Bots {
 impl Default for Bots {
     fn default() -> Self {
         Self {
-            brains: HashMap::new(),
+            brains: BTreeMap::new(),
             skill: 0.5,
             aggressive: true,
             nav: None,
@@ -381,7 +387,7 @@ impl Bots {
     pub fn think(&mut self, world: &World) -> Vec<(PlayerId, TickInput)> {
         if world.mode == GameMode::Special { return Vec::new(); }
         let time = world.time();
-        let dt = crate::TICK_DT;
+        let dt = world.dt();
         let nav = self.nav.clone();
         self.team.update(world,nav.as_deref());
         if let (Some(mesh), true) = (nav.as_deref(), self.site_areas.len() != world.objectives.bomb_sites.len()) {
@@ -458,7 +464,7 @@ impl Bots {
             brain.last_shots = bot.shots;
             let old_angles = glam::Vec2::new(brain.pitch, brain.yaw);
             // Perception (throttled and staggered).
-            if self.aggressive && world.flash_amount(bot.id)<0.25 && (world.tick + bot.id as u64) % PERCEPTION_INTERVAL == 0 {
+            if self.aggressive && world.flash_amount(bot.id)<0.25 && (world.tick + bot.id as u64) % interval(world, PERCEPTION_RATE) == 0 {
                 let mut best: Option<(PlayerId, Vec3, f32)> = None;
                 let (fwd, _, _) = movement::angle_vectors(Vec3::new(0.0, brain.yaw, 0.0));
                 for other in world.players.iter().filter(|o| o.alive && bot.team.enemy_of(o.team)) {
@@ -635,7 +641,7 @@ impl Bots {
                                 }
                             }
                         }
-                        None => wander(bot, brain, &mut input, &mut rng, turn_rate),
+                        None => wander(world, bot, brain, &mut input, &mut rng, turn_rate),
                     },
                 }
             }
@@ -645,7 +651,7 @@ impl Bots {
             }
             if brain.throw.is_none() && self.aggressive && !finishing && world.flash_amount(bot.id)<0.2
                 && time>=brain.next_utility && time>=self.team.utility_after.get(&bot.team).copied().unwrap_or(0.0)
-                && (world.tick+bot.id as u64)%UTILITY_INTERVAL==0 && time-brain.hurt_at>1.5 && bot.plant_start.is_none()
+                && (world.tick+bot.id as u64)%interval(world, UTILITY_RATE)==0 && time-brain.hurt_at>1.5 && bot.plant_start.is_none()
                 && (!brain.visible || (eye.distance(brain.target_pos)>550.0 && bot.health>60
                     && world.players.iter().any(|p|p.id!=bot.id&&p.alive&&p.team==bot.team&&p.eye().distance(eye)<500.0&&world.visible(p.eye(),brain.target_pos)))) {
                 if let Some((def,angles))=choose_utility(world,bot,contact,task) {
@@ -768,14 +774,16 @@ fn choose_utility(world: &World, bot: &Player, contact: Option<crate::tactics::C
     None
 }
 
-fn wander(bot: &crate::Player, brain: &mut Brain, input: &mut TickInput, rng: &mut Rng, turn_rate: f32) {
+fn wander(world: &World, bot: &crate::Player, brain: &mut Brain, input: &mut TickInput, rng: &mut Rng, turn_rate: f32) {
     let moved = (bot.movement.origin - brain.last_pos).truncate().length();
     brain.last_pos = bot.movement.origin;
-    brain.stuck_ticks = if moved < 0.5 { brain.stuck_ticks + 1 } else { 0 };
-    if brain.stuck_ticks > STUCK_TICKS {
+    // Under 64 units/s (half a unit per tick at 128 tick) counts as stuck.
+    let still = 64.0 / world.tick_rate as f32;
+    brain.stuck_ticks = if moved < still { brain.stuck_ticks + 1 } else { 0 };
+    if brain.stuck_ticks as u64 > world.ticks(STUCK_SECONDS) {
         brain.wander_yaw += rng.range(90.0, 270.0);
         brain.stuck_ticks = 0;
-    } else if rng.next_f32() < 0.004 * 64.0 / crate::TICK_RATE as f32 {
+    } else if rng.next_f32() < 0.004 * 64.0 / world.tick_rate as f32 {
         brain.wander_yaw += rng.range(-60.0, 60.0);
     }
     brain.yaw = approach(brain.yaw, brain.wander_yaw, turn_rate * 0.5);
@@ -805,7 +813,7 @@ fn follow_path(
         brain.path.clear();
         brain.path_index = 0;
     }
-    if (world.tick+bot.id as u64)%FIRE_CHECK_INTERVAL==0 && brain.path.iter().skip(brain.path_index).take(3).any(|id|mesh.area(*id).is_some_and(|a|world.fire_at(a.center()))) {brain.path.clear();}
+    if (world.tick+bot.id as u64)%interval(world, FIRE_CHECK_RATE)==0 && brain.path.iter().skip(brain.path_index).take(3).any(|id|mesh.area(*id).is_some_and(|a|world.fire_at(a.center()))) {brain.path.clear();}
     let need_path = brain.path_index + 1 >= brain.path.len();
     if need_path {
         let start = mesh.nearest_area(pos).map(|a| a.id);
@@ -836,7 +844,7 @@ fn follow_path(
         brain.progress_time = time;
         brain.progress_pos = pos;
         if brain.path.len() < 2 {
-            wander(bot, brain, input, rng, turn_rate);
+            wander(world, bot, brain, input, rng, turn_rate);
             return false;
         }
     }
@@ -1035,7 +1043,8 @@ mod tests {
         w.player_mut(id).unwrap().movement.origin=Vec3::ZERO;
         w.player_mut(id).unwrap().view_angles=Vec3::ZERO;
         w.player_mut(enemy).unwrap().movement.origin=Vec3::new(100.0,0.0,0.0);
-        w.tick=(PERCEPTION_INTERVAL-id as u64%PERCEPTION_INTERVAL)%PERCEPTION_INTERVAL;
+        let every=interval(&w,PERCEPTION_RATE);
+        w.tick=(every-id as u64%every)%every;
         let mut bots=Bots::with_skill(0.7);
         bots.think(&w);
         assert_eq!(bots.brains[&id].target,Some(enemy));
@@ -1046,15 +1055,16 @@ mod tests {
         assert_eq!(bots.brains[&id].target_pos,seen);
         assert!(!bots.brains[&id].visible);
         assert_eq!(input.buttons & buttons::ATTACK,0);
-        w.tick+=100*crate::TICK_RATE as u64/64;
+        w.tick+=100*w.tick_rate as u64/64;
         bots.think(&w);
         assert_eq!(bots.brains[&id].target,None);
     }
     #[test] fn angular_motion_is_bounded_and_converges_across_wrap() {
         let mut angle=350.0; let mut velocity=0.0;
         for _ in 0..160 {
-            let next=smooth_angle(angle,10.0,&mut velocity,crate::TICK_DT,420.0);
-            assert!((next-angle).abs()<=420.0*crate::TICK_DT+0.001);
+            let dt=1.0/crate::DEFAULT_TICK_RATE as f32;
+            let next=smooth_angle(angle,10.0,&mut velocity,dt,420.0);
+            assert!((next-angle).abs()<=420.0*dt+0.001);
             assert!(next<=370.001);
             angle=next;
         }

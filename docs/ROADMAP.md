@@ -15,18 +15,19 @@ Minecraft code need work before multiplayer and public releases.
 | Area | State | Call |
 |---|---|---|
 | Format readers (kv, vpk, vfs, bsp, vtf, vmt, mdl), collision, movement | Solid; cite public docs; tested | **Keep** |
-| `sim`: Bevy-free, fixed 64 Hz, per-player `TickInput`, seeded RNG | Right shape for netcode | **Keep, extend** |
+| `sim`: Bevy-free, fixed tick (128 default, runtime setting), per-player `TickInput`, seeded RNG | Right shape for netcode; owns bots and loadouts since Track A | **Keep, extend** |
 | Rendering, animation, viewmodels, sounds | Dust II validated; other maps unverified | **Keep** |
-| Gameplay glue in `client` (bots, loadouts, skins, overworld rules run in Bevy systems, not `sim`) | Blocks server authority | **Refactor into sim** |
+| Gameplay glue in `client` (bots, loadouts, skins, overworld rules run in Bevy systems, not `sim`) | Moved into `sim` (Track A) | **Done** |
 | Main menu (late-2023-style, rebuilt every change, ~950-line `draw`, relaunches the process to start a match) | Not the 2018 look | **Rewrite** |
 | Cases / inventory / cosmetics data | Works locally | **Keep data, rewrite UI** |
-| Netcode, server, browser | None. `Snapshot`/`TickInput` not serialisable; `Snapshot` lacks weapons, money, round and bomb state; `World` not `Clone` | **Build** |
+| Netcode, server, browser | `World` is `Clone`; `TickInput` and the full replicated state (`WorldState`/`Snapshot`) serialise with serde + postcard. No transport yet | **Build** |
 | Install detection | Misses the current CS:GO Legacy app (4465480, `common\csgo legacy`) | **Fix now** |
 | Distribution | Manual zip; no CI, installer or updater | **Build** |
 | `third_party/minecraftoss` + `minecraft_terrain` (~154k lines) | Ported from decompiled Minecraft, no licence files, hard dependency of `level` and `client`; release zip also bundled Minecraft assets | **Removed** (decision 1) |
-| VR | Single view-angle model from input to hitscan to cameras | **Design seam now, build later** |
+| VR | `TickInput` carries tracked head/hand poses and an aim ray; hitscan uses the aim ray. Cameras are still single-view | **Seam in place, build later** |
 
-Tests: 180 `#[test]`s, mostly sim (55) and client (51), on synthetic data.
+Tests: 174 passing tests, with two installed-data tests ignored by default
+(Track A1 verification, 2026-10-11), mostly on synthetic data.
 Real-data checks are the `csr probe` / `csr sim` commands.
 
 ## Phase 0: take ownership
@@ -61,11 +62,20 @@ Small and sequential. Everything else builds on it.
 
 Phase 2 and VR depend on this track.
 
-- [ ] Move all gameplay into `sim`: bots, loadout on spawn, skin and knife
+Track A1 verified on 2026-10-11 ([PR #9](https://github.com/bentsignal/global-offensive/pull/9)):
+workspace tests pass; release-profile Dust II `probe` and `sim` report zero
+failures, including `sim --tickrate 64`; the rendered client screenshot was
+inspected. Review also fixed firing-snapshot equality after recoil-cache
+population and finish ownership on weapons dropped in their spawn, respawn
+or purchase tick. **Next: A2 transport, server/connect, prediction and lag
+compensation.** Bot brains remain server-only; snapshots alone do not replay
+their decisions.
+
+- [x] Move all gameplay into `sim`: bots, loadout on spawn, skin and knife
       definition swaps, round/economy rules. Clients only send input and draw.
-- [ ] **Tick rate as a server setting** (128 default since Phase 0); test
+- [x] **Tick rate as a server setting** (128 default since Phase 0); test
       that movement, recoil, inaccuracy and timers match at 64 and 128.
-- [ ] Make `World` cloneable and add a determinism test (same inputs give
+- [x] Make `World` cloneable and add a determinism test (same inputs give
       the same state hash).
 - [ ] Protocol: `TickInput` up (with **optional tracked head/hand poses and a
       separate aim ray**, reserved now for VR), full-state snapshots then

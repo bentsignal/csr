@@ -1,9 +1,10 @@
 //! Deterministic grenades. Inventory, collision and effects are shared by humans and bots.
-use crate::{GameEvent, PlayerId, TICK_DT, World};
+use crate::{GameEvent, PlayerId, World};
 use collision::contents;
 use glam::Vec3;
+use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Kind {
     Smoke,
     Flash,
@@ -38,7 +39,7 @@ impl Kind {
         matches!(self, Self::Molotov | Self::Incendiary)
     }
 }
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Projectile {
     pub id: u32,
     pub owner: PlayerId,
@@ -47,7 +48,7 @@ pub struct Projectile {
     pub velocity: Vec3,
     pub born: f32,
 }
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Field {
     pub id: u32,
     pub owner: PlayerId,
@@ -141,10 +142,11 @@ impl World {
         else {
             return;
         };
-        let (forward, _, _) = movement::angle_vectors(p.view_angles);
+        let (from, angles) = p.aim_origin_angles();
+        let (forward, _, _) = movement::angle_vectors(angles);
         let tr = self.collision.trace_box(
-            p.eye(),
-            p.eye() + forward * 18.0,
+            from,
+            from + forward * 18.0,
             Vec3::splat(-2.0),
             Vec3::splat(2.0),
             contents::MASK_SOLID,
@@ -152,7 +154,7 @@ impl World {
         if tr.start_solid {
             return;
         }
-        let pos = p.eye() + forward * 18.0 * tr.fraction;
+        let pos = from + forward * 18.0 * tr.fraction;
         let owner = p.id;
         let velocity = forward * 750.0 + p.movement.velocity * 0.5;
         let active = p.active;
@@ -174,10 +176,11 @@ impl World {
     }
     pub(crate) fn step_utility(&mut self) {
         let time = self.time();
+        let dt = self.dt();
         let mut exploded = Vec::new();
         for p in &mut self.projectiles {
-            p.velocity.z -= 320.0 * TICK_DT;
-            let end = p.pos + p.velocity * TICK_DT;
+            p.velocity.z -= 320.0 * dt;
+            let end = p.pos + p.velocity * dt;
             let tr = self.collision.trace_box(
                 p.pos,
                 end,
@@ -268,7 +271,7 @@ impl World {
             f.until > time && !(f.kind.fire() && smokes.iter().any(|s| s.distance(f.pos) < 180.0))
         });
         // Decoys fire twice a second; fire burns about five times a second.
-        if self.tick % (crate::TICK_RATE as u64 / 2) == 0 {
+        if self.tick % (self.tick_rate as u64 / 2).max(1) == 0 {
             for f in self.utility_fields.iter().filter(|f| f.kind == Kind::Decoy) {
                 self.events.push(GameEvent::DecoyShot {
                     player: f.owner,
@@ -276,7 +279,7 @@ impl World {
                 });
             }
         }
-        if self.tick % (13 * crate::TICK_RATE as u64 / 64) == 0 {
+        if self.tick % (13 * self.tick_rate as u64 / 64).max(1) == 0 {
             let fields = self.utility_fields.clone();
             for f in fields.iter().filter(|f| f.kind.fire()) {
                 self.blast_utility(f.owner, f.kind, f.pos + Vec3::Z * 12.0, 140.0, 8.0);
@@ -391,7 +394,7 @@ mod tests {
             p.view_angles = Vec3::ZERO;
         }
         w.player_mut(b).unwrap().view_angles.y = 180.0;
-        w.tick = 2 * crate::TICK_RATE as u64;
+        w.tick = 2 * w.tick_rate as u64;
         w.projectiles.push(Projectile {
             id: 1,
             owner: a,
@@ -407,7 +410,7 @@ mod tests {
     #[test]
     fn smoke_extinguishes_fire_expires_and_does_not_block_bullet_geometry() {
         let mut w = arena();
-        w.tick = crate::TICK_RATE as u64;
+        w.tick = w.tick_rate as u64;
         w.utility_fields.push(Field {
             id: 1,
             owner: 1,
@@ -431,7 +434,7 @@ mod tests {
         let b = Vec3::new(300.0, 0.0, 55.0);
         assert!(w.smoke_occludes(a, b));
         assert!(w.visible(a, b));
-        w.tick = 19 * crate::TICK_RATE as u64;
+        w.tick = 19 * w.tick_rate as u64;
         w.step_utility();
         assert!(!w.smoke_occludes(a, b));
         assert!(w.utility_fields.is_empty());

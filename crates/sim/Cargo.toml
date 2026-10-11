@@ -7,6 +7,9 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
+serde.workspace = true
+postcard.workspace = true
+content.workspace = true
 glam.workspace = true
 collision.workspace = true
 movement.workspace = true
@@ -15,5 +18,3 @@ weapons.workspace = true
 nav.workspace = true
 kv.workspace = true
 
-[dev-dependencies]
-content.workspace = true

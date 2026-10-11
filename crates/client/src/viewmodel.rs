@@ -347,7 +347,7 @@ pub fn update(
     let attack = effects.consume_attack(p.id, &name, &mut state.last_attack_seen);
     // Shotguns that load shell by shell follow the simulation's stage:
     // the start, then one insert per shell, then (below) the finish.
-    let sim_now = world.0.time() + fixed.overstep_fraction() * sim::TICK_DT;
+    let sim_now = world.0.time() + fixed.overstep_fraction() * world.0.dt();
     let shell = w.and_then(|w| w.shell_stage(sim_now));
     let shell_gun = w.is_some_and(|w| w.shell_reload().is_some());
     if reloading && !state.reloading {
