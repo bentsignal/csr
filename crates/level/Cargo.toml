@@ -7,6 +7,7 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
+kv.workspace = true
 glam.workspace = true
 vfs.workspace = true
 bsp.workspace = true

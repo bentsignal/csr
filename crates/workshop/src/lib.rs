@@ -3,7 +3,8 @@
 //! Whenever Valve changed a competitive map it uploaded the old version to
 //! the app 730 Workshop as "`<Map>` [Compatibility Version 1.xx.x.x]", so old
 //! demos keep playing (research: `docs/research/2018-era.md` §1). Those
-//! uploads are the classic maps this crate makes playable:
+//! uploads are the classic map archives this crate retrieves. The archives
+//! contain BSPs only: bot navigation and fidelity still need validation.
 //!
 //! * [`OLD_MAPS`] is a built-in table of map name → Workshop item. The ids,
 //!   sizes and SHA-1s are facts checked against Steam's public, keyless
@@ -40,9 +41,8 @@ const DETAILS_URL: &str = "https://api.steampowered.com/ISteamRemoteStorage/GetP
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct OldMap {
     /// Map name in this game: `<original>_<year>`. For a map from before a
-    /// rework, the year is the last year that version was played (the year
-    /// Valve archived it); for a "2018" map it is the state the map was in
-    /// around August 2018 (the first snapshot uploaded after that date).
+    /// rework, the year is the year Valve archived it. A snapshot's archive
+    /// date does not prove it matches an earlier version of the map.
     pub name: &'static str,
     /// The original map name (`de_dust2`), also the name inside the BSP.
     pub base: &'static str,
@@ -103,7 +103,7 @@ pub const OLD_MAPS: &[OldMap] = &[
         name: "de_train_2015",
         base: "de_train",
         title: "Train (2015)",
-        note: "Classic Train as of October 2015, before the 2016 rework",
+        note: "Valve's October 2015 snapshot (after the December 2014 rework)",
         workshop_id: 538091991,
         version: "1.35.0.6",
         size: 20440332,
@@ -120,70 +120,70 @@ pub const OLD_MAPS: &[OldMap] = &[
         sha1: "1c44a4a54521765b79b5a1593bca52c2038e0ae7",
     },
     OldMap {
-        name: "de_dust2_2018",
+        name: "de_dust2_2019",
         base: "de_dust2",
-        title: "Dust II (2018)",
-        note: "Dust II as in 2018 (replaced June 2019)",
+        title: "Dust II (2019)",
+        note: "Valve's June 2019 snapshot; August 2018 parity unverified",
         workshop_id: 1773333823,
         version: "1.37.0.1",
         size: 86340110,
         sha1: "4090bbbcd2b695552a5b3daec8a0e53664950f0c",
     },
     OldMap {
-        name: "de_inferno_2018",
+        name: "de_inferno_2020",
         base: "de_inferno",
-        title: "Inferno (2018)",
-        note: "Inferno as in 2018 (replaced April 2020)",
+        title: "Inferno (2020)",
+        note: "Valve's April 2020 snapshot; August 2018 parity unverified",
         workshop_id: 2054468706,
         version: "1.37.4.6",
         size: 27011674,
         sha1: "083200b3f067164c581a23318c14958df7f71429",
     },
     OldMap {
-        name: "de_nuke_2018",
+        name: "de_nuke_2019",
         base: "de_nuke",
-        title: "Nuke (2018)",
-        note: "Nuke as in 2018 (replaced October 2019)",
+        title: "Nuke (2019)",
+        note: "Valve's October 2019 snapshot; August 2018 parity unverified",
         workshop_id: 1885085042,
         version: "1.37.1.8",
         size: 64946679,
         sha1: "557e979caebd4c3966e6633c394914ebc641f3f8",
     },
     OldMap {
-        name: "de_cache_2018",
+        name: "de_cache_2019",
         base: "de_cache",
-        title: "Cache (2018)",
-        note: "Cache as in 2018 (left the pool October 2019)",
+        title: "Cache (2019)",
+        note: "Valve's October 2019 snapshot; August 2018 parity unverified",
         workshop_id: 1891729882,
         version: "1.37.1.9",
         size: 72588212,
         sha1: "2ac990b187266d0d0705ac4375273e2398cb3474",
     },
     OldMap {
-        name: "de_train_2018",
+        name: "de_train_2020",
         base: "de_train",
-        title: "Train (2018)",
-        note: "Train as in 2018 (replaced June 2020)",
+        title: "Train (2020)",
+        note: "Valve's June 2020 snapshot; August 2018 parity unverified",
         workshop_id: 2126172171,
         version: "1.37.5.5",
         size: 31315723,
         sha1: "330448b620a7648d489952e47e4a1f31bff10dc7",
     },
     OldMap {
-        name: "de_mirage_2018",
+        name: "de_mirage_2019",
         base: "de_mirage",
-        title: "Mirage (2018)",
-        note: "Mirage as in 2018 (replaced December 2019)",
+        title: "Mirage (2019)",
+        note: "Valve's December 2019 snapshot; August 2018 parity unverified",
         workshop_id: 1935967249,
         version: "1.37.3.2",
         size: 16805449,
         sha1: "0767980881e0c7b7c0bcaebbb9ca95235d2683fd",
     },
     OldMap {
-        name: "de_overpass_2018",
+        name: "de_overpass_2019",
         base: "de_overpass",
-        title: "Overpass (2018)",
-        note: "Overpass as in 2018 (replaced July 2019)",
+        title: "Overpass (2019)",
+        note: "Valve's July 2019 snapshot; August 2018 parity unverified",
         workshop_id: 1821117172,
         version: "1.37.0.7",
         size: 15074693,
@@ -193,7 +193,7 @@ pub const OLD_MAPS: &[OldMap] = &[
         name: "de_cbble_2018",
         base: "de_cbble",
         title: "Cobblestone (2018)",
-        note: "Cobblestone as in 2018 (replaced October 2018)",
+        note: "Valve's October 2018 snapshot",
         workshop_id: 1542127528,
         version: "1.36.5.6",
         size: 31389737,
@@ -203,7 +203,7 @@ pub const OLD_MAPS: &[OldMap] = &[
         name: "de_canals_2018",
         base: "de_canals",
         title: "Canals (2018)",
-        note: "Canals as in 2018 (replaced October 2018)",
+        note: "Valve's October 2018 snapshot",
         workshop_id: 1534022416,
         version: "1.36.5.5",
         size: 58850847,
@@ -219,7 +219,7 @@ pub fn find(name: &str) -> Option<&'static OldMap> {
 /// Where an old map can come from right now.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Status {
-    /// Ready to play: `maps/<name>.bsp` exists in the data folder.
+    /// Map data downloaded: `maps/<name>.bsp` exists in the data folder.
     Installed,
     /// Not installed, but a Steam library already holds the Workshop file;
     /// fetching copies it out without downloading.
@@ -343,7 +343,7 @@ impl Store {
         None
     }
 
-    /// Makes the map playable and returns its `.bsp`. Already installed:
+    /// Retrieves the map archive and returns its `.bsp`. Already installed:
     /// returns at once. Otherwise copies it out of a Steam library, or
     /// downloads it from Valve's CDN. `progress` is called as work proceeds;
     /// return `false` from it to cancel (a partial download is kept and
@@ -386,35 +386,31 @@ impl Store {
     }
 
     fn download(&self, map: &OldMap, part: &Path, progress: &mut dyn FnMut(Progress) -> bool) -> Result<(), String> {
+        if let Some(dir) = part.parent() {
+            fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+        }
+        let have = prepare_partial(part, map.size).map_err(|e| format!("{}: {e}", part.display()))?;
+        if have == map.size {
+            return Ok(());
+        }
         if !progress(Progress { stage: Stage::Query, done: 0, total: 0 }) {
             return Err(CANCELLED.into());
         }
         let agent = agent();
         let url = file_url(&agent, map)?;
-        if let Some(dir) = part.parent() {
-            fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-        }
-        let have = fs::metadata(part).map(|m| m.len()).unwrap_or(0);
-        if have > map.size {
-            let _ = fs::remove_file(part);
-        }
-        let have = have.min(map.size);
-        if have == map.size {
-            return Ok(());
-        }
         let mut request = agent.get(&url);
         if have > 0 {
             request = request.header("Range", format!("bytes={have}-"));
         }
         let response = request.call().map_err(|e| format!("Could not download {} from Steam: {e}", map.title))?;
-        let resumed = response.status().as_u16() == 206;
+        let done = response_offset(response.status().as_u16(), response.headers().get("Content-Range").and_then(|v| v.to_str().ok()), have, map.size)?;
         let mut file = fs::OpenOptions::new()
             .create(true)
             .write(true)
             .truncate(false)
             .open(part)
             .map_err(|e| format!("{}: {e}", part.display()))?;
-        let mut done = if resumed { have } else { 0 };
+        let mut done = done;
         file.set_len(done).and_then(|_| file.seek(SeekFrom::Start(done))).map_err(|e| format!("{}: {e}", part.display()))?;
         let mut body = response.into_body().into_reader();
         let mut buf = vec![0u8; 1 << 16];
@@ -444,6 +440,32 @@ impl Store {
 
 /// Returned by [`Store::fetch`] when the progress callback cancelled.
 pub const CANCELLED: &str = "cancelled";
+
+/// Keep resumable bytes, but restart an oversized partial in this attempt.
+fn prepare_partial(part: &Path, total: u64) -> io::Result<u64> {
+    match fs::metadata(part) {
+        Ok(meta) if meta.len() > total => {
+            fs::OpenOptions::new().write(true).open(part)?.set_len(0)?;
+            Ok(0)
+        }
+        Ok(meta) => Ok(meta.len()),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(0),
+        Err(e) => Err(e),
+    }
+}
+
+/// A CDN can ignore Range and send a full response; only append when it
+/// confirms the requested offset and the pinned file size.
+fn response_offset(status: u16, range: Option<&str>, have: u64, total: u64) -> Result<u64, String> {
+    if status == 200 { return Ok(0); }
+    let valid = range.and_then(|s| s.strip_prefix("bytes "))
+        .and_then(|s| s.split_once('/'))
+        .and_then(|(span, size)| Some((span.split_once('-')?, size.parse::<u64>().ok()?)))
+        .and_then(|((start, end), size)| Some((start.parse::<u64>().ok()?, end.parse::<u64>().ok()?, size)))
+        .is_some_and(|(start, end, size)| start == have && end >= start && end < total && size == total);
+    if status == 206 && valid { Ok(have) }
+    else { Err("Steam's download response does not match the requested byte range; try again".into()) }
+}
 
 fn agent() -> ureq::Agent {
     ureq::Agent::config_builder()
@@ -479,11 +501,20 @@ fn parse_details(text: &str, map: &OldMap) -> Result<String, String> {
     if item["consumer_app_id"].as_u64() != Some(WORKSHOP_APP_ID as u64) {
         return bad("app");
     }
+    if item["publishedfileid"].as_str().and_then(|s| s.parse::<u64>().ok()) != Some(map.workshop_id) {
+        return bad("item id");
+    }
+    if item["filename"].as_str() != Some(format!("mymaps/{}.bsp", map.base).as_str()) {
+        return bad("filename");
+    }
     let size = item["file_size"].as_u64().or_else(|| item["file_size"].as_str().and_then(|s| s.parse().ok()));
     if size != Some(map.size) {
         return bad("size");
     }
     let Some(url) = item["file_url"].as_str() else { return bad("no file_url") };
+    if !url.starts_with("https://cdn.steamusercontent.com/ugc/") {
+        return bad("CDN address");
+    }
     if !url.trim_end_matches('/').to_ascii_lowercase().ends_with(map.sha1) {
         return bad("checksum");
     }
@@ -661,6 +692,23 @@ mod tests {
     }
 
     #[test]
+    fn never_uses_cs2_workshop_vpks() {
+        let bin = fake_bin(b"VBSP legacy bytes");
+        let map = fake_map(&bin);
+        let lib = temp("cs2-lib");
+        let item = lib.join(r"steamapps\workshop\content\730\42");
+        fs::create_dir_all(&item).unwrap();
+        // Even an exact-size/checksum file must have the Legacy archive name.
+        for name in ["42.vpk", "42_dir.vpk", "publish_data.txt"] {
+            fs::write(item.join(name), &bin).unwrap();
+        }
+        let store = Store::with_libraries(&temp("cs2-data"), vec![lib]);
+        assert_eq!(store.status(&map), Status::Download);
+        assert_eq!(store.fetch(&map, &mut |p| p.stage != Stage::Query).unwrap_err(), CANCELLED);
+        assert!(!store.bsp_path(&map).exists());
+    }
+
+    #[test]
     fn checks_steams_answer_against_the_table() {
         let map = find("de_nuke_2016").unwrap();
         let good = r#"{"response":{"result":1,"resultcount":1,"publishedfiledetails":[{"publishedfileid":"626513993","result":1,
@@ -670,6 +718,45 @@ mod tests {
         assert!(parse_details(&good.replace("76561198082857351", "76561190000000000"), map).unwrap_err().contains("creator"));
         assert!(parse_details(&good.replace("9841028", "9841029"), map).unwrap_err().contains("size"));
         assert!(parse_details(&good.replace("49A7", "49A8"), map).unwrap_err().contains("checksum"));
+        assert!(parse_details(&good.replace("626513993", "626513994"), map).unwrap_err().contains("item id"));
+        assert!(parse_details(&good.replace("mymaps/de_nuke.bsp", "mymaps/de_other.bsp"), map).unwrap_err().contains("filename"));
+        assert!(parse_details(&good.replace("cdn.steamusercontent.com", "example.com"), map).unwrap_err().contains("CDN address"));
         assert!(parse_details(&good.replace("\"result\":1,\n", "\"result\":9,\n"), map).is_err());
+    }
+
+    #[test]
+    fn finishes_a_complete_partial_without_contacting_steam() {
+        let contents = b"VBSP cached download";
+        let bin = fake_bin(contents);
+        let map = fake_map(&bin);
+        let store = Store::with_libraries(&temp("complete-partial"), Vec::new());
+        let part = store.part_path(&map);
+        fs::create_dir_all(part.parent().unwrap()).unwrap();
+        fs::write(&part, &bin).unwrap();
+        let path = store.fetch(&map, &mut |p| p.stage != Stage::Query).unwrap();
+        assert_eq!(fs::read(path).unwrap(), contents);
+        assert!(!part.exists());
+    }
+
+    #[test]
+    fn oversized_partial_can_be_restarted_in_the_same_attempt() {
+        let bin = fake_bin(b"VBSP restart");
+        let map = fake_map(&bin);
+        let store = Store::with_libraries(&temp("oversized-partial"), Vec::new());
+        let part = store.part_path(&map);
+        fs::create_dir_all(part.parent().unwrap()).unwrap();
+        fs::write(&part, vec![0; map.size as usize + 1]).unwrap();
+        assert_eq!(store.fetch(&map, &mut |p| p.stage != Stage::Query).unwrap_err(), CANCELLED);
+        assert_eq!(fs::metadata(&part).unwrap().len(), 0, "restart must request byte zero, not treat missing bytes as complete");
+    }
+
+    #[test]
+    fn resumes_only_at_the_requested_offset_and_size() {
+        assert_eq!(response_offset(206, Some("bytes 40-99/100"), 40, 100).unwrap(), 40);
+        assert_eq!(response_offset(200, None, 40, 100).unwrap(), 0, "a full response restarts the file");
+        for range in [None, Some("bytes 0-99/100"), Some("bytes 40-99/101"), Some("bytes 40-100/100"), Some("bytes */100")] {
+            assert!(response_offset(206, range, 40, 100).is_err(), "{range:?}");
+        }
+        assert!(response_offset(204, None, 40, 100).is_err());
     }
 }

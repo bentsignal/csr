@@ -1,14 +1,14 @@
-//! The maps a player can pick: the install's own playable maps plus the old
-//! map versions from Valve's Workshop snapshots (`workshop` crate). Menus
-//! list these; anything in the list loads with [`crate::Level::load`], which
-//! fetches an old map on first use.
+//! Installed maps and experimental archives from Valve's Workshop snapshots
+//! (`workshop` crate), listed by `csr maps`. Archives load with
+//! [`crate::Level::load`], which fetches them on first use. They are not
+//! offered in the match menu until navigation and fidelity are validated.
 
 use std::path::Path;
 
 /// Where a listed map's data is.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MapStatus {
-    /// Loads at once.
+    /// BSP available locally; does not imply validated navigation or assets.
     Ready,
     /// An old map a Steam library already has: the first load copies it out.
     InSteam,
@@ -49,7 +49,7 @@ pub fn base(name: &str) -> &str {
 }
 
 /// Every playable map, sorted by name so old versions sit next to the
-/// current one (`de_dust2`, `de_dust2_2017`, `de_dust2_2018`).
+/// current one (`de_dust2`, `de_dust2_2017`, `de_dust2_2019`).
 pub fn list(game_dir: &Path, fs: &vfs::Vfs) -> Vec<MapEntry> {
     list_with(game_dir, fs, &workshop::Store::current())
 }
@@ -114,7 +114,7 @@ mod tests {
         let names: Vec<&str> = maps.iter().map(|m| m.name.as_str()).collect();
         let at = |n: &str| names.iter().position(|x| *x == n).unwrap();
         assert!(!names.contains(&"ar_shoots"));
-        assert!(at("de_dust2") + 1 == at("de_dust2_2017") && at("de_dust2_2017") + 1 == at("de_dust2_2018"));
+        assert!(at("de_dust2") + 1 == at("de_dust2_2017") && at("de_dust2_2017") + 1 == at("de_dust2_2019"));
         let old = &maps[at("de_dust2_2017")];
         assert_eq!((old.title.as_str(), old.base.as_str(), &old.status), ("Dust II (2017)", "de_dust2", &MapStatus::Download));
         assert_eq!(maps[at("cs_office")].title, "OFFICE");

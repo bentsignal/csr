@@ -109,8 +109,7 @@ impl Level {
             .unwrap_or_default();
         timings.push(("weapons", t.elapsed().as_secs_f32()));
 
-        let nav = fs
-            .read(&format!("maps/{name}.nav"))
+        let nav = map_resource(&fs, name, "maps", "nav")
             .and_then(|bytes| nav::NavMesh::parse(&bytes).ok())
             .map(Arc::new);
 
@@ -129,12 +128,46 @@ impl Level {
     /// The map's radar overview description (`resource/overviews/<map>.txt`),
     /// which names the bomb sites.
     pub fn overview(&self) -> Option<String> {
-        self.vfs.read_string(&format!("resource/overviews/{}.txt", self.name))
+        map_resource(&self.vfs, &self.name, "resource/overviews", "txt")
+            .map(|bytes| kv::decode_text(&bytes))
     }
 
     /// A config file from the game's `cfg/` folder, e.g.
     /// `gamemode_competitive.cfg`.
     pub fn cfg(&self, name: &str) -> Option<String> {
         self.vfs.read_string(&format!("cfg/{name}"))
+    }
+}
+
+/// Archived BSPs keep the original map name inside their pakfile. Resolve
+/// their metadata only there, never against the installed version's files.
+fn map_resource(fs: &vfs::Vfs, name: &str, folder: &str, extension: &str) -> Option<Vec<u8>> {
+    match workshop::find(name) {
+        Some(old) => fs.read_from("map", &format!("{folder}/{}.{extension}", old.base)),
+        None => fs.read(&format!("{folder}/{name}.{extension}")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn archived_map_metadata_uses_its_own_original_name_without_install_fallback() {
+        let root = std::env::temp_dir().join(format!("csr-map-metadata-{}", std::process::id()));
+        let install = root.join("install");
+        let embedded = root.join("embedded");
+        std::fs::create_dir_all(install.join("maps")).unwrap();
+        std::fs::create_dir_all(embedded.join("maps")).unwrap();
+        std::fs::write(install.join("maps/de_dust2.nav"), b"new navigation").unwrap();
+        std::fs::write(embedded.join("maps/de_dust2.nav"), b"old navigation").unwrap();
+        let mut fs = vfs::Vfs::new();
+        fs.push_back("install", vfs::Mount::Dir(install));
+        fs.push_front("map", vfs::Mount::Dir(embedded));
+        assert_eq!(map_resource(&fs, "de_dust2_2017", "maps", "nav").unwrap(), b"old navigation");
+        fs.unmount("map");
+        assert!(map_resource(&fs, "de_dust2_2017", "maps", "nav").is_none());
+        assert_eq!(map_resource(&fs, "de_dust2", "maps", "nav").unwrap(), b"new navigation");
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

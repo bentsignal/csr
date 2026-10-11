@@ -1,7 +1,8 @@
 //! `csr maps`, `csr fetch-map`, `csr remove-map`: the old map versions from
 //! Valve's Workshop snapshots (see the `workshop` crate). Playing, probing or
 //! simulating an old map fetches it by itself; these commands are for
-//! listing, prefetching and freeing disk space.
+//! development checks, prefetching and freeing disk space. Navigation and
+//! fidelity are being validated before archives appear in the match menu.
 
 use std::io::Write;
 
@@ -27,7 +28,8 @@ fn list() -> i32 {
     println!("{:<20} {:<22} {:<10} {}", "map", "title", "status", "source");
     for m in level::maps::list(&game_dir, &fs) {
         let status = match m.status {
-            level::maps::MapStatus::Ready => "ready",
+            level::maps::MapStatus::Ready if m.old.is_some() => "downloaded",
+            level::maps::MapStatus::Ready => "installed",
             level::maps::MapStatus::InSteam => "in Steam",
             level::maps::MapStatus::Download => "download",
         };
@@ -37,7 +39,7 @@ fn list() -> i32 {
         };
         println!("{:<20} {:<22} {:<10} {}", m.name, m.title, status, source);
     }
-    println!("\nOld maps download from Valve's Workshop the first time you play them (`csr fetch-map all` fetches every one now).");
+    println!("\nWorkshop archives are experimental; navigation and fidelity need validation.\nThey are not in the match menu yet. Loading an archive fetches it automatically; `csr fetch-map all` prefetches them.");
     0
 }
 

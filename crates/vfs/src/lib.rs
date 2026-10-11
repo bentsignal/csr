@@ -170,6 +170,15 @@ impl Vfs {
         self.read(path).map(|b| kv::decode_text(&b))
     }
 
+    /// Reads from one named mount without falling back to other sources.
+    /// Map-specific metadata in an archived BSP must not resolve to a newer
+    /// installed map's navigation or radar just because their names match.
+    pub fn read_from(&self, label: &str, path: &str) -> Option<Vec<u8>> {
+        let path = vpk::normalize(path);
+        self.mounts.iter().filter(|m| m.label == label)
+            .find_map(|m| m.mount.read(&path).ok().flatten())
+    }
+
     pub fn exists(&self, path: &str) -> bool {
         let path = vpk::normalize(path);
         self.mounts.iter().any(|m| m.mount.exists(&path))
