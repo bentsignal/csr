@@ -34,7 +34,7 @@ jobs:
         shell: powershell
     steps:
       - uses: actions/checkout@v5
-      - run: Add-Content $env:GITHUB_PATH "$env:USERPROFILE\.cargoin"
+      - run: Add-Content $env:GITHUB_PATH "$env:USERPROFILE\.cargo\bin"
       - run: cargo test --workspace --locked
       - run: cargo build --profile play -p launcher --locked
       # Real-data checks against the CS:GO Legacy install on the runner.
