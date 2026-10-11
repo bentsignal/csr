@@ -85,9 +85,8 @@ pub fn update(
     time: Res<Time<Real>>,
     mut images: ResMut<Assets<Image>>,
     window: Single<&Window, With<bevy::window::PrimaryWindow>>,
-    building:Res<crate::overworld_client::Building>,
 ) {
-    let main = menu.page == Some(Page::Main) || (!menu.open() && building.initialized && building.inventory_open);
+    let main = menu.page == Some(Page::Main);
     let case_item = if menu.page == Some(Page::Cases) {
         cases.preview_item()
     } else {

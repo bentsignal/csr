@@ -267,7 +267,8 @@ impl World {
         self.utility_fields.retain(|f| {
             f.until > time && !(f.kind.fire() && smokes.iter().any(|s| s.distance(f.pos) < 180.0))
         });
-        if self.tick % 32 == 0 {
+        // Decoys fire twice a second; fire burns about five times a second.
+        if self.tick % (crate::TICK_RATE as u64 / 2) == 0 {
             for f in self.utility_fields.iter().filter(|f| f.kind == Kind::Decoy) {
                 self.events.push(GameEvent::DecoyShot {
                     player: f.owner,
@@ -275,7 +276,7 @@ impl World {
                 });
             }
         }
-        if self.tick % 13 == 0 {
+        if self.tick % (13 * crate::TICK_RATE as u64 / 64) == 0 {
             let fields = self.utility_fields.clone();
             for f in fields.iter().filter(|f| f.kind.fire()) {
                 self.blast_utility(f.owner, f.kind, f.pos + Vec3::Z * 12.0, 140.0, 8.0);
@@ -390,7 +391,7 @@ mod tests {
             p.view_angles = Vec3::ZERO;
         }
         w.player_mut(b).unwrap().view_angles.y = 180.0;
-        w.tick = 128;
+        w.tick = 2 * crate::TICK_RATE as u64;
         w.projectiles.push(Projectile {
             id: 1,
             owner: a,
@@ -406,7 +407,7 @@ mod tests {
     #[test]
     fn smoke_extinguishes_fire_expires_and_does_not_block_bullet_geometry() {
         let mut w = arena();
-        w.tick = 64;
+        w.tick = crate::TICK_RATE as u64;
         w.utility_fields.push(Field {
             id: 1,
             owner: 1,
@@ -430,7 +431,7 @@ mod tests {
         let b = Vec3::new(300.0, 0.0, 55.0);
         assert!(w.smoke_occludes(a, b));
         assert!(w.visible(a, b));
-        w.tick = 19 * 64;
+        w.tick = 19 * crate::TICK_RATE as u64;
         w.step_utility();
         assert!(!w.smoke_occludes(a, b));
         assert!(w.utility_fields.is_empty());

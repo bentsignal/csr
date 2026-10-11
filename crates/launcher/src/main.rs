@@ -39,7 +39,6 @@ fn main() {
             Play options:\n\
               --direct                Skip the menu and enter the match\n\
               --team t|ct             Your side (default: ct)\n\
-              --seed N                Overworld seed; same seed resumes its save (42)\n\
               --deathmatch            Respawns and a fixed loadout\n\
               --bots N                Enemy bots; N-1 teammates (default: 5)\n\
               --size W H              Window resolution (default: 1600 900)\n\
@@ -48,8 +47,7 @@ fn main() {
               --frames N              Screenshot frame (default: 120)\n\
               --camera X Y Z P YAW    Noclip camera in Source coordinates\n\n\
             B: buy | Tab: scoreboard | 5 + hold LMB: plant | hold E: defuse\n\
-            Overworld: N build/weapons | I world inventory | LMB mine | RMB place\n\
-            Set CSR_GAME_DIR for CS assets, CSR_MINECRAFT_DIR for Minecraft assets.");
+            Set CSR_GAME_DIR to use a specific CS:GO Legacy install.");
         return;
     }
     if args.first().is_some_and(|a| a == "find-csgo") {
@@ -149,7 +147,6 @@ fn parse_play(map: &str, args: &[String]) -> Result<client::ClientOptions, Strin
         map: map.to_string(),
         ..Default::default()
     };
-    if map.eq_ignore_ascii_case("overworld")||map.eq_ignore_ascii_case("minecraft:overworld"){opts.bots=0;}
     let num = |s: Option<&String>, what: &str| -> Result<f32, String> {
         s.ok_or(format!("{what} needs a value"))?
             .parse::<f32>()
@@ -162,7 +159,6 @@ fn parse_play(map: &str, args: &[String]) -> Result<client::ClientOptions, Strin
                 opts.screenshot = Some(PathBuf::from(args.get(i + 1).ok_or("--screenshot needs a path")?));
                 i += 1;
             }
-            "--seed" => {opts.world_seed=args.get(i+1).ok_or("--seed needs a number")?.parse().map_err(|_|"Invalid seed")?;i+=1;}
             "--frames" => {
                 opts.frames = num(args.get(i + 1), "--frames")? as u32;
                 i += 1;
@@ -196,15 +192,5 @@ fn parse_play(map: &str, args: &[String]) -> Result<client::ClientOptions, Strin
         }
         i += 1;
     }
-    if map.eq_ignore_ascii_case("overworld")||map.eq_ignore_ascii_case("minecraft:overworld") {opts.bots=0;}
     Ok(opts)
-}
-
-#[cfg(test)] mod tests {
-    #[test] fn overworld_is_solo_even_with_explicit_bot_argument(){
-        let args=vec!["--bots".into(),"10".into()];
-        assert_eq!(super::parse_play("overworld",&args).unwrap().bots,0);
-        assert_eq!(super::parse_play("minecraft:overworld",&args).unwrap().bots,0);
-        assert_eq!(super::parse_play("de_dust2",&args).unwrap().bots,10);
-    }
 }

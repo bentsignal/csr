@@ -127,15 +127,6 @@ fn angle_diff(a: f32, b: f32) -> f32 {
 
 /// Ambient cube + sun visibility at a point, in material form.
 pub fn lighting_at(level: &level::Level, sun: Option<Sun>, chest: glam::Vec3) -> ([Vec4; 6], Vec4, Vec4) {
-    if let Some(world)=&level.overworld {
-        let world=world.lock().unwrap();
-        let pos=overworld::block_pos(overworld::to_block(world.save.origin,chest));
-        let day=overworld::terrain::day_cycle::DayCycle{ticks:world.save.day_ticks,paused:false};
-        let sky=world.light.get(pos) as f32/15.0*day.sky_light_level()/15.0;
-        let block=world.light.get_block(pos) as f32/15.0;
-        let color=Vec3::new(0.80,0.88,1.0)*sky.powf(1.8)*0.65+Vec3::new(1.0,0.73,0.45)*block.powf(1.4)+Vec3::splat(0.025);
-        return ([color.extend(1.);6],Vec4::Y,Vec4::ZERO);
-    }
     let samples=[chest,chest+glam::Vec3::Z*22.0,chest-glam::Vec3::Z*20.0];
     let mut cube=[[0.0;3];6];let mut count=0.0;
     for pos in samples {

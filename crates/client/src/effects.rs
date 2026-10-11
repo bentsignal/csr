@@ -25,7 +25,6 @@ pub struct KillFeedEntry {
 pub struct Effects {
     pub feedback: Vec<GameEvent>,
     pub kill_feed: Vec<KillFeedEntry>,
-    pub chat_events: Vec<String>,
     /// Time of the local player's last hit on someone (hit marker).
     pub last_hit: f32,
     /// Last time each player fired (drives fire animations).
@@ -147,11 +146,10 @@ pub fn process(
                     w => w.trim_start_matches("weapon_"),
                 };
                 let text = if attacker == sim::WORLD {
-                    crate::chat::death_text(&weapon, &name(victim))
+                    format!("[{gun}]  {}", name(victim))
                 } else {
                     format!("{}  [{}{}]  {}", name(attacker), gun, if headshot { " HS" } else { "" }, name(victim))
                 };
-                if level.0.overworld.is_some() { effects.chat_events.push(text.clone()); }
                 effects.kill_feed.push(KillFeedEntry {
                     text,
                     local_involved: attacker == local.id || victim == local.id,

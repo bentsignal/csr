@@ -63,7 +63,8 @@ mod tests {
         let first = stair_offset(0.0, 18.0, true, false);
         assert!(first < -15.0 && first > -18.0);
         let mut offset = first;
-        for _ in 0..12 { offset = stair_offset(offset, 0.0, true, false); }
+        // 3/16 s of level ground (12 ticks at 64 Hz) eases the full step out.
+        for _ in 0..12 * sim::TICK_RATE / 64 { offset = stair_offset(offset, 0.0, true, false); }
         assert_eq!(offset, 0.0);
         assert_eq!(stair_offset(0.0, 18.0, false, false), 0.0);
         assert_eq!(stair_offset(-16.0, 150.0, true, true), 0.0);

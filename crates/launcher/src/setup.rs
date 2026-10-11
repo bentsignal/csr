@@ -2,20 +2,18 @@
 //!
 //! * **Data folder.** A release build ships a `csgo-rewrite.portable` file
 //!   next to the executable; its player data (settings, skins, cases,
-//!   Minecraft worlds) then lives in `userdata\` beside it, so a freshly
+//!   loadouts) then lives in `userdata\` beside it, so a freshly
 //!   unpacked copy starts clean. Source checkouts keep theirs at the
 //!   repository root. `CSR_DATA_DIR` overrides both. The process runs inside the
-//!   data folder, so every relative save path (`config\`, `worlds\`) lands
-//!   there.
+//!   data folder, so every relative save path (`config\`) lands there.
 //! * **CS:GO Legacy.** The first run of a release build searches every Steam
 //!   library on the PC (Steam's registry entry, its `libraryfolders.vdf`, and
-//!   the usual library folders on each drive), asks the player to confirm
-//!   the install it found, and falls back to browsing for `csgo.exe`. The
-//!   choice is checked and remembered in `config\paths.cfg`. `csr setup`
-//!   asks again; `csr find-csgo` prints what the search sees.
-//!   `CSR_GAME_DIR` overrides.
-//! * **Minecraft.** A release build bundles the Minecraft 26.3 assets in
-//!   `minecraft-26.3\` beside the executable. `CSR_MINECRAFT_DIR` overrides.
+//!   the usual library folders on each drive) for CS:GO Legacy (Steam app
+//!   4465480, or the older `csgo_legacy` beta of app 730), asks the player
+//!   to confirm the install it found, and otherwise offers to open Steam's
+//!   installer for it or to browse for `csgo.exe`. The choice is checked and
+//!   remembered in `config\paths.cfg`. `csr setup` asks again;
+//!   `csr find-csgo` prints what the search sees. `CSR_GAME_DIR` overrides.
 
 use std::path::{Path, PathBuf};
 
@@ -42,13 +40,13 @@ pub fn csgo_game_dir(picked: &Path) -> Result<PathBuf, String> {
     }
     if picked.join("game/csgo/gameinfo.gi").is_file() || picked.join("gameinfo.gi").is_file() || picked.join("csgo/gameinfo.gi").is_file() {
         return Err("That folder holds Counter-Strike 2, not CS:GO Legacy.\n\n\
-            In Steam, right-click Counter-Strike 2 > Properties > Betas and choose \
-            \"csgo_legacy\", let it download, then select its csgo.exe again."
+            Install \"Counter-Strike: Global Offensive\" (CS:GO Legacy) from your Steam \
+            library, then select the csgo.exe in its \"csgo legacy\" folder."
             .into());
     }
     Err(format!(
-        "No CS:GO Legacy game files in\n{}\n\nSelect csgo.exe inside the \"Counter-Strike Global Offensive\" \
-        folder (next to a \"csgo\" folder with pak01_dir.vpk).",
+        "No CS:GO Legacy game files in\n{}\n\nSelect csgo.exe inside the \"csgo legacy\" \
+        folder in Steam's steamapps\\common (next to a \"csgo\" folder with pak01_dir.vpk).",
         picked.display()
     ))
 }
@@ -166,15 +164,17 @@ pub fn detect() -> Detected {
 fn detect_in(libraries: Vec<PathBuf>) -> Detected {
     let mut found = Detected::default();
     for lib in libraries {
-        let install = lib.join(r"steamapps\common\Counter-Strike Global Offensive");
-        if !install.is_dir() {
-            continue;
-        }
-        match csgo_game_dir(&install) {
-            Ok(game) if !found.legacy.contains(&game) => found.legacy.push(game),
-            Ok(_) => {}
-            Err(_) if install.join(r"game\csgo\gameinfo.gi").is_file() => found.cs2_only.push(install),
-            Err(_) => {}
+        for dir in vfs::LEGACY_INSTALL_DIRS {
+            let install = lib.join(r"steamapps\common").join(dir);
+            if !install.is_dir() {
+                continue;
+            }
+            match csgo_game_dir(&install) {
+                Ok(game) if !found.legacy.contains(&game) => found.legacy.push(game),
+                Ok(_) => {}
+                Err(_) if install.join(r"game\csgo\gameinfo.gi").is_file() => found.cs2_only.push(install),
+                Err(_) => {}
+            }
         }
     }
     found
@@ -187,17 +187,28 @@ enum Answer {
     Cancel,
 }
 
+/// Opens a URL (here a `steam://` link) with the system handler.
+fn open_url(url: &str) {
+    if std::process::Command::new("cmd").args(["/C", "start", "", url]).spawn().is_err() {
+        eprintln!("Open this link to continue: {url}");
+    }
+}
+
 /// "Use this folder?" with Yes / No / Cancel.
 fn confirm(game: &Path) -> Answer {
     let install = game.parent().unwrap_or(game);
-    let text = format!(
+    ask(&format!(
         "CSGO Rewrite found CS:GO Legacy here:\n\n{}\n\nUse this folder?\n\nYes - use it\nNo - choose a different one\nCancel - quit",
         install.display()
-    );
+    ))
+}
+
+/// A Yes / No / Cancel question, as a dialog or on the console.
+fn ask(text: &str) -> Answer {
     let script = format!(
         "$top=New-Object System.Windows.Forms.Form -Property @{{TopMost=$true}}; \
          [Console]::Out.Write([System.Windows.Forms.MessageBox]::Show($top, {}, 'CSGO Rewrite setup', 'YesNoCancel', 'Question'))",
-        ps_quote(&text)
+        ps_quote(text)
     );
     match powershell(&script).as_deref() {
         Some("Yes") => Answer::Yes,
@@ -252,21 +263,19 @@ fn ask_for_csgo(found: &Detected) -> Option<PathBuf> {
     }
     let start = found.legacy.first().and_then(|g| g.parent()).or(found.cs2_only.first().map(PathBuf::as_path)).map(Path::to_path_buf);
     if found.legacy.is_empty() {
-        let text = if found.cs2_only.is_empty() {
-            "CSGO Rewrite could not find CS:GO Legacy on this PC.\n\n\
-             Install it in Steam (right-click Counter-Strike 2 > Properties > Betas > csgo_legacy), \
-             or click OK and select csgo.exe in your CS:GO Legacy folder."
-                .to_string()
-        } else {
-            format!(
-                "Counter-Strike 2 is installed at\n{}\nbut it is not on the CS:GO Legacy branch.\n\n\
-                 In Steam: right-click Counter-Strike 2 > Properties > Betas > choose \"csgo_legacy\", \
-                 wait for the download, then start CSGO Rewrite again.\n\n\
-                 If CS:GO Legacy is somewhere else, click OK and select its csgo.exe.",
-                found.cs2_only[0].display()
-            )
-        };
-        message("CSGO Rewrite setup", &text);
+        let text = "CSGO Rewrite needs CS:GO Legacy (\"Counter-Strike: Global Offensive\" in your \
+             Steam library), and could not find it on this PC.\n\n\
+             Yes - open Steam to install it, then start CSGO Rewrite again when it has downloaded\n\
+             No - it is already installed somewhere else; select its csgo.exe\n\
+             Cancel - quit";
+        match ask(text) {
+            Answer::Yes => {
+                open_url(&format!("steam://install/{}", vfs::LEGACY_APP_ID));
+                return None;
+            }
+            Answer::No => {}
+            Answer::Cancel => return None,
+        }
     }
     loop {
         let picked = pick_csgo_exe(start.as_deref())?;
@@ -284,7 +293,7 @@ pub fn print_detected() {
         println!("CS:GO Legacy: {}", g.display());
     }
     for c in &found.cs2_only {
-        println!("Counter-Strike 2 (not on csgo_legacy): {}", c.display());
+        println!("Counter-Strike 2 (not CS:GO Legacy): {}", c.display());
     }
     if found.legacy.is_empty() && found.cs2_only.is_empty() {
         println!("No CS:GO install found in any Steam library.");
@@ -306,14 +315,6 @@ pub fn prepare(force_ask: bool) -> Result<(), String> {
         std::env::set_current_dir(data).map_err(|e| format!("Cannot use {}: {e}", data.display()))?;
     }
     let data = std::env::current_dir().map_err(|e| e.to_string())?;
-
-    // Minecraft assets shipped with a release.
-    if std::env::var_os("CSR_MINECRAFT_DIR").is_none() {
-        if let Some(bundled) = exe_dir().map(|d| d.join("minecraft-26.3")).filter(|d| d.is_dir()) {
-            // SAFETY: single-threaded start-up, before anything reads the environment.
-            unsafe { std::env::set_var("CSR_MINECRAFT_DIR", bundled) };
-        }
-    }
 
     if std::env::var_os("CSR_GAME_DIR").is_some() && !force_ask {
         return Ok(());
@@ -382,28 +383,33 @@ mod tests {
 
     #[test]
     fn finds_legacy_in_listed_libraries_and_flags_cs2() {
-        // Steam on one "drive" lists a second library holding CS:GO Legacy
-        // and a third holding an un-switched Counter-Strike 2.
+        // Steam on one "drive" lists libraries holding CS:GO Legacy as its
+        // own app, the old 730 beta branch, and a plain Counter-Strike 2.
         let steam = temp("steam");
         let legacy_lib = temp("lib-legacy");
+        let beta_lib = temp("lib-beta");
         let cs2_lib = temp("lib-cs2");
         std::fs::create_dir_all(steam.join("steamapps")).unwrap();
         let vdf = format!(
-            "\"libraryfolders\"\n{{\n\"0\" {{ \"path\" \"{}\" }}\n\"1\" {{ \"path\" \"{}\" }}\n}}\n",
+            "\"libraryfolders\"\n{{\n\"0\" {{ \"path\" \"{}\" }}\n\"1\" {{ \"path\" \"{}\" }}\n\"2\" {{ \"path\" \"{}\" }}\n}}\n",
             legacy_lib.display().to_string().replace('\\', "\\\\"),
+            beta_lib.display().to_string().replace('\\', "\\\\"),
             cs2_lib.display().to_string().replace('\\', "\\\\")
         );
         std::fs::write(steam.join(r"steamapps\libraryfolders.vdf"), vdf).unwrap();
-        let game = legacy_lib.join(r"steamapps\common\Counter-Strike Global Offensive\csgo");
-        std::fs::create_dir_all(&game).unwrap();
-        std::fs::write(game.join("gameinfo.txt"), "").unwrap();
-        std::fs::write(game.join("pak01_dir.vpk"), "").unwrap();
+        let game = legacy_lib.join(r"steamapps\common\csgo legacy\csgo");
+        let beta = beta_lib.join(r"steamapps\common\Counter-Strike Global Offensive\csgo");
+        for dir in [&game, &beta] {
+            std::fs::create_dir_all(dir).unwrap();
+            std::fs::write(dir.join("gameinfo.txt"), "").unwrap();
+            std::fs::write(dir.join("pak01_dir.vpk"), "").unwrap();
+        }
         let cs2 = cs2_lib.join(r"steamapps\common\Counter-Strike Global Offensive");
         std::fs::create_dir_all(cs2.join(r"game\csgo")).unwrap();
         std::fs::write(cs2.join(r"game\csgo\gameinfo.gi"), "").unwrap();
 
         let found = detect_in(libraries_from(vec![steam]));
-        assert_eq!(found.legacy, vec![game]);
+        assert_eq!(found.legacy, vec![game, beta]);
         assert_eq!(found.cs2_only, vec![cs2]);
     }
 

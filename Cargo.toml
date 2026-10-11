@@ -1,6 +1,5 @@
 [workspace]
 resolver = "3"
-exclude = ["third_party/rust-audio/lewton-0.10.2", "third_party/rust-audio/ogg-0.8.0","third_party/minecraft_terrain", "third_party/minecraftoss/core", "third_party/minecraftoss/world", "third_party/minecraftoss/generator", "third_party/minecraftoss/player", "third_party/minecraftoss/entities"]
 members = [
     "crates/content",
     "crates/weapons",
@@ -16,13 +15,12 @@ members = [
     "crates/nav",
     "crates/sim",
     "crates/level",
-    "crates/overworld",
     "crates/client",
     "crates/launcher",
 ]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 license = "Apache-2.0"
 authors = ["Mr. Claude (Anthropic's Claude)"]
@@ -72,7 +70,6 @@ nav = { path = "crates/nav" }
 level = { path = "crates/level" }
 weapons = { path = "crates/weapons" }
 client = { path = "crates/client" }
-overworld = { path = "crates/overworld" }
 
 [profile.dev]
 opt-level = 1
@@ -89,7 +86,3 @@ incremental = true
 
 [profile.release]
 lto = "thin"
-
-[patch.crates-io]
-lewton = { path = "third_party/rust-audio/lewton-0.10.2" }
-ogg = { path = "third_party/rust-audio/ogg-0.8.0" }

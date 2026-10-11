@@ -62,15 +62,6 @@ pub const KEYS: [KeyCode; 40] = [
 #[derive(Resource, Clone, Debug, PartialEq)]
 pub struct Settings {
     pub volume: f32,
-    pub mc_mobs: f32,
-    pub mc_blocks: f32,
-    pub mc_render_distance: i32,
-    pub mc_entity_distance: i32,
-    pub mc_entity_culling: bool,
-    pub mc_clouds: usize,
-    pub mc_show_fps: bool,
-    pub mc_minimap: bool,
-    pub mc_hand_motion: bool,
     pub menu_blur: bool,
     pub sensitivity: f32,
     pub invert_y: bool,
@@ -93,8 +84,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             volume: 0.5,
-            mc_mobs: 1., mc_blocks: 1., mc_minimap: true, mc_hand_motion: true, menu_blur: true,
-            mc_render_distance: 6, mc_entity_distance: 96, mc_entity_culling: true, mc_clouds: 0, mc_show_fps: false,
+            menu_blur: true,
             sensitivity: 2.0,
             invert_y: false,
             exposure: 2.0,
@@ -147,15 +137,6 @@ impl Settings {
             let value = value.trim();
             let v = value.parse::<f32>().ok().filter(|x| x.is_finite());
             match key {
-                "mc_mobs" => { if let Some(v)=v { s.mc_mobs=v.clamp(0.,1.); } },
-                "mc_blocks" => { if let Some(v)=v { s.mc_blocks=v.clamp(0.,1.); } },
-                "mc_render_distance" => {if let Some(v)=v {s.mc_render_distance=(v as i32).clamp(3,16);}},
-                "mc_entity_distance" => {if let Some(v)=v {s.mc_entity_distance=(v as i32).clamp(32,192);}},
-                "mc_clouds" => {if let Some(v)=v {s.mc_clouds=(v as usize).min(2);}},
-                "mc_entity_culling" => s.mc_entity_culling=value=="true",
-                "mc_show_fps" => s.mc_show_fps=value=="true",
-                "mc_minimap" => s.mc_minimap=value=="true",
-                "mc_hand_motion" => s.mc_hand_motion=value=="true",
                 "menu_blur" => s.menu_blur=value=="true",
                 "volume" => {
                     if let Some(v) = v {
@@ -238,8 +219,7 @@ impl Settings {
             self.cross_thickness,
             self.cross_dot
         );
-        text.push_str(&format!("mc_mobs={}\nmc_blocks={}\nmc_minimap={}\nmc_hand_motion={}\nmenu_blur={}\n", self.mc_mobs,self.mc_blocks,self.mc_minimap,self.mc_hand_motion,self.menu_blur));
-        text.push_str(&format!("mc_render_distance={}\nmc_entity_distance={}\nmc_entity_culling={}\nmc_clouds={}\nmc_show_fps={}\n",self.mc_render_distance,self.mc_entity_distance,self.mc_entity_culling,self.mc_clouds,self.mc_show_fps));
+        text.push_str(&format!("menu_blur={}\n", self.menu_blur));
         for (i, key) in self.binds.iter().enumerate() {
             text.push_str(&format!("bind{i}={key:?}\n"));
         }
@@ -288,7 +268,7 @@ mod tests {
         s.rebind(0, KeyCode::KeyS);
         s.volume = 0.7;
         s.cross_dot = true;
-        s.mc_render_distance=12;s.mc_entity_distance=64;s.mc_clouds=2;s.mc_show_fps=true;s.mc_entity_culling=false;
+        s.menu_blur = false;
         assert_eq!(s.binds[1], KeyCode::KeyW);
         assert_eq!(Settings::parse(&s.encode()), s);
     }
@@ -301,7 +281,5 @@ mod tests {
         assert_eq!(s.sensitivity, 10.0);
         assert_eq!(s.resolution, 3);
         assert_eq!(s.exposure, 2.0);
-        let s=Settings::parse("mc_render_distance=999\nmc_entity_distance=-5\nmc_clouds=999");
-        assert_eq!((s.mc_render_distance,s.mc_entity_distance,s.mc_clouds),(16,32,2));
     }
 }

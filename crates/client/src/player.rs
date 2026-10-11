@@ -1,4 +1,4 @@
-//! Local player: input → [`sim::World`] at 64 Hz → interpolated camera.
+//! Local player: input → [`sim::World`] at 128 Hz → interpolated camera.
 //! While dead, the camera follows a living teammate (CS:GO's first-person
 //! spectating); left click switches to the next one.
 
@@ -95,13 +95,11 @@ pub fn grab_cursor(
     enabled: Res<InputEnabled>,
     menu: Res<crate::buymenu::BuyMenu>,
     front: Res<crate::menu::Menu>,
-    building: Res<crate::overworld_client::Building>,
-
 ) {
     if !enabled.0 {
         return;
     }
-    if menu.open || front.open() || building.inventory_open {
+    if menu.open || front.open() {
         cursor.grab_mode = CursorGrabMode::None;
         cursor.visible = true;
         return;
@@ -137,9 +135,8 @@ pub fn look(
     settings: Res<crate::settings::Settings>,
     mut block: ResMut<InputBlockFrames>,
     mut inspect: ResMut<crate::tracers::InspectRequest>,
-    building:Res<crate::overworld_client::Building>,
 ) {
-    if front.open() || building.inventory_open {return;}
+    if front.open() {return;}
     if block.0 > 0 { if !mouse.pressed(MouseButton::Left) && !mouse.pressed(MouseButton::Right) {block.0=0;} return; }
     if !enabled.0 {
         return;
@@ -154,7 +151,7 @@ pub fn look(
         local.pitch = (local.pitch + d.y * (if settings.invert_y {-1.0} else {1.0}) * local.sensitivity * M_YAW * zoom).clamp(-89.0, 89.0);
         local.yaw = local.yaw.rem_euclid(360.0);
     }
-    if !menu.open && !building.initialized && keys.just_pressed(KeyCode::KeyV) {
+    if !menu.open && keys.just_pressed(KeyCode::KeyV) {
         local.noclip = !local.noclip;
         local.noclip_pos = local.curr_eye;
     }
@@ -198,10 +195,7 @@ pub fn look(
     if grabbed && alive && mouse.just_pressed(MouseButton::Right) {
         b |= buttons::ATTACK2;
     }
-    if building.active { b &= !(buttons::ATTACK|buttons::ATTACK2); }
-    if building.using_block {b &= !buttons::ATTACK2;}
     local.latched |= b;
-    if building.active {return;}
 
     if !menu.open {
         for (key, slot) in [
@@ -266,11 +260,10 @@ pub fn tick(
     block: Res<InputBlockFrames>,
     mut poses: ResMut<crate::interpolation::RenderPoses>,
     inventory: Res<crate::inventory::Inventory>,
-    building:Res<crate::overworld_client::Building>,
 ) {
     if front.open() {return;}
     let no_keys = ButtonInput::<KeyCode>::default();
-    let keys: &ButtonInput<KeyCode> = if enabled.0 && !menu.open && !building.inventory_open && block.0==0 { &real_keys } else { &no_keys };
+    let keys: &ButtonInput<KeyCode> = if enabled.0 && !menu.open && block.0==0 { &real_keys } else { &no_keys };
     let (forward, side) = move_axes(keys, &settings);
     let mut held = 0;
     if keys.pressed(settings.binds[4]) {
@@ -297,8 +290,6 @@ pub fn tick(
     }
     if !enabled.0 && std::env::var_os("CSR_ATTACK2").is_some() { held |= buttons::ATTACK2; }
     let mut pressed = held | local.latched;
-    if building.active || building.inventory_open {pressed &= !(buttons::ATTACK|buttons::ATTACK2);}
-    if building.using_block {pressed &= !buttons::ATTACK2;}
     local.latched = 0;
     let mut slot = std::mem::take(&mut local.pending_slot);
     if !enabled.0 && std::env::var_os("CSR_TEST_SWITCH").is_some() {

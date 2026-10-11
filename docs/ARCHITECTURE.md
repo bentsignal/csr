@@ -14,7 +14,7 @@ level::Level::load(map)
   ├─ bsp::Bsp            geometry, lightmaps, entities, static props
   └─ collision::CollisionWorld   brushes + displacement triangles + prop hulls
         │
-        ├──────────────► sim::World (64 Hz)      ◄── TickInput per player
+        ├──────────────► sim::World (128 Hz)      ◄── TickInput per player
         │                  movement::player_move      (keyboard, bots, network)
         │                  → Snapshot
         ▼

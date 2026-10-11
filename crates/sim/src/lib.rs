@@ -9,7 +9,8 @@
 //! Two rule sets ([`GameMode`]): deathmatch (respawn with a fixed loadout)
 //! and competitive (rounds, money, buy zones, the bomb; see [`rules`]).
 //!
-//! The tick rate matches CS:GO's 64-tick matchmaking servers.
+//! The tick rate matches 128-tick CS:GO community servers. Code that counts
+//! ticks derives the count from [`TICK_RATE`], so the rate can change.
 
 pub mod bots;
 pub mod objectives;
@@ -28,7 +29,7 @@ pub use rules::{BuyError, GameMode, Phase, Purchase, RoundEndReason, RoundState,
 use std::sync::Arc;
 use weapon::{AccuracyContext, HitGroup, WeaponState, C4};
 
-pub const TICK_RATE: u32 = 64;
+pub const TICK_RATE: u32 = 128;
 pub const TICK_DT: f32 = 1.0 / TICK_RATE as f32;
 /// Seconds before a dead player respawns (deathmatch rules).
 pub const RESPAWN_DELAY: f32 = 2.0;
@@ -1264,7 +1265,7 @@ impl World {
             {
                 let p = &mut self.players[i];
                 p.view_angles = input.view_angles;
-                // Minecraft fluids use the same collision sweeps as CS movement.
+                // Dynamic-world fluids use the same collision sweeps as CS movement.
                 let swimming=collision.dynamic.as_ref().is_some_and(|d|d.point_contents(p.movement.origin+Vec3::Z*32.,contents::WATER)!=0);
                 if swimming {
                     let mut config=self.config.clone();config.gravity=0.;config.air_accelerate=8.;config.air_max_wishspeed=160.;config.max_speed=160.;

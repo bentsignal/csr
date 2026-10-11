@@ -6,7 +6,6 @@ use std::sync::Arc;
 use std::time::Instant;
 
 pub struct Level {
-    pub overworld: Option<std::sync::Mutex<overworld::Runtime>>,
     pub name: String,
     pub game_dir: PathBuf,
     pub vfs: vfs::Vfs,
@@ -30,7 +29,7 @@ impl std::fmt::Display for LoadError {
         match self {
             LoadError::GameNotFound => write!(
                 f,
-                "CS:GO install not found. Install the csgo_legacy branch or set CSR_GAME_DIR to the folder holding gameinfo.txt"
+                "CS:GO Legacy not found. Install Counter-Strike: Global Offensive (CS:GO Legacy) from Steam, or set CSR_GAME_DIR to the folder holding gameinfo.txt"
             ),
             LoadError::Io(e) => write!(f, "{e}"),
         }
@@ -52,23 +51,13 @@ pub fn mount_game(game_dir: Option<&Path>) -> Result<(PathBuf, vfs::Vfs), LoadEr
 
 impl Level {
     /// Loads `maps/<name>.bsp` and builds its collision world.
-    pub fn load(name: &str, game_dir: Option<&Path>) -> Result<Level, LoadError> {Self::load_seed(name,game_dir,None)}
-    pub fn load_seed(name:&str,game_dir:Option<&Path>,seed:Option<i64>)->Result<Level,LoadError>{
+    pub fn load(name: &str, game_dir: Option<&Path>) -> Result<Level, LoadError> {
         let mut timings = Vec::new();
         let t = Instant::now();
         let (game_dir, mut fs) = mount_game(game_dir)?;
         timings.push(("mount", t.elapsed().as_secs_f32()));
 
         let t = Instant::now();
-        if overworld::is_map(name) {
-            let runtime=overworld::Runtime::load_seed(seed).map_err(LoadError::Io)?;
-            let mut collision=CollisionWorld::new();
-            collision.surfaces.push("concrete".into());
-            collision.dynamic=Some(runtime.collision.clone());
-            collision.mins=glam::Vec3::splat(-100000.); collision.maxs=glam::Vec3::splat(100000.);
-            let catalog=fs.read_string("scripts/items/items_game.txt").and_then(|s| weapons::Catalog::from_items_game(&s).ok()).unwrap_or_default();
-            return Ok(Level{name:"overworld".into(), game_dir, vfs:fs, bsp:bsp::Bsp::default(), collision:Arc::new(collision),catalog:Arc::new(catalog), nav:None,timings,overworld:Some(std::sync::Mutex::new(runtime))});
-        }
         let map_path = format!("maps/{name}.bsp");
         let bytes = fs.read(&map_path).ok_or_else(|| LoadError::Io(format!("{map_path} not found")))?;
         let bsp = bsp::Bsp::parse(&bytes).map_err(|e| LoadError::Io(format!("{map_path}: {e}")))?;
@@ -99,7 +88,6 @@ impl Level {
             .map(Arc::new);
 
         Ok(Level {
-            overworld:None,
             name: name.to_string(),
             game_dir,
             vfs: fs,

@@ -131,10 +131,9 @@ pub fn input(
     windows: Query<&Window>,
     front: Res<crate::menu::Menu>,
     settings: Res<crate::settings::Settings>,
-    building: Res<crate::overworld_client::Building>,
 ) {
     menu.just_closed = false;
-    if front.open() || building.inventory_open {menu.open=false;return;}
+    if front.open() {menu.open=false;return;}
     if !enabled.0 {
         return;
     }

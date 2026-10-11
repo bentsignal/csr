@@ -1,11 +1,15 @@
 # CSGO Rewrite
 
-A from-scratch **Rust** rewrite of Counter-Strike: Global Offensive's runtime,
-built on [Bevy](https://bevyengine.org/) 0.19. Point it at a CS:GO install you
-already have and it loads that install's maps, textures, models and weapon data
-into its own engine. It uses no Valve code.
+A from-scratch **Rust** rewrite of Counter-Strike: Global Offensive, built on
+[Bevy](https://bevyengine.org/) 0.19, so friends can play the original CS:GO
+together: own servers, 128 tick, the 2018-era look and feel, mods, and later
+VR cross-play. It reads maps, textures, models, sounds and weapon data from
+the CS:GO Legacy install you already have from Steam. It uses no Valve code
+and ships no Valve files.
 
-**Written by Mr. Claude** (Anthropic's Claude), for Frostty.
+Goals: [docs/VISION.md](docs/VISION.md). Plan: [docs/ROADMAP.md](docs/ROADMAP.md).
+
+This repository continues a project started by hawk.
 
 It follows the approach of [IW4L](https://github.com/vladtrc/iw4L) and
 [2010-rust-rewrite-mashup](https://github.com/chasmlol/2010-rust-rewrite-mashup)
@@ -15,19 +19,10 @@ the games can later be **stitched together** into one runtime. See
 
 ## Status
 
-**Overworld is available in the map selector.** `Play Overworld.cmd` opens the
-Minecraft Special mode with CS:GO movement, weapons and HUD. It is solo, with
-unlimited time and no CS bots. It uses the installed Minecraft assets for streamed
-terrain, creatures, Survival inventory, 2×2/3×3 crafting and furnaces. The
-completion route includes Nether portals, fortress blazes, real strongholds,
-Eyes of Ender and a custom Ender Dragon encounter. **N** toggles tools/weapons;
-**I** opens inventory. New seeds start with an empty Minecraft inventory. See
-[docs/OVERWORLD.md](docs/OVERWORLD.md) for controls, saves and parity limits.
-
 You can load de_dust2 and play a local 5v5 competitive match against bots,
 with freeze time, buying, money, bomb planting/defusing, halftime and match
 results. Respawn deathmatch is also available. This is a playable prototype;
-grenades, wall penetration and multiplayer networking are still unfinished.
+wall penetration and multiplayer networking are still unfinished.
 
 | Area | State |
 |---|---|
@@ -39,7 +34,7 @@ grenades, wall penetration and multiplayer networking are still unfinished.
 | Animations | ✅ classic RLE tracks and CS:GO's newer frame-animation format (incl. its compressed quaternions), sections, `.ani` blocks, include models, weight lists |
 | Collision | ✅ swept-box traces against brushes, displacements and prop hulls |
 | Player movement | ✅ clean-room CS:GO movement: friction, accel, air-strafe, stairs, crouch-jump, stamina, bhop cap |
-| Simulation | ✅ deterministic fixed 64-tick `TickInput → step → Snapshot` |
+| Simulation | ✅ deterministic fixed 128-tick `TickInput → step → Snapshot` |
 | Renderer | ✅ world plus lightmaps, WorldVertexTransition blends, batched props lit by ambient cube + sun, 3D skybox (≈120 fps on an RTX 3070 laptop GPU) |
 | Weapon catalog | ✅ `items_game.txt` → typed `WeaponDefinition`s (prefab inheritance) |
 | Shooting | ✅ fire rate, ammo, reloads, CS:GO inaccuracy model, seeded recoil pattern, range falloff, armor, hit groups (damage matches CS:GO: AK 111 helmet HS, 27 armored body) |
@@ -53,33 +48,33 @@ grenades, wall penetration and multiplayer networking are still unfinished.
 | Inventory | ✅ local base-item collection, rotatable 3D previews and saved T/CT Deathmatch loadouts |
 | Hit feedback | ✅ surface impacts, blood masks/splats, original damage sounds, directional hurt feedback; optional hit marker |
 | Match UI | ✅ round/score HUD, plant/defuse progress, kill feed, spectating and Tab scoreboard |
-| Grenades, wall penetration, netcode | ⏳ see [docs/ROADMAP.md](docs/ROADMAP.md) |
+| Grenades | 🟡 bots buy and throw them; full parity pending |
+| Wall penetration, netcode, servers | ⏳ see [docs/ROADMAP.md](docs/ROADMAP.md) |
 
 ## Download and play (Windows)
 
-1. Switch Counter-Strike 2 to CS:GO Legacy in Steam: right-click Counter-Strike 2
-   → Properties → Betas → `csgo_legacy`, and let it download.
+1. Have CS:GO Legacy installed in Steam ("Counter-Strike: Global Offensive"
+   in your library). If it isn't, the game offers to open Steam's installer.
 2. Download `CSGO-Rewrite-<version>-windows-x64.zip` from this repository's
    **Releases** page and unzip it anywhere.
-3. Run **Play CSGO.bat** (or **Play Minecraft.bat**). The first launch searches
-   every Steam library on the PC for CS:GO Legacy and asks you to confirm the
-   folder it found. If it finds none, you select `csgo.exe` yourself. The
-   choice is remembered; **Change CSGO Folder.bat** asks again.
+3. Run **Play CSGO.bat**. If Windows says "Windows protected your PC", click
+   **More info → Run anyway** (the game is not code-signed). The first launch
+   finds CS:GO Legacy in your Steam libraries and asks you to confirm it.
+   The choice is remembered; **Change CSGO Folder.bat** asks again.
 
-Every release starts as a fresh install: no settings, skins, cases or
-Minecraft worlds. Your progress is saved in `userdata\` next to the game.
-The zip bundles the Minecraft 26.3 assets the Overworld mode uses. CS:GO
-files are never included; they are read from your own install. See
-[docs/PLAYERS.md](docs/PLAYERS.md) (shipped as `README.txt`).
+Every release starts as a fresh install. Your progress is saved in
+`userdata\` next to the game. CS:GO files are never included; they are read
+from your own install. See [docs/PLAYERS.md](docs/PLAYERS.md) (shipped as
+`README.txt`). A self-updating installer is on the roadmap.
 
 To build a release yourself, run **Package Release.cmd**. It writes
 `dist\CSGO-Rewrite-<version>-windows-x64.zip`.
 
 ## Building from source: what you need
 
-- **CS:GO (legacy)**. In Steam: right-click Counter-Strike 2 → Properties →
-  Betas → choose `csgo_legacy`. The install is found automatically. Otherwise set
-  `CSR_GAME_DIR` to the folder that holds `gameinfo.txt`.
+- **CS:GO Legacy** from Steam (app 4465480, "Counter-Strike: Global
+  Offensive" in your library). The install is found automatically. Otherwise
+  set `CSR_GAME_DIR` to the folder that holds `gameinfo.txt`.
 - Rust (stable, 2024 edition).
 
 Game files are only ever **read**. Nothing from CS:GO is stored in this

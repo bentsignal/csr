@@ -1,7 +1,4 @@
 //! Local CS:GO-style front end. All presented game modes are playable offline.
-#[path = "world_seed.rs"]
-mod world_seed;
-pub(crate) use world_seed::input as seed_input;
 use crate::{
     player::{InputEnabled, LocalPlayer},
     settings::{ACTIONS, RESOLUTIONS, Settings},
@@ -24,8 +21,6 @@ pub enum Page {
     Audio,
     Controls,
     Crosshair,
-    Minecraft,
-    MinecraftGraphics,
 }
 #[derive(Resource)]
 pub struct Menu {
@@ -33,8 +28,6 @@ pub struct Menu {
     pub in_match: bool,
     pub maps: Vec<String>,
     pub map: usize,
-    pub world_seed:i64,
-    pub seed_edit:Option<world_seed::Editor>,
     pub deathmatch: bool,
     pub terrorist: bool,
     pub bots: u32,
@@ -52,7 +45,6 @@ impl Default for Menu {
             in_match: true,
             maps: Vec::new(),
             map: 0,
-            world_seed:42,seed_edit:None,
             deathmatch: false,
             terrorist: false,
             bots: 5,
@@ -80,9 +72,6 @@ pub enum Action {
     Quit,
     Start,
     SelectMap(usize),
-    EditSeed,
-    NewSeed,
-    ApplySeed,
     SelectWeapon(usize),
     Filter(usize),
     Equip(bool),
@@ -122,24 +111,19 @@ pub(crate) fn setup(
             }),
     );
     maps.retain(|p| !p.contains('/') && (p.starts_with("de_") || p.starts_with("cs_")));
-    maps.push("overworld".into());
     maps.sort();
     maps.dedup();
     if maps.is_empty() {
         maps.push(opts.0.map.clone());
     }
-    menu.world_seed=opts.0.world_seed;
     menu.map = maps.iter().position(|p| p == &opts.0.map).unwrap_or(0);
     menu.maps = maps;
     menu.deathmatch = opts.0.deathmatch || menu.maps[menu.map].starts_with("cs_");
     menu.terrorist = opts.0.terrorist;
-    menu.bots = if overworld::is_map(&menu.maps[menu.map]){0}else{opts.0.bots};
+    menu.bots = opts.0.bots;
     let test = std::env::var("CSR_TEST_MENU").ok();
-    if opts.0.screenshot.is_some() && std::env::var_os("CSR_TEST_SEED").is_some() {menu.seed_edit=Some(world_seed::Editor::new("-8675309123456789".into()));}
     if (!opts.0.direct && opts.0.screenshot.is_none()) || test.is_some() {
         menu.page = Some(match test.as_deref() {
-            Some("minecraft") => Page::Minecraft,
-            Some("mcgraphics") => Page::MinecraftGraphics,
             Some("pause") => Page::Pause,
             Some("graphics") => Page::Graphics,
             Some("audio") => Page::Audio,
@@ -150,7 +134,7 @@ pub(crate) fn setup(
             Some("cases") => Page::Cases,
             _ => Page::Main,
         });
-        menu.in_match = test.as_deref().is_some_and(|v| matches!(v,"pause"|"minecraft"|"mcgraphics")) || (test.is_some() && std::env::var_os("CSR_TEST_PAUSED").is_some());
+        menu.in_match = test.as_deref().is_some_and(|v| v == "pause") || (test.is_some() && std::env::var_os("CSR_TEST_PAUSED").is_some());
         clock.pause();
     }
 }
@@ -172,17 +156,11 @@ pub(crate) fn input(
     enabled: Res<InputEnabled>,
     mut inventory: ResMut<crate::inventory::Inventory>,
     collection: Res<crate::inventory::Collection>,
-    building: Res<crate::overworld_client::Building>,
 ) {
     if !enabled.0 {
         return;
     }
-    let was_mc = matches!(menu.page,Some(Page::Minecraft | Page::MinecraftGraphics));
     let was_open = menu.open();
-    if keys.just_pressed(KeyCode::KeyO) && building.initialized && menu.in_match && !building.inventory_open && menu.capture.is_none() {
-        menu.page = if matches!(menu.page,Some(Page::Minecraft | Page::MinecraftGraphics)) { None } else {Some(Page::Minecraft)};
-        menu.dirty=true;
-    }
     if let Some(index) = menu.capture {
         if keys.just_pressed(KeyCode::Escape) {
             menu.capture = None;
@@ -198,8 +176,7 @@ pub(crate) fn input(
     } else if keys.just_pressed(KeyCode::Escape) && !buy.open {
         menu.page = match menu.page {
             None => Some(Page::Pause),
-            Some(Page::Pause | Page::Minecraft) => None,
-            Some(Page::MinecraftGraphics) => Some(Page::Minecraft),
+            Some(Page::Pause) => None,
             Some(Page::Main) => Some(Page::Main),
             _ => Some(if menu.in_match {
                 Page::Pause
@@ -233,14 +210,10 @@ pub(crate) fn input(
                 Action::Quit => {
                     exit.write(AppExit::Success);
                 }
-                Action::EditSeed=>{if menu.seed_edit.is_none() {menu.seed_edit=Some(world_seed::Editor::new(menu.world_seed.to_string()));}}
-                Action::ApplySeed=>{world_seed::commit(&mut menu);}
-                Action::NewSeed=>{menu.seed_edit=None;menu.world_seed=world_seed::random_seed();}
                 Action::SelectMap(index) => {
                     if index < menu.maps.len() {
                         menu.map = index;
-                        if overworld::is_map(&menu.maps[index]){menu.bots=0;}
-                        if menu.maps[index].starts_with("cs_") || overworld::is_map(&menu.maps[index]) {
+                        if menu.maps[index].starts_with("cs_") {
                             menu.deathmatch = true;
                         }
                     }
@@ -277,11 +250,11 @@ pub(crate) fn input(
                     if menu.maps[menu.map].starts_with("de_") {
                         menu.deathmatch = !menu.deathmatch;
                     } else {
-                        menu.status = if overworld::is_map(&menu.maps[menu.map]){"Special mode: solo, no bots, unlimited time."}else{"Hostage maps currently support Deathmatch."}.into();
+                        menu.status = "Hostage maps currently support Deathmatch.".into();
                     }
                 }
                 Action::Team => menu.terrorist = !menu.terrorist,
-                Action::Bots(d) => menu.bots = if overworld::is_map(&menu.maps[menu.map]){0}else{(menu.bots as i32 + d).clamp(0, 10) as u32},
+                Action::Bots(d) => menu.bots = (menu.bots as i32 + d).clamp(0, 10) as u32,
                 Action::Bind(i) => {
                     menu.capture = Some(i);
                     menu.status =
@@ -302,10 +275,9 @@ pub(crate) fn input(
                     Ok(()) => {
                         let mut next = opts.0.clone();
                         next.map = menu.maps[menu.map].clone();
-                        next.world_seed=menu.world_seed;
                         next.deathmatch = menu.deathmatch;
                         next.terrorist = menu.terrorist;
-                        next.bots = if overworld::is_map(&next.map){0}else{menu.bots};
+                        next.bots = menu.bots;
                         next.direct = true;
                         next.screenshot = None;
                         next.camera = None;
@@ -343,23 +315,11 @@ pub(crate) fn input(
                             (settings.cross_thickness + delta).clamp(1.0, 6.0)
                     }
                     14 => settings.cross_dot = !settings.cross_dot,
-                    20 => settings.mc_mobs=(settings.mc_mobs+delta).clamp(0.,1.),
-                    21 => settings.mc_blocks=(settings.mc_blocks+delta).clamp(0.,1.),
-                    22 => settings.mc_minimap=!settings.mc_minimap,
-                    23 => settings.mc_hand_motion=!settings.mc_hand_motion,
                     24 => settings.menu_blur=!settings.menu_blur,
-                    25 => settings.mc_render_distance=(settings.mc_render_distance+delta as i32).clamp(3,16),
-                    26 => settings.mc_entity_distance=(settings.mc_entity_distance+delta as i32).clamp(32,192),
-                    27 => settings.mc_entity_culling=!settings.mc_entity_culling,
-                    28 => settings.mc_clouds=(settings.mc_clouds+1)%3,
-                    29 => settings.mc_show_fps=!settings.mc_show_fps,
                     _ => {}
                 },
             }
         }
-    }
-    if was_mc && !matches!(menu.page,Some(Page::Minecraft | Page::MinecraftGraphics)) {
-        if let Err(e)=settings.save() { menu.status=format!("Could not save settings: {e}"); menu.page=Some(Page::Minecraft); menu.dirty=true; }
     }
     if menu.open() {
         buy.open = false;
@@ -466,8 +426,6 @@ fn row(commands: &mut Commands, parent: Entity, name: &str, value: String, id: u
     button(commands, r, "+", Action::Adjust(id, step), px(38.0));
 }
 
-fn building_available(menu:&Menu)->bool {menu.maps.get(menu.map).is_some_and(|m|overworld::is_map(m))}
-
 pub fn draw(
     mut commands: Commands,
     mut menu: ResMut<Menu>,
@@ -494,7 +452,6 @@ pub fn draw(
     let Some(page) = menu.page else {
         return;
     };
-    if matches!(page,Page::Minecraft | Page::MinecraftGraphics) { return; }
     let root = commands
         .spawn((
             Node {
@@ -606,7 +563,6 @@ pub fn draw(
             Page::Main => "COUNTER-STRIKE: GLOBAL OFFENSIVE",
             Page::Inventory => "INVENTORY",
             Page::Cases => "INVENTORY / CASES & SKINS",
-            Page::Play if overworld::is_map(&menu.maps[menu.map]) => "PLAY  /  SPECIAL  /  OVERWORLD",
             Page::Play => "PLAY  /  PRACTICE WITH BOTS",
             Page::Pause => "MATCH PAUSED",
             Page::Settings => "GAME SETTINGS",
@@ -614,8 +570,6 @@ pub fn draw(
             Page::Audio => "AUDIO SETTINGS",
             Page::Controls => "KEYBOARD / MOUSE",
             Page::Crosshair => "CROSSHAIR",
-            Page::Minecraft => "Minecraft Options",
-            Page::MinecraftGraphics => "Minecraft Video Settings",
         },
         30.0,
         Color::WHITE,
@@ -659,7 +613,7 @@ pub fn draw(
     );
     let on = |v: bool| if v { "Enabled" } else { "Disabled" }.to_string();
     match page {
-        Page::Cases | Page::Minecraft | Page::MinecraftGraphics => {}
+        Page::Cases => {}
         Page::Main => {
             let scene = column(
                 &mut commands,
@@ -720,7 +674,7 @@ pub fn draw(
             label(
                 &mut commands,
                 news,
-                "Competitive, Deathmatch or solo Overworld Special mode. Choose a map to begin.",
+                "Competitive or Deathmatch against bots. Choose a map to begin.",
                 19.0,
                 Color::srgb(0.72, 0.78, 0.82),
             );
@@ -979,7 +933,6 @@ pub fn draw(
             );
         }
         Page::Pause => {
-            if building_available(&menu) { button(&mut commands,body,"MINECRAFT OPTIONS  [O]",Action::Page(Page::Minecraft),px(320.)); }
             label(
                 &mut commands,
                 body,
@@ -1017,7 +970,7 @@ pub fn draw(
                 options,
                 format!(
                     "MODE  •  {}",
-                    if overworld::is_map(&menu.maps[menu.map]) {"Special"} else if menu.deathmatch {
+                    if menu.deathmatch {
                         "Deathmatch"
                     } else {
                         "Competitive"
@@ -1026,7 +979,6 @@ pub fn draw(
                 Action::Mode,
                 px(260.0),
             );
-            if !overworld::is_map(&menu.maps[menu.map]) {
             button(
                 &mut commands,
                 options,
@@ -1054,20 +1006,6 @@ pub fn draw(
                 Color::WHITE,
             );
             button(&mut commands, options, "+", Action::Bots(1), px(34.0));
-            } else {
-                label(&mut commands,options,"SOLO  •  NO BOTS  •  UNLIMITED TIME",17.,Color::WHITE);
-            }
-            if overworld::is_map(&menu.maps[menu.map]) {
-                let row=column(&mut commands,body,Node{column_gap:px(10.),align_items:AlignItems::Center,..default()});
-                label(&mut commands,row,"WORLD SEED",15.,Color::WHITE);
-                let value=menu.seed_edit.as_ref().map_or_else(||menu.world_seed.to_string(),world_seed::Editor::display);
-                let field=button(&mut commands,row,value,Action::EditSeed,px(370.));
-                if menu.seed_edit.is_some() { commands.entity(field).insert(BackgroundColor(Color::srgba(0.16,0.40,0.57,0.95))); }
-                button(&mut commands,row,"APPLY",Action::ApplySeed,px(80.));
-                button(&mut commands,row,"RANDOM SEED",Action::NewSeed,px(145.));
-                label(&mut commands,body,"Click to edit • Numbers or words • Ctrl+A replace • Ctrl+V paste • Enter / Apply to save • Esc cancel",14.,Color::srgb(0.80,0.86,0.90));
-                label(&mut commands,body,"The same seed resumes its saved world. A blank field chooses a random seed.",14.,Color::srgb(0.80,0.86,0.90));
-            }
             let grid = scroll_grid(&mut commands, body, menu.scroll);
             let cols = if size.x >= 1200.0 { 6.0 } else { 5.0 };
             let width = ((size.x - 168.0 - (cols - 1.0) * 12.0 - 20.0) / cols).floor();
@@ -1094,12 +1032,12 @@ pub fn draw(
                         .spawn((
                             ImageNode {
                                 image: img,
-                                rect: if overworld::is_map(name){None}else{Some(Rect::new(
+                                rect: Some(Rect::new(
                                     0.0,
                                     (360.0 - crop) * 0.5,
                                     640.0,
                                     (360.0 + crop) * 0.5,
-                                ))},
+                                )),
                                 image_mode: bevy::ui::widget::NodeImageMode::Stretch,
                                 ..default()
                             },
@@ -1687,7 +1625,6 @@ mod tests {
         let mut a = App::new();
         a.init_resource::<Menu>()
             .init_resource::<Settings>()
-            .init_resource::<crate::overworld_client::Building>()
             .init_resource::<Relaunch>()
             .init_resource::<crate::inventory::Inventory>()
             .init_resource::<crate::inventory::Collection>()
@@ -1699,7 +1636,7 @@ mod tests {
             .insert_resource(LocalPlayer::new(1, glam::Vec3::ZERO, 0.0))
             .insert_resource(InputEnabled(true))
             .add_message::<bevy::input::keyboard::KeyboardInput>()
-            .add_systems(Update, (seed_input, input, crate::player::grab_cursor).chain());
+            .add_systems(Update, (input, crate::player::grab_cursor).chain());
         a.world_mut().spawn((
             PrimaryWindow,
             CursorOptions {
@@ -1709,27 +1646,6 @@ mod tests {
             },
         ));
         a
-    }
-    #[test]
-    fn world_seed_editor_uses_text_events_keeps_order_and_consumes_menu_shortcuts() {
-        use bevy::input::{keyboard::{KeyboardInput,Key},ButtonState};
-        let mut a=harness();
-        {let mut menu=a.world_mut().resource_mut::<Menu>();menu.page=Some(Page::Play);menu.maps=vec!["overworld".into()];}
-        a.world_mut().resource_mut::<crate::overworld_client::Building>().initialized=true;
-        let click=a.world_mut().spawn((Interaction::Pressed,Action::EditSeed)).id();a.update();
-        assert!(a.world().resource::<Menu>().seed_edit.is_some());a.world_mut().despawn(click);
-        let send=|a:&mut App,key_code,text:&str,repeat| {
-            a.world_mut().resource_mut::<Messages<KeyboardInput>>().write(KeyboardInput{key_code,logical_key:Key::Character(text.into()),state:ButtonState::Pressed,text:Some(text.into()),repeat,window:Entity::PLACEHOLDER});
-        };
-        send(&mut a,KeyCode::Numpad7,"7",false);send(&mut a,KeyCode::Numpad7,"7",true);a.update();
-        send(&mut a,KeyCode::Enter,"",false);a.update();assert_eq!(a.world().resource::<Menu>().world_seed,77);
-        {let mut m=a.world_mut().resource_mut::<Menu>();m.seed_edit=Some(world_seed::Editor::new("77".into()));}
-        a.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::KeyO);
-        send(&mut a,KeyCode::KeyO,"o",false);a.update();assert_eq!(a.world().resource::<Menu>().page,Some(Page::Play));
-        send(&mut a,KeyCode::Escape,"",false);a.update();assert_eq!(a.world().resource::<Menu>().world_seed,77);assert_eq!(a.world().resource::<Menu>().page,Some(Page::Play));
-        {let mut m=a.world_mut().resource_mut::<Menu>();m.seed_edit=Some(world_seed::Editor::new("-9223372036854775808".into()));}
-        a.world_mut().spawn((Interaction::Pressed,Action::ApplySeed));a.update();
-        assert_eq!(a.world().resource::<Menu>().world_seed,i64::MIN);assert!(a.world().resource::<Menu>().seed_edit.is_none());
     }
     #[test]
     fn map_cards_select_directly_and_ignore_invalid_indices() {
@@ -1805,15 +1721,6 @@ mod tests {
         assert!(a.world().resource::<Menu>().deathmatch);
     }
     #[test]
-    fn overworld_selection_and_stale_bot_buttons_cannot_enable_bots() {
-        let mut a=harness();
-        {let mut m=a.world_mut().resource_mut::<Menu>();m.page=Some(Page::Play);m.maps=vec!["de_dust2".into(),"overworld".into()];m.bots=10;}
-        let e=a.world_mut().spawn((Interaction::Pressed,Action::SelectMap(1))).id();a.update();
-        assert_eq!(a.world().resource::<Menu>().bots,0);
-        a.world_mut().entity_mut(e).insert((Interaction::Pressed,Action::Bots(1)));a.update();
-        assert_eq!(a.world().resource::<Menu>().bots,0);
-    }
-    #[test]
     fn clicking_resume_leaves_mouse_gated_until_release() {
         let mut a = harness();
         a.world_mut().resource_mut::<Menu>().page = Some(Page::Pause);
@@ -1825,44 +1732,4 @@ mod tests {
         assert!(!a.world().resource::<Menu>().open());
         assert!(a.world().resource::<crate::player::InputBlockFrames>().0 > 0);
     }
-    #[test]
-    fn minecraft_options_key_pauses_and_closes_buy_without_leaking_input() {
-        let mut a=harness();
-        a.world_mut().resource_mut::<crate::overworld_client::Building>().initialized=true;
-        a.world_mut().resource_mut::<crate::buymenu::BuyMenu>().open=true;
-        a.world_mut().resource_mut::<LocalPlayer>().latched=3;
-        a.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::KeyO);
-        a.update();
-        assert_eq!(a.world().resource::<Menu>().page,Some(Page::Minecraft));
-        assert!(a.world().resource::<Time<Virtual>>().is_paused());
-        assert!(!a.world().resource::<crate::buymenu::BuyMenu>().open);
-        assert_eq!(a.world().resource::<LocalPlayer>().latched,0);
-        a.world_mut().resource_mut::<ButtonInput<KeyCode>>().reset_all();
-        a.world_mut().spawn((Interaction::Pressed,Action::Adjust(20,-0.1)));
-        a.update();
-        assert!((a.world().resource::<Settings>().mc_mobs-0.9).abs()<0.001);
-    }
-    #[test]
-    fn minecraft_video_controls_apply_and_escape_returns_to_options() {
-        let mut a=harness();
-        a.world_mut().resource_mut::<Menu>().page=Some(Page::MinecraftGraphics);
-        let e=a.world_mut().spawn((Interaction::Pressed,Action::Adjust(25,2.))).id();a.update();
-        assert_eq!(a.world().resource::<Settings>().mc_render_distance,8);
-        a.world_mut().entity_mut(e).insert((Interaction::Pressed,Action::Adjust(28,1.)));a.update();
-        assert_eq!(a.world().resource::<Settings>().mc_clouds,1);
-        a.world_mut().entity_mut(e).insert((Interaction::None,Action::Adjust(29,1.)));
-        a.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::Escape);a.update();
-        assert_eq!(a.world().resource::<Menu>().page,Some(Page::Minecraft));
-        assert!(a.world().resource::<Time<Virtual>>().is_paused());
-    }
-    #[test]
-    fn minecraft_options_do_not_open_in_cs_maps_or_over_inventory() {
-        for inventory_open in [false,true] {
-            let mut a=harness();
-            {let mut b=a.world_mut().resource_mut::<crate::overworld_client::Building>();b.initialized=inventory_open;b.inventory_open=inventory_open;}
-            a.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::KeyO);
-            a.update();assert!(!a.world().resource::<Menu>().open());
-        }
-    }
-
 }
