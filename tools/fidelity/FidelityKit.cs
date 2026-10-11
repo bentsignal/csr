@@ -33,6 +33,7 @@ namespace CsrFidelity
                 try
                 {
                     var c = new TcpClient();
+                    c.NoDelay = true;
                     c.Connect("127.0.0.1", port);
                     var n = new NetCon { client = c, stream = c.GetStream() };
                     n.reader = new Thread(n.Read) { IsBackground = true };

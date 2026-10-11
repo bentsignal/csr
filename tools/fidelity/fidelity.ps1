@@ -10,12 +10,13 @@
 
 .NOTES
   Commands: real (capture the real game), ours (render ours), compare,
-  all (real + ours + compare), sounds (real-game sound log probes), quit.
+  all (real + ours + compare), sounds (real-game sound log probes),
+  sounds-ours (matching client probes), quit.
   Output goes to -Out (default %USERPROFILE%\csr-fidelity), never into the
   repository: captures contain Valve art and must not be committed.
 #>
 param(
-    [Parameter(Position = 0)][ValidateSet('real', 'ours', 'compare', 'all', 'sounds', 'quit')][string]$Command = 'all',
+    [Parameter(Position = 0)][ValidateSet('real', 'ours', 'compare', 'all', 'sounds', 'sounds-ours', 'quit')][string]$Command = 'all',
     [string]$Out = (Join-Path $env:USERPROFILE 'csr-fidelity'),
     [string[]]$Only = @(),
     [int]$Width = 1600,
@@ -29,6 +30,7 @@ $ErrorActionPreference = 'Stop'
 $here = $PSScriptRoot
 $repo = Split-Path (Split-Path $here -Parent) -Parent
 Add-Type -TypeDefinition (Get-Content -Raw (Join-Path $here 'FidelityKit.cs')) -ReferencedAssemblies System.Drawing
+. (Join-Path $here 'session.ps1')
 
 # CS:GO's standing view offset: `getpos` prints origin + this.
 $EyeHeight = 64.062561
@@ -48,71 +50,72 @@ function Get-Viewpoints([switch]$Resolved) {
     } | Where-Object { $Only.Count -eq 0 -or $Only -contains $_.Name }
 }
 
-$SessionFile = Join-Path $Out 'game-session-start.txt'
+$SessionFile = Join-Path $Out 'game-session.json'
+$Session = if (Test-Path -LiteralPath $SessionFile) { Get-Content -Raw -LiteralPath $SessionFile | ConvertFrom-Json } else { $null }
 
 function Connect-Game([string]$map) {
     $running = Get-Process csgo -ErrorAction SilentlyContinue
+    if ($running -and -not (Get-OwnedGameProcess $Session)) { throw 'CS:GO is already running outside this harness. Close it before capturing references.' }
     if (-not $running) {
-        # Remember when the session began, so files the game creates in its
-        # own folder (round backups, the Workshop map sync) can be removed.
-        (Get-Date).ToString('o') | Set-Content $SessionFile
         $exe = Join-Path $Game 'csgo.exe'
         if (-not (Test-Path $exe)) { throw "csgo.exe not found under $Game" }
+        if ($Session) { Remove-GameLeftovers }
+        $root = [IO.Path]::GetFullPath((Join-Path $Game 'csgo'))
+        $before = @(Get-GameByproducts $root | ForEach-Object { $_.FullName })
         Write-Host "Starting CS:GO Legacy ($map)..."
         # -insecure: no VAC session; -netconport: console over TCP for this script.
-        Start-Process -FilePath $exe -ArgumentList "-insecure -novid -nojoy -windowed -noborder -w $Width -h $Height -netconport $Port +map $map" | Out-Null
+        $process = Start-Process -FilePath $exe -ArgumentList "-insecure -novid -nojoy -windowed -noborder -w $Width -h $Height -netconport $Port +map $map" -WindowStyle Hidden -PassThru
+        $script:Session = [pscustomobject]@{ Root = $root; Before = $before; ProcessId = $process.Id; ProcessStart = $process.StartTime.ToUniversalTime().ToString('o') }
+        $Session | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $SessionFile -Encoding UTF8
     }
     $con = [CsrFidelity.NetCon]::Connect($Port, 120000)
     $deadline = (Get-Date).AddSeconds(150)
+    $ready = $false
     while ((Get-Date) -lt $deadline) {
         $t = $con.Now
         $con.Send('status')
         Start-Sleep 2
         $s = $con.Since($t) -join "`n"
-        if ($s -match "map\s+:\s+$map" -and $s -match '#\s+\d+\s+\d+\s+"[^"]+"\s+\S+\s+\S+\s+\d+\s+\d+\s+active') { break }
+        if ($s -match "map\s+:\s+$map" -and $s -match '#\s+\d+\s+\d+\s+"[^"]+"\s+\S+\s+\S+\s+\d+\s+\d+\s+active') { $ready = $true; break }
         if ($s -match '#\s+\d+\s+\d+\s+"' -and $s -notmatch "map\s+:\s+$map") { $con.Send("map $map") ; Start-Sleep 10 }
     }
+    if (-not $ready) { $con.Dispose(); throw "CS:GO did not enter $map before the capture deadline." }
     # A quiet, frozen, unobstructed scene: no bots, no HUD or viewmodel,
     # rounds that never end. Cheats are needed for setpos/noclip.
-    foreach ($c in @('sv_cheats 1', 'sv_max_allowed_developer 1', 'jointeam 3 1', 'bot_quota 0', 'bot_kick', 'mp_warmup_end',
-            'mp_freezetime 0', 'mp_backup_round_auto 0', 'mp_roundtime 60', 'mp_roundtime_defuse 60', 'mp_ignore_round_win_conditions 1',
+    foreach ($c in @('sv_cheats 1', 'sv_max_allowed_developer 1', 'jointeam 3 1', 'bot_quota 0', 'bot_kick', 'mp_freezetime 0', 'mp_warmup_end',
+            'mp_backup_round_auto 0', 'mp_roundtime 60', 'mp_roundtime_defuse 60', 'mp_ignore_round_win_conditions 1',
             'cl_drawhud 0', 'r_drawviewmodel 0', 'cl_showpos 0', 'cl_showfps 0', 'net_graph 0', 'fps_max 120',
             'developer 0', 'con_drawnotify 0', 'con_notifytime 0')) {
         $con.Send($c)
     }
-    Start-Sleep 3
+    # Restart after applying freeze settings; the current round may already
+    # be frozen when warmup ends, which otherwise suppresses the first shots.
+    $con.Send('mp_restartgame 1')
+    Start-Sleep 4
     return $con
 }
 
 function Stop-Game($con) {
     if ($KeepGame) { return }
-    try { $con.Send('quit') } catch {}
-    Start-Sleep 3
-    Get-Process csgo -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-    Start-Sleep 2
+    $process = Get-OwnedGameProcess $Session
+    if ($process) {
+        try { if ($con) { $con.Send('quit') } } catch {}
+        if (-not $process.WaitForExit(5000)) { Stop-Process -Id $process.Id -Force; $process.WaitForExit() }
+    }
+    if ($con) { $con.Dispose() }
     Remove-GameLeftovers
 }
 
 # The install is read-only for us. A session makes the game write round
 # backups, a nav graph cache and a copy of every subscribed Workshop map
-# (gigabytes) into csgo\; delete whatever it created since the session began.
+# (gigabytes) into csgo\; remove only known files absent before our session.
 function Remove-GameLeftovers {
-    if (-not (Test-Path $SessionFile)) { return }
-    $since = [datetime]::Parse((Get-Content $SessionFile))
-    $root = Join-Path $Game 'csgo'
-    # Only the known session byproducts, so a Steam update that lands
-    # mid-session is never touched.
-    $created = @(
-        Get-ChildItem (Join-Path $root 'maps\workshop') -Recurse -Force -ErrorAction SilentlyContinue
-        Get-Item (Join-Path $root 'maps\workshop') -Force -ErrorAction SilentlyContinue
-        Get-ChildItem $root -Filter 'backup_round*.txt' -Force -ErrorAction SilentlyContinue
-        Get-ChildItem (Join-Path $root 'maps\graphs') -Filter '*.ain' -Force -ErrorAction SilentlyContinue
-    ) | Where-Object { $_.CreationTime -gt $since } | Sort-Object { $_.FullName.Length } -Descending
-    foreach ($item in $created) {
-        Remove-Item -LiteralPath $item.FullName -Recurse -Force -Confirm:$false -ErrorAction SilentlyContinue
-    }
-    if ($created.Count) { Write-Host "Removed $($created.Count) files the game created during the session." }
-    Remove-Item $SessionFile -ErrorAction SilentlyContinue
+    if (-not $Session -or (Get-OwnedGameProcess $Session)) { return }
+    if ([IO.Path]::GetFullPath($Session.Root).TrimEnd('\') -ne [IO.Path]::GetFullPath((Join-Path $Game 'csgo')).TrimEnd('\')) { throw 'Recorded cleanup folder does not match this Legacy install.' }
+    $removed = Remove-SessionByproducts $Session
+    if ($removed) { Write-Host "Removed $removed new session byproducts." }
+    Remove-Item -LiteralPath $SessionFile -ErrorAction SilentlyContinue
+    $script:Session = $null
 }
 
 function Invoke-Real {
@@ -151,7 +154,7 @@ function Invoke-Ours {
         $path = Join-Path $shots "$($v.Name)_ours.png"
         $arguments = "play $($v.Map) --bots 0 --size $Width $Height --camera $($v.X) $($v.Y) $($v.Z) $($v.Pitch) $($v.Yaw) --screenshot `"$path`""
         $log = Join-Path $Out 'csr-last.log'
-        $p = Start-Process -FilePath $exe -ArgumentList $arguments -WorkingDirectory $repo -Wait -PassThru -NoNewWindow -RedirectStandardError $log -RedirectStandardOutput "$log.out"
+        $p = Start-Process -FilePath $exe -ArgumentList $arguments -WorkingDirectory $repo -Wait -PassThru -WindowStyle Hidden -RedirectStandardError $log -RedirectStandardOutput "$log.out"
         Write-Host "ours  $($v.Name) (exit $($p.ExitCode))"
     }
 }
@@ -179,24 +182,25 @@ function Invoke-Sounds {
     $con.Send('noclip 0')
     $logs = Join-Path $Out 'sounds'
     New-Item -ItemType Directory -Force $logs | Out-Null
-    $scenarios = [ordered]@{}
-    $name = $null
-    foreach ($line in Get-Content (Join-Path $here 'soundprobes.txt')) {
-        $l = $line.Trim()
-        if (-not $l -or $l.StartsWith('#')) { continue }
-        if ($l -match '^\[(.+)\]$') { $name = $Matches[1]; $scenarios[$name] = @(); continue }
-        $scenarios[$name] += $l
-    }
+    $scenarios = Get-SoundScenarios
     foreach ($s in $scenarios.Keys) {
         if ($Only.Count -and $Only -notcontains $s) { continue }
         $con.Send('snd_showstart 0')
-        Start-Sleep -Milliseconds 300
+        # Each probe can run on its own: give the same fixture loadout,
+        # release held buttons and settle before starting its log.
+        foreach ($c in @('-attack', '-reload', '-forward', '-speed', '-duck', '-jump', 'give weapon_ak47', 'give weapon_hkp2000', 'slot1')) { $con.Send($c) }
+        Start-Sleep -Milliseconds 1500
         $t = $con.Now
         $con.Send('snd_showstart 2')
         $con.Send("echo ==== $s")
         foreach ($step in $scenarios[$s]) {
             if ($step -match '^wait (\d+)$') { Start-Sleep -Milliseconds ([int]$Matches[1]) }
-            else { $con.Send($step); $con.Send("echo @@ $step") }
+            else {
+                $sent = $con.Now
+                $con.Send($step)
+                $con.Send("echo @@ $step")
+                if (-not $con.WaitFor("@@ $step", $sent, 5000)) { throw "Console did not acknowledge: $step" }
+            }
         }
         $con.Send('snd_showstart 0')
         Start-Sleep -Milliseconds 500
@@ -207,11 +211,48 @@ function Invoke-Sounds {
     Stop-Game $con
 }
 
-switch ($Command) {
+function Get-SoundScenarios {
+    $scenarios = [ordered]@{}
+    $name = $null
+    foreach ($line in Get-Content (Join-Path $here 'soundprobes.txt')) {
+        $l = $line.Trim()
+        if (-not $l -or $l.StartsWith('#')) { continue }
+        if ($l -match '^\[(.+)\]$') { $name = $Matches[1]; $scenarios[$name] = @(); continue }
+        $scenarios[$name] += $l
+    }
+    return $scenarios
+}
+
+function Invoke-SoundsOurs {
+    $exe = if ($Csr) { $Csr } else { Join-Path $repo 'target\release\csr.exe' }
+    if (-not (Test-Path -LiteralPath $exe)) { throw "Build first: $exe not found" }
+    $logs = Join-Path $Out 'sounds-ours'
+    New-Item -ItemType Directory -Force $logs | Out-Null
+    $names = @('CSR_SOUND_LOG', 'CSR_SOUND_PROBE', 'CSR_DATA_DIR', 'CSR_NO_UPDATE')
+    $previous = @{}
+    foreach ($name in $names) { $previous[$name] = [Environment]::GetEnvironmentVariable($name, 'Process') }
+    try {
+        $env:CSR_SOUND_LOG = '1'
+        $env:CSR_DATA_DIR = Join-Path $Out 'probe-userdata'
+        $env:CSR_NO_UPDATE = '1'
+        foreach ($s in (Get-SoundScenarios).Keys) {
+            if ($Only.Count -and $Only -notcontains $s) { continue }
+            $env:CSR_SOUND_PROBE = $s
+            $path = Join-Path $shots "$($s)_ours.png"
+            $arguments = "play de_dust2 --direct --deathmatch --bots 0 --size $Width $Height --screenshot `"$path`""
+            $p = Start-Process -FilePath $exe -ArgumentList $arguments -WorkingDirectory $repo -Wait -PassThru -WindowStyle Hidden -RedirectStandardError (Join-Path $logs "$s.err") -RedirectStandardOutput (Join-Path $logs "$s.log")
+            if ($p.ExitCode -ne 0) { throw "Client probe $s failed: exit $($p.ExitCode)" }
+            Write-Host "sound ours $s"
+        }
+    } finally { foreach ($name in $names) { [Environment]::SetEnvironmentVariable($name, $previous[$name], 'Process') } }
+}
+
+try { switch ($Command) {
     'real' { Invoke-Real }
     'ours' { Invoke-Ours }
     'compare' { Invoke-Compare }
     'all' { Invoke-Real; Invoke-Ours; Invoke-Compare }
     'sounds' { Invoke-Sounds }
-    'quit' { try { $c = [CsrFidelity.NetCon]::Connect($Port, 2000); Stop-Game $c } catch { Get-Process csgo -ErrorAction SilentlyContinue | Stop-Process -Force } }
-}
+    'sounds-ours' { Invoke-SoundsOurs }
+    'quit' { try { $c = [CsrFidelity.NetCon]::Connect($Port, 2000); Stop-Game $c } catch { Stop-Game $null } }
+} } finally { if ($Command -in @('real', 'all', 'sounds')) { Stop-Game $null } }
