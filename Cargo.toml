@@ -14,6 +14,8 @@ members = [
     "crates/movement",
     "crates/nav",
     "crates/sim",
+    "crates/netcode",
+    "crates/server",
     "crates/level",
     "crates/client",
     "crates/launcher",
@@ -73,6 +75,7 @@ mdl = { path = "crates/mdl" }
 collision = { path = "crates/collision" }
 movement = { path = "crates/movement" }
 sim = { path = "crates/sim" }
+netcode = { path = "crates/netcode" }
 nav = { path = "crates/nav" }
 level = { path = "crates/level" }
 weapons = { path = "crates/weapons" }

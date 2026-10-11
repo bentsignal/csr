@@ -617,6 +617,20 @@ impl World {
         self.players.iter().find(|p| p.id == id)
     }
 
+    /// Removes a departed player under server authority. Competitive gear,
+    /// especially the C4, stays available instead of vanishing on disconnect.
+    pub fn remove_player(&mut self, id: PlayerId) -> bool {
+        let Some(i) = self.index_of(id) else { return false; };
+        self.death_drops(i);
+        if let Some(bomb) = &mut self.bomb {
+            if bomb.defuser.is_some_and(|(defuser, _)| defuser == id) {
+                bomb.defuser = None;
+            }
+        }
+        self.players.remove(i);
+        true
+    }
+
     pub fn player_mut(&mut self, id: PlayerId) -> Option<&mut Player> {
         self.players.iter_mut().find(|p| p.id == id)
     }

@@ -77,6 +77,14 @@ their decisions.
       that movement, recoil, inaccuracy and timers match at 64 and 128.
 - [x] Make `World` cloneable and add a determinism test (same inputs give
       the same state hash).
+
+The A2 foundation now has a Bevy-free Renet UDP session and `csr-server`
+dedicated executable, with reliable control/events, redundant inputs,
+fragmented full snapshots, content compatibility checks and 128-tick
+authority. A two-client Dust II loopback check exercises the installed
+catalog and tracked poses. Rendered-client join/prediction and the other
+items below remain open; see [NETCODE.md](NETCODE.md).
+
 - [ ] Protocol: `TickInput` up (with **optional tracked head/hand poses and a
       separate aim ray**, reserved now for VR), full-state snapshots then
       deltas down. Serialisation via serde + a compact binary codec.
