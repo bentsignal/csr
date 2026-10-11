@@ -172,3 +172,25 @@ pub fn hide_own_console() {
         }
     }
 }
+
+/// Draws the setup dialogs to PNGs for review:
+/// `CSR_DIALOG_PREVIEW=<folder> cargo test -p launcher render_dialogs -- --ignored`.
+#[cfg(test)]
+mod preview {
+    #[test]
+    #[ignore]
+    fn render_dialogs() {
+        let out = std::env::var("CSR_DIALOG_PREVIEW").unwrap();
+        let shots: [(&str, &str, &[&str]); 3] = [
+            ("missing", "CSGO Rewrite plays using the game files of CS:GO Legacy, which is free on Steam. In your Steam library it is called \"Counter-Strike: Global Offensive\".\n\nIt is not installed on this PC yet.", &["Install it with Steam", "It is installed somewhere else", "Quit"]),
+            ("steam-running", "Add CSGO Rewrite to your Steam library?\n\nIt shows up with your other games, with its own artwork, so you can start it from Steam.\n\nSteam is open and has to restart to show it. CSGO Rewrite closes Steam, adds the game and opens Steam again. If you are in a Steam call or chat, pick \"Not now\" and you will be asked again next time.", &["Add and restart Steam", "Not now", "No thanks"]),
+            ("waiting", "Steam is opening the installer for CS:GO Legacy. Click Install there.\n\nCSGO Rewrite starts by itself as soon as the download has finished, so you can leave this window open. It is a big download and can take a while.", &["Quit"]),
+        ];
+        for (name, text, buttons) in shots {
+            let path = format!("{out}\\{name}.png");
+            let script = super::form_script("CSGO Rewrite", text, buttons)
+                + &format!("$f.Show(); [System.Windows.Forms.Application]::DoEvents(); $bmp=New-Object System.Drawing.Bitmap($f.Width,$f.Height); $f.DrawToBitmap($bmp,(New-Object System.Drawing.Rectangle(0,0,$f.Width,$f.Height))); $bmp.Save({}); $f.Close()", super::ps_quote(&path));
+            super::powershell(&script).unwrap();
+        }
+    }
+}
