@@ -1,0 +1,20 @@
+[package]
+name = "server"
+description = "Headless CSGO Rewrite dedicated server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "csr-server"
+path = "src/main.rs"
+
+[dependencies]
+netcode.workspace = true
+sim.workspace = true
+level.workspace = true
+sha1.workspace = true
+glam.workspace = true
+weapons.workspace = true
+ctrlc = "=3.5.2"

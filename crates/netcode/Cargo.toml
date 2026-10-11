@@ -1,0 +1,21 @@
+[package]
+name = "netcode"
+description = "Bevy-free authoritative sessions and UDP transport"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+sim.workspace = true
+content.workspace = true
+weapons.workspace = true
+movement.workspace = true
+glam.workspace = true
+serde.workspace = true
+postcard.workspace = true
+renet = { git = "https://github.com/bentsignal/renet", rev = "833a5deea2c22771db665fdf982b37b1ddbe484b" }
+renet_netcode = { git = "https://github.com/bentsignal/renet", rev = "833a5deea2c22771db665fdf982b37b1ddbe484b" }
+
+[dev-dependencies]
+collision.workspace = true

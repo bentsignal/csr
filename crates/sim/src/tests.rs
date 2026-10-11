@@ -3,6 +3,23 @@ use objectives::{BombSite, BuyZone, Zone};
 use weapons::{Side, WeaponClass, WeaponDefinition};
 
 #[test]
+fn disconnected_competitive_player_leaves_bomb_and_cancels_defusing() {
+    let mut w = world();
+    let t = w.add_player("departing carrier", Team::Terrorist);
+    let ct = w.add_player("departing defuser", Team::CounterTerrorist);
+    w.set_mode(GameMode::Competitive, rules());
+    w.step(&[]);
+    assert!(w.player(t).unwrap().has_bomb());
+    assert!(w.remove_player(t));
+    assert!(w.player(t).is_none());
+    assert!(w.dropped_bomb().is_some());
+    w.bomb = Some(PlantedBomb { pos: Vec3::ZERO, planter: t, site: 0, planted_at: 0., explode_at: 40., defuser: Some((ct, 0.)) });
+    assert!(w.remove_player(ct));
+    assert!(w.bomb.unwrap().defuser.is_none());
+    assert!(!w.remove_player(ct));
+}
+
+#[test]
 fn special_mode_is_solo_without_round_timeouts_and_still_respawns() {
     let mut w=world();let id=w.add_player("player",Team::CounterTerrorist);w.add_bot("bot",Team::Terrorist);
     w.set_mode(GameMode::Special, RulesConfig{round_time:1.,max_rounds:1,..rules()});
