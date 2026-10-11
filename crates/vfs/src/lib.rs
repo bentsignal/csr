@@ -17,6 +17,16 @@ use std::path::{Path, PathBuf};
 
 pub use zipfs::ZipArchive;
 
+/// Paths from map/material metadata stay inside a mount. Leading slashes
+/// denote the virtual root, as before; host drive/stream and parent paths
+/// must never reach a loose-directory lookup.
+fn lookup_path(path: &str) -> Option<String> {
+    let path = vpk::normalize(path);
+    (!path.is_empty() && !path.contains(':') && !path.bytes().any(|b| b < 32)
+        && !path.split('/').any(|part| matches!(part, "." | "..")))
+        .then_some(path)
+}
+
 pub enum Mount {
     Dir(PathBuf),
     Vpk(vpk::Vpk),
@@ -159,7 +169,7 @@ impl Vfs {
     /// Reads the first match for `path`. I/O errors in one mount are skipped
     /// so that a single bad archive does not hide lower-priority copies.
     pub fn read(&self, path: &str) -> Option<Vec<u8>> {
-        let path = vpk::normalize(path);
+        let path = lookup_path(path)?;
         for m in &self.mounts {
             match m.mount.read(&path) {
                 Ok(Some(bytes)) => return Some(bytes),
@@ -178,13 +188,13 @@ impl Vfs {
     /// Map-specific metadata in an archived BSP must not resolve to a newer
     /// installed map's navigation or radar just because their names match.
     pub fn read_from(&self, label: &str, path: &str) -> Option<Vec<u8>> {
-        let path = vpk::normalize(path);
+        let path = lookup_path(path)?;
         self.mounts.iter().filter(|m| m.label == label)
             .find_map(|m| m.mount.read(&path).ok().flatten())
     }
 
     pub fn exists(&self, path: &str) -> bool {
-        let path = vpk::normalize(path);
+        let Some(path) = lookup_path(path) else { return false };
         self.mounts.iter().any(|m| m.mount.exists(&path))
     }
 
@@ -325,6 +335,23 @@ pub fn libraries_from(roots: Vec<PathBuf>) -> Vec<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn metadata_paths_cannot_escape_a_loose_mount() {
+        let root = std::env::temp_dir().join(format!("csr-vfs-safe-{}", std::process::id()));
+        let inside = root.join("inside");
+        std::fs::create_dir_all(&inside).unwrap();
+        std::fs::write(root.join("secret.txt"), b"outside").unwrap();
+        std::fs::write(inside.join("safe.txt"), b"inside").unwrap();
+        let mut fs = Vfs::new(); fs.push_back("loose", Mount::Dir(inside));
+        for path in ["../secret.txt", "..\\secret.txt", "models/../../secret.txt", "C:/secret.txt", "safe.txt:stream"] {
+            assert!(fs.read(path).is_none(), "{path}");
+            assert!(fs.read_from("loose", path).is_none(), "{path}");
+            assert!(!fs.exists(path), "{path}");
+        }
+        assert_eq!(fs.read("/SAFE.TXT").unwrap(), b"inside");
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn priority_order_first_mount_wins() {

@@ -80,7 +80,10 @@ impl Installed {
         }
     }
     pub fn current() -> Self {
-        Self::new(&std::env::current_dir().unwrap_or_default())
+        let data = std::env::var_os("CSR_DATA_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+        Self::new(&data)
     }
     pub fn dir(&self) -> &Path {
         &self.dir

@@ -79,7 +79,13 @@ impl Level {
         if let Ok(id) = name.parse::<ContentId>() {
             if id.kind != ContentKind::Map { return Err(LoadError::Io(format!("{id} is not a map"))); }
             let (pack, map) = packs::Installed::current().resolve_map(&id).map_err(LoadError::Io)?;
-            let (game_dir, fs) = mount_game(game_dir)?;
+            let (game_dir, mut fs) = mount_game(game_dir)?;
+            // A recipe is specifically a read of the player's Legacy data,
+            // not an alias into the runtime Workshop archive folder.
+            if map.source == packs::MapSource::Legacy {
+                let archives = fs.labels().into_iter().filter(|l| l.starts_with("workshop:")).map(str::to_owned).collect::<Vec<_>>();
+                for label in archives { fs.unmount(&label); }
+            }
             return Self::load_pack(&pack, &map, game_dir, fs);
         }
         if !packs::valid_bsp_name(name) { return Err(LoadError::Io("invalid map name".into())); }

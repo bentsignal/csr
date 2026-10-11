@@ -413,7 +413,7 @@ impl Pack {
             let mut data = Vec::new();
             entry
                 .by_ref()
-                .take(bound.saturating_add(1))
+                .take(size.saturating_add(1))
                 .read_to_end(&mut data)
                 .map_err(|e| format!("{name}: {e}"))?;
             if data.len() as u64 != size || data.len() as u64 > bound {
