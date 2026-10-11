@@ -5,6 +5,8 @@
 //! another Bevy app (the planned multi-game "stitch").
 
 pub mod audio;
+pub mod foley;
+pub mod surfaces;
 pub mod tracers;
 pub mod inventory;
 pub mod cosmetics;
@@ -142,6 +144,8 @@ impl Plugin for CsgoPlugin {
             .init_resource::<scoreboard::Scoreboard>()
             .init_resource::<items::GroundInstances>()
             .init_resource::<effects::PendingEvents>()
+            .init_resource::<audio::Listener>()
+            .init_resource::<foley::Foley>()
             .init_resource::<effects::Effects>()
             .init_resource::<player::BotBrains>()
             .init_resource::<characters::Characters>()
@@ -149,8 +153,8 @@ impl Plugin for CsgoPlugin {
             .add_systems(
                 Update,
                 (
-                    menu::apply,
-                    (skin_finish::record, skin_finish::assign, effects::process).chain(),
+                    (menu::apply, audio::update).chain(),
+                    (skin_finish::record, skin_finish::assign, effects::process, foley::update).chain(),
                     (feedback::update, utility_fx::update).chain(),
                     sky::follow_camera,
                     visibility::update,
@@ -369,6 +373,7 @@ fn spawn_level(
     info!("characters and viewmodels loaded in {:.2}s", t_chars.elapsed().as_secs_f32());
     let localization = localize::Localization::load(&level.vfs);
     let sounds = audio::SoundLibrary::load(&level.vfs);
+    commands.insert_resource(surfaces::SurfaceProps::load(&level.vfs));
     info!(
         "characters: T {}, CT {}, {} weapon world models; {} sound entries; {} weapons",
         character_models.terrorist.is_some(),
