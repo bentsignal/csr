@@ -34,7 +34,13 @@
   leaked CS:GO/TF2 source or paste Source SDK code.
 - **Fidelity is 1:1.** Match the original exactly (2018-era look, sounds and
   feel); measure against references, never invent.
-- **Friction is a bug.** Anything a player must do by hand needs a reason.
+- **CS:GO, not CS2.** We rebuild the original CS:GO. Never use or imitate
+  Counter-Strike 2 content, behaviour, UI or the CS2 install (`game\csgo`,
+  `.vpk`s under app 730's CS2 layout); the only source is CS:GO Legacy.
+- **Friction is a bug.** Players may not be technical. Setup must feel like
+  magic: install CS:GO Legacy on Steam, run our installer, play. No
+  terminals, config files, manual copying or long setup. Anything a player
+  must do by hand is a bug unless there is no other way.
 - **Estimates:** never give human-scale durations. Plan in phases,
   dependencies and parallel tracks.
 

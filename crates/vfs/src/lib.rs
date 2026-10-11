@@ -193,6 +193,14 @@ impl Vfs {
     }
 }
 
+/// Steam app ID of CS:GO Legacy, the standalone CS:GO that Steam installs
+/// next to Counter-Strike 2.
+pub const LEGACY_APP_ID: u32 = 4465480;
+
+/// Folders under `steamapps/common` that can hold CS:GO Legacy: its own app
+/// (`csgo legacy`), and the older `csgo_legacy` beta branch of app 730.
+pub const LEGACY_INSTALL_DIRS: [&str; 2] = ["csgo legacy", "Counter-Strike Global Offensive"];
+
 /// Locates a CS:GO game directory (the folder holding `gameinfo.txt`).
 ///
 /// Order: `CSR_GAME_DIR`, then every Steam library listed in
@@ -232,9 +240,11 @@ pub fn find_csgo_dir() -> Option<PathBuf> {
         }
     }
     for lib in libraries {
-        let game = lib.join("steamapps/common/Counter-Strike Global Offensive/csgo");
-        if game.join("gameinfo.txt").is_file() {
-            return Some(game);
+        for dir in LEGACY_INSTALL_DIRS {
+            let game = lib.join("steamapps/common").join(dir).join("csgo");
+            if game.join("gameinfo.txt").is_file() {
+                return Some(game);
+            }
         }
     }
     None

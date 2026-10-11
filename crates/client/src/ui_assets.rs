@@ -43,11 +43,6 @@ pub fn load(mut commands: Commands, level: Res<crate::LoadedLevel>, mut fonts: R
     let regular = font("stratum2regular");
     let bold = font("stratum2bold");
     let mut art = HashMap::new();
-    if let Ok(root)=overworld::asset_root(){
-        if let Ok(bytes)=std::fs::read(root.join("resourcepacks/local/minecraft-26.3/assets/minecraft/textures/block/grass_block_side.png")){
-            if let Ok(img)=Image::from_buffer(&bytes,ImageType::Extension("png"),CompressedImageFormats::NONE,true,ImageSampler::nearest(),RenderAssetUsages::RENDER_WORLD){art.insert("map-overworld".into(),images.add(img));}
-        }
-    }
     let mut png = |key: &str, path: &str| {
         if let Some(bytes) = fs.read(path) {
             if let Ok(img) = Image::from_buffer(&bytes, ImageType::Extension("png"), CompressedImageFormats::NONE, true, ImageSampler::linear(), RenderAssetUsages::RENDER_WORLD) {

@@ -256,7 +256,7 @@ pub fn update(
     local: Res<LocalPlayer>,
     models: Res<ViewModels>,
     mut state: ResMut<ViewModelState>,
-    (request,inventory,building): (Res<crate::tracers::InspectRequest>,Res<crate::cosmetics::Inventory>,Res<crate::overworld_client::Building>),
+    (request,inventory): (Res<crate::tracers::InspectRequest>,Res<crate::cosmetics::Inventory>),
     mut muzzles: ResMut<crate::tracers::Muzzles>,
     mut materials: ResMut<Assets<WorldMaterial>>,
     effects: Res<crate::effects::Effects>,
@@ -272,7 +272,7 @@ pub fn update(
     let now = time.elapsed_secs();
     let dt = time.delta_secs();
     let Some(p) = world.0.player(local.view_target()) else { return };
-    let show = !building.active && p.alive && !local.noclip && !p.active_weapon().is_some_and(|w| w.hides_viewmodel());
+    let show = p.alive && !local.noclip && !p.active_weapon().is_some_and(|w| w.hides_viewmodel());
     let active = p.active_weapon().map(|w| w.def.class_name.clone()).unwrap_or_default();
 
     let glove=if p.id==local.id{inventory.active("gloves").map(|i|i.weapon.as_str()).unwrap_or("")}else{""};

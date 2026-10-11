@@ -4,11 +4,6 @@
 //! [`CsgoPlugin`] is self-contained so the whole game can be added to
 //! another Bevy app (the planned multi-game "stitch").
 
-pub mod loading;
-pub mod overworld_client;
-mod overworld_minimap;
-mod minecraft_ui;
-mod chat;
 pub mod audio;
 pub mod tracers;
 pub mod inventory;
@@ -20,8 +15,6 @@ pub mod cosmetic_geometry;
 pub mod case_ui;
 pub mod menu_scene;
 mod menu_blur;
-mod minecraft_settings;
-mod minecraft_graphics;
 pub mod settings;
 pub mod menu;
 pub mod feedback;
@@ -71,7 +64,6 @@ pub const VERTICAL_FOV_DEG: f32 = 73.74;
 #[derive(Clone, Debug)]
 pub struct ClientOptions {
     pub map: String,
-    pub world_seed:i64,
     /// Take a screenshot after `frames` frames, then exit.
     pub screenshot: Option<PathBuf>,
     pub frames: u32,
@@ -93,7 +85,6 @@ impl Default for ClientOptions {
     fn default() -> Self {
         Self {
             map: "de_dust2".into(),
-            world_seed:42,
             screenshot: None,
             frames: 120,
             camera: None,
@@ -128,13 +119,13 @@ pub struct CsgoPlugin;
 impl Plugin for CsgoPlugin {
     fn build(&self, app: &mut App) {
         embedded_asset!(app, "shaders/world.wgsl");
-        app.add_plugins((overworld_client::OverworldPlugin, loading::LoadingPlugin, menu_blur::PostProcessPlugin, minecraft_settings::MinecraftSettingsPlugin))
+        app.add_plugins(menu_blur::PostProcessPlugin)
             .add_plugins(MaterialPlugin::<WorldMaterial>::default())
             .insert_resource(Time::<Fixed>::from_hz(sim::TICK_RATE as f64))
             .add_systems(Startup, (spawn_level, ui_assets::load, case_ui::setup, hud::setup, hud_art::setup, scope::setup, feedback::setup, utility_fx::setup, menu_scene::setup, menu::setup, hud::mark_roots).chain())
             .add_systems(
                 RunFixedMainLoop,
-                (menu::seed_input, menu::input, buymenu::input, player::look, player::grab_cursor).chain()
+                (menu::input, buymenu::input, player::look, player::grab_cursor).chain()
                     .in_set(bevy::app::RunFixedMainLoopSystems::BeforeFixedMainLoop),
             )
             .add_systems(Update, player::update_camera)
@@ -152,9 +143,6 @@ impl Plugin for CsgoPlugin {
             .init_resource::<items::GroundInstances>()
             .init_resource::<effects::PendingEvents>()
             .init_resource::<effects::Effects>()
-            .init_resource::<chat::Chat>()
-            .add_systems(RunFixedMainLoop, chat::input.before(overworld_client::input).in_set(bevy::app::RunFixedMainLoopSystems::BeforeFixedMainLoop))
-            .add_systems(Update,chat::draw.after(effects::process).before(hud::update))
             .init_resource::<player::BotBrains>()
             .init_resource::<characters::Characters>()
             .init_resource::<viewmodel::ViewModelState>()
@@ -192,7 +180,7 @@ impl Plugin for CsgoPlugin {
 /// Loads the map and runs the game window. Returns a process exit code.
 pub fn run(opts: ClientOptions) -> i32 {
     let t = Instant::now();
-    let level = match level::Level::load_seed(&opts.map, None,Some(opts.world_seed)) {
+    let level = match level::Level::load(&opts.map, None) {
         Ok(l) => l,
         Err(e) => {
             eprintln!("error: {e}");
@@ -201,26 +189,7 @@ pub fn run(opts: ClientOptions) -> i32 {
     };
     info!("loaded {} in {:.2}s {:?}", opts.map, t.elapsed().as_secs_f32(), level.timings);
 
-    let mut video_settings=settings::Settings::load();
-    if opts.screenshot.is_some() {
-        if let Ok(overrides)=std::env::var("CSR_TEST_MC_SETTINGS") {video_settings=settings::Settings::parse(&format!("{}\n{overrides}",video_settings.encode()));}
-    }
-    // Minecraft: build the whole view before the window opens (at the
-    // render distance the game will use, or the stream would start over).
-    if let Some(runtime) = &level.overworld {
-        let mut runtime = runtime.lock().unwrap();
-        let distance = std::env::var("CSR_RENDER_DISTANCE").ok().and_then(|s| s.parse().ok()).unwrap_or(video_settings.mc_render_distance);
-        runtime.set_render_distance(distance);
-        if std::env::var_os("CSR_NO_PREGEN").is_none() {
-            let t = Instant::now();
-            let aspect = opts.width as f32 / opts.height.max(1) as f32;
-            let done = runtime.pregenerate(VERTICAL_FOV_DEG, aspect, std::time::Duration::from_secs(90), &mut |p| {
-                eprintln!("Preparing world: {}/{} chunks, {} sections ({:.1}s)", p.chunks, p.chunks_total, p.sections, p.seconds);
-            });
-            eprintln!("World prepared in {:.2}s: {} sections at render distance {distance}{}", t.elapsed().as_secs_f32(), done.sections, if done.done { "" } else { " (timed out; the rest streams in)" });
-        }
-        runtime.stream.set_generation_threads(overworld::play_generation_threads());
-    }
+    let video_settings = settings::Settings::load();
     let relaunch = menu::Relaunch::default();
     let mut app = App::new();
     app.add_plugins(
@@ -267,7 +236,6 @@ pub fn run(opts: ClientOptions) -> i32 {
         let exe = match std::env::current_exe() { Ok(p)=>p, Err(e)=>{eprintln!("Cannot locate launcher: {e}");return 1;} };
         let mut command=std::process::Command::new(exe);
         command.args(["play", &next.map, "--direct", "--bots", &next.bots.to_string(), "--team", if next.terrorist{"t"}else{"ct"}]);
-        command.args(["--seed", &next.world_seed.to_string()]);
         if next.deathmatch { command.arg("--deathmatch"); }
         return match command.spawn() {Ok(_)=>0,Err(e)=>{eprintln!("Could not launch map: {e}");1}};
     }
@@ -303,7 +271,7 @@ fn spawn_level(
     let world_shared = world_mesh::SharedHandles {
         lightmap: lightmap.clone(),
     };
-    if level.overworld.is_none() { sky::spawn_2d(&mut commands, &level, &mut meshes, &mut materials, &mut images, &mut textures, &world_shared); }
+    sky::spawn_2d(&mut commands, &level, &mut meshes, &mut materials, &mut images, &mut textures, &world_shared);
     let mut world_draws = 0;
     let mut world_materials: std::collections::HashMap<String, Handle<WorldMaterial>> = Default::default();
     for (in_sky, build) in [(false, &main), (true, &skybox)] {
@@ -418,16 +386,6 @@ fn spawn_level(
     // Simulation: the local player on CT, bots on both teams.
     let mut world = sim::World::with_catalog(level.collision.clone(), level.catalog.clone());
     world.load_map(&level.bsp, level.overview().as_deref());
-    if let Some(runtime)=&level.overworld {
-        let runtime=runtime.lock().unwrap(); let pos=runtime.spawn_source();
-        world.spawns.clear();
-        for team in [sim::Team::CounterTerrorist,sim::Team::Terrorist] {
-            world.spawns.push(sim::SpawnPoint{origin:pos,yaw:0.,team});
-            if let Some(nav)=&level.nav { for a in nav.areas.iter().filter(|a|{let d=a.center().distance(pos);d>160.&&d<600.}).step_by(15).take(12) {
-                world.spawns.push(sim::SpawnPoint{origin:a.center()+glam::Vec3::Z*0.1,yaw:0.,team});
-            }}
-        }
-    }
     let (mine, theirs) = if opts.terrorist {
         (sim::Team::Terrorist, sim::Team::CounterTerrorist)
     } else {
@@ -435,17 +393,14 @@ fn spawn_level(
     };
     let id = world.add_player("You", mine);
     let names = |team: sim::Team| if team == sim::Team::Terrorist { &BOT_NAMES_T } else { &BOT_NAMES_CT };
-    let bot_count=if level.overworld.is_some(){0}else{opts.bots};
+    let bot_count = opts.bots;
     for i in 0..bot_count {
         world.add_bot(names(theirs)[i as usize % 8], theirs);
     }
     for i in 0..bot_count.saturating_sub(1) {
         world.add_bot(names(mine)[i as usize % 8], mine);
     }
-    if level.overworld.is_some() {
-        world.set_mode(sim::GameMode::Special, sim::RulesConfig::default());
-        info!("Overworld Special mode: {} player, no CS bots, unlimited time",world.players.len());
-    } else if !opts.deathmatch {
+    if !opts.deathmatch {
         world.set_mode(sim::GameMode::Competitive, competitive_rules(&level));
     }
     // Deterministic visual checks only; interactive sessions ignore these controls.
@@ -464,11 +419,6 @@ fn spawn_level(
     let inventory = inventory::Inventory::load();
     if opts.screenshot.is_none() { inventory::apply(&mut world, id, &inventory); }
     commands.insert_resource(inventory::Collection(level.catalog.clone()));
-    if let Some(runtime)=&level.overworld {let runtime=runtime.lock().unwrap();if let Some(p)=world.player_mut(id){p.movement.origin=runtime.spawn_source();
-        p.view_angles.y=(0..24).map(|i|i as f32*15.).max_by(|a,b|{
-            let distance=|yaw:f32|{let (f,_,_)=movement::angle_vectors(glam::Vec3::new(0.,yaw,0.));level.collision.trace_ray(p.eye(),p.eye()+f*1500.,collision::contents::MASK_SHOT).fraction};distance(*a).total_cmp(&distance(*b))
-        }).unwrap_or(0.);
-    }}
     let p = world.player(id).expect("player just added");
     let mut local = LocalPlayer::new(id, p.movement.eye_position(), p.view_angles.y);
     if let Some((pos, pitch, yaw)) = opts.camera {
@@ -525,7 +475,7 @@ fn spawn_level(
         Tonemapping::None,
         start,
         PlayerCamera,
-        bevy::audio::SpatialListener::new(if level.overworld.is_some() {16.0} else {16.0 / 39.37}),
+        bevy::audio::SpatialListener::new(16.0 / 39.37),
     ));
     // Viewmodel camera: drawn last with its own depth buffer and FOV.
     commands.spawn((
@@ -563,7 +513,6 @@ pub fn competitive_rules(level: &level::Level) -> sim::RulesConfig {
 fn smoke_test(
     mut frame: Local<u32>,
     mut frame_times: Local<Vec<f32>>,
-    render_stats: Res<minecraft_graphics::RenderStats>,
     real: Res<Time<Real>>,
     options: Res<Options>,
     mut commands: Commands,
@@ -585,8 +534,7 @@ fn smoke_test(
     if let Some(limit) = std::env::var("CSR_FRAME_LOG").ok().and_then(|v| v.parse::<f32>().ok()) {
         let ms = real.delta_secs() * 1000.0;
         if ms > limit {
-            let stream = level.0.overworld.as_ref().and_then(|r| r.lock().ok()).map(|r| (r.stream_tick_ms, r.stream_tick_loaded)).unwrap_or_default();
-            info!("slow frame {}: {ms:.1} ms (terrain {:.2} ms, {} uploads in {:.2} ms, entities {:.2} ms, {} sections, last stream tick {:.2} ms / {} chunks)", *frame, render_stats.terrain_ms, render_stats.uploads, render_stats.upload_ms, render_stats.entities_ms, render_stats.sections, stream.0, stream.1);
+            info!("slow frame {}: {ms:.1} ms", *frame);
         }
     }
     if *frame == opts.frames.saturating_sub(90) && std::env::var_os("CSR_INSPECT").is_some(){inspect.0+=1;}
@@ -596,22 +544,6 @@ fn smoke_test(
         menu.category = cat.checked_sub(1);
     }
     let mut local = local;
-    if std::env::var_os("CSR_TEST_TRAVERSE").is_some() {
-        if let Some(l)=local.as_mut() {
-            // Reproducible screenshot-only streaming route: 0.2 blocks/frame, rotating camera.
-            l.noclip=true;
-            let f=frame.saturating_sub(120) as f32;
-            l.noclip_pos=glam::Vec3::new(f*overworld::BLOCK*0.2,0.,overworld::BLOCK*35.);
-            l.prev_eye=l.noclip_pos; l.curr_eye=l.noclip_pos;
-            l.yaw=f*0.3; l.pitch=15.;
-            if let Some(w)=world.as_mut() {
-                if let Some(p)=w.0.player_mut(l.id) {
-                    p.movement.origin=l.noclip_pos-glam::Vec3::Z*64.;
-                    p.movement.velocity=glam::Vec3::ZERO;
-                }
-            }
-        }
-    }
     // Explicit screenshot-only fixture, never enabled in interactive play.
     // This checks rendering/event plumbing, not combat accuracy.
     if *frame == opts.frames.saturating_sub(8) && std::env::var_os("CSR_TEST_FEEDBACK").is_some() {
@@ -678,8 +610,6 @@ fn smoke_test(
             .get(&FrameTimeDiagnosticsPlugin::FRAME_TIME)
             .and_then(|d| d.average())
             .unwrap_or(0.0);
-        info!("overworld renderer: sections {}/{}, uploads {}, entity vertices {}, terrain {:.2} ms, upload {:.2} ms, entities {:.2} ms",render_stats.visible_sections,render_stats.sections,render_stats.uploads,render_stats.mob_vertices,render_stats.terrain_ms,render_stats.upload_ms,render_stats.entities_ms);
-        info!("lighting: {} pending, {} accepted, worker mean {:.2} ms",render_stats.pending_lights,render_stats.light_updates,render_stats.worker_light_ms);
         info!("smoke test: {fps:.1} fps average ({ms:.2} ms/frame) at frame {}", *frame);
         if !frame_times.is_empty() {
             frame_times.sort_by(f32::total_cmp);

@@ -186,7 +186,7 @@ pub fn impact_sound(surface: &str) -> &'static str {
     }
 }
 
-/// Shared by CS player damage and accepted Minecraft mob hits.
+/// Shared by player damage and hits on dynamic-world targets.
 #[allow(clippy::too_many_arguments)]
 fn blood_hit(
     commands: &mut Commands,
@@ -364,24 +364,6 @@ pub fn update(
                 );
             }
             _ => {}
-        }
-    }
-    if let Some(runtime) = &level.0.overworld {
-        let hits = std::mem::take(&mut runtime.lock().unwrap().mob_hits);
-        for hit in hits {
-            effects.last_hit = now;
-            effects.last_hit_headshot = false;
-            blood_hit(
-                &mut commands,
-                &assets,
-                &level.0.collision,
-                hit.point,
-                (hit.point - hit.from).normalize_or_zero(),
-                eye,
-                now,
-                settings.blood,
-                &mut budget,
-            );
         }
     }
     if !reset {

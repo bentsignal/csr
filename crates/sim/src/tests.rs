@@ -11,17 +11,17 @@ fn special_mode_is_solo_without_round_timeouts_and_still_respawns() {
     w.tick=64*60*120;w.step(&[]);
     assert_eq!(w.mode,GameMode::Special);assert_eq!(w.round.round,round);assert!(!w.competitive());assert!(w.player(id).unwrap().alive);
     assert!(!w.events.iter().any(|e|matches!(e,GameEvent::RoundEnd{..}|GameEvent::RoundStart{..})));
-    w.damage_environment(id,1000,"minecraft");w.tick+=64*10;w.step(&[]);assert!(w.player(id).unwrap().alive);
+    w.damage_environment(id,1000,"environment");w.tick+=64*10;w.step(&[]);assert!(w.player(id).unwrap().alive);
 }
 
 #[test]
 fn environmental_damage_uses_normal_death_and_respawn_path() {
     let mut w=world();let id=w.add_player("player",Team::CounterTerrorist);
-    w.damage_environment(id,40,"minecraft");
+    w.damage_environment(id,40,"environment");
     assert!(w.player(id).unwrap().alive);assert_eq!(w.player(id).unwrap().health,60);
-    w.damage_environment(id,70,"minecraft");
+    w.damage_environment(id,70,"environment");
     let p=w.player(id).unwrap();assert!(!p.alive);assert_eq!(p.health,0);assert_eq!(p.deaths,1);assert!(p.respawn_at>w.time());
-    w.damage_environment(id,100,"minecraft");assert_eq!(w.player(id).unwrap().deaths,1);
+    w.damage_environment(id,100,"environment");assert_eq!(w.player(id).unwrap().deaths,1);
     assert!(w.events.iter().any(|e|matches!(e,GameEvent::Kill{attacker:WORLD,victim,..} if *victim==id)));
 }
 
@@ -715,7 +715,7 @@ fn survival_starts_with_pistol_and_knife_and_zero_cash_and_can_buy_anywhere() {
     w.buy(id,Purchase::Kevlar).unwrap();
     assert_eq!(w.player(id).unwrap().money,1000-rules::KEVLAR_PRICE);
     assert_eq!(w.player(id).unwrap().armor,100);
-    w.damage_environment(id,1000,"minecraft");
+    w.damage_environment(id,1000,"environment");
     assert_eq!(w.buy_cost(id,Purchase::Kevlar),Err(BuyError::NotAllowedNow));
     w.respawn(id);
     assert_eq!(w.player(id).unwrap().weapons.len(),2);

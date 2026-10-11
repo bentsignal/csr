@@ -1264,7 +1264,7 @@ impl World {
             {
                 let p = &mut self.players[i];
                 p.view_angles = input.view_angles;
-                // Minecraft fluids use the same collision sweeps as CS movement.
+                // Dynamic-world fluids use the same collision sweeps as CS movement.
                 let swimming=collision.dynamic.as_ref().is_some_and(|d|d.point_contents(p.movement.origin+Vec3::Z*32.,contents::WATER)!=0);
                 if swimming {
                     let mut config=self.config.clone();config.gravity=0.;config.air_accelerate=8.;config.air_max_wishspeed=160.;config.max_speed=160.;
