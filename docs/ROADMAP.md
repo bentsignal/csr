@@ -26,7 +26,8 @@ Minecraft code need work before multiplayer and public releases.
 | `third_party/minecraftoss` + `minecraft_terrain` (~154k lines) | Ported from decompiled Minecraft, no licence files, hard dependency of `level` and `client`; release zip also bundled Minecraft assets | **Removed** (decision 1) |
 | VR | `TickInput` carries tracked head/hand poses and an aim ray; hitscan uses the aim ray. Cameras are still single-view | **Seam in place, build later** |
 
-Tests: 180 `#[test]`s, mostly sim (55) and client (51), on synthetic data.
+Tests: 174 passing tests, with two installed-data tests ignored by default
+(Track A1 verification, 2026-10-11), mostly on synthetic data.
 Real-data checks are the `csr probe` / `csr sim` commands.
 
 ## Phase 0: take ownership
@@ -60,6 +61,15 @@ Small and sequential. Everything else builds on it.
 ### Track A: Multiplayer (critical path)
 
 Phase 2 and VR depend on this track.
+
+Track A1 verified on 2026-10-11 ([PR #9](https://github.com/bentsignal/global-offensive/pull/9)):
+workspace tests pass; release-profile Dust II `probe` and `sim` report zero
+failures, including `sim --tickrate 64`; the rendered client screenshot was
+inspected. Review also fixed firing-snapshot equality after recoil-cache
+population and finish ownership on weapons dropped in their spawn, respawn
+or purchase tick. **Next: A2 transport, server/connect, prediction and lag
+compensation.** Bot brains remain server-only; snapshots alone do not replay
+their decisions.
 
 - [x] Move all gameplay into `sim`: bots, loadout on spawn, skin and knife
       definition swaps, round/economy rules. Clients only send input and draw.
