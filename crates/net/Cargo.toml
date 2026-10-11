@@ -1,0 +1,21 @@
+[package]
+name = "net"
+description = "Multiplayer: protocol, dedicated server loop, client prediction and interpolation (no Bevy)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+sim.workspace = true
+weapons.workspace = true
+movement.workspace = true
+glam.workspace = true
+serde.workspace = true
+postcard.workspace = true
+renet = "2.0"
+renet_netcode = "2.0"
+
+[dev-dependencies]
+collision.workspace = true
+content.workspace = true

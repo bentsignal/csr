@@ -101,7 +101,8 @@ impl World {
     /// weapons keep their owner's finish wherever they go.
     pub(crate) fn dress_weapons(&mut self) {
         let catalog = self.catalog.clone();
-        for p in &mut self.players {
+        let only = self.predicting;
+        for p in self.players.iter_mut().filter(|p| only.is_none_or(|id| id == p.id)) {
             let (id, team) = (p.id, p.team);
             for w in p.weapons.iter_mut().filter(|w| w.cosmetic_owner.is_none()) {
                 p.loadout.dress(id, team, &catalog, w);

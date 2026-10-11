@@ -25,6 +25,10 @@ use nav::NavMesh;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+/// Bot names, as the game's bot profiles name them.
+pub const NAMES_T: [&str; 8] = ["Albert", "Crusher", "Dragomir", "Gunner", "Kasper", "Minh", "Rock", "Vitaliy"];
+pub const NAMES_CT: [&str; 8] = ["Brian", "Darryl", "Elliot", "Frank", "Harold", "Jon", "Pete", "Walt"];
+
 /// Ticks between events that happen `per_second` times a second.
 fn interval(world: &World, per_second: u32) -> u64 {
     (world.tick_rate / per_second).max(1) as u64

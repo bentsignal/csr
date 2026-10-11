@@ -346,3 +346,69 @@ fn a_dropped_skin_keeps_its_owner_and_finish() {
     let gun = w.player(t2).unwrap().weapons.iter().find(|g| g.def.class_name == "weapon_glock").unwrap();
     assert_eq!((gun.cosmetic_owner, gun.cosmetic.map(|c| c.serial)), (Some(t), Some(5)));
 }
+
+#[test]
+fn lag_compensation_rewinds_targets_to_the_view_tick() {
+    // The target stood in the line of fire at tick `seen`, then stepped
+    // out. A shot from a player who still saw it there hits; a shot judged
+    // against the present misses.
+    for (rewind, hit) in [(true, true), (false, false)] {
+        let (mut w, shooter, target) = aim_setup();
+        let (pitch, yaw) = bots::look_angles(w.player(shooter).unwrap().eye(), Vec3::new(0.0, 300.0, 48.0));
+        let seen = w.tick;
+        teleport(&mut w, target, Vec3::new(200.0, 300.0, 1.0));
+        run(&mut w, 0.1, &[]);
+        let shot = TickInput {
+            view_angles: Vec3::new(pitch, yaw, 0.0),
+            buttons: buttons::ATTACK,
+            view_tick: rewind.then_some(seen),
+            ..Default::default()
+        };
+        w.step(&[(shooter, shot)]);
+        assert_eq!(w.player(target).unwrap().health < 100, hit, "rewind {rewind}");
+    }
+}
+
+#[test]
+fn lag_compensation_is_bounded() {
+    let (mut w, shooter, target) = aim_setup();
+    let (pitch, yaw) = bots::look_angles(w.player(shooter).unwrap().eye(), Vec3::new(0.0, 300.0, 48.0));
+    let seen = w.tick;
+    teleport(&mut w, target, Vec3::new(200.0, 300.0, 1.0));
+    run(&mut w, MAX_UNLAG + 0.2, &[]);
+    let shot = TickInput { view_angles: Vec3::new(pitch, yaw, 0.0), buttons: buttons::ATTACK, view_tick: Some(seen), ..Default::default() };
+    w.step(&[(shooter, shot)]);
+    assert_eq!(w.player(target).unwrap().health, 100, "too old to honour");
+}
+
+#[test]
+fn prediction_moves_only_the_local_player_and_never_damages() {
+    let (mut w, shooter, target) = aim_setup();
+    w.add_bot("bot", Team::CounterTerrorist);
+    let (pitch, yaw) = bots::look_angles(w.player(shooter).unwrap().eye(), Vec3::new(0.0, 300.0, 48.0));
+    let before = w.clone();
+    let shoot = TickInput { view_angles: Vec3::new(pitch, yaw, 0.0), buttons: buttons::ATTACK, forward_move: 450.0, ..Default::default() };
+    w.predict(shooter, shoot);
+    assert_eq!(w.player(target).unwrap().health, 100);
+    assert!(w.events.iter().any(|e| matches!(e, GameEvent::Fire { .. })));
+    assert!(w.events.iter().any(|e| matches!(e, GameEvent::Tracer { end, .. } if end.y > 270.0 && end.y < 320.0)), "the tracer stops at the target");
+    assert!(!w.events.iter().any(|e| matches!(e, GameEvent::Damage { .. } | GameEvent::Kill { .. })));
+    for (a, b) in w.players.iter().zip(&before.players) {
+        if a.id != shooter {
+            assert_eq!(a, b, "{} did not move", a.name);
+        }
+    }
+    assert_eq!(w.tick, before.tick + 1);
+    let clip = |w: &World| w.player(shooter).unwrap().active_weapon().unwrap().clip;
+    assert_eq!(clip(&w) + 1, clip(&before));
+}
+
+#[test]
+fn leaving_drops_the_bomb() {
+    let (mut w, t, _) = duel();
+    run(&mut w, 1.1, &[]);
+    assert!(w.player(t).unwrap().has_bomb());
+    w.remove_player(t);
+    assert!(w.player(t).is_none());
+    assert!(w.dropped_bomb().is_some());
+}

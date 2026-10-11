@@ -118,6 +118,10 @@ pub struct AimRay {
 /// are pulled back so nobody shoots from outside their hull.
 pub const MAX_AIM_OFFSET: f32 = 48.0;
 
+/// The furthest back lag compensation rewinds other players, seconds (as
+/// `sv_maxunlag`, but tighter: a very late shot is not worth honouring).
+pub const MAX_UNLAG: f32 = 0.4;
+
 /// Input for one player for one tick.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct TickInput {
@@ -139,6 +143,11 @@ pub struct TickInput {
     pub drop: bool,
     /// Select a carried grenade by item definition; never grants an item.
     pub utility: u32,
+    /// The tick of the state the player was looking at (other players are
+    /// drawn slightly in the past). Shots are checked against where the
+    /// targets were then: lag compensation. `None` for local players and
+    /// bots.
+    pub view_tick: Option<u64>,
     /// Tracked head and hands (VR). `None` for flat players.
     pub tracked: Option<TrackedPose>,
     /// Weapon aim, when it differs from the view (VR). Shots, knife swings
@@ -411,6 +420,13 @@ pub struct World {
     /// AI for the players with `is_bot`. They think at the start of every
     /// [`World::step`] on whoever runs the authoritative world.
     pub bots: bots::Bots,
+    /// Where everyone's hull was after each recent tick, for lag
+    /// compensation (server side; not replicated).
+    hull_history: std::collections::VecDeque<(u64, Vec<(PlayerId, Vec3, Vec3)>)>,
+    /// The tick the current shot rewinds targets to.
+    rewind_to: Option<u64>,
+    /// The one player being stepped by [`World::predict`].
+    pub(crate) predicting: Option<PlayerId>,
     next_id: PlayerId,
     next_item: u32,
 }
@@ -465,6 +481,9 @@ impl World {
             tick_rate: DEFAULT_TICK_RATE,
             events: Vec::new(),
             bots: bots::Bots::default(),
+            hull_history: Default::default(),
+            rewind_to: None,
+            predicting: None,
             next_id: 1,
             next_item: 1,
         }
@@ -615,6 +634,21 @@ impl World {
 
     pub fn player(&self, id: PlayerId) -> Option<&Player> {
         self.players.iter().find(|p| p.id == id)
+    }
+
+    /// Takes a player out of the game (they left). What they carried that
+    /// others need (the bomb, their best gun) is dropped where they stood.
+    pub fn remove_player(&mut self, id: PlayerId) {
+        let Some(i) = self.index_of(id) else { return };
+        if self.players[i].alive {
+            self.death_drops(i);
+        }
+        self.players.remove(i);
+        if let Some(b) = &mut self.bomb {
+            if b.defuser.is_some_and(|(d, _)| d == id) {
+                b.defuser = None;
+            }
+        }
     }
 
     pub fn player_mut(&mut self, id: PlayerId) -> Option<&mut Player> {
@@ -1251,7 +1285,8 @@ impl World {
         // Bots decide first, from last tick's state and events (what they
         // heard). Explicit inputs win over a bot's own.
         let with_bots;
-        let inputs = if self.players.iter().any(|p| p.is_bot) {
+        let predicting = self.predicting;
+        let inputs = if predicting.is_none() && self.players.iter().any(|p| p.is_bot) {
             let mut bots = std::mem::take(&mut self.bots);
             let mut all = bots.think(self);
             self.bots = bots;
@@ -1268,6 +1303,7 @@ impl World {
         let collision = self.collision.clone();
 
         match self.mode {
+            _ if predicting.is_some() => {}
             GameMode::Deathmatch | GameMode::Special => {
                 let due: Vec<PlayerId> = self
                     .players
@@ -1284,7 +1320,7 @@ impl World {
         let frozen = self.competitive() && self.round.phase == Phase::Freeze;
 
         for i in 0..self.players.len() {
-            if !self.players[i].alive {
+            if !self.players[i].alive || predicting.is_some_and(|p| p != self.players[i].id) {
                 continue;
             }
             let id = self.players[i].id;
@@ -1447,23 +1483,67 @@ impl World {
                 }
             }
             if fire {
+                self.rewind_to = input.view_tick.filter(|_| predicting.is_none());
                 if self.players[i].active_weapon().is_some_and(|w| w.def.class==weapons::WeaponClass::Grenade) {
                     self.throw_grenade(i);
                 } else if self.players[i].active_weapon().is_some_and(|w| w.is_melee()) {
                     self.melee_attack(i, time, stab);
                 } else { self.fire(i, time); }
+                self.rewind_to = None;
             }
-            if self.players[i].alive && !self.items.is_empty() {
+            if self.players[i].alive && !self.items.is_empty() && predicting.is_none() {
                 self.pickups(i, time);
             }
             self.players[i].last_input = input;
         }
-        self.step_utility();
-        if self.competitive() {
-            self.check_elimination();
+        if predicting.is_none() {
+            self.step_utility();
+            if self.competitive() {
+                self.check_elimination();
+            }
         }
         self.dress_weapons();
         self.tick += 1;
+        if predicting.is_none() {
+            self.record_hulls();
+        }
+    }
+
+    /// Steps only player `id` with `input`: client-side prediction. Bots,
+    /// round timers, grenades and other players stand still, and shots draw
+    /// tracers and impacts but deal no damage; the server's next snapshot
+    /// replaces everything this changes.
+    pub fn predict(&mut self, id: PlayerId, input: TickInput) {
+        self.predicting = Some(id);
+        self.step(&[(id, input)]);
+        self.predicting = None;
+    }
+
+    fn record_hulls(&mut self) {
+        let keep = self.ticks(MAX_UNLAG) as usize + 2;
+        while self.hull_history.len() >= keep {
+            self.hull_history.pop_front();
+        }
+        let hulls = self.players.iter().filter(|p| p.alive).map(|p| {
+            let (mn, mx) = p.bounds();
+            (p.id, mn, mx)
+        });
+        self.hull_history.push_back((self.tick, hulls.collect()));
+    }
+
+    /// A target's hull for the shot being fired: where it was at the
+    /// shooter's view tick (lag compensation), else where it is now.
+    fn target_bounds(&self, target: &Player) -> (Vec3, Vec3) {
+        let rewound = self.rewind_to.and_then(|tick| {
+            let oldest = self.tick.saturating_sub(self.ticks(MAX_UNLAG));
+            let tick = tick.clamp(oldest, self.tick);
+            if tick == self.tick {
+                return None;
+            }
+            let (_, hulls) = self.hull_history.iter().rev().find(|(t, _)| *t <= tick)?;
+            hulls.iter().find(|(id, _, _)| *id == target.id).map(|&(_, mn, mx)| (mn, mx))
+        });
+        rewound.unwrap_or_else(|| target.bounds())
     }
 
     fn melee_attack(&mut self, shooter: usize, time: f32, secondary: bool) {
@@ -1480,7 +1560,7 @@ impl World {
         let mut best = None;
         for (j, other) in self.players.iter().enumerate() {
             if j == shooter || !other.alive || !team.enemy_of(other.team) { continue; }
-            let (mn, mx) = other.bounds();
+            let (mn, mx) = self.target_bounds(other);
             if let Some(t) = ray_box(eye, dir, mn, mx) {
                 if t <= tr.fraction * range && best.is_none_or(|(_, bt)| t < bt) { best = Some((j, t)); }
             }
@@ -1489,7 +1569,7 @@ impl World {
             .filter(|(_, fraction)| best.is_none_or(|(_, t)| fraction * tr.fraction * range < t));
         let hit = if best.is_some() || external.is_some() { MeleeHit::Player } else if tr.fraction < 1.0 { MeleeHit::World } else { MeleeHit::Miss };
         self.events.push(GameEvent::Melee { player: id, weapon: def.class_name.clone(), origin: eye, secondary, hit });
-        if let Some((key, fraction)) = external {
+        if let Some((key, fraction)) = external.filter(|_| self.predicting.is_none()) {
             if let Some(dynamic) = &self.collision.dynamic {
                 dynamic.damage_target_at(key, if secondary { 65.0 } else if first { 40.0 } else { 25.0 }, eye, eye + (tr.end-eye)*fraction);
             }
@@ -1567,7 +1647,7 @@ impl World {
                 if j == shooter || !other.alive || !team.enemy_of(other.team) {
                     continue;
                 }
-                let (mn, mx) = other.bounds();
+                let (mn, mx) = self.target_bounds(other);
                 if let Some(t) = ray_box(eye, dir, mn, mx) {
                     if t <= world_dist && best.is_none_or(|(_, bt)| t < bt) {
                         best = Some((j, t));
@@ -1590,7 +1670,7 @@ impl World {
                     let hit = eye + dir * t;
                     self.events.push(GameEvent::Tracer { player: id, start: eye, end: hit });
                     let victim = &self.players[j];
-                    let (mn, mx) = victim.bounds();
+                    let (mn, mx) = self.target_bounds(victim);
                     let frac = ((hit.z - mn.z) / (mx.z - mn.z)).clamp(0.0, 1.0);
                     let (_, vright, _) = movement::angle_vectors(Vec3::new(0.0, victim.view_angles.y, 0.0));
                     let center = (mn + mx) * 0.5;
@@ -1630,6 +1710,10 @@ impl World {
     }
 
     fn apply_damage(&mut self, attacker: usize, victim: usize, def: &weapons::WeaponDefinition, distance: f32, group: HitGroup, pos: Vec3) {
+        if self.predicting.is_some() {
+            // Only the server decides hits.
+            return;
+        }
         let v = &self.players[victim];
         let (health_dmg, armor_dmg) = weapon::damage(def, distance, group, v.armor, v.helmet);
         let attacker_id = self.players[attacker].id;
