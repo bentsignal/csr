@@ -85,16 +85,20 @@ Phase 2 and VR depend on this track.
 
 ### Track B: Distribution and updates
 
-- [ ] **Velopack** (Rust crate + `vpk` packer): `Setup.exe` installs per
+- [x] **Velopack** (Rust crate + `vpk` packer): `Setup.exe` installs per
       user, makes Start-menu shortcuts and applies **delta updates from
       GitHub Releases**. The game checks for updates on launch and applies
       them on restart. Built and published by CI on a version tag.
-- [ ] First run: auto-detect CS:GO Legacy and confirm; folder picker only
-      as a fallback (reuse `setup.rs`).
-- [ ] "Add to Steam" option: write a non-Steam-game entry plus library
+      (`update.rs`, `tools/package-release.ps1`, `release.yml`; player data
+      moved to `%LocalAppData%\CSGO-Rewrite\userdata` so it survives updates.)
+- [x] First run: auto-detect CS:GO Legacy and use it without a question
+      (VISION §1: "nothing else is asked"); if it is missing, install it
+      through Steam and wait for the download, or pick the folder.
+- [x] "Add to Steam" option: write a non-Steam-game entry plus library
       artwork to Steam's `shortcuts.vdf`. A real Steam store app is not an
       option: it needs Steamworks approval for a game built on Valve's IP.
-- [ ] SmartScreen: installers are unsigned (decision 4). The download page
+      (`steam.rs`; artwork drawn in code by `art.rs`.)
+- [x] SmartScreen: installers are unsigned (decision 4). The download page
       and installer readme show the "More info → Run anyway" step.
 - [ ] Release channels: `public` (this repo, clean) and an optional
       **`private`** channel for the owner's friends (see Track E and the

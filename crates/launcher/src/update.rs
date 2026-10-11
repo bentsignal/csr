@@ -40,13 +40,11 @@ pub fn installed_root() -> Option<PathBuf> {
     locator().map(|l| l.get_root_dir())
 }
 
-/// The exe that shortcuts should start: Velopack's launcher in the install
-/// folder when there is one (its path never changes), else `current\`.
+/// The exe that shortcuts should start: `current\CSGO-Rewrite.exe`, the
+/// same target as the Start menu shortcut Velopack makes (updates replace
+/// the folder's contents, never its path).
 pub fn launch_exe() -> Option<PathBuf> {
-    let l = locator()?;
-    let main = l.get_main_exe_path();
-    let stub = l.get_root_dir().join(main.file_name()?);
-    Some(if stub.is_file() { stub } else { main })
+    locator().map(|l| l.get_main_exe_path())
 }
 
 fn source() -> Box<dyn UpdateSource> {

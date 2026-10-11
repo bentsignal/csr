@@ -138,7 +138,7 @@ Write-Host "Packing installer $Version..."
 & $vpk pack --packId $packId --packVersion $Version --packDir $appDir --mainExe "$name.exe" `
     --packTitle 'CSGO Rewrite' --packAuthors 'CSGO Rewrite contributors' `
     --icon (Join-Path $art 'icon.ico') --splashImage (Join-Path $art 'splash.png') `
-    --shortcuts 'Desktop,StartMenuRoot' --noPortable --outputDir $Releases
+    --runtime win-x64 --shortcuts 'Desktop,StartMenuRoot' --noPortable --outputDir $Releases
 if ($LASTEXITCODE -ne 0) { throw 'vpk pack failed' }
 
 $setup = Join-Path $Releases "$packId-win-Setup.exe"
