@@ -189,65 +189,9 @@ pub struct Detected {
     pub cs2_only: Vec<PathBuf>,
 }
 
-/// Steam's install folder from the registry (`reg` ships with Windows).
-fn steam_from_registry() -> Vec<PathBuf> {
-    let mut out = Vec::new();
-    for (key, value) in [
-        (r"HKCU\Software\Valve\Steam", "SteamPath"),
-        (r"HKLM\SOFTWARE\WOW6432Node\Valve\Steam", "InstallPath"),
-        (r"HKLM\SOFTWARE\Valve\Steam", "InstallPath"),
-    ] {
-        let Ok(o) = std::process::Command::new("reg").args(["query", key, "/v", value]).output() else { continue };
-        for line in String::from_utf8_lossy(&o.stdout).lines() {
-            if let Some((_, path)) = line.split_once("REG_SZ") {
-                out.push(PathBuf::from(path.trim()));
-            }
-        }
-    }
-    out
-}
-
-/// Steam library folders: registered ones (from every Steam install's
-/// `libraryfolders.vdf`) plus the usual places on every drive.
-fn steam_libraries() -> Vec<PathBuf> {
-    let mut roots = steam_from_registry();
-    roots.push(PathBuf::from(r"C:\Program Files (x86)\Steam"));
-    roots.push(PathBuf::from(r"C:\Program Files\Steam"));
-    for letter in b'C'..=b'Z' {
-        let drive = PathBuf::from(format!("{}:\\", letter as char));
-        if !drive.is_dir() {
-            continue;
-        }
-        for sub in ["SteamLibrary", "Steam", r"Program Files (x86)\Steam", r"Program Files\Steam", r"Games\Steam", r"Games\SteamLibrary", "Games"] {
-            roots.push(drive.join(sub));
-        }
-    }
-    libraries_from(roots)
-}
-
-/// Each root plus the libraries its `steamapps\libraryfolders.vdf` lists.
-fn libraries_from(roots: Vec<PathBuf>) -> Vec<PathBuf> {
-    let mut libraries = Vec::new();
-    for root in roots {
-        if let Ok(bytes) = std::fs::read(root.join("steamapps/libraryfolders.vdf")) {
-            if let Some(folders) = kv::parse_bytes(&bytes).ok().as_ref().and_then(|d| d.block("libraryfolders")) {
-                for (_, v) in folders.iter() {
-                    if let Some(p) = v.as_block().and_then(|b| b.str("path")) {
-                        libraries.push(PathBuf::from(p.replace(r"\\", r"\")));
-                    }
-                }
-            }
-        }
-        libraries.push(root);
-    }
-    let mut seen = std::collections::HashSet::new();
-    libraries.retain(|p| seen.insert(p.to_string_lossy().to_lowercase().replace('/', "\\").trim_end_matches('\\').to_string()));
-    libraries
-}
-
 /// Looks for CS:GO Legacy in every Steam library on this PC.
 pub fn detect() -> Detected {
-    detect_in(steam_libraries())
+    detect_in(vfs::steam_libraries())
 }
 
 fn detect_in(libraries: Vec<PathBuf>) -> Detected {
@@ -299,7 +243,7 @@ fn install_with_steam() -> Option<PathBuf> {
         if window.dismissed() {
             return None;
         }
-        if let Some(game) = steam_libraries().iter().find_map(|lib| finished_install(lib)) {
+        if let Some(game) = vfs::steam_libraries().iter().find_map(|lib| finished_install(lib)) {
             window.close();
             return Some(game);
         }
@@ -539,7 +483,7 @@ mod tests {
         std::fs::create_dir_all(cs2.join(r"game\csgo")).unwrap();
         std::fs::write(cs2.join(r"game\csgo\gameinfo.gi"), "").unwrap();
 
-        let found = detect_in(libraries_from(vec![steam]));
+        let found = detect_in(vfs::libraries_from(vec![steam]));
         assert_eq!(found.legacy, vec![game, beta]);
         assert_eq!(found.cs2_only, vec![cs2]);
     }

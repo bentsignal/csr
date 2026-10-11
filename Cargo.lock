@@ -2920,6 +2920,7 @@ dependencies = [
  "vpk",
  "vtf",
  "weapons",
+ "workshop",
 ]
 
 [[package]]
@@ -2934,11 +2935,15 @@ version = "0.3.0"
 dependencies = [
  "bsp",
  "collision",
+ "content",
  "glam",
+ "kv",
  "mdl",
  "nav",
  "vfs",
  "weapons",
+ "workshop",
+ "zip",
 ]
 
 [[package]]
@@ -5571,6 +5576,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "23b97319f7b8343df12cc98938e5c3eb436064524c8d2b4e30a1d3a36eecdf81"
 dependencies = [
  "memchr",
+]
+
+[[package]]
+name = "workshop"
+version = "0.3.0"
+dependencies = [
+ "content",
+ "serde_json",
+ "sha1",
+ "ureq",
+ "vfs",
+ "zip",
 ]
 
 [[package]]

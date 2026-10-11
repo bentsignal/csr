@@ -13,6 +13,8 @@
 //! csr sim [map] [--tickrate N] headless movement, combat and round checks
 //! csr probe [map]              load every asset a map references and report
 //! csr weapons                  print the weapon catalog from items_game.txt
+//! csr maps                     list maps, including old Workshop versions
+//! csr fetch-map <name|all>     fetch old map versions now (remove-map deletes)
 //! csr cases                    list available local cases
 //! csr give-case <name|id> [N]   add local cases, no keys required
 //! ```
@@ -20,6 +22,7 @@
 
 mod art;
 mod dialog;
+mod mapcmd;
 mod probe;
 mod setup;
 mod simcheck;
@@ -40,7 +43,10 @@ fn main() {
             csr setup                 Choose the CS:GO Legacy folder again\n\
             csr find-csgo             Show the CS:GO installs found on this PC\n\
             csr add-to-steam          Add CSGO Rewrite to your Steam library\n\
-            csr weapons               List weapons from your CS:GO install\n\n\
+            csr weapons               List weapons from your CS:GO install\n\
+            csr maps                  List maps, including old versions (de_dust2_2017)\n\
+            csr fetch-map NAME|all    Download old map versions now\n\
+            csr remove-map NAME|all   Delete downloaded old maps\n\n\
             csr cases                 List local cases and their IDs\n\
             csr give-case NAME [N]    Add N local cases (names may contain spaces)\n\n\
             Play options:\n\
@@ -74,6 +80,9 @@ fn main() {
         return;
     }
     update::check_in_background();
+    if let Some(code) = mapcmd::run(&args) {
+        std::process::exit(code);
+    }
     let (cmd, rest) = match args.first().map(String::as_str) {
         Some("sim") | Some("probe") | Some("play") | Some("weapons") | Some("cases") | Some("give-case") | Some("give-skin") | Some("give-sticker") | Some("stickers") | Some("skins") => (args[0].as_str(), &args[1..]),
         _ => ("play", &args[..]),

@@ -1,6 +1,6 @@
 //! `csr probe <map>`: loads everything a map references and reports.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::time::Instant;
 
 pub fn run(map: &str) -> i32 {
@@ -36,6 +36,7 @@ pub fn run(map: &str) -> i32 {
         level.collision.mins,
         level.collision.maxs
     );
+    println!("navigation: {}", level.nav.as_ref().map_or("missing".into(), |n| format!("{} areas", n.areas.len())));
 
     let mut failures = 0;
     let mut displacement_lightmaps = 0;
@@ -92,7 +93,14 @@ pub fn run(map: &str) -> i32 {
 
     let t = Instant::now();
     let (mut ok, mut tris) = (0, 0usize);
-    for name in &bsp.static_props.models {
+    for (model_index, name) in bsp.static_props.models.iter().enumerate() {
+        // Check the skins actually referenced by this map's prop instances.
+        // Skin zero need not be used, and checking only it misses other skins.
+        let skins: BTreeSet<usize> = bsp.static_props.props.iter()
+            .filter(|p| p.model as usize == model_index)
+            .map(|p| p.skin.max(0) as usize)
+            .collect();
+        if skins.is_empty() { continue; }
         let base = name.trim_end_matches(".mdl");
         let files = (
             fs.read(name),
@@ -108,8 +116,11 @@ pub fn run(map: &str) -> i32 {
             Ok(model) => {
                 ok += 1;
                 tris += model.meshes.iter().map(|m| m.indices.len() / 3).sum::<usize>();
-                for mesh in &model.meshes {
-                    let tex = model.skin_texture(0, mesh.material);
+                let textures: BTreeSet<usize> = skins.iter().flat_map(|&skin| {
+                    let model = &model;
+                    model.meshes.iter().map(move |mesh| model.skin_texture(skin, mesh.material))
+                }).collect();
+                for tex in textures {
                     let found = model
                         .material_candidates(tex)
                         .into_iter()
@@ -122,7 +133,7 @@ pub fn run(map: &str) -> i32 {
                         }
                         None => {
                             failures += 1;
-                            println!("  {name}: no material for texture {tex}");
+                            println!("  {name}: no material for texture {tex} ({:?}); used skins {skins:?}; candidates {:?}", model.textures.get(tex), model.material_candidates(tex));
                         }
                     }
                 }

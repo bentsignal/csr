@@ -26,8 +26,8 @@ Minecraft code need work before multiplayer and public releases.
 | `third_party/minecraftoss` + `minecraft_terrain` (~154k lines) | Ported from decompiled Minecraft, no licence files, hard dependency of `level` and `client`; release zip also bundled Minecraft assets | **Removed** (decision 1) |
 | VR | `TickInput` carries tracked head/hand poses and an aim ray; hitscan uses the aim ray. Cameras are still single-view | **Seam in place, build later** |
 
-Tests: 174 passing tests, with two installed-data tests ignored by default
-(Track A1 verification, 2026-10-11), mostly on synthetic data.
+Tests: 185 passing tests, with two installed-data tests ignored by default
+(archive-loader verification, 2026-10-11), mostly on synthetic data.
 Real-data checks are the `csr probe` / `csr sim` commands.
 
 ## Phase 0: take ownership
@@ -146,10 +146,16 @@ byte-identical to 2018.
       timing comes from `inventorypanel.swf` running, or frame counts from
       footage. Reuse the existing case and cosmetic data.
 - [ ] Scaleform scoreboard, buy menu and HUD (the movies are in the install).
-- [ ] 2018 maps: fetch Valve's own "Compatibility Version" Workshop snapshots
+- [x] Archive loader: fetch Valve's own "Compatibility Version" Workshop snapshots
       at runtime (map → Workshop ID table in research §1), and also pick up
       any already in `steamapps\workshop\content\730`. Download them
-      straight from Valve's CDN, with no Steam step (decision 6).
+      straight from Valve's CDN, with no Steam step (decision 6). Fourteen
+      pinned archives verified; embedded navigation/overview lookup fixed;
+      all fourteen simulations pass. [PR #15](https://github.com/bentsignal/global-offensive/pull/15).
+- [ ] Offer classic maps in the menu with a visible, cancellable download
+      screen. Resolve the four material dependencies and measure fidelity
+      against the archived maps before calling them ready. Archive years
+      do not establish August 2018 parity. Results: [OLD-MAPS.md](OLD-MAPS.md).
 - [ ] Optional: a 2018 build via `download_depot` with the owner's own
       account, if Steam still serves old manifests (unverified). Only adds
       a few changed models and the old HE explosion sound.
@@ -181,6 +187,13 @@ thing is uncanny. Fidelity is measured, never eyeballed:
 - [ ] The inherited fidelity checklist below (M2–M4).
 
 ### Track E: Content packs and modding
+
+The archive-loader groundwork in [PR #15](https://github.com/bentsignal/global-offensive/pull/15)
+gives listed maps and loaded levels stable `ContentId`s and exposes
+`Level::load_from_vfs` for maps in mounted content packs. A synthetic pack
+loads without a game install. The interrupted pack-format draft remains
+in [PR #12](https://github.com/bentsignal/global-offensive/pull/12); the items
+below are still open.
 
 - [ ] Pack format `.csrpack`: a zip with `pack.toml` (id, version, origin,
       provided `ContentId`s, content hash) plus data definitions and
