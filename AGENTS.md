@@ -1,5 +1,6 @@
 # Notes for agents working on CSGO Rewrite
 
+**If [docs/HANDOFF.md](docs/HANDOFF.md) says `Status: OPEN`, start there.**
 **Read [docs/VISION.md](docs/VISION.md) first.** It is the owner's intent.
 [docs/ROADMAP.md](docs/ROADMAP.md) is the plan; tick items off as they land.
 
