@@ -91,8 +91,12 @@ file copying and no reading.
 
 ### 7. Look and feel: early CS:GO, ideally pixel-perfect
 
-- The menu is the **2018 launch-era Panorama UI**, not the late-2023 one that
-  ships in CS:GO Legacy. References:
+- The menu is the **classic Scaleform UI**: the Flash-based menu CS:GO used
+  from 2012 until August 2018, shown in the owner's screenshots. It is not
+  the Panorama UI that replaced it and ships in CS:GO Legacy. (This file
+  first called it "2018 Panorama"; research showed the screenshots are
+  Scaleform. See [research/2018-era.md](research/2018-era.md) §0.)
+  References:
   - [reference/menu-2018-home.png](reference/menu-2018-home.png): main menu,
     about August 2018 (the "A New Horizon" / Horizon Case news post).
   - [reference/menu-2018-case-opening.png](reference/menu-2018-case-opening.png):

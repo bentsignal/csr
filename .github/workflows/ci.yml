@@ -31,4 +31,5 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       # Tests use synthetic data. Ones that need a CS:GO install are #[ignore]d.
       - run: cargo test --workspace --locked
-      - run: cargo build --profile play -p launcher --locked
+      # Same profile as the tests, so it reuses their build.
+      - run: cargo build -p launcher --locked

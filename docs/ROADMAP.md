@@ -101,26 +101,43 @@ Phase 2 and VR depend on this track.
       Minecraft decision). Velopack supports channels; the private feed
       must not be on the public repo.
 
-### Track C: The 2018 front end
+### Track C: The classic (Scaleform) front end
+
+The target is the Scaleform UI in `docs/reference/` (VISION §7). Research:
+[research/2018-era.md](research/2018-era.md). The CS:GO Legacy install still
+ships all 117 original Scaleform movies (`csgo/resource/flash/*.swf`: main
+menu, friends list, store tiles, `inventorypanel.swf` with the case opening,
+HUD, scoreboard, buy menu), and the UI sounds, case sounds and menu music are
+byte-identical to 2018.
 
 - [ ] New UI layer with an app state machine (menu ↔ loading ↔ match ↔
-      server browser) instead of relaunching the process, and retained
-      widgets instead of rebuilding the whole tree every change.
-- [ ] Rebuild the home screen to match `docs/reference/menu-2018-home.png`
-      at 1920x1080, then scale. Use art and fonts from the install's
-      `panorama/code.pbin` and VPKs at runtime; recreate only what is
-      missing, as original work.
-- [ ] Screenshot-diff harness: render the menu headless at the reference
-      resolution and overlay/diff it against the reference images.
-- [ ] 2018 case opening (`menu-2018-case-opening.png`): reel, centre line,
-      "Unlocking Container...", contents grid with rarity strips, original
-      sounds and timing. Reuse the existing case and cosmetic data.
-- [ ] 2018-style play menu, inventory, options, scoreboard and buy menu.
-- [ ] Research: can Steam's `download_depot` still fetch 2018-era CS:GO
-      depot manifests for an owned copy? If so, the real 2018 Panorama
-      layouts, art, sounds and map versions can be **read at runtime** from
-      a second, older install. Verify before relying on it. Fallback:
-      reconstruct from screenshots and 2018 video footage.
+      server browser) instead of relaunching the process.
+- [ ] **Spike: play Valve's own SWFs with [Ruffle](https://github.com/ruffle-rs/ruffle)**
+      (Rust Flash player, MIT/Apache, wgpu) inside the Bevy app, read from
+      the player's install at runtime. Stub the Scaleform game API the
+      ActionScript calls and feed it our local profile, friends, inventory
+      and server data. If it works, the menu is pixel-exact by construction
+      and nothing of Valve's is shipped. Risks: CS:GO-specific Scaleform
+      extensions, and Ruffle's wgpu version versus Bevy's (fallback: render
+      Ruffle offscreen and copy the frame).
+- [ ] Fallback if the spike fails: a native Bevy layout measured against the
+      references, pulling shapes, bitmaps and fonts out of the SWFs at
+      runtime with the `swf` crate (nothing redrawn or committed).
+- [ ] Screenshot-diff harness: render the menu at 1920x1080 and diff it
+      against the reference images.
+- [ ] Case opening as in `menu-2018-case-opening.png`, with its original
+      sounds (`UI.CrateOpen`, `UI.CrateItemScroll`, `UI.CrateDisplay`). Reel
+      timing comes from `inventorypanel.swf` running, or frame counts from
+      footage. Reuse the existing case and cosmetic data.
+- [ ] Scaleform scoreboard, buy menu and HUD (the movies are in the install).
+- [ ] 2018 maps: fetch Valve's own "Compatibility Version" Workshop snapshots
+      at runtime (map → Workshop ID table in research §1), and also pick up
+      any already in `steamapps\workshop\content\730`. The open question for
+      the owner is whether to download them straight from Valve's CDN or
+      only through a Steam subscription.
+- [ ] Optional: a 2018 build via `download_depot` with the owner's own
+      account, if Steam still serves old manifests (unverified). Only adds
+      a few changed models and the old HE explosion sound.
 
 ### Track D: Gameplay completeness
 
@@ -197,9 +214,9 @@ Depends on Track A's protocol carrying tracked poses.
 1. **Minecraft code:** removed from the repo (it was ported from decompiled
    Mojang code). Other games come in as third-party mods through the
    connection layer (Track E), never in this repo.
-2. **Old content:** old everything: 2018-era menu, sounds, guns, maps
-   (Workshop has many old map versions), case opening. Research in
-   `docs/research/2018-era.md`.
+2. **Old content:** old everything: the classic Scaleform menu (the
+   screenshots), sounds, guns, maps (Valve's own Workshop snapshots of old
+   map versions), case opening. Research in `docs/research/2018-era.md`.
 3. **Hosting:** both your own PC and the cloud.
 4. **Code signing:** no. Document the SmartScreen click-through.
 5. **Tick rate:** 128 tick.
