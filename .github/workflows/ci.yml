@@ -41,3 +41,4 @@ jobs:
       # Real-data checks against the CS:GO Legacy install on the runner.
       - run: cargo run --profile play -p launcher --locked -- probe de_dust2
       - run: cargo run --profile play -p launcher --locked -- sim de_dust2
+      - run: cargo run --profile play -p server --locked -- de_dust2 --netcheck --bots 2

@@ -26,8 +26,8 @@ Minecraft code need work before multiplayer and public releases.
 | `third_party/minecraftoss` + `minecraft_terrain` (~154k lines) | Ported from decompiled Minecraft, no licence files, hard dependency of `level` and `client`; release zip also bundled Minecraft assets | **Removed** (decision 1) |
 | VR | `TickInput` carries tracked head/hand poses and an aim ray; hitscan uses the aim ray. Cameras are still single-view | **Seam in place, build later** |
 
-Tests: 194 passing tests, with two installed-data tests ignored by default
-(sound-foundation verification, 2026-10-11), mostly on synthetic data.
+Tests: 213 passing tests, with two installed-data tests ignored by default
+(UDP-foundation verification, 2026-10-11), mostly on synthetic data.
 Real-data checks are the `csr probe` / `csr sim` commands.
 
 ## Phase 0: take ownership
@@ -77,6 +77,14 @@ their decisions.
       that movement, recoil, inaccuracy and timers match at 64 and 128.
 - [x] Make `World` cloneable and add a determinism test (same inputs give
       the same state hash).
+
+The A2 foundation now has a Bevy-free Renet UDP session and `csr-server`
+dedicated executable, with reliable control/events, redundant inputs,
+fragmented full snapshots, content compatibility checks and 128-tick
+authority. A two-client Dust II loopback check exercises the installed
+catalog and tracked poses. Rendered-client join/prediction and the other
+items below remain open; see [NETCODE.md](NETCODE.md).
+
 - [ ] Protocol: `TickInput` up (with **optional tracked head/hand poses and a
       separate aim ray**, reserved now for VR), full-state snapshots then
       deltas down. Serialisation via serde + a compact binary codec.
