@@ -33,20 +33,27 @@ Real-data checks are the `csr probe` / `csr sim` commands.
 
 Small and sequential. Everything else builds on it.
 
-- [ ] Install the Rust toolchain on the dev machine; build; run the full
-      verification list; playtest Dust II.
-- [ ] Install detection: search `common\csgo legacy\csgo` (app 4465480)
-      as well as the old 730 beta layout; read `appmanifest_4465480.acf`.
-      Update setup messages, README and PLAYERS.md (they still say
-      "Counter-Strike 2 → Betas → csgo_legacy").
-- [ ] Remove the vendored Minecraft code, the Overworld mode and the bundled
-      Minecraft assets (decision 1).
-- [ ] GitHub Actions: build + `cargo test --workspace` on Windows for every
-      push (the tests need no game data). Cache cargo.
-- [ ] CI guard: fail if the repo contains game asset file types (`.vpk`,
-      `.bsp`, `.vtf`, `.mdl`, `.wav`, `.ogg`, Minecraft asset trees, ...)
-      outside an allowlist.
-- [ ] README/attribution: the fork's owner, and the original author's credit.
+- [x] Install the Rust toolchain on the dev machine; build; run the full
+      verification list (baseline: 178 tests, probe and 10-round sim all
+      pass on the inherited code).
+- [x] Install detection: search `common\csgo legacy\csgo` (app 4465480)
+      as well as the old 730 beta layout. If neither exists, offer to open
+      Steam's installer (`steam://install/4465480`). Setup messages, README
+      and PLAYERS.md updated.
+- [x] Remove the vendored Minecraft code, the Overworld mode and the bundled
+      Minecraft assets (decision 1). Left behind on purpose: the
+      game-agnostic `collision::DynamicWorld` trait, voxel/climbable hooks in
+      `movement` and `GameMode::Special` in `sim`. They are inert on CS maps
+      and are input to the Track E connection layer (keep, generalise or
+      delete there).
+- [x] GitHub Actions: build + `cargo test --workspace` on Windows for every
+      push and PR; tagged pushes build and publish a release zip.
+- [x] CI guard (`tools/check-no-assets.sh`): fails if the repo tracks game
+      asset file types.
+- [x] README/attribution and an Apache-2.0 `LICENSE` file.
+- [x] 128 tick (decision 5): `sim::TICK_RATE` is 128 and tick-counted
+      cadences derive from it. Making it a per-server setting stays in
+      Track A.
 
 ## Phase 1: parallel tracks
 
@@ -56,8 +63,8 @@ Phase 2 and VR depend on this track.
 
 - [ ] Move all gameplay into `sim`: bots, loadout on spawn, skin and knife
       definition swaps, round/economy rules. Clients only send input and draw.
-- [ ] **128 tick**: make the tick rate a server setting (default 128) and
-      check that movement, recoil, inaccuracy and timers are rate-independent.
+- [ ] **Tick rate as a server setting** (128 default since Phase 0); test
+      that movement, recoil, inaccuracy and timers match at 64 and 128.
 - [ ] Make `World` cloneable and add a determinism test (same inputs give
       the same state hash).
 - [ ] Protocol: `TickInput` up (with **optional tracked head/hand poses and a

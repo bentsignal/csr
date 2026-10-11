@@ -11,7 +11,7 @@ fn special_mode_is_solo_without_round_timeouts_and_still_respawns() {
     w.tick=64*60*120;w.step(&[]);
     assert_eq!(w.mode,GameMode::Special);assert_eq!(w.round.round,round);assert!(!w.competitive());assert!(w.player(id).unwrap().alive);
     assert!(!w.events.iter().any(|e|matches!(e,GameEvent::RoundEnd{..}|GameEvent::RoundStart{..})));
-    w.damage_environment(id,1000,"environment");w.tick+=64*10;w.step(&[]);assert!(w.player(id).unwrap().alive);
+    w.damage_environment(id,1000,"environment");w.tick+=TICK_RATE as u64*10;w.step(&[]);assert!(w.player(id).unwrap().alive);
 }
 
 #[test]

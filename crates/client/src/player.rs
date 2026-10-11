@@ -1,4 +1,4 @@
-//! Local player: input → [`sim::World`] at 64 Hz → interpolated camera.
+//! Local player: input → [`sim::World`] at 128 Hz → interpolated camera.
 //! While dead, the camera follows a living teammate (CS:GO's first-person
 //! spectating); left click switches to the next one.
 

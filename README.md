@@ -34,7 +34,7 @@ wall penetration and multiplayer networking are still unfinished.
 | Animations | ✅ classic RLE tracks and CS:GO's newer frame-animation format (incl. its compressed quaternions), sections, `.ani` blocks, include models, weight lists |
 | Collision | ✅ swept-box traces against brushes, displacements and prop hulls |
 | Player movement | ✅ clean-room CS:GO movement: friction, accel, air-strafe, stairs, crouch-jump, stamina, bhop cap |
-| Simulation | ✅ deterministic fixed 64-tick `TickInput → step → Snapshot` |
+| Simulation | ✅ deterministic fixed 128-tick `TickInput → step → Snapshot` |
 | Renderer | ✅ world plus lightmaps, WorldVertexTransition blends, batched props lit by ambient cube + sun, 3D skybox (≈120 fps on an RTX 3070 laptop GPU) |
 | Weapon catalog | ✅ `items_game.txt` → typed `WeaponDefinition`s (prefab inheritance) |
 | Shooting | ✅ fire rate, ammo, reloads, CS:GO inaccuracy model, seeded recoil pattern, range falloff, armor, hit groups (damage matches CS:GO: AK 111 helmet HS, 27 armored body) |

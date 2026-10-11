@@ -25,8 +25,14 @@ use nav::NavMesh;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-/// Ticks between perception updates (64 Hz / 8 ≈ 8 per second).
-const PERCEPTION_INTERVAL: u64 = 8;
+/// Ticks between perception updates (8 per second).
+const PERCEPTION_INTERVAL: u64 = crate::TICK_RATE as u64 / 8;
+/// Ticks between utility-throw decisions (4 per second).
+const UTILITY_INTERVAL: u64 = crate::TICK_RATE as u64 / 4;
+/// Ticks between checks for fire on the planned path (2 per second).
+const FIRE_CHECK_INTERVAL: u64 = crate::TICK_RATE as u64 / 2;
+/// Ticks without movement before a wandering bot turns away (1/8 s).
+const STUCK_TICKS: u32 = crate::TICK_RATE / 8;
 
 #[derive(Clone, Debug, Default)]
 struct Brain {
@@ -639,7 +645,7 @@ impl Bots {
             }
             if brain.throw.is_none() && self.aggressive && !finishing && world.flash_amount(bot.id)<0.2
                 && time>=brain.next_utility && time>=self.team.utility_after.get(&bot.team).copied().unwrap_or(0.0)
-                && (world.tick+bot.id as u64)%16==0 && time-brain.hurt_at>1.5 && bot.plant_start.is_none()
+                && (world.tick+bot.id as u64)%UTILITY_INTERVAL==0 && time-brain.hurt_at>1.5 && bot.plant_start.is_none()
                 && (!brain.visible || (eye.distance(brain.target_pos)>550.0 && bot.health>60
                     && world.players.iter().any(|p|p.id!=bot.id&&p.alive&&p.team==bot.team&&p.eye().distance(eye)<500.0&&world.visible(p.eye(),brain.target_pos)))) {
                 if let Some((def,angles))=choose_utility(world,bot,contact,task) {
@@ -766,10 +772,10 @@ fn wander(bot: &crate::Player, brain: &mut Brain, input: &mut TickInput, rng: &m
     let moved = (bot.movement.origin - brain.last_pos).truncate().length();
     brain.last_pos = bot.movement.origin;
     brain.stuck_ticks = if moved < 0.5 { brain.stuck_ticks + 1 } else { 0 };
-    if brain.stuck_ticks > 8 {
+    if brain.stuck_ticks > STUCK_TICKS {
         brain.wander_yaw += rng.range(90.0, 270.0);
         brain.stuck_ticks = 0;
-    } else if rng.next_f32() < 0.004 {
+    } else if rng.next_f32() < 0.004 * 64.0 / crate::TICK_RATE as f32 {
         brain.wander_yaw += rng.range(-60.0, 60.0);
     }
     brain.yaw = approach(brain.yaw, brain.wander_yaw, turn_rate * 0.5);
@@ -799,7 +805,7 @@ fn follow_path(
         brain.path.clear();
         brain.path_index = 0;
     }
-    if (world.tick+bot.id as u64)%32==0 && brain.path.iter().skip(brain.path_index).take(3).any(|id|mesh.area(*id).is_some_and(|a|world.fire_at(a.center()))) {brain.path.clear();}
+    if (world.tick+bot.id as u64)%FIRE_CHECK_INTERVAL==0 && brain.path.iter().skip(brain.path_index).take(3).any(|id|mesh.area(*id).is_some_and(|a|world.fire_at(a.center()))) {brain.path.clear();}
     let need_path = brain.path_index + 1 >= brain.path.len();
     if need_path {
         let start = mesh.nearest_area(pos).map(|a| a.id);
@@ -1040,7 +1046,7 @@ mod tests {
         assert_eq!(bots.brains[&id].target_pos,seen);
         assert!(!bots.brains[&id].visible);
         assert_eq!(input.buttons & buttons::ATTACK,0);
-        w.tick+=100;
+        w.tick+=100*crate::TICK_RATE as u64/64;
         bots.think(&w);
         assert_eq!(bots.brains[&id].target,None);
     }
