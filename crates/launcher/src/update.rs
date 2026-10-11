@@ -67,7 +67,7 @@ pub fn check_in_background() {
             "CSGO Rewrite update ready",
             &format!("Version {version} has been downloaded. It installs the next time you start the game."),
         ),
-        Ok(None) => eprintln!("CSGO Rewrite {} is up to date.", manager.get_current_version_as_string()),
+        Ok(None) => eprintln!("Update check done (running {}).", manager.get_current_version_as_string()),
         Err(e) => eprintln!("Update check failed (the game works offline): {e}"),
     });
 }
@@ -75,7 +75,8 @@ pub fn check_in_background() {
 /// Downloads the newest release if there is one; `Some(version)` once it is
 /// ready to apply.
 fn download(manager: &UpdateManager) -> Result<Option<String>, velopack::Error> {
-    if manager.get_update_pending_restart().is_some() {
+    if let Some(pending) = manager.get_update_pending_restart() {
+        eprintln!("CSGO Rewrite {} is downloaded and installs at the next start.", pending.Version);
         return Ok(None);
     }
     match manager.check_for_updates()? {
