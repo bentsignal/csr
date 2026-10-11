@@ -10,30 +10,43 @@
 //!     --bots <n>               enemy bots, teammates get n-1 (5)
 //!     --team <t|ct>            side to play (ct)
 //!     --deathmatch             respawn deathmatch instead of competitive rounds
-//! csr sim [map]                headless movement, combat and round checks
+//! csr sim [map] [--tickrate N] headless movement, combat and round checks
 //! csr probe [map]              load every asset a map references and report
 //! csr weapons                  print the weapon catalog from items_game.txt
+//! csr maps                     list maps, including old Workshop versions
+//! csr fetch-map <name|all>     fetch old map versions now (remove-map deletes)
 //! csr cases                    list available local cases
 //! csr give-case <name|id> [N]   add local cases, no keys required
 //! ```
 //! Set `CSR_GAME_DIR` if the CS:GO install is not found automatically.
 
+mod art;
+mod dialog;
+mod mapcmd;
 mod probe;
 mod setup;
 mod simcheck;
+mod steam;
+mod update;
 
 use std::path::PathBuf;
 
 fn main() {
+    // Installer hooks and pending updates; must run before anything else.
+    update::startup();
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.iter().any(|a| a == "--help" || a == "-h") {
         println!("CSGO Rewrite\n\n\
             csr play [map] [options]  Open the main menu (default: de_dust2)\n\
-            csr sim [map]             Check movement, combat and competitive rounds\n\
+            csr sim [map] [--tickrate N]  Check movement, combat and rounds (default 128 tick)\n\
             csr probe [map]           Validate the map's models and textures\n\
             csr setup                 Choose the CS:GO Legacy folder again\n\
             csr find-csgo             Show the CS:GO installs found on this PC\n\
-            csr weapons               List weapons from your CS:GO install\n\n\
+            csr add-to-steam          Add CSGO Rewrite to your Steam library\n\
+            csr weapons               List weapons from your CS:GO install\n\
+            csr maps                  List maps, including old versions (de_dust2_2017)\n\
+            csr fetch-map NAME|all    Download old map versions now\n\
+            csr remove-map NAME|all   Delete downloaded old maps\n\n\
             csr cases                 List local cases and their IDs\n\
             csr give-case NAME [N]    Add N local cases (names may contain spaces)\n\n\
             Play options:\n\
@@ -50,9 +63,8 @@ fn main() {
             Set CSR_GAME_DIR to use a specific CS:GO Legacy install.");
         return;
     }
-    if args.first().is_some_and(|a| a == "find-csgo") {
-        setup::print_detected();
-        return;
+    if let Some(code) = setup::early_command(&args) {
+        std::process::exit(code);
     }
     let setup_only = args.first().is_some_and(|a| a == "setup");
     if let Err(e) = setup::prepare(setup_only) {
@@ -62,6 +74,14 @@ fn main() {
     if setup_only {
         println!("CS:GO Legacy folder: {}", std::env::var("CSR_GAME_DIR").unwrap_or_default());
         return;
+    }
+    if args.first().is_some_and(|a| a == "add-to-steam") {
+        steam::offer(&std::env::current_dir().unwrap_or_default(), true);
+        return;
+    }
+    update::check_in_background();
+    if let Some(code) = mapcmd::run(&args) {
+        std::process::exit(code);
     }
     let (cmd, rest) = match args.first().map(String::as_str) {
         Some("sim") | Some("probe") | Some("play") | Some("weapons") | Some("cases") | Some("give-case") | Some("give-skin") | Some("give-sticker") | Some("stickers") | Some("skins") => (args[0].as_str(), &args[1..]),
@@ -74,7 +94,14 @@ fn main() {
         .unwrap_or_else(|| "de_dust2".into());
     let code = match cmd {
         "probe" => probe::run(&map),
-        "sim" => simcheck::run(&map),
+        "sim" => match flag_value(rest, "--tickrate").map(|v| v.parse::<u32>()) {
+            None if !rest.iter().any(|a| a == "--tickrate") => simcheck::run(&map, sim::DEFAULT_TICK_RATE),
+            Some(Ok(rate)) if sim::TICK_RATE_RANGE.contains(&rate) => simcheck::run(&map, rate),
+            Some(_) | None => {
+                eprintln!("error: --tickrate takes a number from {} to {}", sim::TICK_RATE_RANGE.start(), sim::TICK_RATE_RANGE.end());
+                2
+            }
+        },
         "weapons" => weapons_cmd(),
         "cases" | "give-case" | "give-skin" | "give-sticker" | "stickers" | "skins" => cosmetics_cmd(cmd,rest),
         _ => match parse_play(&map, rest) {
@@ -86,6 +113,11 @@ fn main() {
         },
     };
     std::process::exit(code);
+}
+
+/// The value after `--flag`, if given.
+fn flag_value<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
+    args.iter().position(|a| a == flag).and_then(|i| args.get(i + 1)).map(String::as_str)
 }
 
 fn cosmetics_cmd(cmd:&str,args:&[String])->i32 {

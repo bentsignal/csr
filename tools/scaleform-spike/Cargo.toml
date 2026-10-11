@@ -1,0 +1,37 @@
+[package]
+name = "scaleform-spike"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+publish = false
+description = "Feasibility spike: play CS:GO's Scaleform menu movies from the player's install with Ruffle"
+
+# Standalone on purpose: Ruffle pulls in wgpu 30 (Bevy 0.19 uses wgpu 29) and a
+# large dependency tree, so this tool stays out of the main workspace and CI.
+[workspace]
+
+[dependencies]
+# Ruffle is not on crates.io. Pinned to our fork's `csgo-scaleform` branch:
+# upstream ba92d5af (2026-10-11) plus fixes for ImportAssets inside imported movies,
+# which every CS:GO menu movie relies on (see
+# docs/research/scaleform-spike.md).
+ruffle_core = { git = "https://github.com/bentsignal/ruffle", rev = "bf1f4c8300d705eb6bffcb78bf08ed486d8c90cd", features = ["default_font"] }
+ruffle_render_wgpu = { git = "https://github.com/bentsignal/ruffle", rev = "bf1f4c8300d705eb6bffcb78bf08ed486d8c90cd" }
+# AS2 compiler (used by Ruffle for its own AVM1 globals); compiles our bridge shim.
+rascal = "0.3.5"
+futures = "0.3"
+async-channel = "2.5"
+encoding_rs = "0.8"
+kv = { path = "../../crates/kv" }
+vfs = { path = "../../crates/vfs" }
+image = { version = "0.25", default-features = false, features = ["png"] }
+anyhow = "1"
+url = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3

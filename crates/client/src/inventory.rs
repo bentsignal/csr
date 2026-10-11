@@ -1,7 +1,7 @@
 //! Local base-item collection and persisted practice loadouts.
 use bevy::prelude::*;
 use std::sync::Arc;
-use weapons::{Catalog, Side, WeaponClass, WeaponDefinition};
+use weapons::{Catalog, WeaponClass, WeaponDefinition};
 
 #[derive(Resource, Default)]
 pub struct Collection(pub Arc<Catalog>);
@@ -48,16 +48,10 @@ pub fn visible(def: &WeaponDefinition, filter: usize) -> bool {
         _ => false,
     }
 }
+/// Whether a side may pick this weapon as a practice primary or pistol
+/// (the sim enforces the same rule).
 pub fn allowed(def: &WeaponDefinition, ct: bool) -> bool {
-    let slot = sim::weapon::slot(def);
-    (slot == 1 || slot == 2)
-        && (def.side == Side::Both
-            || def.side
-                == if ct {
-                    Side::CounterTerrorist
-                } else {
-                    Side::Terrorist
-                })
+    sim::loadout::practice_allowed(def, if ct { sim::Team::CounterTerrorist } else { sim::Team::Terrorist })
 }
 impl Inventory {
     pub fn load() -> Self {
@@ -97,6 +91,10 @@ impl Inventory {
         )?;
         std::fs::rename("config/inventory.tmp", "config/inventory.cfg")
     }
+    /// The practice picks in [`sim::Loadout::practice`] order.
+    pub fn practice(&self) -> [Option<String>; 4] {
+        self.loadouts.clone().map(Some)
+    }
     pub fn equip(&mut self, catalog: &Catalog, ct: bool) -> bool {
         let Some(def) = catalog.get(&self.selected).filter(|d| allowed(d, ct)) else {
             return false;
@@ -106,34 +104,6 @@ impl Inventory {
         true
     }
 }
-pub fn apply(world: &mut sim::World, id: sim::PlayerId, inventory: &Inventory) {
-    // Collection choices grant weapons only in the respawning practice mode.
-    if world.mode != sim::GameMode::Deathmatch {
-        return;
-    }
-    let Some(p) = world.player(id) else { return };
-    let ct = p.team == sim::Team::CounterTerrorist;
-    let defs: Vec<_> = (0..2)
-        .filter_map(|slot| {
-            world
-                .catalog
-                .get(&inventory.loadouts[usize::from(ct) * 2 + slot])
-                .filter(|d| allowed(d, ct) && sim::weapon::slot(d) == slot as u8 + 1)
-                .cloned()
-        })
-        .collect();
-    let Some(p) = world.player_mut(id) else {
-        return;
-    };
-    for def in defs {
-        p.weapons
-            .retain(|w| sim::weapon::slot(&w.def) != sim::weapon::slot(&def));
-        p.weapons.push(sim::weapon::WeaponState::new(Arc::new(def)));
-    }
-    p.active = p.best_weapon();
-    p.last_active = p.active;
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -151,15 +121,6 @@ mod tests {
         )
     }
     #[test]
-    fn practice_loadout_cannot_grant_survival_weapons() {
-        let mut world=sim::World::with_catalog(Arc::new(collision::CollisionWorld::new()),catalog());
-        world.set_mode(sim::GameMode::Special,Default::default());
-        let id=world.add_player("survivor",sim::Team::Terrorist);
-        let before:Vec<_>=world.player(id).unwrap().weapons.iter().map(|w|w.def.class_name.clone()).collect();
-        apply(&mut world,id,&Inventory::default());
-        assert_eq!(before,world.player(id).unwrap().weapons.iter().map(|w|w.def.class_name.clone()).collect::<Vec<_>>());
-    }
-    #[test]
     fn team_and_slot_validation_and_deathmatch_application() {
         let catalog = catalog();
         let mut inv = Inventory::default();
@@ -169,51 +130,17 @@ mod tests {
         assert_eq!(inv.loadouts[2], "weapon_awp");
         inv.selected = "weapon_knife".into();
         assert!(!inv.equip(&catalog, true));
-        let mut world =
-            sim::World::with_catalog(Arc::new(collision::CollisionWorld::new()), catalog);
+        // The sim equips the practice pick on a deathmatch respawn.
+        let mut world = sim::World::with_catalog(Arc::new(collision::CollisionWorld::new()), catalog);
         let id = world.add_player("Test", sim::Team::CounterTerrorist);
-        apply(&mut world, id, &inv);
-        assert_eq!(
-            world
-                .player(id)
-                .unwrap()
-                .active_weapon()
-                .unwrap()
-                .def
-                .class_name,
-            "weapon_awp"
-        );
-        // Edited configuration cannot bypass team restrictions or put a pistol in a primary slot.
+        world.set_loadout(id, sim::Loadout { practice: inv.practice(), ..Default::default() });
+        world.respawn(id);
+        assert_eq!(world.player(id).unwrap().active_weapon().unwrap().def.class_name, "weapon_awp");
+        // An edited file cannot put a T pistol in a CT primary slot.
         inv.loadouts[2] = "weapon_glock".into();
-        apply(&mut world, id, &inv);
-        assert!(
-            world
-                .player(id)
-                .unwrap()
-                .weapons
-                .iter()
-                .all(|w| w.def.class_name != "weapon_glock")
-        );
-        world.set_mode(sim::GameMode::Competitive, Default::default());
-        let before: Vec<_> = world
-            .player(id)
-            .unwrap()
-            .weapons
-            .iter()
-            .map(|w| w.def.class_name.clone())
-            .collect();
-        inv.loadouts[2] = "weapon_awp".into();
-        apply(&mut world, id, &inv);
-        assert_eq!(
-            before,
-            world
-                .player(id)
-                .unwrap()
-                .weapons
-                .iter()
-                .map(|w| w.def.class_name.clone())
-                .collect::<Vec<_>>()
-        );
+        world.set_loadout(id, sim::Loadout { practice: inv.practice(), ..Default::default() });
+        world.respawn(id);
+        assert!(world.player(id).unwrap().weapons.iter().all(|w| w.def.class_name != "weapon_glock"));
     }
     #[test]
     fn invalid_config_cannot_supply_paths_or_extra_slots() {

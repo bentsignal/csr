@@ -170,6 +170,15 @@ impl Vfs {
         self.read(path).map(|b| kv::decode_text(&b))
     }
 
+    /// Reads from one named mount without falling back to other sources.
+    /// Map-specific metadata in an archived BSP must not resolve to a newer
+    /// installed map's navigation or radar just because their names match.
+    pub fn read_from(&self, label: &str, path: &str) -> Option<Vec<u8>> {
+        let path = vpk::normalize(path);
+        self.mounts.iter().filter(|m| m.label == label)
+            .find_map(|m| m.mount.read(&path).ok().flatten())
+    }
+
     pub fn exists(&self, path: &str) -> bool {
         let path = vpk::normalize(path);
         self.mounts.iter().any(|m| m.mount.exists(&path))
@@ -249,6 +258,64 @@ pub fn find_csgo_dir() -> Option<PathBuf> {
     }
     None
 }
+
+/// Steam's install folder from the registry (`reg` ships with Windows).
+fn steam_from_registry() -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    for (key, value) in [
+        (r"HKCU\Software\Valve\Steam", "SteamPath"),
+        (r"HKLM\SOFTWARE\WOW6432Node\Valve\Steam", "InstallPath"),
+        (r"HKLM\SOFTWARE\Valve\Steam", "InstallPath"),
+    ] {
+        let Ok(o) = std::process::Command::new("reg").args(["query", key, "/v", value]).output() else { continue };
+        for line in String::from_utf8_lossy(&o.stdout).lines() {
+            if let Some((_, path)) = line.split_once("REG_SZ") {
+                out.push(PathBuf::from(path.trim()));
+            }
+        }
+    }
+    out
+}
+
+/// Steam library folders: registered ones (from every Steam install's
+/// `libraryfolders.vdf`) plus the usual places on every drive. Some may not
+/// exist; callers check for what they need.
+pub fn steam_libraries() -> Vec<PathBuf> {
+    let mut roots = steam_from_registry();
+    roots.push(PathBuf::from(r"C:\Program Files (x86)\Steam"));
+    roots.push(PathBuf::from(r"C:\Program Files\Steam"));
+    for letter in b'C'..=b'Z' {
+        let drive = PathBuf::from(format!("{}:\\", letter as char));
+        if !drive.is_dir() {
+            continue;
+        }
+        for sub in ["SteamLibrary", "Steam", r"Program Files (x86)\Steam", r"Program Files\Steam", r"Games\Steam", r"Games\SteamLibrary", "Games"] {
+            roots.push(drive.join(sub));
+        }
+    }
+    libraries_from(roots)
+}
+
+/// Each root plus the libraries its `steamapps\libraryfolders.vdf` lists.
+pub fn libraries_from(roots: Vec<PathBuf>) -> Vec<PathBuf> {
+    let mut libraries = Vec::new();
+    for root in roots {
+        if let Ok(bytes) = std::fs::read(root.join("steamapps/libraryfolders.vdf")) {
+            if let Some(folders) = kv::parse_bytes(&bytes).ok().as_ref().and_then(|d| d.block("libraryfolders")) {
+                for (_, v) in folders.iter() {
+                    if let Some(p) = v.as_block().and_then(|b| b.str("path")) {
+                        libraries.push(PathBuf::from(p.replace(r"\\", r"\")));
+                    }
+                }
+            }
+        }
+        libraries.push(root);
+    }
+    let mut seen = std::collections::HashSet::new();
+    libraries.retain(|p| seen.insert(p.to_string_lossy().to_lowercase().replace('/', "\\").trim_end_matches('\\').to_string()));
+    libraries
+}
+
 
 #[cfg(test)]
 mod tests {

@@ -15,18 +15,19 @@ Minecraft code need work before multiplayer and public releases.
 | Area | State | Call |
 |---|---|---|
 | Format readers (kv, vpk, vfs, bsp, vtf, vmt, mdl), collision, movement | Solid; cite public docs; tested | **Keep** |
-| `sim`: Bevy-free, fixed 64 Hz, per-player `TickInput`, seeded RNG | Right shape for netcode | **Keep, extend** |
+| `sim`: Bevy-free, fixed tick (128 default, runtime setting), per-player `TickInput`, seeded RNG | Right shape for netcode; owns bots and loadouts since Track A | **Keep, extend** |
 | Rendering, animation, viewmodels, sounds | Dust II validated; other maps unverified | **Keep** |
-| Gameplay glue in `client` (bots, loadouts, skins, overworld rules run in Bevy systems, not `sim`) | Blocks server authority | **Refactor into sim** |
+| Gameplay glue in `client` (bots, loadouts, skins, overworld rules run in Bevy systems, not `sim`) | Moved into `sim` (Track A) | **Done** |
 | Main menu (late-2023-style, rebuilt every change, ~950-line `draw`, relaunches the process to start a match) | Not the 2018 look | **Rewrite** |
 | Cases / inventory / cosmetics data | Works locally | **Keep data, rewrite UI** |
-| Netcode, server, browser | None. `Snapshot`/`TickInput` not serialisable; `Snapshot` lacks weapons, money, round and bomb state; `World` not `Clone` | **Build** |
+| Netcode, server, browser | `World` is `Clone`; `TickInput` and the full replicated state (`WorldState`/`Snapshot`) serialise with serde + postcard. No transport yet | **Build** |
 | Install detection | Misses the current CS:GO Legacy app (4465480, `common\csgo legacy`) | **Fix now** |
 | Distribution | Manual zip; no CI, installer or updater | **Build** |
 | `third_party/minecraftoss` + `minecraft_terrain` (~154k lines) | Ported from decompiled Minecraft, no licence files, hard dependency of `level` and `client`; release zip also bundled Minecraft assets | **Removed** (decision 1) |
-| VR | Single view-angle model from input to hitscan to cameras | **Design seam now, build later** |
+| VR | `TickInput` carries tracked head/hand poses and an aim ray; hitscan uses the aim ray. Cameras are still single-view | **Seam in place, build later** |
 
-Tests: 180 `#[test]`s, mostly sim (55) and client (51), on synthetic data.
+Tests: 185 passing tests, with two installed-data tests ignored by default
+(archive-loader verification, 2026-10-11), mostly on synthetic data.
 Real-data checks are the `csr probe` / `csr sim` commands.
 
 ## Phase 0: take ownership
@@ -61,11 +62,20 @@ Small and sequential. Everything else builds on it.
 
 Phase 2 and VR depend on this track.
 
-- [ ] Move all gameplay into `sim`: bots, loadout on spawn, skin and knife
+Track A1 verified on 2026-10-11 ([PR #9](https://github.com/bentsignal/global-offensive/pull/9)):
+workspace tests pass; release-profile Dust II `probe` and `sim` report zero
+failures, including `sim --tickrate 64`; the rendered client screenshot was
+inspected. Review also fixed firing-snapshot equality after recoil-cache
+population and finish ownership on weapons dropped in their spawn, respawn
+or purchase tick. **Next: A2 transport, server/connect, prediction and lag
+compensation.** Bot brains remain server-only; snapshots alone do not replay
+their decisions.
+
+- [x] Move all gameplay into `sim`: bots, loadout on spawn, skin and knife
       definition swaps, round/economy rules. Clients only send input and draw.
-- [ ] **Tick rate as a server setting** (128 default since Phase 0); test
+- [x] **Tick rate as a server setting** (128 default since Phase 0); test
       that movement, recoil, inaccuracy and timers match at 64 and 128.
-- [ ] Make `World` cloneable and add a determinism test (same inputs give
+- [x] Make `World` cloneable and add a determinism test (same inputs give
       the same state hash).
 - [ ] Protocol: `TickInput` up (with **optional tracked head/hand poses and a
       separate aim ray**, reserved now for VR), full-state snapshots then
@@ -85,16 +95,20 @@ Phase 2 and VR depend on this track.
 
 ### Track B: Distribution and updates
 
-- [ ] **Velopack** (Rust crate + `vpk` packer): `Setup.exe` installs per
+- [x] **Velopack** (Rust crate + `vpk` packer): `Setup.exe` installs per
       user, makes Start-menu shortcuts and applies **delta updates from
       GitHub Releases**. The game checks for updates on launch and applies
       them on restart. Built and published by CI on a version tag.
-- [ ] First run: auto-detect CS:GO Legacy and confirm; folder picker only
-      as a fallback (reuse `setup.rs`).
-- [ ] "Add to Steam" option: write a non-Steam-game entry plus library
+      (`update.rs`, `tools/package-release.ps1`, `release.yml`; player data
+      moved to `%LocalAppData%\CSGO-Rewrite\userdata` so it survives updates.)
+- [x] First run: auto-detect CS:GO Legacy and use it without a question
+      (VISION §1: "nothing else is asked"); if it is missing, install it
+      through Steam and wait for the download, or pick the folder.
+- [x] "Add to Steam" option: write a non-Steam-game entry plus library
       artwork to Steam's `shortcuts.vdf`. A real Steam store app is not an
       option: it needs Steamworks approval for a game built on Valve's IP.
-- [ ] SmartScreen: installers are unsigned (decision 4). The download page
+      (`steam.rs`; artwork drawn in code by `art.rs`.)
+- [x] SmartScreen: installers are unsigned (decision 4). The download page
       and installer readme show the "More info → Run anyway" step.
 - [ ] Release channels: `public` (this repo, clean) and an optional
       **`private`** channel for the owner's friends (see Track E and the
@@ -112,28 +126,36 @@ byte-identical to 2018.
 
 - [ ] New UI layer with an app state machine (menu ↔ loading ↔ match ↔
       server browser) instead of relaunching the process.
-- [ ] **Spike: play Valve's own SWFs with [Ruffle](https://github.com/ruffle-rs/ruffle)**
-      (Rust Flash player, MIT/Apache, wgpu) inside the Bevy app, read from
-      the player's install at runtime. Stub the Scaleform game API the
-      ActionScript calls and feed it our local profile, friends, inventory
-      and server data. If it works, the menu is pixel-exact by construction
-      and nothing of Valve's is shipped. Risks: CS:GO-specific Scaleform
-      extensions, and Ruffle's wgpu version versus Bevy's (fallback: render
-      Ruffle offscreen and copy the frame).
-- [ ] Fallback if the spike fails: a native Bevy layout measured against the
-      references, pulling shapes, bitmaps and fonts out of the SWFs at
-      runtime with the `swf` crate (nothing redrawn or committed).
+- [x] **Spike: play Valve's own SWFs with [Ruffle](https://github.com/ruffle-rs/ruffle)**
+      (Rust Flash player, MIT/Apache, wgpu), read from the player's install
+      at runtime, with the Scaleform game API stubbed. It works: the home
+      screen renders within 6.0/255 mean error of the reference outside web
+      content and avatars. Decision and evidence:
+      [research/scaleform-spike.md](research/scaleform-spike.md). Needs three
+      Ruffle fixes (fork `bentsignal/ruffle`, branch `csgo-scaleform`).
+- [ ] Integrate Ruffle as the menu layer (`crates/scaleform`), bridge the
+      game API to our real data, replace `client::menu`.
+- The fallback (a native Bevy layout built from the SWFs with the `swf`
+  crate) is not needed.
 - [ ] Screenshot-diff harness: render the menu at 1920x1080 and diff it
-      against the reference images.
+      against the reference images. The spike tool has it
+      (`tools/scaleform-spike diff`); move it into the client's screenshot
+      mode with the integration.
 - [ ] Case opening as in `menu-2018-case-opening.png`, with its original
       sounds (`UI.CrateOpen`, `UI.CrateItemScroll`, `UI.CrateDisplay`). Reel
       timing comes from `inventorypanel.swf` running, or frame counts from
       footage. Reuse the existing case and cosmetic data.
 - [ ] Scaleform scoreboard, buy menu and HUD (the movies are in the install).
-- [ ] 2018 maps: fetch Valve's own "Compatibility Version" Workshop snapshots
+- [x] Archive loader: fetch Valve's own "Compatibility Version" Workshop snapshots
       at runtime (map → Workshop ID table in research §1), and also pick up
       any already in `steamapps\workshop\content\730`. Download them
-      straight from Valve's CDN, with no Steam step (decision 6).
+      straight from Valve's CDN, with no Steam step (decision 6). Fourteen
+      pinned archives verified; embedded navigation/overview lookup fixed;
+      all fourteen simulations pass. [PR #15](https://github.com/bentsignal/global-offensive/pull/15).
+- [ ] Offer classic maps in the menu with a visible, cancellable download
+      screen. Resolve the four material dependencies and measure fidelity
+      against the archived maps before calling them ready. Archive years
+      do not establish August 2018 parity. Results: [OLD-MAPS.md](OLD-MAPS.md).
 - [ ] Optional: a 2018 build via `download_depot` with the owner's own
       account, if Steam still serves old manifests (unverified). Only adds
       a few changed models and the old HE explosion sound.
@@ -165,6 +187,13 @@ thing is uncanny. Fidelity is measured, never eyeballed:
 - [ ] The inherited fidelity checklist below (M2–M4).
 
 ### Track E: Content packs and modding
+
+The archive-loader groundwork in [PR #15](https://github.com/bentsignal/global-offensive/pull/15)
+gives listed maps and loaded levels stable `ContentId`s and exposes
+`Level::load_from_vfs` for maps in mounted content packs. A synthetic pack
+loads without a game install. The interrupted pack-format draft remains
+in [PR #12](https://github.com/bentsignal/global-offensive/pull/12); the items
+below are still open.
 
 - [ ] Pack format `.csrpack`: a zip with `pack.toml` (id, version, origin,
       provided `ContentId`s, content hash) plus data definitions and

@@ -12,7 +12,8 @@
 //! spread values are in milliradians.
 
 use crate::rng::Rng;
-use std::sync::Arc;
+use serde::{Deserialize, Serialize};
+use std::sync::{Arc, OnceLock};
 use weapons::{WeaponClass, WeaponDefinition};
 
 /// Degrees of aim punch per unit of `recoil magnitude`.
@@ -24,11 +25,29 @@ pub const VIEW_PUNCH_FRACTION: f32 = 0.5;
 /// Recoil recovery when not firing, in pattern steps per second.
 pub const RECOIL_RECOVERY_RATE: f32 = 12.0;
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Cosmetic { pub serial:u64, pub paint: u32, pub seed: u32, pub wear: f32, pub stattrak:Option<u32>, pub souvenir:Option<u32>, pub stickers:[Option<(u32,f32)>;4] }
 
-#[derive(Clone, Debug)]
+impl Cosmetic {
+    /// Wear values in range (a client's choice is never trusted to be).
+    pub fn sanitized(&self) -> Self {
+        let wear = |w: f32| if w.is_finite() { w.clamp(0.0, 1.0) } else { 0.0 };
+        Self { wear: wear(self.wear), stickers: self.stickers.map(|s| s.map(|(kit, w)| (kit, wear(w)))), ..*self }
+    }
+}
+
+/// Derived data is excluded from both the wire state and state equality.
+/// Reading aim punch may fill the cache without changing the weapon.
+#[derive(Clone, Debug, Default)]
+struct RecoilPatternCache(OnceLock<Arc<Vec<[f32; 2]>>>);
+
+impl PartialEq for RecoilPatternCache {
+    fn eq(&self, _other: &Self) -> bool { true }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct WeaponState {
+    #[serde(with = "crate::state::weapon_def")]
     pub def: Arc<WeaponDefinition>,
     pub cosmetic: Option<Cosmetic>,
     pub cosmetic_owner: Option<crate::PlayerId>,
@@ -53,15 +72,16 @@ pub struct WeaponState {
     pub accuracy_penalty: f32,
     /// Position in the recoil pattern (shots, fractional while recovering).
     pub recoil_index: f32,
-    /// Precomputed cumulative recoil offsets (pitch, yaw) in degrees.
-    pattern: Arc<Vec<[f32; 2]>>,
+    /// Cumulative recoil offsets (pitch, yaw) in degrees, computed from
+    /// `def` on first use (not replicated: both sides derive it).
+    #[serde(skip)]
+    pattern: RecoilPatternCache,
 }
 
 impl WeaponState {
     pub fn new(def: Arc<WeaponDefinition>) -> Self {
         let clip = def.clip_size.max(0);
         let reserve = def.reserve_ammo.max(0);
-        let pattern = Arc::new(recoil_pattern(&def));
         Self {
             def,
             cosmetic: None,
@@ -80,8 +100,18 @@ impl WeaponState {
             last_melee_attack: None,
             accuracy_penalty: 0.0,
             recoil_index: 0.0,
-            pattern,
+            pattern: RecoilPatternCache::default(),
         }
+    }
+
+    /// Swaps the definition (a knife model choice), keeping the state.
+    pub fn set_def(&mut self, def: Arc<WeaponDefinition>) {
+        self.def = def;
+        self.pattern = RecoilPatternCache::default();
+    }
+
+    fn pattern(&self) -> &[[f32; 2]] {
+        self.pattern.0.get_or_init(|| Arc::new(recoil_pattern(&self.def)))
     }
 
     pub fn zoom_levels(&self) -> u8 {
@@ -179,16 +209,20 @@ impl WeaponState {
     /// Current aim punch (pitch, yaw) in degrees from the recoil pattern,
     /// interpolated at the fractional recoil index. Negative pitch is up.
     pub fn aim_punch(&self) -> [f32; 2] {
-        if self.pattern.is_empty() || self.recoil_index <= 0.0 {
+        if self.recoil_index <= 0.0 {
             return [0.0, 0.0];
         }
-        let max = (self.pattern.len() - 1) as f32;
+        let pattern = self.pattern();
+        if pattern.is_empty() {
+            return [0.0, 0.0];
+        }
+        let max = (pattern.len() - 1) as f32;
         let i = self.recoil_index.min(max);
         let lo = i.floor() as usize;
-        let hi = (lo + 1).min(self.pattern.len() - 1);
+        let hi = (lo + 1).min(pattern.len() - 1);
         let t = i - lo as f32;
-        let a = self.pattern[lo];
-        let b = self.pattern[hi];
+        let a = pattern[lo];
+        let b = pattern[hi];
         [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]
     }
 }
@@ -382,7 +416,7 @@ pub fn damage(def: &WeaponDefinition, distance: f32, group: HitGroup, armor: i32
     (health as i32, armor_dmg as i32)
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum HitGroup {
     Head,
     Chest,
@@ -493,8 +527,8 @@ mod tests {
     fn run_reload(w: &mut WeaponState, from: f32, until: f32) {
         let mut t = from;
         while t < until {
-            think(w, t, crate::TICK_DT, false, false);
-            t += crate::TICK_DT;
+            think(w, t, 1.0 / 128.0, false, false);
+            t += 1.0 / 128.0;
         }
     }
 
