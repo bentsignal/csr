@@ -12,7 +12,9 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
-  CARGO_INCREMENTAL: 0
+  # Persistent build cache on the self-hosted runner (outside the checkout,
+  # which is cleaned between runs).
+  CARGO_TARGET_DIR: D:\tools\csr-actions-runner\cargo-target
 
 jobs:
   no-game-assets:
@@ -23,13 +25,17 @@ jobs:
       - run: bash tools/check-no-assets.sh
 
   test:
-    name: Build and test (Windows)
-    runs-on: windows-latest
+    name: Build, test and check against CS:GO Legacy
+    # The owner's PC (see docs/CI.md). Never run code from forks on it.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, csr]
+    defaults:
+      run:
+        shell: powershell
     steps:
       - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      # Tests use synthetic data. Ones that need a CS:GO install are #[ignore]d.
       - run: cargo test --workspace --locked
-      # Same profile as the tests, so it reuses their build.
-      - run: cargo build -p launcher --locked
+      - run: cargo build --profile play -p launcher --locked
+      # Real-data checks against the CS:GO Legacy install on the runner.
+      - run: cargo run --profile play -p launcher --locked -- probe de_dust2
+      - run: cargo run --profile play -p launcher --locked -- sim de_dust2

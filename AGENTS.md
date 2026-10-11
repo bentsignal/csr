@@ -100,4 +100,5 @@ Debug switches: `CSR_WATCH_BOT=n` (camera on bot n), `CSR_AUTOFIRE=1`,
 - Releases are built by `.github/workflows/release.yml` on a `v*` tag, using
   `tools/package-release.ps1` (`Package Release.cmd` runs it locally).
 
+CI runs on the owner's PC (self-hosted runner, real-data checks included): `docs/CI.md`.
 Architecture: `docs/ARCHITECTURE.md`. Multi-game plans: `docs/STITCHING.md`.

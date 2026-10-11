@@ -132,14 +132,28 @@ byte-identical to 2018.
 - [ ] Scaleform scoreboard, buy menu and HUD (the movies are in the install).
 - [ ] 2018 maps: fetch Valve's own "Compatibility Version" Workshop snapshots
       at runtime (map → Workshop ID table in research §1), and also pick up
-      any already in `steamapps\workshop\content\730`. The open question for
-      the owner is whether to download them straight from Valve's CDN or
-      only through a Steam subscription.
+      any already in `steamapps\workshop\content\730`. Download them
+      straight from Valve's CDN, with no Steam step (decision 6).
 - [ ] Optional: a 2018 build via `download_depot` with the owner's own
       account, if Steam still serves old manifests (unverified). Only adds
       a few changed models and the old HE explosion sound.
 
-### Track D: Gameplay completeness
+### Track D: Fidelity and gameplay completeness
+
+The owner's first playtest (2026-10-11): "very far from one-to-one". Many
+sounds are wrong, textures look off, the gameplay feels wrong, and the whole
+thing is uncanny. Fidelity is measured, never eyeballed:
+
+- [ ] **Reference capture harness.** Drive the real CS:GO Legacy (`csgo.exe`
+      on the same machine, `-insecure`, console commands for map, camera
+      position and angles, screenshot) and our `csr play --screenshot
+      --camera` from the same viewpoints, then diff the image pairs. Do the
+      same for sounds (which file and soundscript entry plays for each
+      event) and for movement and weapon numbers (`cl_showpos`, recoil
+      patterns, timings). Every fidelity fix cites a before/after pair.
+- [ ] Fix the gaps the harness finds, worst first: sounds (wrong files,
+      missing events, volume and falloff), materials and lighting, then the
+      feel of movement, recoil, animation and hit registration.
 
 - [ ] Grenades: HE, flash, smoke, molotov/incendiary, decoy.
 - [ ] Wall penetration (surface properties) and hit groups from the models'
@@ -220,6 +234,11 @@ Depends on Track A's protocol carrying tracked poses.
 3. **Hosting:** both your own PC and the cloud.
 4. **Code signing:** no. Document the SmartScreen click-through.
 5. **Tick rate:** 128 tick.
+6. **Old maps:** download Valve's Workshop snapshots straight from the CDN;
+   zero friction beats Steam-sanctioned. If that gets the public version
+   taken down, so be it.
+7. **CI:** runs on the owner's PC (self-hosted runner), not GitHub's
+   machines. See [CI.md](CI.md).
 
 ---
 

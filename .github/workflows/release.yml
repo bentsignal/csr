@@ -12,30 +12,34 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  CARGO_TARGET_DIR: D:\tools\csr-actions-runner\cargo-target
 
 jobs:
-  release:
-    runs-on: windows-latest
+  no-game-assets:
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
       - run: bash tools/check-no-assets.sh
-        shell: bash
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: release
+
+  release:
+    needs: no-game-assets
+    runs-on: [self-hosted, csr]
+    defaults:
+      run:
+        shell: powershell
+    steps:
+      - uses: actions/checkout@v5
       - run: cargo test --workspace --locked
       - name: Package
-        shell: pwsh
         run: ./tools/package-release.ps1
       - name: Publish
         if: startsWith(github.ref, 'refs/tags/')
-        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" dist/CSGO-Rewrite-*-windows-x64.zip \
-            --title "CSGO Rewrite $GITHUB_REF_NAME" --generate-notes
+          $zip = Get-ChildItem dist -Filter 'CSGO-Rewrite-*-windows-x64.zip' | Select-Object -First 1
+          gh release create $env:GITHUB_REF_NAME $zip.FullName --title "CSGO Rewrite $env:GITHUB_REF_NAME" --generate-notes
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Keep the zip (manual runs)
         if: ${{ !startsWith(github.ref, 'refs/tags/') }}
         uses: actions/upload-artifact@v4
