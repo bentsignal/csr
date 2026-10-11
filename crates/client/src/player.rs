@@ -1,4 +1,6 @@
-//! Local player: input → [`sim::World`] at 128 Hz → interpolated camera.
+//! Local player: input → [`sim::World`] at the world's tick rate (128 Hz by
+//! default) → interpolated camera. The sim runs the bots and applies
+//! loadouts itself; this module only turns devices into [`TickInput`]s.
 //! While dead, the camera follows a living teammate (CS:GO's first-person
 //! spectating); left click switches to the next one.
 
@@ -14,9 +16,6 @@ const M_YAW: f32 = 0.022;
 
 #[derive(Resource)]
 pub struct SimWorld(pub sim::World);
-
-#[derive(Resource, Default)]
-pub struct BotBrains(pub sim::bots::Bots);
 
 #[derive(Resource)]
 pub struct LocalPlayer {
@@ -247,7 +246,6 @@ fn move_axes(keys: &ButtonInput<KeyCode>, settings: &crate::settings::Settings) 
 #[allow(clippy::too_many_arguments)]
 pub fn tick(
     mut world: ResMut<SimWorld>,
-    mut bots: ResMut<BotBrains>,
     mut pending: ResMut<crate::effects::PendingEvents>,
     mut local: ResMut<LocalPlayer>,
     real_keys: Res<ButtonInput<KeyCode>>,
@@ -259,7 +257,7 @@ pub fn tick(
     settings: Res<crate::settings::Settings>,
     block: Res<InputBlockFrames>,
     mut poses: ResMut<crate::interpolation::RenderPoses>,
-    inventory: Res<crate::inventory::Inventory>,
+    probe: Res<crate::sound_probe::SoundProbe>,
 ) {
     if front.open() {return;}
     let no_keys = ButtonInput::<KeyCode>::default();
@@ -303,10 +301,10 @@ pub fn tick(
     let buy = if local.pending_buys.is_empty() { Purchase::None } else { local.pending_buys.remove(0) };
     let drop = std::mem::take(&mut local.pending_drop);
 
-    let mut inputs = bots.0.think(&world.0);
+    let mut inputs = Vec::new();
 
     if local.noclip {
-        let dt = sim::TICK_DT;
+        let dt = world.0.dt();
         let (f, r, _) = movement::angle_vectors(glam::Vec3::new(local.pitch, local.yaw, 0.0));
         let speed = if keys.pressed(settings.binds[6]) { 1600.0 } else { 600.0 };
         let wish = f * (forward / 450.0) + r * (side / 450.0);
@@ -314,26 +312,27 @@ pub fn tick(
         local.noclip_pos += wish * speed * dt;
         local.curr_eye = local.noclip_pos;
     } else {
+        let input = probe.input(world.0.time()).unwrap_or(TickInput {
+            view_angles: glam::Vec3::new(local.pitch, local.yaw, 0.0),
+            forward_move: forward,
+            side_move: side,
+            buttons: pressed,
+            weapon_slot: slot,
+            buy,
+            drop,
+            ..Default::default()
+        });
+        if probe.active() {
+            local.pitch = input.view_angles.x;
+            local.yaw = input.view_angles.y;
+        }
         inputs.push((
             local.id,
-            TickInput {
-                view_angles: glam::Vec3::new(local.pitch, local.yaw, 0.0),
-                forward_move: forward,
-                side_move: side,
-                buttons: pressed,
-                weapon_slot: slot,
-                buy,
-                drop,
-                utility: 0,
-            },
+            input,
         ));
     }
     let id = local.id;
-    let alive_before = world.0.player(id).is_some_and(|p| p.alive);
     world.0.step(&inputs);
-    if !alive_before && world.0.player(id).is_some_and(|p| p.alive) {
-        crate::inventory::apply(&mut world.0,id,&inventory);
-    }
     poses.capture(&world.0);
     pending.0.extend(world.0.events.iter().cloned());
     if local.noclip {
@@ -402,7 +401,7 @@ pub fn update_camera(
     let fwd = view_forward(angles.x, angles.y);
     let fov = if local.noclip { 90.0 } else {
         world.0.player(local.view_target()).filter(|p| p.alive).and_then(|p| p.active_weapon())
-            .map_or(90.0, |w| w.rendered_fov(world.0.time() + alpha * sim::TICK_DT))
+            .map_or(90.0, |w| w.rendered_fov(world.0.time() + alpha * world.0.dt()))
     };
     for (mut cam, mut projection, viewmodel) in &mut cams {
         if viewmodel.is_none() {

@@ -44,6 +44,8 @@ struct SeqClip {
     clip: Arc<Clip>,
     weights: Arc<Vec<f32>>,
     left_muzzle: bool,
+    /// Soundscript entries the sequence plays (`AE_CL_PLAYSOUND`), by cycle.
+    sounds: Arc<Vec<(f32, String)>>,
 }
 
 struct WeaponView {
@@ -64,6 +66,13 @@ pub struct ViewModels {
 }
 
 impl ViewModels {
+    /// Animation-event sounds of a weapon's first sequence for an activity
+    /// (`ACT_VM_DRAW`, `ACT_VM_RELOAD`, ...) and that sequence's duration.
+    pub fn activity_sounds(&self, weapon: &str, activity: &str) -> Option<(f32, Arc<Vec<(f32, String)>>)> {
+        let seq = self.weapons.get(weapon)?.clips.get(activity)?.first()?;
+        Some((seq.clip.duration(), seq.sounds.clone()))
+    }
+
     pub fn preview(&self,name:&str)->Option<&SkinnedAsset>{self.weapons.get(name).map(|w|&w.asset)}
     pub fn decoration(&self,path:&str)->Option<&SkinnedAsset>{self.decorations.get(path)}
 }
@@ -149,6 +158,7 @@ pub fn load(
                             clip: Arc::new(clip),
                             weights: Arc::new(weights),
                             left_muzzle: seq.name.to_ascii_lowercase().contains("left"),
+                            sounds: Arc::new(seq.events.iter().filter_map(|e| Some((e.cycle, e.client_sound()?.to_string()))).collect()),
                         });
                     }
                     Err(e) => warn!("{}: {}: {e}", def.view_model, seq.name),
@@ -347,7 +357,7 @@ pub fn update(
     let attack = effects.consume_attack(p.id, &name, &mut state.last_attack_seen);
     // Shotguns that load shell by shell follow the simulation's stage:
     // the start, then one insert per shell, then (below) the finish.
-    let sim_now = world.0.time() + fixed.overstep_fraction() * sim::TICK_DT;
+    let sim_now = world.0.time() + fixed.overstep_fraction() * world.0.dt();
     let shell = w.and_then(|w| w.shell_stage(sim_now));
     let shell_gun = w.is_some_and(|w| w.shell_reload().is_some());
     if reloading && !state.reloading {

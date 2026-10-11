@@ -23,3 +23,6 @@ url = "2"
 tracing = "0.1"
 image = { version = "0.25", default-features = false, features = ["png"] }
 anyhow = "1"
+
+[dev-dependencies]
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

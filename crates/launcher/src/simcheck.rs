@@ -8,15 +8,17 @@
 //!    `gamemode_competitive.cfg` rules; rounds must start and end, bots
 //!    must buy, plant the bomb, and the economy must stay within bounds.
 //!
+//! Every check runs at the requested tick rate (`--tickrate`, default 128).
+//!
 //! Exits non-zero on failure.
 
 use glam::Vec3;
 use movement::buttons;
-use sim::{bots::Bots, GameEvent, GameMode, PlayerId, RoundEndReason, RulesConfig, Team, TickInput, World, TICK_DT, TICK_RATE};
+use sim::{bots::Bots, GameEvent, GameMode, PlayerId, RoundEndReason, RulesConfig, Team, TickInput, World};
 use std::collections::BTreeMap;
 use std::time::Instant;
 
-pub fn run(map: &str) -> i32 {
+pub fn run(map: &str, tick_rate: u32) -> i32 {
     let t = Instant::now();
     let level = match level::Level::load(map, None) {
         Ok(l) => l,
@@ -26,17 +28,21 @@ pub fn run(map: &str) -> i32 {
         }
     };
     println!("loaded {map} in {:.2}s {:?}", t.elapsed().as_secs_f32(), level.timings);
-    println!("weapon catalog: {} weapons", level.catalog.weapons.len());
-    let mut failures = movement_checks(&level);
-    failures += combat_check(&level);
-    failures += round_check(&level);
+    println!("weapon catalog: {} weapons; {tick_rate} tick", level.catalog.weapons.len());
+    let new_world = || {
+        let mut w = World::with_catalog(level.collision.clone(), level.catalog.clone());
+        w.set_tick_rate(tick_rate);
+        w
+    };
+    let mut failures = movement_checks(&level, new_world());
+    failures += combat_check(&level, new_world());
+    failures += round_check(&level, new_world());
     println!("failures: {failures}");
     if failures == 0 { 0 } else { 1 }
 }
 
-fn movement_checks(level: &level::Level) -> i32 {
+fn movement_checks(level: &level::Level, mut world: World) -> i32 {
     let floor_z = level.collision.mins.z;
-    let mut world = World::with_catalog(level.collision.clone(), level.catalog.clone());
     world.load_spawns(&level.bsp);
     println!("spawns: {}", world.spawns.len());
     if world.spawns.is_empty() {
@@ -53,7 +59,8 @@ fn movement_checks(level: &level::Level) -> i32 {
         }
     };
 
-    step(&mut world, &[], TICK_RATE as usize / 2);
+    let half_second = world.ticks(0.5) as usize;
+    step(&mut world, &[], half_second);
     for id in [t_id, ct_id] {
         let p = world.player(id).unwrap();
         println!(
@@ -85,7 +92,7 @@ fn movement_checks(level: &level::Level) -> i32 {
             };
             let mut max_speed: f32 = 0.0;
             let mut stuck_solid = 0;
-            for _ in 0..TICK_RATE * 2 {
+            for _ in 0..world.ticks(2.0) {
                 world.step(&[(id, input)]);
                 ticks += 1;
                 let p = world.player(id).unwrap();
@@ -127,7 +134,7 @@ fn movement_checks(level: &level::Level) -> i32 {
     };
     world.step(&[(t_id, jump)]);
     let mut peak = base_z;
-    for _ in 0..TICK_RATE {
+    for _ in 0..world.ticks(1.0) {
         world.step(&[(t_id, TickInput::default())]);
         ticks += 1;
         peak = peak.max(world.player(t_id).unwrap().movement.origin.z);
@@ -144,18 +151,17 @@ fn movement_checks(level: &level::Level) -> i32 {
     failures
 }
 
-fn combat_check(level: &level::Level) -> i32 {
+fn combat_check(level: &level::Level, mut world: World) -> i32 {
     if level.catalog.weapons.is_empty() {
         println!("combat: FAIL no weapon catalog");
         return 1;
     }
-    let mut world = World::with_catalog(level.collision.clone(), level.catalog.clone());
     world.load_spawns(&level.bsp);
     for i in 0..5 {
         world.add_bot(&format!("T bot {i}"), Team::Terrorist);
         world.add_bot(&format!("CT bot {i}"), Team::CounterTerrorist);
     }
-    let mut bots = Bots::with_skill(0.7).with_nav(level.nav.clone());
+    world.bots = Bots::with_skill(0.7).with_nav(level.nav.clone());
     println!(
         "nav mesh: {}",
         level.nav.as_ref().map_or("none".to_string(), |n| format!("{} areas, {} places", n.areas.len(), n.places.len()))
@@ -167,16 +173,16 @@ fn combat_check(level: &level::Level) -> i32 {
     let mut last: Vec<Vec3> = world.players.iter().map(|p| p.movement.origin).collect();
     let mut stall = vec![0u32; world.players.len()];
     let mut peak_stall = 0u32;
-    for _ in 0..(TICK_RATE * seconds) {
-        let inputs = bots.think(&world);
-        world.step(&inputs);
+    for _ in 0..world.ticks(seconds as f32) {
+        // The world runs its own bots.
+        world.step(&[]);
         for (i, p) in world.players.iter().enumerate() {
             if p.alive {
                 let d = (p.movement.origin - last[i]).length();
                 if d < 64.0 {
                     distance += d;
                 }
-                let commanded = inputs.iter().find(|(id,_)| *id==p.id).is_some_and(|(_,v)| v.forward_move.abs()+v.side_move.abs()>100.0);
+                let commanded = p.last_input.forward_move.abs()+p.last_input.side_move.abs()>100.0;
                 stall[i] = if commanded && d < 0.3 && p.movement.on_ground { stall[i]+1 } else { 0 };
                 peak_stall = peak_stall.max(stall[i]);
             }
@@ -208,7 +214,7 @@ fn combat_check(level: &level::Level) -> i32 {
         "  bots walked {:.0}u total; {shots} shots, {impacts} wall impacts, {hits} hits, {kills} kills ({headshots} headshots); score T {t_kills} - CT {ct_kills}",
         distance
     );
-    println!("  longest continuous blocked movement: {:.2}s", peak_stall as f32 * TICK_DT);
+    println!("  longest continuous blocked movement: {:.2}s", peak_stall as f32 * world.dt());
     let mut failures = 0;
     if distance < 1000.0 {
         println!("  FAIL: bots barely moved");
@@ -218,12 +224,10 @@ fn combat_check(level: &level::Level) -> i32 {
         println!("  FAIL: expected shots, hits and kills");
         failures += 1;
     }
-    let _ = TICK_DT;
     failures
 }
 
-fn round_check(level: &level::Level) -> i32 {
-    let mut world = World::with_catalog(level.collision.clone(), level.catalog.clone());
+fn round_check(level: &level::Level, mut world: World) -> i32 {
     world.load_map(&level.bsp, level.overview().as_deref());
     let rules: RulesConfig = client::competitive_rules(level);
     println!(
@@ -256,7 +260,7 @@ fn round_check(level: &level::Level) -> i32 {
         println!("  FAIL: {not_in_zone} players spawned outside their buy zone");
         failures += 1;
     }
-    let mut bots = Bots::with_skill(0.7).with_nav(level.nav.clone());
+    world.bots = Bots::with_skill(0.7).with_nav(level.nav.clone());
     let target_rounds = 10;
     let t = Instant::now();
     let mut reasons: BTreeMap<String, u32> = BTreeMap::new();
@@ -266,10 +270,9 @@ fn round_check(level: &level::Level) -> i32 {
     let mut detonations=0;
     let mut money_ok = true;
     let mut ticks = 0u64;
-    let max_ticks = (TICK_RATE as f32 * (rules.freeze_time + rules.round_time + rules.c4_timer + rules.restart_delay + 5.0) * target_rounds as f32) as u64;
+    let max_ticks = (world.tick_rate as f32 * (rules.freeze_time + rules.round_time + rules.c4_timer + rules.restart_delay + 5.0) * target_rounds as f32) as u64;
     while rounds < target_rounds && ticks < max_ticks {
-        let inputs = bots.think(&world);
-        world.step(&inputs);
+        world.step(&[]);
         ticks += 1;
         for e in &world.events {
             match e {
@@ -312,7 +315,7 @@ fn round_check(level: &level::Level) -> i32 {
         }
     }
     let elapsed = t.elapsed().as_secs_f32();
-    let game = ticks as f32 * TICK_DT;
+    let game = ticks as f32 * world.dt();
     println!(
         "  {rounds} rounds in {game:.0}s game time ({elapsed:.1}s, {:.0}x real time): {reasons:?}",
         game / elapsed.max(1e-3)

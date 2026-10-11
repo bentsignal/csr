@@ -246,7 +246,10 @@ pub fn sync(
         }
 
         // Hidden in first person: the local player, or whoever we spectate.
-        let visible = p.alive && (p.id != local.view_target() || local.noclip);
+        // CSR_NO_SELF hides our own body from a noclip camera too, so
+        // fidelity captures match the real game's noclip view.
+        let own_hidden = p.id == local.id && std::env::var_os("CSR_NO_SELF").is_some();
+        let visible = p.alive && !own_hidden && (p.id != local.view_target() || local.noclip);
         for (index,e) in c.body.meshes.iter().chain(c.weapon.iter().flat_map(|w| w.1.meshes.iter())).enumerate() {
             let default_glove=p.id==local.id && inventory.active("gloves").is_some() && team_model.asset.model.meshes.get(index).is_some_and(|m|team_model.asset.model.textures[team_model.asset.model.skin_texture(0,m.material)].contains("glove"));
             if let Ok(mut v) = visibility.get_mut(*e) {

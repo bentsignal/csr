@@ -1,26 +1,49 @@
 # Builds a player-ready Windows release of CSGO Rewrite:
-#   dist\CSGO-Rewrite\                        the game folder (exe, launch scripts)
+#   dist\CSGO-Rewrite\                         the unzipped game folder (portable)
 #   dist\CSGO-Rewrite-<version>-windows-x64.zip
+#   dist\velopack\                             the installer and update feed:
+#       CSGORewrite-win-Setup.exe              what players download and run
+#       CSGORewrite-<version>-full.nupkg       full update package
+#       CSGORewrite-<version>-delta.nupkg      delta from the previous release
+#       releases.win.json, RELEASES            the update feed
 #
 # The release is a fresh install with no player data. On first launch the
 # game finds the player's CS:GO Legacy install (CS:GO files are never shipped).
-# CI runs this on every version tag (.github/workflows/release.yml).
+# CI runs this on every version tag (.github/workflows/release.yml) and
+# publishes everything in dist\velopack plus the zip to the GitHub Release.
 #
 # Usage (from the repository root):
-#   powershell -ExecutionPolicy Bypass -File tools\package-release.ps1 [-SkipBuild]
+#   powershell -ExecutionPolicy Bypass -File tools\package-release.ps1
+#     [-SkipBuild]          reuse the last build
+#     [-Version 1.2.3]      package as this version (default: Cargo.toml)
+#     [-NoInstaller]        only the zip (no Velopack installer)
+#     [-DeltaFromGitHub]    fetch the latest published release first, so the
+#                           new release includes a delta update from it
+#     [-Releases <dir>]     installer output folder (default dist\velopack);
+#                           packages already there are used for deltas
 
 param(
-    [switch]$SkipBuild
+    [switch]$SkipBuild,
+    [string]$Version,
+    [switch]$NoInstaller,
+    [switch]$DeltaFromGitHub,
+    [string]$Releases
 )
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
 
-$version = (Select-String -Path Cargo.toml -Pattern '^version\s*=\s*"([^"]+)"' | Select-Object -First 1).Matches[0].Groups[1].Value
+if (-not $Version) {
+    $Version = (Select-String -Path Cargo.toml -Pattern '^version\s*=\s*"([^"]+)"' | Select-Object -First 1).Matches[0].Groups[1].Value
+}
 $name = 'CSGO-Rewrite'
+$packId = 'CSGORewrite'        # Velopack app id: never change it, or installed copies stop updating
+$vpkVersion = '1.2.161'        # keep in step with the velopack crate in crates/launcher/Cargo.toml
+$repoUrl = 'https://github.com/bentsignal/global-offensive'
 $dist = Join-Path $root 'dist'
 $out = Join-Path $dist $name
-$zip = Join-Path $dist "$name-$version-windows-x64.zip"
+$zip = Join-Path $dist "$name-$Version-windows-x64.zip"
+if (-not $Releases) { $Releases = Join-Path $dist 'velopack' }
 
 # --- Build -----------------------------------------------------------------
 $cargo = (Get-Command cargo -ErrorAction SilentlyContinue).Source
@@ -28,7 +51,7 @@ if (-not $cargo) { $cargo = Join-Path $env:USERPROFILE '.cargo\bin\cargo.exe' }
 # crt-static changes every crate's flags, so keep it apart from normal builds.
 $targetDir = if ($env:CARGO_TARGET_DIR) { Join-Path $env:CARGO_TARGET_DIR 'dist' } else { Join-Path $root 'target\dist' }
 if (-not $SkipBuild) {
-    Write-Host "Building release $version (static C runtime, thin LTO). This takes a while..."
+    Write-Host "Building release $Version (static C runtime, thin LTO). This takes a while..."
     $env:RUSTFLAGS = '-C target-feature=+crt-static'
     & $cargo build --release --locked -p launcher --target-dir $targetDir
     if ($LASTEXITCODE -ne 0) { throw 'cargo build failed' }
@@ -41,10 +64,18 @@ if (-not (Test-Path $exe)) { throw "Missing $exe (run without -SkipBuild)" }
 if (Test-Path $out) { Remove-Item $out -Recurse -Force }
 New-Item -ItemType Directory -Force $out | Out-Null
 Copy-Item $exe (Join-Path $out "$name.exe")
+Copy-Item 'docs\PLAYERS.md' (Join-Path $out 'README.txt')
+Copy-Item 'LICENSE' (Join-Path $out 'LICENSE.txt') -ErrorAction SilentlyContinue
 
-# Marks a release: player data goes to userdata\ next to the exe.
+# The installed app gets the same files, minus the portable marker and the
+# .bat launchers (it has Start menu and desktop shortcuts instead).
+$appDir = Join-Path $dist "$name-app"
+if (Test-Path $appDir) { Remove-Item $appDir -Recurse -Force }
+Copy-Item $out $appDir -Recurse
+
+# Marks the zip copy as portable: player data goes to userdata\ next to the exe.
 Set-Content -Encoding ascii (Join-Path $out 'csgo-rewrite.portable') @'
-This file marks a release copy of CSGO Rewrite. Player data (settings, skins,
+This file marks a portable copy of CSGO Rewrite. Player data (settings, skins,
 cases and the CS:GO folder choice) is kept in the userdata folder next to the
 game. Delete userdata to start over as a fresh install.
 '@
@@ -61,12 +92,11 @@ Write-Bat 'Change CSGO Folder.bat' @"
 pause
 "@
 
-Copy-Item 'docs\PLAYERS.md' (Join-Path $out 'README.txt')
-Copy-Item 'LICENSE' (Join-Path $out 'LICENSE.txt') -ErrorAction SilentlyContinue
-
 # Nothing personal goes out.
-foreach ($p in 'userdata', 'config', 'logs') {
-    if (Test-Path (Join-Path $out $p)) { throw "Release unexpectedly contains $p" }
+foreach ($dir in $out, $appDir) {
+    foreach ($p in 'userdata', 'config', 'logs') {
+        if (Test-Path (Join-Path $dir $p)) { throw "Release unexpectedly contains $p" }
+    }
 }
 
 # --- Zip -------------------------------------------------------------------
@@ -77,5 +107,41 @@ $tar = Join-Path $env:SystemRoot 'System32\tar.exe'
 if ($LASTEXITCODE -ne 0) { throw 'Creating the zip failed' }
 $size = [math]::Round((Get-Item $zip).Length / 1MB)
 Write-Host ""
-Write-Host "Release ready: $zip ($size MB)"
-Write-Host "Folder:        $out"
+Write-Host "Zip ready:       $zip ($size MB)"
+
+if ($NoInstaller) { return }
+
+# --- Installer and update packages (Velopack) -------------------------------
+$vpk = (Get-Command vpk -ErrorAction SilentlyContinue).Source
+if (-not $vpk) { $vpk = Join-Path $env:USERPROFILE '.dotnet\tools\vpk.exe' }
+if (-not (Test-Path $vpk)) {
+    Write-Host "Installing the Velopack packer (vpk $vpkVersion, a .NET tool)..."
+    & dotnet tool install -g vpk --version $vpkVersion
+    if ($LASTEXITCODE -ne 0) { throw 'Could not install vpk. Install the .NET 8 SDK or newer, or pass -NoInstaller.' }
+}
+
+# Our own artwork, drawn by the game itself (no image files in the repo).
+$art = Join-Path $dist 'art'
+& (Join-Path $out "$name.exe") art $art
+if ($LASTEXITCODE -ne 0) { throw 'Drawing the artwork failed' }
+
+New-Item -ItemType Directory -Force $Releases | Out-Null
+if ($DeltaFromGitHub) {
+    # The previous full package lets vpk build a small delta update.
+    $tokenArgs = @()
+    if ($env:GH_TOKEN) { $tokenArgs = @('--token', $env:GH_TOKEN) }
+    & $vpk download github --repoUrl $repoUrl -o $Releases @tokenArgs
+    if ($LASTEXITCODE -ne 0) { Write-Host 'No earlier installer release found; this one has no delta.' }
+}
+
+Write-Host "Packing installer $Version..."
+& $vpk pack --packId $packId --packVersion $Version --packDir $appDir --mainExe "$name.exe" `
+    --packTitle 'CSGO Rewrite' --packAuthors 'CSGO Rewrite contributors' `
+    --icon (Join-Path $art 'icon.ico') --splashImage (Join-Path $art 'splash.png') `
+    --runtime win-x64 --shortcuts 'Desktop,StartMenuRoot' --noPortable --outputDir $Releases
+if ($LASTEXITCODE -ne 0) { throw 'vpk pack failed' }
+
+$setup = Join-Path $Releases "$packId-win-Setup.exe"
+if (-not (Test-Path $setup)) { throw "Missing $setup" }
+$size = [math]::Round((Get-Item $setup).Length / 1MB)
+Write-Host "Installer ready: $setup ($size MB)"

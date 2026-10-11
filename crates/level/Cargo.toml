@@ -7,6 +7,8 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
+content.workspace = true
+kv.workspace = true
 glam.workspace = true
 vfs.workspace = true
 bsp.workspace = true
@@ -14,3 +16,7 @@ mdl.workspace = true
 collision.workspace = true
 weapons.workspace = true
 nav.workspace = true
+workshop.workspace = true
+
+[dev-dependencies]
+zip.workspace = true

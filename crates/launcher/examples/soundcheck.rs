@@ -1,8 +1,12 @@
 //! Decodes every weapon sound through the same checks + decoder the client uses.
 fn main() {
+    use rodio::Source;
     let (_, fs) = level::mount_game(None).unwrap();
     let mut paths = fs.archive_paths_with_prefix("sound/weapons/");
     let library = client::audio::SoundLibrary::load(&fs);
+    for name in library.names().filter(|name| matches!(library.category(name), Some(client::audio::Category::Foley | client::audio::Category::Footsteps | client::audio::Category::Suit | client::audio::Category::Impacts))) {
+        paths.extend(library.waves(name).unwrap().iter().cloned());
+    }
     for name in [
         "Flesh.BulletImpact",
         "Player.DamageHeadShot",
@@ -19,6 +23,14 @@ fn main() {
         "BaseGrenade.Explode",
         "Inferno.Start_IncGrenade",
         "SmokeGrenade.Bounce",
+        "CT_Gravel.StepLeft",
+        "CT_Gravel.StepRight",
+        "T_Gravel.StepLeft",
+        "T_Gravel.StepRight",
+        "CT_Default.Suit",
+        "CT_Default.SuitLand",
+        "Default.WalkJump",
+        "Land_Gravel.StepLeft",
     ] {
         let waves = library
             .waves(name)
@@ -34,6 +46,7 @@ fn main() {
     paths.sort();
     paths.dedup();
     let (mut ok, mut skipped, mut failed) = (0, 0, 0);
+    let mut channels = std::collections::BTreeMap::<u16, usize>::new();
     for p in paths
         .iter()
         .filter(|p| p.ends_with(".wav") || p.ends_with(".mp3"))
@@ -47,7 +60,7 @@ fn main() {
                     .with_data(cursor)
                     .build()
                 {
-                    Ok(_) => ok += 1,
+                    Ok(decoder) => { ok += 1; *channels.entry(decoder.channels().get()).or_default() += 1; }
                     Err(e) => {
                         failed += 1;
                         println!("decode failed {p}: {e}");
@@ -58,7 +71,7 @@ fn main() {
         }
     }
     println!(
-        "weapon and feedback sounds: {ok} decodable, {skipped} skipped (unsupported), {failed} would have crashed"
+        "weapon, feedback and foley sounds: {ok} decodable, {skipped} skipped (unsupported), {failed} would have crashed; channels {channels:?}"
     );
     if failed > 0 {
         std::process::exit(1);

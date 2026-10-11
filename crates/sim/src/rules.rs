@@ -8,10 +8,11 @@
 //! defaults are the game's documented defaults (40 s and 7 s).
 
 use crate::Team;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 /// Which rule set the world runs.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum GameMode {
     /// Respawn after a short delay with a fixed loadout, no objectives.
     Deathmatch,
@@ -21,7 +22,7 @@ pub enum GameMode {
     Competitive,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RulesConfig {
     pub freeze_time: f32,
     /// Seconds after the freeze time ends during which buying is allowed.
@@ -155,7 +156,7 @@ impl RulesConfig {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Phase {
     /// Players are frozen at spawn and may buy.
     Freeze,
@@ -167,7 +168,7 @@ pub enum Phase {
     MatchOver,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RoundEndReason {
     TargetBombed,
     BombDefused,
@@ -201,7 +202,7 @@ impl RoundEndReason {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RoundState {
     pub phase: Phase,
     /// 1-based round number within the match.
@@ -272,7 +273,7 @@ impl RoundState {
 }
 
 /// A buy request, carried in [`crate::TickInput`].
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Purchase {
     #[default]
     None,

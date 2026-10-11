@@ -300,6 +300,7 @@ pub fn update(
                 pos,
                 normal,
                 surface,
+                ..
             } => {
                 if budget < 4 || level.0.collision.is_sky(surface) {
                     continue;

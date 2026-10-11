@@ -25,6 +25,16 @@ sim.workspace = true
 level.workspace = true
 client.workspace = true
 weapons.workspace = true
+workshop.workspace = true
+# Installer and self-update from GitHub Releases (keep in step with the
+# `vpk` packer version in tools/package-release.ps1).
+velopack = "=1.2.161"
+# Original Steam library artwork and the app icon, drawn in code.
+png = "0.18"
+crc32fast = "1"
+
+[build-dependencies]
+png = "0.18"
 
 [dev-dependencies]
 rodio = { version = "0.22", default-features = false, features = ["hound", "mp3"] }

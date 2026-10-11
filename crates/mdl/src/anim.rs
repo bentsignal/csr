@@ -76,6 +76,66 @@ pub struct Sequence {
     /// Per-bone weights (0 = the sequence leaves that bone alone, keeping
     /// whatever pose it already had). Empty means all ones.
     pub bone_weights: Vec<f32>,
+    /// Animation events (sounds, muzzle flashes, ...) at points in the cycle.
+    pub events: Vec<Event>,
+}
+
+/// One `mstudioevent_t`: something the game does when the sequence's cycle
+/// passes `cycle` (0..1), e.g. `AE_CL_PLAYSOUND` with a soundscript entry
+/// as `options`.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Event {
+    pub cycle: f32,
+    /// Numeric id for old-style events (5004 = client sound); 0 when named.
+    pub id: i32,
+    /// Event name for new-style events (`AE_CL_PLAYSOUND`), else empty.
+    pub name: String,
+    pub options: String,
+}
+
+impl Event {
+    /// The soundscript entry this event plays on the client, if any.
+    pub fn client_sound(&self) -> Option<&str> {
+        let sound = self.name.eq_ignore_ascii_case("AE_CL_PLAYSOUND") || self.id == 5004;
+        (sound && !self.options.is_empty()).then_some(self.options.as_str())
+    }
+}
+
+/// Size of `mstudioevent_t`: cycle, event, type, options[64], szeventindex.
+const EVENT_STRIDE: usize = 80;
+/// `type` flag: the event is identified by name (szeventindex), not number.
+const NEW_EVENT_STYLE: i32 = 1 << 10;
+
+fn read_events(r: &R, seq: usize) -> io::Result<Vec<Event>> {
+    let count = r.i32(seq + 24)?;
+    if !(0..=256).contains(&count) { return Err(invalid("invalid animation event count")); }
+    let count = count as usize;
+    let index = r.i32(seq + 28)?;
+    let start = seq.checked_add_signed(index as isize).ok_or_else(|| invalid("invalid animation event offset"))?;
+    let end = start.checked_add(count * EVENT_STRIDE).ok_or_else(|| invalid("animation events overflow"))?;
+    if end > r.0.len() { return Err(invalid("animation events past end")); }
+    let mut out = Vec::with_capacity(count);
+    for i in 0..count {
+        let o = start + i * EVENT_STRIDE;
+        let kind = r.i32(o + 8)?;
+        let name_ofs = r.i32(o + 76)?;
+        let name = if kind & NEW_EVENT_STYLE != 0 && name_ofs != 0 {
+            r.cstr(o.checked_add_signed(name_ofs as isize).ok_or_else(|| invalid("invalid event name offset"))?)?
+        } else {
+            String::new()
+        };
+        let cycle = r.f32(o)?;
+        if !cycle.is_finite() || !(0.0..=1.0).contains(&cycle) { return Err(invalid("invalid animation event cycle")); }
+        let options = &r.0[o + 12..o + 76];
+        let options_end = options.iter().position(|b| *b == 0).unwrap_or(options.len());
+        out.push(Event {
+            cycle,
+            id: if name.is_empty() { r.i32(o + 4)? } else { 0 },
+            name,
+            options: String::from_utf8_lossy(&options[..options_end]).into_owned(),
+        });
+    }
+    Ok(out)
 }
 
 impl Sequence {
@@ -160,6 +220,7 @@ pub(crate) fn read_sequences(r: &R, count: usize, index: usize, num_bones: usize
             fade_in: r.f32(o + 104)?,
             fade_out: r.f32(o + 108)?,
             bone_weights,
+            events: read_events(r, o).unwrap_or_default(),
         });
     }
     Ok(out)
@@ -556,6 +617,38 @@ pub fn decode_clip(mdl: &[u8], ani: Option<&[u8]>, blocks: &[(u32, u32)], desc: 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn animation_sound_events_support_old_and_named_styles() {
+        let mut data = vec![0u8; 240];
+        data[24..28].copy_from_slice(&2i32.to_le_bytes());
+        data[28..32].copy_from_slice(&32i32.to_le_bytes());
+        data[32..36].copy_from_slice(&0.25f32.to_le_bytes());
+        data[36..40].copy_from_slice(&5004i32.to_le_bytes());
+        data[44..108].fill(b'x'); // Exactly 64 bytes, without a terminator.
+        data[112..116].copy_from_slice(&0.75f32.to_le_bytes());
+        data[120..124].copy_from_slice(&NEW_EVENT_STYLE.to_le_bytes());
+        data[124..132].copy_from_slice(b"ClipIn\0\0");
+        data[188..192].copy_from_slice(&80i32.to_le_bytes());
+        data[192..208].copy_from_slice(b"AE_CL_PLAYSOUND\0");
+        let events = read_events(&R(&data), 0).unwrap();
+        assert_eq!(events[0].client_sound().unwrap(), "x".repeat(64));
+        assert_eq!(events[1].client_sound(), Some("ClipIn"));
+        assert_eq!(events[1].cycle, 0.75);
+    }
+
+    #[test]
+    fn malformed_event_offsets_and_cycles_return_errors() {
+        let mut data = vec![0u8; 112];
+        data[24..28].copy_from_slice(&1i32.to_le_bytes());
+        data[28..32].copy_from_slice(&(-1i32).to_le_bytes());
+        assert!(read_events(&R(&data), 0).is_err());
+        data[28..32].copy_from_slice(&32i32.to_le_bytes());
+        data[32..36].copy_from_slice(&f32::NAN.to_le_bytes());
+        assert!(read_events(&R(&data), 0).is_err());
+        data[32..36].copy_from_slice(&0.5f32.to_le_bytes());
+        assert!(read_events(&R(&data[..111]), 0).is_err());
+    }
 
     #[test]
     fn rle_runs_and_repeats() {

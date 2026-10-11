@@ -53,22 +53,33 @@ wall penetration and multiplayer networking are still unfinished.
 
 ## Download and play (Windows)
 
-1. Have CS:GO Legacy installed in Steam ("Counter-Strike: Global Offensive"
-   in your library). If it isn't, the game offers to open Steam's installer.
-2. Download `CSGO-Rewrite-<version>-windows-x64.zip` from this repository's
-   **Releases** page and unzip it anywhere.
-3. Run **Play CSGO.bat**. If Windows says "Windows protected your PC", click
-   **More info → Run anyway** (the game is not code-signed). The first launch
-   finds CS:GO Legacy in your Steam libraries and asks you to confirm it.
-   The choice is remembered; **Change CSGO Folder.bat** asks again.
+**[Download the installer](https://github.com/bentsignal/global-offensive/releases/latest/download/CSGORewrite-win-Setup.exe)**
+(this link always gets the newest version; share it as is).
 
-Every release starts as a fresh install. Your progress is saved in
-`userdata\` next to the game. CS:GO files are never included; they are read
-from your own install. See [docs/PLAYERS.md](docs/PLAYERS.md) (shipped as
-`README.txt`). A self-updating installer is on the roadmap.
+1. Run `CSGORewrite-win-Setup.exe`. Windows says "Windows protected your
+   PC" because the game is not code-signed: click **More info**, then
+   **Run anyway**. It installs for your Windows account in seconds (no
+   admin), adds desktop and Start menu shortcuts and starts the game.
+2. The game finds CS:GO Legacy ("Counter-Strike: Global Offensive" in your
+   Steam library) by itself. If it is not installed, click **Install it with
+   Steam**; the game starts by itself when the download is done.
+3. Optionally, let it add CSGO Rewrite to your Steam library, with its own
+   artwork.
 
-To build a release yourself, run **Package Release.cmd**. It writes
-`dist\CSGO-Rewrite-<version>-windows-x64.zip`.
+After that the game **updates itself**: each start checks GitHub Releases in
+the background, downloads a new version while you play and installs it the
+next time you start the game. Your progress is kept in
+`%LocalAppData%\CSGO-Rewrite\userdata` and survives updates. CS:GO files are
+never included; they are read from your own install. See
+[docs/PLAYERS.md](docs/PLAYERS.md) (shipped as `README.txt`).
+
+No install wanted? Each release also has a portable
+`CSGO-Rewrite-<version>-windows-x64.zip`: unzip it and run **Play CSGO.bat**.
+It keeps its data in `userdata\` next to the game and does not update itself.
+
+To build a release yourself, run **Package Release.cmd**. It writes the zip
+and, using the [Velopack](https://velopack.io) packer (`vpk`, a .NET tool it
+installs if needed), the installer and update packages in `dist\velopack`.
 
 ## Building from source: what you need
 
