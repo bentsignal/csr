@@ -1511,7 +1511,7 @@ dependencies = [
 
 [[package]]
 name = "bsp"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "glam",
  "kv",
@@ -1619,7 +1619,7 @@ dependencies = [
 
 [[package]]
 name = "client"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "bevy",
  "bsp",
@@ -1661,7 +1661,7 @@ dependencies = [
 
 [[package]]
 name = "collision"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "bsp",
  "glam",
@@ -1742,7 +1742,7 @@ dependencies = [
 
 [[package]]
 name = "content"
-version = "0.2.0"
+version = "0.3.0"
 
 [[package]]
 name = "convert_case"
@@ -2874,11 +2874,11 @@ dependencies = [
 
 [[package]]
 name = "kv"
-version = "0.2.0"
+version = "0.3.0"
 
 [[package]]
 name = "launcher"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "bsp",
  "client",
@@ -2909,7 +2909,7 @@ checksum = "bbd2bcb4c963f2ddae06a2efc7e9f3591312473c50c6685e1f298068316e66fe"
 
 [[package]]
 name = "level"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "bsp",
  "collision",
@@ -3040,7 +3040,7 @@ dependencies = [
 
 [[package]]
 name = "mdl"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "glam",
 ]
@@ -3082,7 +3082,7 @@ dependencies = [
 
 [[package]]
 name = "movement"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "collision",
  "glam",
@@ -3150,7 +3150,7 @@ dependencies = [
 
 [[package]]
 name = "nav"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "glam",
 ]
@@ -4260,7 +4260,7 @@ checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
 
 [[package]]
 name = "sim"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "bsp",
  "collision",
@@ -4895,7 +4895,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "vfs"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "kv",
  "lzma-rs",
@@ -4905,18 +4905,18 @@ dependencies = [
 
 [[package]]
 name = "vmt"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "kv",
 ]
 
 [[package]]
 name = "vpk"
-version = "0.2.0"
+version = "0.3.0"
 
 [[package]]
 name = "vtf"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "bcdec_rs",
 ]
@@ -5020,7 +5020,7 @@ checksum = "323f4da9523e9a669e1eaf9c6e763892769b1d38c623913647bfdc1532fe4549"
 
 [[package]]
 name = "weapons"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "content",
  "kv",
