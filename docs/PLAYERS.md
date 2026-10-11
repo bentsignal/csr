@@ -11,27 +11,41 @@ contains no Valve game files: it reads your own CS:GO Legacy install.
 WHAT YOU NEED
 -------------
 * Windows 10 or 11 (64-bit) and a graphics card with DirectX 12 or Vulkan.
-* CS:GO Legacy, installed through Steam. It is called "Counter-Strike:
-  Global Offensive" in your Steam library. If you do not have it installed,
-  the game offers to open Steam's installer for you.
+* Steam, with CS:GO Legacy installed. It is called "Counter-Strike: Global
+  Offensive" in your Steam library and is free. If it is not installed, the
+  game offers to install it for you.
 
 
-FIRST LAUNCH
-------------
-1. Unzip this folder anywhere (for example your Desktop).
-2. Double-click "Play CSGO.bat".
-   Windows may say "Windows protected your PC". Click "More info", then
-   "Run anyway". (The game is not code-signed.)
-3. The game finds CS:GO Legacy on your PC and asks "Use this folder?".
-   Click Yes. If it is not installed, click Yes to open Steam's installer,
-   let it download, then start the game again.
-4. That's it. The game remembers the folder from then on.
+INSTALLING
+----------
+1. Download CSGORewrite-win-Setup.exe (from the link you were sent, or the
+   Releases page: github.com/bentsignal/global-offensive/releases).
+   If your browser asks whether to keep the file, choose Keep.
+2. Run it. Windows may say "Windows protected your PC". Click "More info",
+   then "Run anyway". (The game is not code-signed, so Windows does not
+   recognise it yet. You only see this once.)
+3. It installs in a few seconds, without asking for an administrator,
+   puts "CSGO Rewrite" on your desktop and in the Start menu, and starts.
+4. The game finds CS:GO Legacy by itself. If it is not installed, click
+   "Install it with Steam" and then Install in Steam. Leave the CSGO Rewrite
+   window open: the game starts by itself when the download is done.
+5. It asks once whether to add CSGO Rewrite to your Steam library. If you
+   say yes, it shows up next to your other games with its own artwork. If
+   Steam is open it restarts Steam to do this; pick "Not now" if you are in
+   a Steam call, and it asks again next time.
+
+
+UPDATES
+-------
+Automatic. Each time you start the game it checks for a new version in the
+background. When there is one, it downloads while you play and you get a
+notification. It installs the next time you start the game, which takes a
+few seconds. You never need to download the installer again.
 
 
 PLAYING
 -------
-Play CSGO.bat           the main menu; pick a map and mode
-Change CSGO Folder.bat  pick the CS:GO Legacy folder again
+Start CSGO Rewrite from the desktop, the Start menu or Steam.
 
 WASD move, Space jump, Ctrl crouch, Shift walk, LMB fire, R reload,
 E use/defuse, 1-5 / Q / wheel weapons, G drop, B buy menu, Tab scoreboard,
@@ -41,16 +55,39 @@ Esc menu. Plant: select the bomb (5) in a bomb site and hold LMB.
 YOUR DATA
 ---------
 Everything the game saves (settings, skins, cases, the CS:GO folder choice)
-is in the "userdata" folder next to the game. Delete that folder to reset
-to a fresh install. Copy it to keep your progress when updating.
+is in this folder (paste it into the File Explorer address bar):
+
+    %LocalAppData%\CSGO-Rewrite\userdata
+
+It is kept when the game updates and when you uninstall it. Delete it to
+start over. If you played an unzipped copy before installing, the first
+start copies your progress from it (from your Desktop, Downloads or
+Documents).
+
+
+UNINSTALLING
+------------
+Windows Settings > Apps > Installed apps > CSGO Rewrite > Uninstall. This
+also takes it out of your Steam library (close Steam first for that).
+
+
+PORTABLE ZIP (NO INSTALL)
+-------------------------
+Each release also has a CSGO-Rewrite-<version>-windows-x64.zip. Unzip it
+anywhere and double-click "Play CSGO.bat" ("Change CSGO Folder.bat" picks
+the CS:GO Legacy folder again). It keeps its data in the "userdata" folder
+next to the game and does not update itself.
 
 
 TROUBLESHOOTING
 ---------------
 * "That folder holds Counter-Strike 2": you picked Counter-Strike 2. Pick
   the csgo.exe in Steam's "csgo legacy" folder instead.
-* The console window shows what the game is doing; if something fails, the
-  message there (or in the pop-up) says why.
+* To choose a different CS:GO Legacy folder, or to add the game to Steam
+  after saying no, press Win+R and run one of:
+      "%LocalAppData%\CSGORewrite\current\CSGO-Rewrite.exe" setup
+      "%LocalAppData%\CSGORewrite\current\CSGO-Rewrite.exe" add-to-steam
+* If something fails, a message says why.
 
 
 CREDITS AND LICENCES

@@ -1,7 +1,10 @@
 name: Release
 
 # Push a tag like v0.2.0 to build and publish a release. The version in the tag
-# must match `version` in Cargo.toml.
+# must match `version` in Cargo.toml. The release carries the installer
+# (CSGORewrite-win-Setup.exe), the full and delta update packages and the
+# update feed (releases.win.json) that installed copies read, plus the
+# portable zip.
 on:
   push:
     tags: ['v*']
@@ -30,9 +33,17 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - run: Add-Content $env:GITHUB_PATH "$env:USERPROFILE\.cargo\bin"
+      - run: Add-Content $env:GITHUB_PATH "$env:USERPROFILE\.dotnet\tools"
+      - name: Velopack packer (vpk, same version as the velopack crate)
+        run: |
+          dotnet tool update -g vpk --version 1.2.161
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - run: cargo test --workspace --locked
       - name: Package
-        run: ./tools/package-release.ps1
+        env:
+          GH_TOKEN: ${{ github.token }}
+        # -DeltaFromGitHub fetches the previous release so updates can be deltas.
+        run: ./tools/package-release.ps1 -DeltaFromGitHub
       - name: Publish
         if: startsWith(github.ref, 'refs/tags/')
         env:
@@ -41,9 +52,15 @@ jobs:
           $zip = Get-ChildItem dist -Filter 'CSGO-Rewrite-*-windows-x64.zip' | Select-Object -First 1
           gh release create $env:GITHUB_REF_NAME $zip.FullName --title "CSGO Rewrite $env:GITHUB_REF_NAME" --generate-notes
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Keep the zip (manual runs)
+          # Adds Setup.exe, the update packages and the feed to the same release.
+          vpk upload github --repoUrl "https://github.com/$env:GITHUB_REPOSITORY" --token $env:GH_TOKEN `
+            --outputDir dist\velopack --tag $env:GITHUB_REF_NAME --releaseName "CSGO Rewrite $env:GITHUB_REF_NAME" --merge --publish
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Keep the zip and installer (manual runs)
         if: ${{ !startsWith(github.ref, 'refs/tags/') }}
         uses: actions/upload-artifact@v4
         with:
           name: csgo-rewrite-windows-x64
-          path: dist/CSGO-Rewrite-*-windows-x64.zip
+          path: |
+            dist/CSGO-Rewrite-*-windows-x64.zip
+            dist/velopack/*
