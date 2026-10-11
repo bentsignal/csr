@@ -15,7 +15,7 @@
 //! walks away from it.
 
 use crate::coords::to_bevy;
-use bevy::audio::{AudioPlayer, AudioSinkPlayback, AudioSource, PlaybackSettings, SpatialAudioSink, SpatialListener, SpatialScale, Volume};
+use bevy::audio::{AudioPlayer, AudioSink, AudioSinkPlayback, AudioSource, PlaybackSettings, SpatialAudioSink, SpatialListener, SpatialScale, Volume};
 use bevy::prelude::*;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -48,6 +48,8 @@ pub enum Category {
     Ui,
     /// Player voice lines (`vo/`).
     Voice,
+    /// Map ambience from soundscapes (`ambient/`, the "Ambient" mix group).
+    Ambient,
     /// Everything else: attenuated by soundlevel.
     Plain,
 }
@@ -63,6 +65,8 @@ impl Category {
             Category::Impacts => 0.29,
             Category::Announcer | Category::Ui => 0.58,
             Category::Voice => 0.29,
+            // soundmixers.txt: Ambient 0.25 against Weapons1 0.7.
+            Category::Ambient => 0.36,
             Category::Plain => 1.6,
         }
     }
@@ -77,6 +81,7 @@ impl Category {
             Category::Impacts => 0.16,
             Category::Announcer | Category::Ui => 0.58 * 0.57,
             Category::Voice => 0.29 * 0.57,
+            Category::Ambient => 0.36 * 0.57,
             Category::Plain => 1.08,
         };
         measured / RODIO_FRONT
@@ -367,6 +372,8 @@ fn parse_entry(b: &kv::Block) -> Option<Entry> {
         Category::Ui
     } else if first.contains("/vo/") || first.starts_with("vo/") {
         Category::Voice
+    } else if first.starts_with("ambient/") {
+        Category::Ambient
     } else {
         Category::Plain
     };
@@ -602,12 +609,88 @@ impl SoundLibrary {
 }
 
 /// Follows the listener and re-applies distance gains to world sounds.
+/// A volume ramp (soundscape cross-fades). Fading out despawns at the end.
+#[derive(Component, Clone, Copy)]
+pub struct Fade {
+    start: f64,
+    duration: f32,
+    out: bool,
+}
+
+impl Fade {
+    fn value(&self, clock: f64) -> f32 {
+        let t = (((clock - self.start) as f32) / self.duration.max(0.001)).clamp(0.0, 1.0);
+        if self.out { 1.0 - t } else { t }
+    }
+}
+
+/// A sound described directly (not by a soundscript entry), as soundscapes
+/// do: one wave with its own volume, pitch and soundlevel.
+#[derive(Clone, Copy, Debug)]
+pub struct Raw {
+    pub at: Option<glam::Vec3>,
+    pub volume: f32,
+    pub pitch: f32,
+    pub soundlevel: f32,
+    pub looping: bool,
+    /// Fade in over this many seconds (0 = start at full volume).
+    pub fade_in: f32,
+}
+
+impl SoundLibrary {
+    /// Plays one wave file as ambience; returns the entity so the caller
+    /// can fade it out later.
+    pub fn play_raw(&mut self, commands: &mut Commands, fs: &vfs::Vfs, sources: &mut Assets<AudioSource>, wave: &str, raw: Raw) -> Option<Entity> {
+        let path = strip_flags(wave);
+        let handle = self.source(fs, sources, &path)?;
+        let category = Category::Ambient;
+        let base = PlaybackSettings { mode: if raw.looping { bevy::audio::PlaybackMode::Loop } else { bevy::audio::PlaybackMode::Despawn }, ..PlaybackSettings::DESPAWN }
+            .with_speed((raw.pitch / 100.0).clamp(0.25, 4.0));
+        let fade = (raw.fade_in > 0.0).then_some(Fade { start: self.clock, duration: raw.fade_in, out: false });
+        let start = if fade.is_some() { 0.0 } else { 1.0 };
+        if self.log {
+            info!("ambient {:.3} {path} vol {:.2} at {:?}", self.clock, raw.volume, raw.at);
+        }
+        let mut e = match raw.at {
+            Some(pos) => {
+                let emitter = Emitter { pos: to_bevy(pos), base: raw.volume * category.field(), category, soundlevel: raw.soundlevel, gunfire: None };
+                let gain = emitter.gain(emitter.pos.distance(self.listener)) * start;
+                commands.spawn((
+                    AudioPlayer(handle),
+                    SoundGain(emitter.base),
+                    emitter,
+                    base.with_volume(Volume::Linear(gain * self.master_volume)).with_spatial(true).with_spatial_scale(SpatialScale::new(PAN_ONLY_SCALE)),
+                    Transform::from_translation(emitter.pos),
+                ))
+            }
+            None => {
+                let gain = raw.volume * category.near(false);
+                commands.spawn((AudioPlayer(handle), SoundGain(gain), base.with_volume(Volume::Linear(gain * start * self.master_volume))))
+            }
+        };
+        if let Some(fade) = fade {
+            e.insert(fade);
+        }
+        Some(e.id())
+    }
+
+    /// Fades a sound out over `seconds`, then despawns it.
+    pub fn fade_out(&self, commands: &mut Commands, entity: Entity, seconds: f32) {
+        if let Ok(mut e) = commands.get_entity(entity) {
+            e.insert(Fade { start: self.clock, duration: seconds, out: true });
+        }
+    }
+}
+
+#[allow(clippy::type_complexity)]
 pub fn update(
+    mut commands: Commands,
     time: Res<Time>,
     mut sounds: ResMut<SoundLibrary>,
     mut listener: ResMut<Listener>,
     ears: Query<&GlobalTransform, With<SpatialListener>>,
-    mut spatial: Query<(&Emitter, &mut SpatialAudioSink)>,
+    mut spatial: Query<(&Emitter, Option<&Fade>, &mut SpatialAudioSink)>,
+    mut faded: Query<(Entity, &SoundGain, &Fade, Option<&mut AudioSink>, Has<Emitter>)>,
 ) {
     sounds.clock += time.delta_secs_f64();
     if let Some(ear) = ears.iter().next() {
@@ -615,9 +698,19 @@ pub fn update(
     }
     sounds.listener = listener.0;
     let master = sounds.master_volume;
-    for (emitter, mut sink) in &mut spatial {
-        let gain = emitter.gain(emitter.pos.distance(listener.0));
+    let clock = sounds.clock;
+    for (emitter, fade, mut sink) in &mut spatial {
+        let gain = emitter.gain(emitter.pos.distance(listener.0)) * fade.map_or(1.0, |f| f.value(clock));
         sink.set_volume(Volume::Linear(gain * master));
+    }
+    for (entity, gain, fade, sink, is_spatial) in &mut faded {
+        if fade.out && fade.value(clock) <= 0.0 {
+            commands.entity(entity).try_despawn();
+            continue;
+        }
+        if let (Some(mut sink), false) = (sink, is_spatial) {
+            sink.set_volume(Volume::Linear(gain.0 * fade.value(clock) * master));
+        }
     }
 }
 
