@@ -5,6 +5,11 @@
 //! another Bevy app (the planned multi-game "stitch").
 
 pub mod audio;
+pub mod session;
+pub mod frontend;
+mod frontend_inventory;
+mod frontend_game;
+mod frontend_options;
 pub mod foley;
 mod sound_probe;
 pub mod surfaces;
@@ -57,6 +62,7 @@ use player::{LocalPlayer, PlayerCamera, SimWorld};
 use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::Instant;
+use session::AppState;
 
 const BOT_NAMES_T: [&str; 8] = ["Albert", "Crusher", "Dragomir", "Gunner", "Kasper", "Minh", "Rock", "Vitaliy"];
 const BOT_NAMES_CT: [&str; 8] = ["Brian", "Darryl", "Elliot", "Frank", "Harold", "Jon", "Pete", "Walt"];
@@ -114,6 +120,23 @@ struct PendingLevel(Mutex<Option<level::Level>>);
 #[derive(Resource)]
 pub struct LoadedLevel(pub level::Level);
 
+/// Install data used by the front end without loading a map.
+#[derive(Resource)]
+pub struct GameData {
+    pub game_dir: PathBuf,
+    pub vfs: std::sync::Arc<vfs::Vfs>,
+    pub catalog: std::sync::Arc<weapons::Catalog>,
+}
+
+impl GameData {
+    fn load() -> Result<Self, String> {
+        let (game_dir, vfs) = level::mount_game(None).map_err(|e| e.to_string())?;
+        let items = vfs.read_string("scripts/items/items_game.txt").ok_or("items_game.txt not found")?;
+        let catalog = std::sync::Arc::new(weapons::Catalog::from_items_game(&items).map_err(|e| e.to_string())?);
+        Ok(Self { game_dir, vfs: std::sync::Arc::new(vfs), catalog })
+    }
+}
+
 #[derive(Resource, Clone)]
 struct Options(ClientOptions);
 
@@ -124,14 +147,27 @@ impl Plugin for CsgoPlugin {
         embedded_asset!(app, "shaders/world.wgsl");
         app.add_plugins(menu_blur::PostProcessPlugin)
             .add_plugins(MaterialPlugin::<WorldMaterial>::default())
+            .init_state::<AppState>()
+            .init_resource::<session::Loader>()
+            .add_observer(session::own_entity::<Transform>)
+            .add_observer(session::own_entity::<Node>)
+            .add_observer(session::own_entity::<bevy::audio::AudioPlayer>)
             .insert_resource(Time::<Fixed>::from_hz(sim::DEFAULT_TICK_RATE as f64))
-            .add_systems(Startup, (spawn_level, ui_assets::load, case_ui::setup, hud::setup, hud_art::setup, scope::setup, feedback::setup, utility_fx::setup, menu_scene::setup, menu::setup, hud::mark_roots).chain())
+            .add_systems(Startup, (ui_assets::load, case_ui::setup, menu_scene::setup, menu::setup, frontend::setup).chain())
+            .add_systems(Update, (frontend::update, frontend::input, frontend::cancel_loading).chain())
+            .add_systems(Update, (menu::apply, audio::update).chain().after(player::update_camera))
+            .add_systems(OnEnter(AppState::Loading), session::begin_load)
+            .add_systems(OnExit(AppState::Loading), session::cancel_load)
+            .add_systems(OnEnter(AppState::Match), (spawn_level, hud::setup, hud_art::setup, scope::setup, feedback::setup, utility_fx::setup, hud::mark_roots, session::match_ready).chain())
+            .add_systems(OnExit(AppState::Match), session::clear_match)
+            .add_systems(Update, (session::request_load, session::poll_load).chain())
             .add_systems(
                 RunFixedMainLoop,
                 (menu::input, buymenu::input, player::look, player::grab_cursor).chain()
+                    .run_if(in_state(AppState::Match))
                     .in_set(bevy::app::RunFixedMainLoopSystems::BeforeFixedMainLoop),
             )
-            .add_systems(Update, player::update_camera)
+            .add_systems(Update, player::update_camera.run_if(in_state(AppState::Match)))
             .init_resource::<interpolation::RenderPoses>()
             .init_resource::<tracers::Muzzles>()
             .init_resource::<skin_finish::SkinTextures>()
@@ -154,7 +190,6 @@ impl Plugin for CsgoPlugin {
             .add_systems(
                 Update,
                 (
-                    (menu::apply, audio::update).chain(),
                     (skin_finish::record, skin_finish::sync_loadout, effects::process).chain(),
                     (feedback::update, utility_fx::update).chain(),
                     sky::follow_camera,
@@ -168,34 +203,32 @@ impl Plugin for CsgoPlugin {
                     buymenu::draw,
                     scoreboard::draw,
                     hud_art::update.run_if(|| std::env::var_os("CSR_NO_HUD").is_none()),
-                    (menu_scene::update,skin_finish::update,decorations::update).chain(),
-                    (menu::draw, case_ui::input, case_ui::draw, case_ui::animate).chain(),
-                    menu::cards,
-                    menu::hover,
+                    (menu_scene::update.run_if(frontend::native_enabled),skin_finish::update,decorations::update).chain(),
+                    (menu::draw, case_ui::input, case_ui::draw, case_ui::animate).chain().run_if(frontend::native_enabled),
+                    menu::cards.run_if(frontend::native_enabled),
+                    menu::hover.run_if(frontend::native_enabled),
                     (ui_assets::fonts, hud::menu_visibility).chain(),
                     hud::update.run_if(|| std::env::var_os("CSR_NO_HUD").is_none()),
                 )
                     .chain()
+                    .run_if(in_state(AppState::Match))
                     .after(player::update_camera),
             )
-            .add_systems(FixedUpdate, (player::tick, foley::update).chain());
+            .add_systems(FixedUpdate, (player::tick, foley::update).chain().run_if(in_state(AppState::Match)));
     }
 }
 
 /// Loads the map and runs the game window. Returns a process exit code.
 pub fn run(opts: ClientOptions) -> i32 {
-    let t = Instant::now();
-    let level = match level::Level::load(&opts.map, None) {
-        Ok(l) => l,
+    let data = match GameData::load() {
+        Ok(data) => data,
         Err(e) => {
             eprintln!("error: {e}");
             return 1;
         }
     };
-    info!("loaded {} in {:.2}s {:?}", opts.map, t.elapsed().as_secs_f32(), level.timings);
-
     let video_settings = settings::Settings::load();
-    let relaunch = menu::Relaunch::default();
+    let load_request = menu::LoadRequest::default();
     let mut app = App::new();
     app.add_plugins(
         DefaultPlugins
@@ -217,12 +250,19 @@ pub fn run(opts: ClientOptions) -> i32 {
     .add_plugins(FrameTimeDiagnosticsPlugin::default())
     .insert_resource(ClearColor(Color::srgb(0.55, 0.68, 0.85)))
     .insert_resource(LevelInfo { name: opts.map.clone() })
-    .insert_resource(PendingLevel(Mutex::new(Some(level))))
+    .insert_resource(PendingLevel(Mutex::new(None)))
+    .insert_resource(inventory::Collection(data.catalog.clone()))
+    .insert_resource(cosmetics::Catalog::load(&data.vfs).unwrap_or_else(|e| { error!("Cosmetics: {e}"); default() }))
+    .insert_resource(audio::SoundLibrary::load(&data.vfs))
+    .insert_resource(localize::Localization::load(&data.vfs))
+    .insert_resource(data)
     .insert_resource(Options(opts.clone()))
     .insert_resource(video_settings)
-    .insert_resource(relaunch.clone())
+    .insert_resource(load_request.clone())
     .insert_resource(player::InputEnabled(opts.screenshot.is_none()))
-    .add_plugins(CsgoPlugin);
+    .add_plugins(CsgoPlugin)
+    .insert_state(if std::env::var("CSR_TEST_MENU").as_deref() == Ok("main") { AppState::Menu }
+        else if opts.direct || opts.screenshot.is_some() { AppState::Loading } else { AppState::Menu });
     if opts.screenshot.is_some() {
         // Automated runs never have focus; don't let the unfocused 60 Hz
         // throttle skew frame-rate readings.
@@ -230,20 +270,10 @@ pub fn run(opts: ClientOptions) -> i32 {
             focused_mode: bevy::winit::UpdateMode::Continuous,
             unfocused_mode: bevy::winit::UpdateMode::Continuous,
         })
-        .add_systems(Update, smoke_test);
+        .add_systems(Update, smoke_test.run_if(in_state(AppState::Match)))
+        .add_systems(Update, frontend::capture_menu.run_if(in_state(AppState::Menu)));
     }
     let result = app.run();
-    let next = relaunch.0.lock().unwrap().take();
-    if let Some(next) = next {
-        // A new world also gets fresh GPU assets, simulation and event state.
-        // Restart after the old window/event loop is closed (winit cannot
-        // create a second event loop in this process on every platform).
-        let exe = match std::env::current_exe() { Ok(p)=>p, Err(e)=>{eprintln!("Cannot locate launcher: {e}");return 1;} };
-        let mut command=std::process::Command::new(exe);
-        command.args(["play", &next.map, "--direct", "--bots", &next.bots.to_string(), "--team", if next.terrorist{"t"}else{"ct"}]);
-        if next.deathmatch { command.arg("--deathmatch"); }
-        return match command.spawn() {Ok(_)=>0,Err(e)=>{eprintln!("Could not launch map: {e}");1}};
-    }
     match result { AppExit::Success=>0,AppExit::Error(code)=>code.get() as i32 }
 
 }

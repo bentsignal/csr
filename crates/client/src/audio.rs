@@ -329,7 +329,8 @@ fn spatial_normalization(channels: u16) -> f32 { 1.0 / channels.max(1) as f32 }
 
 fn strip_flags(wave: &str) -> String {
     let w = wave.trim_start_matches(|c: char| "*#@><^)}$!?&~`+%(".contains(c));
-    format!("sound/{}", w.replace('\\', "/").to_ascii_lowercase())
+    let normalized = w.replace('\\', "/").to_ascii_lowercase();
+    format!("sound/{}", normalized.split('/').filter(|part| !part.is_empty()).collect::<Vec<_>>().join("/"))
 }
 
 fn parse_entry(b: &kv::Block) -> Option<Entry> {
@@ -660,9 +661,16 @@ impl SoundLibrary {
     /// Plays one wave file as ambience; returns the entity so the caller
     /// can fade it out later.
     pub fn play_raw(&mut self, commands: &mut Commands, fs: &vfs::Vfs, sources: &mut Assets<AudioSource>, wave: &str, raw: Raw) -> Option<Entity> {
+        self.play_wave(commands, fs, sources, wave, raw, Category::Ambient)
+    }
+
+    pub fn play_ui_wave(&mut self, commands: &mut Commands, fs: &vfs::Vfs, sources: &mut Assets<AudioSource>, wave: &str) -> Option<Entity> {
+        self.play_wave(commands, fs, sources, wave, Raw { at: None, volume: 1.0, pitch: 100.0, soundlevel: 0.0, looping: false, fade_in: 0.0 }, Category::Ui)
+    }
+
+    fn play_wave(&mut self, commands: &mut Commands, fs: &vfs::Vfs, sources: &mut Assets<AudioSource>, wave: &str, raw: Raw, category: Category) -> Option<Entity> {
         let path = strip_flags(wave);
         let (handle, channels) = self.source(fs, sources, &path)?;
-        let category = Category::Ambient;
         let base = PlaybackSettings { mode: if raw.looping { bevy::audio::PlaybackMode::Loop } else { bevy::audio::PlaybackMode::Despawn }, ..PlaybackSettings::DESPAWN }
             .with_speed((raw.pitch / 100.0).clamp(0.25, 4.0));
         let fade = (raw.fade_in > 0.0).then_some(Fade { start: self.clock, duration: raw.fade_in, out: false });
@@ -704,7 +712,7 @@ impl SoundLibrary {
 #[allow(clippy::type_complexity)]
 pub fn update(
     mut commands: Commands,
-    time: Res<Time>,
+    time: Res<Time<Real>>,
     mut sounds: ResMut<SoundLibrary>,
     mut listener: ResMut<Listener>,
     ears: Query<&GlobalTransform, With<SpatialListener>>,
@@ -737,6 +745,11 @@ pub fn update(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn movie_wave_paths_resolve_doubled_separators() {
+        assert_eq!(super::strip_flags(r"UI\\buttonrollover.wav"), "sound/ui/buttonrollover.wav");
+        assert_eq!(super::strip_flags("*weapons/ak47/ak47_01.wav"), "sound/weapons/ak47/ak47_01.wav");
+    }
     use super::*;
 
     #[test]

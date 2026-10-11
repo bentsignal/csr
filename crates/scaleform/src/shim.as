@@ -74,6 +74,61 @@ _global.csrResolve = function(path) {
     return o;
 };
 
+_global.csrProbeBudget = 0;
+_global.csrProbeTrace = function(kind, path, typeName) {
+    if (_global.csrProbeBudget > 0) {
+        _global.csrProbeBudget = _global.csrProbeBudget - 1;
+        csrEI.call("csr.Probe" + kind, path, typeName);
+    }
+};
+_global.csrProbeProperty = function(target, key, value, path) {
+    target.addProperty(key, function() {
+        _global.csrProbeTrace("Read", path, typeof value);
+        return value;
+    }, null);
+};
+_global.csrProbeRecord = function(value, path, depth) {
+    if (typeof value != "object" || value == null || depth > 8) {
+        return value;
+    }
+    var result = value instanceof Array ? [] : new Object();
+    for (var key in value) {
+        if (value.hasOwnProperty(key)) {
+            var childPath = path + "." + key;
+            var child = _global.csrProbeRecord(value[key], childPath, depth + 1);
+            _global.csrProbeProperty(result, key, child, childPath);
+        }
+    }
+    if (value instanceof Array) {
+        result.length = value.length;
+    }
+    result.__resolve = function(key) {
+        _global.csrProbeTrace("Missing", path + "." + key, "undefined");
+        return undefined;
+    };
+    return result;
+};
+
+// Explicit probe-only observation of absent runtime member lookups. Existing
+// resolvers are preserved, and absent members still resolve to undefined.
+_global.csrDiagnostics = new Object();
+_global.csrDiagnostics.observeTarget = function(path) {
+    var target = _global.csrResolve(path);
+    if (target == undefined) {
+        return false;
+    }
+    var previousResolver = target.__resolve;
+    _global.csrProbeBudget = 128;
+    target.__resolve = function(key) {
+        _global.csrProbeTrace("Missing", path + "." + key, "undefined");
+        if (typeof previousResolver == "function") {
+            return previousResolver.apply(this, [key]);
+        }
+        return undefined;
+    };
+    return true;
+};
+
 csrEI.addCallback("csrCall", null, function(path, fname, args) {
     var o = _global.csrResolve(path);
     if (o == undefined) {
@@ -85,6 +140,14 @@ csrEI.addCallback("csrCall", null, function(path, fname, args) {
     }
     if (args == undefined) {
         args = [];
+    }
+    var i = 0;
+    while (i < args.length) {
+        if (typeof args[i] == "object" && args[i] != null && args[i].__csrProbe === true) {
+            _global.csrProbeBudget = 128;
+            args[i] = _global.csrProbeRecord(args[i].value, path + "." + fname + ".arg" + i, 0);
+        }
+        i = i + 1;
     }
     return _global.csrToHost(f.apply(o, args));
 });
@@ -98,6 +161,19 @@ csrEI.addCallback("csrSet", null, function(path, name, value) {
 
 csrEI.addCallback("csrGet", null, function(path) {
     return _global.csrToHost(_global.csrResolve(path));
+});
+
+// Read-only runtime API discovery for integration diagnostics. Exposes names
+// and value types, never function bodies or movie bytecode.
+csrEI.addCallback("csrInspect", null, function(path) {
+    var o = _global.csrResolve(path);
+    var entries = [];
+    for (var key in o) {
+        var t = typeof o[key];
+        var primitive = t == "number" || t == "boolean" || t == "string" || o[key] == null;
+        entries.push(key + ":" + t + (primitive ? "=" + String(o[key]).substr(0, 256) : ""));
+    }
+    return entries;
 });
 
 csrEI.addCallback("csrRequestElement", null, function(elementId, apiName) {

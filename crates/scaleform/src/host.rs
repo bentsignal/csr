@@ -17,7 +17,7 @@ use ruffle_core::backend::navigator::{
     ErrorResponse, NavigationMethod, NavigatorBackend, NullExecutor, NullSpawner, OwnedFuture,
     Request, SuccessResponse, create_fetch_error,
 };
-use ruffle_core::events::{KeyDescriptor, KeyLocation, LogicalKey, NamedKey, PhysicalKey, MouseButton as RuffleButton, MouseWheelDelta, PlayerEvent};
+use ruffle_core::events::{KeyDescriptor, KeyLocation, LogicalKey, NamedKey, PhysicalKey, MouseButton as RuffleButton, MouseWheelDelta, PlayerEvent, TextControlCode};
 use ruffle_core::external::{ExternalInterfaceProvider, Value as ExtValue};
 use ruffle_core::indexmap::IndexMap;
 use ruffle_core::loader::Error as LoadError;
@@ -47,6 +47,7 @@ type Error = String;
 /// `resource/flash/`.
 struct Files {
     vfs: vfs::Vfs,
+    engine: Rc<RefCell<Box<dyn Engine>>>,
     loc: Rc<Localization>,
     cache: RefCell<HashMap<String, Rc<Vec<u8>>>>,
     stats: RefCell<RewriteStats>,
@@ -69,6 +70,11 @@ impl Files {
         if rel.starts_with("img://avatar_") {
             return Some(Rc::new(solid_png(64, 64, [58, 64, 72])));
         }
+        if rel.starts_with("img://") {
+            // Native inventory images are addressed by opaque item ids, not
+            // installation paths. The engine resolves only ids it owns.
+            return self.engine.try_borrow_mut().ok()?.image(&rel).map(Rc::new);
+        }
         if rel.split(['/', '\\']).any(|part| part == "..") || rel.contains(':') || rel.starts_with('/') {
             return None;
         }
@@ -87,6 +93,22 @@ impl Files {
         } else {
             raw
         };
+        let data = if rel == "single-player.swf" {
+            let result = self.vfs.read("resource/flash/sharedlib.swf")
+                .ok_or_else(|| anyhow::anyhow!("sharedlib.swf missing"))
+                .and_then(|library| rewrite::symbol_names(&library))
+                .and_then(|names| {
+                    let mut maps: Vec<_> = names.iter().filter(|name| name.starts_with("map-") && name.ends_with("-overall")).map(String::as_str).collect();
+                    maps.sort_unstable();
+                    rewrite::import_symbols(&data, "sharedlib.swf", &maps)
+                });
+            match result { Ok(data) => data, Err(error) => { tracing::warn!("scaleform: shared map symbols: {error}"); data } }
+        } else if rel == "optionsmenu.swf" {
+            match rewrite::import_symbols(&data, "sharedlib.swf", &["slide-control_number", "btn-main-master"]) {
+                Ok(data) => data,
+                Err(error) => { tracing::warn!("scaleform: shared option symbols: {error}"); data }
+            }
+        } else { data };
         let data = Rc::new(data);
         self.cache.borrow_mut().insert(rel, data.clone());
         Some(data)
@@ -183,7 +205,7 @@ impl NavigatorBackend for InstallNavigator {
 /// Routes every proxied call: bookkeeping, the game's [`Engine`], then the
 /// built-in defaults.
 struct Dispatcher {
-    engine: Box<dyn Engine>,
+    engine: Rc<RefCell<Box<dyn Engine>>>,
     loc: Rc<Localization>,
     calls: Calls,
     events: EventSender<Event>,
@@ -203,7 +225,7 @@ impl Dispatcher {
             }
             _ => {}
         }
-        if let Some(v) = self.engine.call(object, method, args, &mut self.calls) {
+        if let Some(v) = self.engine.borrow_mut().call(object, method, args, &mut self.calls) {
             return v;
         }
         if method == "Translate" {
@@ -275,7 +297,8 @@ impl Host {
         cache.insert(SHIM_NAME.to_string(), Rc::new(compile_shim()?));
         let gfxfontlib = rewrite::build_gfxfontlib(&fontlib, &mapping).map_err(|e| e.to_string())?;
         cache.insert("gfxfontlib.swf".to_string(), Rc::new(gfxfontlib));
-        let files = Rc::new(Files { vfs: fs, loc: loc.clone(), cache: RefCell::new(cache), stats: Default::default() });
+        let engine = Rc::new(RefCell::new(engine));
+        let files = Rc::new(Files { vfs: fs, engine: engine.clone(), loc: loc.clone(), cache: RefCell::new(cache), stats: Default::default() });
 
         let dispatcher = Rc::new(RefCell::new(Dispatcher {
             engine,
@@ -329,6 +352,15 @@ impl Host {
 
     pub fn root_ready(&self) -> bool {
         self.dispatcher.borrow().root_ready
+    }
+
+    pub fn inspect(&mut self, path: &str) {
+        let value = self.call_as("csrInspect", vec![ExtValue::String(path.into())]);
+        let properties = match value {
+            ExtValue::List(values) => values.into_iter().filter_map(|v| match v { ExtValue::String(s) => Some(s), _ => None }).collect(),
+            _ => vec![],
+        };
+        let _ = self.dispatcher.borrow().events.send(Event::Inspected { path: path.into(), properties });
     }
 
     /// Defines `_global.CScaleformComponent_*` for every component the movies use.
@@ -387,6 +419,9 @@ impl Host {
             Command::RequestElement(element) => {
                 self.call_as("csrRequestElement", vec![ExtValue::String(element.clone()), ExtValue::String(element)]);
             }
+            Command::Set { path, property, value } => {
+                self.call_as("csrSet", vec![ExtValue::String(path), ExtValue::String(property), to_ext(value)]);
+            }
         }
     }
 
@@ -428,6 +463,11 @@ impl Host {
                 return;
             }
             Input::Char(c) => PlayerEvent::TextInput { codepoint: c },
+            Input::Edit { name, control, shift } => {
+                let Some(code) = text_control(&name, control, shift) else { return; };
+                PlayerEvent::TextControl { code }
+            }
+            Input::Focus(focused) => if focused { PlayerEvent::FocusGained } else { PlayerEvent::FocusLost },
             _ => return,
         };
         self.player.lock().unwrap().handle_event(event);
@@ -461,6 +501,35 @@ impl Host {
         let image = renderer.capture_frame().ok_or("no frame captured")?;
         Ok((image.width(), image.height(), image.into_raw()))
     }
+}
+
+fn text_control(name: &str, control: bool, shift: bool) -> Option<TextControlCode> {
+    use TextControlCode::*;
+    Some(match (name, control, shift) {
+        ("KEY_A", true, _) => SelectAll,
+        ("KEY_BACKSPACE", true, _) => BackspaceWord,
+        ("KEY_BACKSPACE", false, _) => Backspace,
+        ("KEY_DELETE", true, _) => DeleteWord,
+        ("KEY_DELETE", false, _) => Delete,
+        ("KEY_ENTER", _, _) => Enter,
+        ("KEY_LEFT", false, false) => MoveLeft,
+        ("KEY_LEFT", true, false) => MoveLeftWord,
+        ("KEY_LEFT", false, true) => SelectLeft,
+        ("KEY_LEFT", true, true) => SelectLeftWord,
+        ("KEY_RIGHT", false, false) => MoveRight,
+        ("KEY_RIGHT", true, false) => MoveRightWord,
+        ("KEY_RIGHT", false, true) => SelectRight,
+        ("KEY_RIGHT", true, true) => SelectRightWord,
+        ("KEY_HOME", false, false) => MoveLeftLine,
+        ("KEY_HOME", true, false) => MoveLeftDocument,
+        ("KEY_HOME", false, true) => SelectLeftLine,
+        ("KEY_HOME", true, true) => SelectLeftDocument,
+        ("KEY_END", false, false) => MoveRightLine,
+        ("KEY_END", true, false) => MoveRightDocument,
+        ("KEY_END", false, true) => SelectRightLine,
+        ("KEY_END", true, true) => SelectRightDocument,
+        _ => return None,
+    })
 }
 
 // The Scaleform callbacks are separate from Flash's Key state/listeners.
@@ -515,6 +584,15 @@ fn compile_shim() -> Result<Vec<u8>, Error> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn editing_distinguishes_caret_selection_and_word_deletion() {
+        use ruffle_core::events::TextControlCode::*;
+        assert_eq!(super::text_control("KEY_LEFT", true, true), Some(SelectLeftWord));
+        assert_eq!(super::text_control("KEY_BACKSPACE", true, false), Some(BackspaceWord));
+        assert_eq!(super::text_control("KEY_HOME", false, false), Some(MoveLeftLine));
+        assert_eq!(super::text_control("KEY_A", false, false), None);
+    }
+
     #[test]
     fn flash_keys_preserve_navigation_and_key_location() {
         use ruffle_core::events::{LogicalKey, NamedKey, KeyLocation};

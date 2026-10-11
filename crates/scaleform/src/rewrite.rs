@@ -175,6 +175,80 @@ fn merge_imports(data: &[u8], stats: &mut RewriteStats) -> Result<Vec<u8>> {
     Ok(out)
 }
 
+/// Scaleform made shared-library exports available to dynamic attachMovie
+/// calls even when the authoring tool omitted a static import. Bind only
+/// the requested missing names, with collision-free local character IDs.
+/// This changes public symbol metadata; movie instructions remain untouched.
+pub(crate) fn import_symbols(data: &[u8], library: &str, names: &[&str]) -> Result<Vec<u8>> {
+    let buf = swf::decompress_swf(data)?;
+    let mut used = std::collections::HashSet::new();
+    let mut imported = std::collections::HashSet::new();
+    symbol_metadata(&buf.data, &mut used, &mut imported)?;
+    let missing: Vec<_> = names.iter().filter(|name| !imported.contains(**name)).collect();
+    if missing.is_empty() { return Ok(data.to_vec()); }
+    let mut next = used.iter().copied().max().unwrap_or(0);
+    let mut body = library.as_bytes().to_vec();
+    body.push(0);
+    body.extend_from_slice(&u16::try_from(missing.len())?.to_le_bytes());
+    for name in missing {
+        next = next.checked_add(1).context("SWF character ID space exhausted")?;
+        body.extend_from_slice(&next.to_le_bytes());
+        body.extend_from_slice(name.as_bytes());
+        body.push(0);
+    }
+    let mut tags = Vec::new();
+    push_tag(&mut tags, 57, &body);
+    tags.extend_from_slice(&buf.data);
+    let tags = merge_imports(&tags, &mut RewriteStats::default())?;
+    let mut header = buf.header.swf_header().clone();
+    header.compression = swf::Compression::None;
+    let mut out = Vec::new();
+    swf::write::write_swf_raw_tags(&header, &tags, &mut out)?;
+    Ok(out)
+}
+
+fn symbol_metadata(data: &[u8], used: &mut std::collections::HashSet<u16>, imported: &mut std::collections::HashSet<String>) -> Result<()> {
+    for tag in split_tags(data)? {
+        // Public SWF Define* records begin with their character ID.
+        if matches!(tag.code, 2 | 6 | 7 | 10 | 11 | 14 | 20 | 21 | 22 | 32 | 33 | 34 | 35 | 36 | 37 | 39 | 46 | 48 | 60 | 75 | 83 | 84 | 87 | 90 | 91) {
+            if tag.body.len() < 2 { bail!("truncated symbol definition"); }
+            used.insert(u16::from_le_bytes([tag.body[0], tag.body[1]]));
+            if tag.code == 39 {
+                if tag.body.len() < 4 { bail!("truncated sprite definition"); }
+                symbol_metadata(&tag.body[4..], used, imported)?;
+            }
+        }
+        if matches!(tag.code, 56 | 57 | 71) {
+            let mut body = tag.body;
+            if tag.code != 56 {
+                let nul = body.iter().position(|&b| b == 0).context("truncated import URL")?;
+                body = &body[nul + 1..];
+                if tag.code == 71 { body = body.get(2..).context("truncated import flags")?; }
+            }
+            if body.len() < 2 { bail!("truncated symbol count"); }
+            let count = u16::from_le_bytes([body[0], body[1]]);
+            body = &body[2..];
+            for _ in 0..count {
+                if body.len() < 2 { bail!("truncated symbol ID"); }
+                used.insert(u16::from_le_bytes([body[0], body[1]]));
+                body = &body[2..];
+                let nul = body.iter().position(|&b| b == 0).context("truncated symbol name")?;
+                imported.insert(String::from_utf8_lossy(&body[..nul]).into_owned());
+                body = &body[nul + 1..];
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Reads only the public export/import name tables of an installed library.
+pub(crate) fn symbol_names(data: &[u8]) -> Result<std::collections::HashSet<String>> {
+    let buf = swf::decompress_swf(data)?;
+    let mut names = std::collections::HashSet::new();
+    symbol_metadata(&buf.data, &mut std::collections::HashSet::new(), &mut names)?;
+    Ok(names)
+}
+
 struct RawTag<'a> {
     code: u16,
     body: &'a [u8],
@@ -419,4 +493,38 @@ pub fn build_gfxfontlib(fontlib: &[u8], fontmapping: &str) -> Result<Vec<u8>> {
     swf::write::write_swf_raw_tags(&header, &out, &mut swf_bytes)?;
     tracing::info!("gfxfontlib: {:?}", exports.iter().map(|e| &e.1).collect::<Vec<_>>());
     Ok(swf_bytes)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn dynamic_imports_preserve_existing_ids_and_movie_instructions() {
+        let mut tags = Vec::new();
+        let mut sprite = 500u16.to_le_bytes().to_vec();
+        sprite.extend_from_slice(&0u16.to_le_bytes());
+        push_tag(&mut sprite, 0, &[]);
+        push_tag(&mut tags, 39, &sprite);
+        let actions = [0x04, 0x07, 0x00];
+        push_tag(&mut tags, 12, &actions);
+        let mut imported = b"sharedlib.swf\0".to_vec();
+        imported.extend_from_slice(&1u16.to_le_bytes());
+        imported.extend_from_slice(&800u16.to_le_bytes());
+        imported.extend_from_slice(b"existing\0");
+        push_tag(&mut tags, 57, &imported);
+        push_tag(&mut tags, 0, &[]);
+        let mut movie = Vec::new();
+        swf::write::write_swf_raw_tags(&swf::Header::default_with_swf_version(10), &tags, &mut movie).unwrap();
+        let rewritten = import_symbols(&movie, "sharedlib.swf", &["existing", "slider"]).unwrap();
+        let body = swf::decompress_swf(rewritten.as_slice()).unwrap();
+        let tags = split_tags(&body.data).unwrap();
+        assert_eq!(tags.iter().filter(|tag| tag.code == 57).count(), 1);
+        assert_eq!(tags.iter().find(|tag| tag.code == 12).unwrap().body, actions);
+        let mut ids = std::collections::HashSet::new();
+        let mut names = std::collections::HashSet::new();
+        symbol_metadata(&body.data, &mut ids, &mut names).unwrap();
+        assert_eq!(ids, std::collections::HashSet::from([500, 800, 801]));
+        assert_eq!(names, std::collections::HashSet::from(["existing".into(), "slider".into()]));
+        assert_eq!(import_symbols(&rewritten, "sharedlib.swf", &["slider"]).unwrap(), rewritten);
+    }
 }

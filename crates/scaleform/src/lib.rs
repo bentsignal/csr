@@ -87,6 +87,10 @@ impl From<i32> for Value {
 
 /// The game side of the Scaleform API. Runs on the menu thread.
 pub trait Engine: Send + 'static {
+    /// Engine-generated image URLs, resolved from the game's local data.
+    /// Returning encoded image bytes keeps runtime art outside the repository.
+    fn image(&mut self, _url: &str) -> Option<Vec<u8>> { None }
+
     /// Answers `object.method(args)`, e.g. `("CScaleformComponent_MyPersona",
     /// "GetXuid")` or `("MainMenu", "BasePanelRunCommand")` (a `gameAPI`,
     /// named after its element). `None` falls back to the built-in answers
@@ -109,6 +113,11 @@ impl Calls {
         self.queue.push(Command::Call { path: path.into(), function: function.into(), args });
     }
 
+    /// Sets a public movie property without replacing its authored display object.
+    pub fn set(&mut self, path: &str, property: &str, value: Value) {
+        self.queue.push(Command::Set { path: path.into(), property: property.into(), value });
+    }
+
     /// Loads an element through the root movie's `RequestElement`, as the
     /// engine did (`"MainMenu"`, `"StartSinglePlayer"`, `"OptionsMenu"`...).
     pub fn request_element(&mut self, element: &str) {
@@ -129,10 +138,16 @@ pub enum Input {
     /// A key as CS:GO's `_global.KeyDownEvent` expected: the Source key name
     /// (`"KEY_ESCAPE"`, `"KEY_ENTER"`, `"KEY_A"`...) and its Windows virtual-key code.
     Key { name: String, vkey: u32, down: bool },
+    /// Native text-field navigation/editing, separate from Flash Key events.
+    Edit { name: String, control: bool, shift: bool },
+    Focus(bool),
     Char(char),
     Resize { width: u32, height: u32 },
     Call { path: String, function: String, args: Vec<Value> },
+    Set { path: String, property: String, value: Value },
     RequestElement(String),
+    /// Read-only names/types of a runtime object's public properties.
+    Inspect(String),
     /// Advance the movies only while visible (saves CPU in a match).
     SetActive(bool),
 }
@@ -147,6 +162,7 @@ pub enum MouseButton {
 #[derive(Debug, Clone)]
 pub(crate) enum Command {
     Call { path: String, function: String, args: Vec<Value> },
+    Set { path: String, property: String, value: Value },
     RequestElement(String),
 }
 
@@ -166,6 +182,7 @@ pub enum Event {
     Loaded(String),
     /// The player failed or panicked; the game should fall back.
     Failed(String),
+    Inspected { path: String, properties: Vec<String> },
 }
 
 pub struct Config {
@@ -248,8 +265,12 @@ fn run(
             match input.try_recv() {
                 Ok(Input::SetActive(a)) => active = a,
                 Ok(Input::Resize { width, height }) => host.resize(width, height),
+                Ok(Input::Inspect(path)) => host.inspect(&path),
                 Ok(Input::Call { path, function, args }) => {
                     host.run_command(Command::Call { path, function, args });
+                }
+                Ok(Input::Set { path, property, value }) => {
+                    host.run_command(Command::Set { path, property, value });
                 }
                 Ok(Input::RequestElement(e)) => host.run_command(Command::RequestElement(e)),
                 Ok(other) => host.input(other),

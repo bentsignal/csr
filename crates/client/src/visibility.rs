@@ -31,7 +31,7 @@ pub fn update(level: Res<crate::LoadedLevel>, local: Res<crate::player::LocalPla
     mut previous: Local<Option<i16>>, mut batches: Query<(&MapClusters, &mut Visibility)>) {
     let bsp = &level.0.bsp;
     let cluster = bsp.leafs.get(bsp.point_leaf(local.render_eye)).map_or(-1, |l| l.cluster);
-    if *previous == Some(cluster) { return; }
+    if !level.is_added() && *previous == Some(cluster) { return; }
     *previous = Some(cluster);
     let row = if std::env::var_os("CSR_NO_PVS").is_some() { None } else { bsp.cluster_pvs(cluster) };
     for (clusters, mut visibility) in &mut batches {
