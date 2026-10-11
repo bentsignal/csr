@@ -64,6 +64,12 @@ The authoring helper fills the payload hash:
 `cargo run -p packs --example packtool -- build <private folder> <new output.csrpack>`.
 It refuses to overwrite an existing output. Put inputs and output outside Git.
 
+`cargo run -p level --example packcheck -- <file.csrpack> <map ContentId>
+<private data folder> [Legacy game folder]` verifies installation, identity,
+BSP/collision/catalog/NAV loading without building the renderer. This is also
+a useful asset-pack proof with an empty VFS when the pack supplies its own
+dependencies. It never writes to the Legacy install.
+
 Optional `[[resources]]` entries have `id` and `path`, for example
 `id = "mod_material_arena_wall"`, `path = "materials/arena/wall.vmt"`.
 Supported kinds are `model` (`.mdl`), `material` (`.vmt`) and `sound`
