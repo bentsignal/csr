@@ -18,6 +18,8 @@ pub enum MapStatus {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MapEntry {
+    /// Stable identity for content packs and server map selection.
+    pub id: content::ContentId,
     /// The name to load (`de_dust2`, `de_dust2_2017`).
     pub name: String,
     /// Menu title (`DUST2`, `Dust II (2017)`).
@@ -73,6 +75,7 @@ pub fn list_with(game_dir: &Path, fs: &vfs::Vfs, store: &workshop::Store) -> Vec
     let mut out: Vec<MapEntry> = names
         .into_iter()
         .map(|name| MapEntry {
+            id: content::ContentId::csgo(content::ContentKind::Map, &name),
             title: title(&name),
             base: name.clone(),
             name,
@@ -82,6 +85,7 @@ pub fn list_with(game_dir: &Path, fs: &vfs::Vfs, store: &workshop::Store) -> Vec
         .collect();
     for (old, status) in store.list() {
         out.push(MapEntry {
+            id: old.content_id(),
             name: old.name.to_string(),
             title: old.title.to_string(),
             base: old.base.to_string(),

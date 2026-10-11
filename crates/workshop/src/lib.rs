@@ -60,6 +60,11 @@ pub struct OldMap {
 }
 
 impl OldMap {
+    /// Stable identity for recipes, content packs and server map selection.
+    pub fn content_id(&self) -> content::ContentId {
+        content::ContentId::csgo(content::ContentKind::Map, self.name)
+    }
+
     pub fn workshop_page(&self) -> String {
         format!("https://steamcommunity.com/sharedfiles/filedetails/?id={}", self.workshop_id)
     }
@@ -625,14 +630,17 @@ mod tests {
     #[test]
     fn table_is_consistent() {
         let mut names = std::collections::HashSet::new();
+        let mut ids = std::collections::HashSet::new();
         for m in OLD_MAPS {
             assert!(names.insert(m.name), "duplicate {}", m.name);
+            assert!(ids.insert(m.content_id()), "duplicate content id {}", m.name);
             assert!(m.name.starts_with(&format!("{}_", m.base)), "{}", m.name);
             assert_eq!(m.sha1.len(), 40);
             assert!(m.sha1.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
             assert!(m.size > 1_000_000);
         }
         assert_eq!(find("DE_DUST2_2017").unwrap().workshop_id, 1164734849);
+        assert_eq!(find("de_dust2_2017").unwrap().content_id().to_string(), "csgo_map_de_dust2_2017");
         assert!(find("de_dust2").is_none());
     }
 

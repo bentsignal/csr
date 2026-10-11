@@ -2935,6 +2935,7 @@ version = "0.3.0"
 dependencies = [
  "bsp",
  "collision",
+ "content",
  "glam",
  "kv",
  "mdl",
@@ -2942,6 +2943,7 @@ dependencies = [
  "vfs",
  "weapons",
  "workshop",
+ "zip",
 ]
 
 [[package]]
@@ -5580,6 +5582,7 @@ dependencies = [
 name = "workshop"
 version = "0.3.0"
 dependencies = [
+ "content",
  "serde_json",
  "sha1",
  "ureq",
