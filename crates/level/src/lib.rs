@@ -76,6 +76,13 @@ fn fetch_old_map(map: &workshop::OldMap) -> Result<(), LoadError> {
 impl Level {
     /// Loads `maps/<name>.bsp` and builds its collision world.
     pub fn load(name: &str, game_dir: Option<&Path>) -> Result<Level, LoadError> {
+        if let Ok(id) = name.parse::<ContentId>() {
+            if id.kind != ContentKind::Map { return Err(LoadError::Io(format!("{id} is not a map"))); }
+            let (pack, map) = packs::Installed::current().resolve_map(&id).map_err(LoadError::Io)?;
+            let (game_dir, fs) = mount_game(game_dir)?;
+            return Self::load_pack(&pack, &map, game_dir, fs);
+        }
+        if !packs::valid_bsp_name(name) { return Err(LoadError::Io("invalid map name".into())); }
         let t = Instant::now();
         let (game_dir, fs) = mount_game(game_dir)?;
         let mount_time = t.elapsed().as_secs_f32();
@@ -90,6 +97,18 @@ impl Level {
         Ok(level)
     }
 
+    /// Loads a validated pack selection into a session-owned VFS. Asset maps
+    /// can use an empty VFS without a Legacy install; recipes need a mounted
+    /// Legacy VFS. No other installed pack changes this map's dependencies.
+    pub fn load_pack(pack: &packs::Pack, map: &packs::MapDef, game_dir: PathBuf, mut fs: vfs::Vfs) -> Result<Level, LoadError> {
+        if !pack.manifest().maps.contains(map) { return Err(LoadError::Io("map is not defined by selected pack".into())); }
+        if map.source == packs::MapSource::Pack {
+            fs.push_front(format!("pack:{}", pack.manifest().id), pack.mount());
+        }
+        let id = map.id.parse().map_err(|e| LoadError::Io(format!("{e}")))?;
+        Self::load_from_vfs(id, &map.bsp, game_dir, fs)
+    }
+
     /// Loads a map from an already mounted file system, including content
     /// pack mounts. Does not detect Steam or fetch Workshop data. `game_dir`
     /// records the source directory; the loader reads all data through VFS.
@@ -98,6 +117,7 @@ impl Level {
         if id.kind != ContentKind::Map {
             return Err(LoadError::Io(format!("{id} is not a map")));
         }
+        if !packs::valid_bsp_name(name) { return Err(LoadError::Io("invalid map filename".into())); }
         let mut timings = Vec::new();
         let t = Instant::now();
         let map_path = format!("maps/{name}.bsp");
@@ -192,21 +212,21 @@ mod tests {
 
     #[test]
     fn loads_a_pack_map_without_a_game_install_and_preserves_its_origin() {
-        use std::io::Write;
         let id = ContentId::new(GameOrigin::Mod, ContentKind::Map, "test_arena");
         let mut bsp = vec![0; 8 + 64 * 16 + 4];
         bsp[..4].copy_from_slice(b"VBSP");
         bsp[4..8].copy_from_slice(&21i32.to_le_bytes());
-        let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
-        zip.start_file("maps/test-arena.bsp", zip::write::SimpleFileOptions::default()).unwrap();
-        zip.write_all(&bsp).unwrap();
-        let bytes = zip.finish().unwrap().into_inner();
-        let mut fs = vfs::Vfs::new();
-        fs.push_back("pack", vfs::Mount::Zip(vfs::ZipArchive::from_bytes(bytes).unwrap()));
-        let level = Level::load_from_vfs(id.clone(), "test-arena", PathBuf::from("no-game-install"), fs).unwrap();
+        let map = packs::MapDef { id: id.to_string(), bsp: "test-arena".into(), name: "Test arena".into(), source: packs::MapSource::Pack };
+        let manifest = packs::Manifest {
+            format_version: 1, id: "test_pack".into(), name: "Test pack".into(), version: "1.0.0".into(),
+            origin: "mod".into(), kind: packs::PackKind::Assets, provides: vec![id.to_string()],
+            content_hash: String::new(), min_game_version: "0.0.0".into(), description: String::new(), maps: vec![map.clone()], resources: Vec::new(),
+        };
+        let pack = packs::Pack::from_bytes(packs::build(&manifest, &[("maps/test-arena.bsp", &bsp)]).unwrap()).unwrap();
+        let level = Level::load_pack(&pack, &map, PathBuf::from("no-game-install"), vfs::Vfs::new()).unwrap();
         assert_eq!(level.id, id);
         assert_eq!(level.name, "test-arena");
         assert_eq!(level.bsp.version, 21);
-        assert!(level.vfs.labels().contains(&"pack"));
+        assert!(level.vfs.labels().contains(&"pack:test_pack"));
     }
 }

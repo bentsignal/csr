@@ -21,6 +21,8 @@
 /logs/
 # Old maps fetched from Valve's Workshop (never commit them)
 /workshop/
+/packs/
+*.csrpack
 
 # Agent worktrees and local tool state
 /.claude/

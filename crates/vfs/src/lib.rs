@@ -21,6 +21,8 @@ pub enum Mount {
     Dir(PathBuf),
     Vpk(vpk::Vpk),
     Zip(ZipArchive),
+    /// Already validated pack data. Never reopens a mutable archive.
+    Memory(std::collections::BTreeMap<String, std::sync::Arc<[u8]>>),
 }
 
 impl Mount {
@@ -36,6 +38,7 @@ impl Mount {
             }
             Mount::Vpk(v) => v.read(path),
             Mount::Zip(z) => z.read(path),
+            Mount::Memory(files) => Ok(files.get(path).map(|b| b.to_vec())),
         }
     }
 
@@ -44,6 +47,7 @@ impl Mount {
             Mount::Dir(root) => root.join(path).is_file(),
             Mount::Vpk(v) => v.contains(path),
             Mount::Zip(z) => z.contains(path),
+            Mount::Memory(files) => files.contains_key(path),
         }
     }
 }
@@ -194,6 +198,7 @@ impl Vfs {
                 Mount::Vpk(v) => out.extend(v.paths().filter(|p| p.starts_with(&prefix)).map(String::from)),
                 Mount::Zip(z) => out.extend(z.paths().filter(|p| p.starts_with(&prefix)).map(String::from)),
                 Mount::Dir(_) => {}
+                Mount::Memory(files) => out.extend(files.keys().filter(|p| p.starts_with(&prefix)).cloned()),
             }
         }
         out.sort();
