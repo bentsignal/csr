@@ -180,7 +180,7 @@ Observations that shape the model:
   footsteps all follow ~`0.78 · e^(-2.5x)` past `min` (curve amount 0.7);
   impacts (curve amount 0.1) follow ~`e^(-1.3x)`.
 - Entries without a stack attenuate as `min(1, r / d)` with
-  `r ≈ 32 u · 10^((soundlevel - 60) / 20)` (inverse distance, 6 dB per
+  `r ≈ 32 u · 10^((soundlevel - 60) / 22)` (empirical radius fit; inverse distance, 6 dB per
   doubling), measured at 60, 65, 75 and 80 dB. `SNDLVL_NONE`/`0` does not
   attenuate (`c4.explode`, voice lines).
 - Gunfire cross-fades with the `…SingleDistant` entry: the near entry is
