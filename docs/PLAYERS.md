@@ -47,6 +47,12 @@ PLAYING
 -------
 Start CSGO Rewrite from the desktop, the Start menu or Steam.
 
+For an existing server, choose Play > Community Server Browser. In Favorites,
+choose Add a Server and enter the address your host gave you. Select the
+server and choose Connect. The game loads matching content from your own
+Legacy install; it shows an error if that content is unavailable. Hosting
+from the menu and automatic server content downloads are still being added.
+
 WASD move, Space jump, Ctrl crouch, Shift walk, LMB fire, R reload,
 E use/defuse, 1-5 / Q / wheel weapons, G drop, B buy menu, Tab scoreboard,
 Esc menu. Plant: select the bomb (5) in a bomb site and hold LMB.
@@ -73,7 +79,9 @@ file cannot be installed, a message explains why. A successful install
 opens the game, or shows a notification if the game is already running.
 Cancelling before installation finishes keeps the previous pack version.
 Packs are kept with your other data and survive game updates.
-Choosing installed pack maps from the menu is still being added.
+The Content packs button on the home screen opens the installed pack list.
+Choose a pack and map, then Play. Install opens a file picker; dropping a
+.csrpack file onto the game window also starts installation.
 
 
 UNINSTALLING

@@ -11,8 +11,9 @@ them are listed. Every item ends in a verified state (`cargo test`,
 The inherited code is a **real, playable single-player base**. Phase 0 and
 the installer/updater release are complete. Gameplay now lives in the fixed
 tick sim; dedicated multiplayer, prediction and local content packs have
-landed. The rendered browser/join integration is undergoing its final visual
-checks. Fidelity, full classic UI coverage and VR remain unfinished.
+landed. Rendered joining has passed two-client lifecycle checks at both tick
+rates; the browser's final context presentation check is in progress. Fidelity,
+full classic UI coverage and VR remain unfinished.
 
 | Area | State | Call |
 |---|---|---|
@@ -84,25 +85,28 @@ The A2 foundation now has a Bevy-free Renet UDP session and `csr-server`
 dedicated executable, with reliable control/events, redundant inputs,
 fragmented full snapshots, content compatibility checks and 128-tick
 authority. A two-client Dust II loopback check exercises the installed
-catalog and tracked poses. Rendered-client join/prediction and the other
-items below remain open; see [NETCODE.md](NETCODE.md). A transport-independent
+catalog and tracked poses. Rendered-client joining now uses the same authority
+and prediction; the remaining items are separated below. See [NETCODE.md](NETCODE.md).
+A transport-independent
 predictor now restores snapshots and replays bounded unacknowledged inputs
 through the shared sim without inventing server AI or exposing replay events.
 The real two-client check includes delayed transport polling and exact final
-reconciliation; rendered-client prediction/interpolation integration remains.
+reconciliation; the rendered client consumes the same prediction/interpolation.
 A bounded, read-only remote pose history now samples fractional snapshot
 times, guards teleport/respawn discontinuities and interpolates tracked
 head/hands independently of the aim ray. Dust II UDP checks exercise this
-at 64 and 128 tick; Bevy rendering and full hitbox fidelity remain open.
+at 64 and 128 tick; full hitbox and animation fidelity remain open.
 A server-only bounded hull history now supports authoritative hitscan rewind
 without moving live actors. The server derives valid view ticks from its own
 RTT/caps and requires matching spawn epochs, teams and rounds. Coarse existing
-hit groups remain; MDL/VR hitboxes and rendered multiplayer proof are open.
+hit groups remain; MDL/VR hitboxes are open.
 A renderer-free owned remote session now combines bounded metadata discovery,
 verified installed-content admission, prediction, remote poses, authoritative
 events and idempotent cancellation. Its two-client Dust II lifecycle proof
-runs at 64 and 128 tick; frontend loading/join integration remains open.
-See [REMOTESESSION.md](REMOTESESSION.md).
+runs at 64 and 128 tick. The rendered client has also completed Ready, pause,
+Home teardown and offline reload with two actual clients at both rates and
+all sixteen fresh captures inspected. See [REMOTESESSION.md](REMOTESESSION.md)
+and [REMOTE_JOIN.md](REMOTE_JOIN.md).
 
 - [x] Protocol: `TickInput` up, including optional tracked head/hand poses
       and a separate aim ray; fragmented full snapshots and authoritative

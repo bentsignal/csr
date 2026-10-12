@@ -55,8 +55,9 @@ Remote timing uses the observed authoritative tick, real elapsed time since
 the latest snapshot, and the negotiated interpolation allowance. Its timeline
 is bounded by history and the core extrapolation policy; the transmitted view
 tick never exceeds authority. These remain explicit prototype policies pending
-Legacy measurements. Rendered UI joining, weapon/model timing fidelity and
-VR cameras still require integration and visual verification.
+Legacy measurements. Rendered UI joining and lifecycle verification are
+documented in [REMOTE_JOIN.md](REMOTE_JOIN.md). Weapon/model timing fidelity
+and VR cameras still require integration and visual verification.
 
 Headless Bevy tests use actual encrypted UDP sessions and prove assigned-id
 adoption, silent local prediction separate from unchanged authoritative HUD

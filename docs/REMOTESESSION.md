@@ -72,8 +72,9 @@ map-loading cancellation should discard its pending result and cancel this
 session; a late result cannot provide a map to the closed session.
 
 Direct-IP admission remains unauthenticated prototype transport. Discovery is
-for one known address, not LAN broadcast or a server browser. Static installed
+for one known address, not LAN broadcast or a public directory. Static installed
 content packs are supported through the same verified ContentId/manifest
-contract; automatic downloads, identity, listen-server UI and rendered
-multiplayer remain separate work. `csr-server --remotecheck` verifies this
+contract; automatic downloads, identity and listen-server UI remain separate
+work. The local favorites browser and rendered integration are documented in
+[REMOTE_JOIN.md](REMOTE_JOIN.md). `csr-server --remotecheck` verifies this
 lifecycle on real Dust II at 64 and 128 ticks without launching graphics.

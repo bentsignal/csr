@@ -138,7 +138,7 @@ fn main() {
     let args: Vec<_> = std::env::args().skip(1).collect();
     if args.iter().any(|s| s == "--help" || s == "-h") {
         println!(
-            "CSGO Rewrite dedicated server\ncsr-server [MAP] [--bind IP:PORT] [--tickrate 128] [--bots N] [--maxplayers N]\n           [--deathmatch] [--ticks N] [--netcheck | --remotecheck]\n           [--max-unlag-ticks N] [--interpolation-ticks N]\nReads CS:GO Legacy automatically; CSR_GAME_DIR overrides.\nDirect-IP prototype: no Steam identity or server browser yet."
+            "CSGO Rewrite dedicated server\ncsr-server [MAP] [--bind IP:PORT] [--tickrate 128] [--bots N] [--maxplayers N]\n           [--deathmatch] [--ticks N] [--netcheck | --remotecheck]\n           [--max-unlag-ticks N] [--interpolation-ticks N]\nReads CS:GO Legacy automatically; CSR_GAME_DIR overrides.\nDirect-IP prototype: client favorites browser supported; authenticated identity and public discovery remain open."
         );
         return;
     }
