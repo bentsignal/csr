@@ -32,12 +32,49 @@ pub fn step_period(speed: f32) -> f32 {
 
 #[derive(Default)]
 struct PlayerFoley {
+    life_epoch: Option<u64>,
     weapon: String,
     reloading: bool,
     shell_stage: Option<Option<i32>>,
     moving: bool,
     step_timer: f32,
     left: bool,
+}
+
+#[derive(Clone, Copy)]
+struct Elapsed {
+    seconds: f32,
+    tick_seconds: f32,
+}
+
+impl PlayerFoley {
+    fn footstep(&mut self, grounded: bool, speed: f32, elapsed: Elapsed) -> Option<bool> {
+        if !grounded || speed <= AUDIBLE_SPEED {
+            self.moving = false;
+            return None;
+        }
+        let period = step_period(speed);
+        let seconds = if self.moving {
+            elapsed.seconds
+        } else {
+            // Movement/life onset was only just observed. Do not infer that
+            // this player was moving throughout the preceding snapshot gap.
+            self.moving = true;
+            self.step_timer = period;
+            elapsed.tick_seconds
+        };
+        self.step_timer -= seconds;
+        if self.step_timer > 0.0 { return None; }
+        // Emit at most one current step. Missing intermediate movement and
+        // surfaces cannot be reconstructed; discard whole-period overruns.
+        self.step_timer = if self.step_timer <= -period {
+            period
+        } else {
+            (self.step_timer + period).max(0.0)
+        };
+        self.left = !self.left;
+        Some(self.left)
+    }
 }
 
 struct Queued {
@@ -52,10 +89,35 @@ struct Queued {
 pub struct Foley {
     players: HashMap<sim::PlayerId, PlayerFoley>,
     queue: Vec<Queued>,
-    last_tick: Option<u64>,
+    last_tick: Option<(u64, u32)>,
 }
 
 impl Foley {
+    fn advance(&mut self, tick: u64, rate: u32) -> Option<Elapsed> {
+        let tick_seconds = 1.0 / rate as f32;
+        let seconds = match self.last_tick.replace((tick, rate)) {
+            Some((old_tick, old_rate)) if old_rate == rate && tick == old_tick => return None,
+            Some((old_tick, old_rate)) if old_rate == rate && tick > old_tick => {
+                (tick - old_tick) as f32 * tick_seconds
+            }
+            Some(_) => {
+                // A new clock cannot continue old absolute animation times.
+                self.players.clear();
+                self.queue.clear();
+                tick_seconds
+            }
+            None => tick_seconds,
+        };
+        Some(Elapsed { seconds, tick_seconds })
+    }
+
+    fn retain_lives(&mut self, players: &[sim::Player]) {
+        self.players.retain(|id, state| players.iter().any(|player| {
+            player.id == *id && player.alive && state.life_epoch == Some(player.life_epoch)
+        }));
+        self.queue.retain(|sound| self.players.contains_key(&sound.player));
+    }
+
     fn schedule(&mut self, player: sim::PlayerId, weapon: &str, now: f32, duration: f32, events: &[(f32, String)], reload: bool) {
         for (cycle, entry) in events {
             self.queue.push(Queued { at: now + cycle * duration, player, weapon: weapon.to_string(), entry: entry.clone(), reload });
@@ -109,19 +171,18 @@ pub fn update(
     mut foley: ResMut<Foley>,
 ) {
     let now = world.0.time();
-    if foley.last_tick == Some(world.0.tick) { return; }
-    foley.last_tick = Some(world.0.tick);
-    let dt = world.0.dt();
+    let elapsed = foley.advance(world.0.tick, world.0.tick_rate);
+    foley.retain_lives(&world.0.players);
+    let Some(elapsed) = elapsed else { return; };
     let fs = &level.0.vfs;
     let foley = &mut *foley;
     for p in &world.0.players {
-        let st = foley.players.entry(p.id).or_default();
+        if !p.alive { continue; }
+        let st = foley.players.entry(p.id).or_insert_with(|| PlayerFoley {
+            life_epoch: Some(p.life_epoch),
+            ..PlayerFoley::default()
+        });
         let weapon = p.active_weapon().map(|w| w.def.class_name.clone()).unwrap_or_default();
-        if !p.alive {
-            *st = PlayerFoley::default();
-            foley.queue.retain(|q| q.player != p.id);
-            continue;
-        }
         // Deploy: the draw sequence's sounds, at its own speed.
         if weapon != st.weapon {
             st.weapon = weapon.clone();
@@ -170,25 +231,13 @@ pub fn update(
         let st = foley.players.get_mut(&p.id).unwrap();
         let v = p.movement.velocity;
         let speed = (v.x * v.x + v.y * v.y).sqrt();
-        if p.movement.on_ground && speed > AUDIBLE_SPEED {
-            if !st.moving {
-                st.moving = true;
-                st.step_timer = step_period(speed);
-            }
-            st.step_timer -= dt;
-            if st.step_timer <= 0.0 {
-                st.step_timer = (st.step_timer + step_period(speed)).max(0.0);
-                st.left = !st.left;
-                let left = st.left;
-                let step = surface_step(&level.0, &props, p.movement.origin, left);
-                let entry = step_entry(&sounds, p.team, &step, left);
-                if std::env::var_os("CSR_SOUND_LOG").is_some() { info!("footstep sim {now:.3} player {} {entry} speed {speed:.1}", p.id); }
-                let emit = emit_for(p, &local, p.movement.origin);
-                sounds.play_with(&mut commands, fs, &mut sources, &entry, emit);
-                sounds.play_with(&mut commands, fs, &mut sources, &format!("{}Default.Suit", team_prefix(p.team)), emit);
-            }
-        } else {
-            st.moving = false;
+        if let Some(left) = st.footstep(p.movement.on_ground, speed, elapsed) {
+            let step = surface_step(&level.0, &props, p.movement.origin, left);
+            let entry = step_entry(&sounds, p.team, &step, left);
+            if std::env::var_os("CSR_SOUND_LOG").is_some() { info!("footstep sim {now:.3} player {} {entry} speed {speed:.1}", p.id); }
+            let emit = emit_for(p, &local, p.movement.origin);
+            sounds.play_with(&mut commands, fs, &mut sources, &entry, emit);
+            sounds.play_with(&mut commands, fs, &mut sources, &format!("{}Default.Suit", team_prefix(p.team)), emit);
         }
     }
 
@@ -232,6 +281,148 @@ pub fn land(commands: &mut Commands, sounds: &mut SoundLibrary, sources: &mut As
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Reference to the previous per-tick loop: protects the measured offline
+    // onset, threshold transitions, alternating feet and cadence together.
+    fn offline_reference(state: &mut PlayerFoley, grounded: bool, speed: f32, dt: f32) -> Option<bool> {
+        if grounded && speed > AUDIBLE_SPEED {
+            let period = step_period(speed);
+            if !state.moving { state.moving = true; state.step_timer = period; }
+            state.step_timer -= dt;
+            if state.step_timer <= 0.0 {
+                state.step_timer = (state.step_timer + period).max(0.0);
+                state.left = !state.left;
+                return Some(state.left);
+            }
+        } else { state.moving = false; }
+        None
+    }
+
+    #[test]
+    fn offline_tick_sequence_preserves_previous_onset_and_cadence() {
+        for rate in [64, 128] {
+            let mut clock = Foley::default();
+            let mut actual = PlayerFoley::default();
+            let mut previous = PlayerFoley::default();
+            for tick in 0..rate as u64 * 12 {
+                let phase = tick / rate as u64;
+                let speed = match phase { 0 => 135.0, 1..=3 => 140.0, 4..=6 => 250.0, 7 => 130.0, _ => 215.0 };
+                let grounded = phase != 9;
+                assert_eq!(actual.footstep(grounded, speed, clock.advance(tick, rate).unwrap()),
+                    offline_reference(&mut previous, grounded, speed, 1.0 / rate as f32),
+                    "rate={rate} tick={tick}");
+                assert_eq!(actual.step_timer, previous.step_timer);
+            }
+        }
+    }
+
+    fn steps(rate: u32, interval: u64, speed: f32) -> Vec<(u64, bool)> {
+        let mut clock = Foley::default();
+        let mut player = PlayerFoley::default();
+        (0..=rate as u64 * 12).step_by(interval as usize).filter_map(|tick| {
+            player.footstep(true, speed, clock.advance(tick, rate).unwrap()).map(|left| (tick, left))
+        }).collect()
+    }
+
+    #[test]
+    fn steady_snapshot_cadence_matches_ticks_with_observation_quantization() {
+        for rate in [64, 128] {
+            for speed in [140.0, 215.0, 250.0] {
+                let ticks = steps(rate, 1, speed);
+                for interval in [4, 8] {
+                    let snapshots = steps(rate, interval, speed);
+                    assert_eq!(snapshots.len(), ticks.len(), "rate={rate} speed={speed} interval={interval}");
+                    for ((tick, left), (observed, observed_left)) in ticks.iter().zip(snapshots) {
+                        assert_eq!(*left, observed_left);
+                        assert_eq!(observed, tick.div_ceil(interval) * interval);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn duplicate_ticks_and_large_gaps_do_not_backfill_steps() {
+        let mut clock = Foley::default();
+        let mut player = PlayerFoley::default();
+        assert_eq!(player.footstep(true, 250.0, clock.advance(0, 128).unwrap()), None);
+        assert!(clock.advance(0, 128).is_none());
+        assert_eq!(player.footstep(true, 250.0, clock.advance(1280, 128).unwrap()), Some(true));
+        assert_eq!(player.step_timer, FAST_STEP);
+        assert!(clock.advance(1280, 128).is_none());
+        assert_eq!(player.footstep(true, 250.0, clock.advance(1281, 128).unwrap()), None);
+    }
+
+    #[test]
+    fn newly_observed_motion_does_not_charge_the_unknown_snapshot_gap() {
+        let mut clock = Foley::default();
+        let mut player = PlayerFoley::default();
+        assert_eq!(player.footstep(true, 135.0, clock.advance(0, 128).unwrap()), None);
+        assert_eq!(player.footstep(true, 250.0, clock.advance(1280, 128).unwrap()), None);
+        assert_eq!(player.step_timer, FAST_STEP - 1.0 / 128.0);
+        assert_eq!(player.footstep(false, 250.0, clock.advance(1281, 128).unwrap()), None);
+        assert_eq!(player.footstep(true, 250.0, clock.advance(2560, 128).unwrap()), None);
+        assert_eq!(player.step_timer, FAST_STEP - 1.0 / 128.0);
+    }
+
+    fn tracked_world() -> (sim::World, Foley, sim::PlayerId, sim::PlayerId) {
+        let mut world = sim::World::new(std::sync::Arc::new(collision::CollisionWorld::new()));
+        let first = world.add_player("first", sim::Team::CounterTerrorist);
+        let second = world.add_player("second", sim::Team::CounterTerrorist);
+        let mut foley = Foley::default();
+        for player in &mut world.players {
+            player.alive = true;
+            foley.players.insert(player.id, PlayerFoley {
+                life_epoch: Some(player.life_epoch), moving: true, step_timer: 0.001, left: true,
+                weapon: "weapon_ak47".into(), reloading: true, ..PlayerFoley::default()
+            });
+            foley.schedule(player.id, "weapon_ak47", 0.0, 1.0, &[(0.5, "reload".into())], true);
+            foley.schedule(player.id, "weapon_ak47", 0.0, 1.0, &[(0.8, "deploy".into())], false);
+        }
+        (world, foley, first, second)
+    }
+
+    #[test]
+    fn changed_life_even_at_duplicate_tick_discards_old_animation_and_cadence() {
+        let (mut world, mut foley, first, second) = tracked_world();
+        foley.advance(10, 128);
+        world.player_mut(first).unwrap().life_epoch += 1;
+        assert!(foley.advance(10, 128).is_none());
+        foley.retain_lives(&world.players);
+        assert!(!foley.players.contains_key(&first));
+        assert!(foley.players.contains_key(&second));
+        assert!(foley.queue.iter().all(|sound| sound.player == second));
+        let mut new_life = PlayerFoley::default();
+        assert_eq!(new_life.footstep(true, 250.0, foley.advance(100, 128).unwrap()), None);
+        assert!(!new_life.left);
+        assert_eq!(new_life.step_timer, FAST_STEP - 1.0 / 128.0);
+    }
+
+    #[test]
+    fn death_and_removal_discard_only_their_owned_queued_sounds() {
+        for removed in [false, true] {
+            let (mut world, mut foley, first, second) = tracked_world();
+            if removed { world.players.retain(|player| player.id != first); }
+            else { world.player_mut(first).unwrap().alive = false; }
+            foley.retain_lives(&world.players);
+            assert!(!foley.players.contains_key(&first));
+            assert!(foley.players.contains_key(&second));
+            assert_eq!(foley.queue.len(), 2);
+            assert!(foley.queue.iter().all(|sound| sound.player == second));
+        }
+    }
+
+    #[test]
+    fn clock_reversal_and_rate_change_reanchor_and_discard_old_queues() {
+        for (tick, rate) in [(9, 128), (11, 64)] {
+            let (_, mut foley, _, _) = tracked_world();
+            foley.advance(10, 128);
+            let elapsed = foley.advance(tick, rate).unwrap();
+            assert_eq!(elapsed.seconds, 1.0 / rate as f32);
+            assert!(foley.players.is_empty());
+            assert!(foley.queue.is_empty());
+        }
+    }
 
     #[test]
     fn step_cadence_matches_measurements() {
