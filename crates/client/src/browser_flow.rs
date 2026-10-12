@@ -353,6 +353,29 @@ fn current_action(action: &UiAction, generation: u64) -> bool {
         UiAction::Tab(_) | UiAction::Address => true,
     }
 }
+fn favorites(world: &mut World, proof: &mut Proof, id: Entity, current: Option<(Model, Snapshot)>) {
+    // The tab changes on press. Finish the owned release before consulting
+    // that changed model or busy refresh, otherwise the next click stays held.
+    if proof.step == 2 {
+        if click_ui(world, proof, id, MouseButton::Left, |_| false) {
+            proof.enter(Phase::AwaitFavorites);
+        }
+        return;
+    }
+    let Some((model, snapshot)) = current else {
+        return;
+    };
+    if snapshot.busy {
+        return;
+    }
+    if (model.tab == Tab::Favorites && proof.step == 0)
+        || click_ui(world, proof, id, MouseButton::Left, |action| {
+            matches!(action, UiAction::Tab(Tab::Favorites))
+        })
+    {
+        proof.enter(Phase::AwaitFavorites);
+    }
+}
 fn click_movie(world: &mut World, proof: &mut Proof, id: Entity, x: f64, y: f64) -> bool {
     let window = world.get::<Window>(id).unwrap();
     let x = x * window.physical_width() as f64 / 1920.0;
@@ -523,7 +546,9 @@ pub(crate) fn update(world: &mut World, mut proof: Local<Proof>) {
             proof.enter(Phase::Play);
         }
         Phase::Play | Phase::ReopenPlay => {
-            if state == AppState::Menu && click_movie(world, &mut proof, id, 486.0, 26.0) {
+            if (proof.step == 2 || state == AppState::Menu)
+                && click_movie(world, &mut proof, id, 486.0, 26.0)
+            {
                 let next = if proof.phase == Phase::Play {
                     Phase::Community
                 } else {
@@ -534,7 +559,7 @@ pub(crate) fn update(world: &mut World, mut proof: Local<Proof>) {
         }
         Phase::Community | Phase::ReopenCommunity => {
             if proof.settled()
-                && state == AppState::Menu
+                && (proof.step == 2 || state == AppState::Menu)
                 && click_movie(world, &mut proof, id, 503.0, 222.0)
             {
                 let next = if proof.phase == Phase::Community {
@@ -547,19 +572,8 @@ pub(crate) fn update(world: &mut World, mut proof: Local<Proof>) {
         }
         Phase::AwaitBrowser if state == AppState::Browser => proof.enter(Phase::Favorites),
         Phase::Favorites => {
-            let Some((model, snapshot)) = browser(world) else {
-                return;
-            };
-            if snapshot.busy {
-                return;
-            }
-            if model.tab == Tab::Favorites {
-                proof.enter(Phase::AwaitFavorites);
-            } else if click_ui(world, &mut proof, id, MouseButton::Left, |action| {
-                matches!(action, UiAction::Tab(Tab::Favorites))
-            }) {
-                proof.enter(Phase::AwaitFavorites);
-            }
+            let current = browser(world);
+            favorites(world, &mut proof, id, current);
         }
         Phase::AwaitFavorites => {
             let Some((model, snapshot)) = browser(world) else {
@@ -703,7 +717,9 @@ pub(crate) fn update(world: &mut World, mut proof: Local<Proof>) {
         }
         Phase::Connect => {
             let key = proof.key.unwrap();
-            if browser(world).is_none_or(|(model, _)| model.selected != Some(key)) {
+            if proof.step != 2
+                && browser(world).is_none_or(|(model, _)| model.selected != Some(key))
+            {
                 failed(
                     world,
                     &mut proof,
@@ -924,6 +940,75 @@ pub(crate) fn update(world: &mut World, mut proof: Local<Proof>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn changed_favorites_tab_finishes_release_before_advance_and_next_press() {
+        // Actual InputPlugin processing: a held button suppresses the next
+        // repeated Pressed event's just_pressed edge until Released is consumed.
+        for busy in [false, true] {
+            let mut app = App::new();
+            app.add_plugins((MinimalPlugins, bevy::input::InputPlugin));
+            let window = app.world_mut().spawn_empty().id();
+            mouse(
+                app.world_mut(),
+                window,
+                MouseButton::Left,
+                ButtonState::Pressed,
+            );
+            app.update();
+            assert!(
+                app.world()
+                    .resource::<ButtonInput<MouseButton>>()
+                    .pressed(MouseButton::Left)
+            );
+            mouse(
+                app.world_mut(),
+                window,
+                MouseButton::Left,
+                ButtonState::Pressed,
+            );
+            app.update();
+            assert!(
+                !app.world()
+                    .resource::<ButtonInput<MouseButton>>()
+                    .just_pressed(MouseButton::Left)
+            );
+            let mut proof = Proof::default();
+            proof.phase = Phase::Favorites;
+            proof.step = 2; // Press dispatched; the tab now reflects that press.
+            let current = Some((
+                Model {
+                    tab: Tab::Favorites,
+                    ..default()
+                },
+                Snapshot { busy, ..default() },
+            ));
+            favorites(app.world_mut(), &mut proof, window, current);
+            assert_eq!(proof.phase, Phase::AwaitFavorites);
+            app.update();
+            assert!(
+                !app.world()
+                    .resource::<ButtonInput<MouseButton>>()
+                    .pressed(MouseButton::Left)
+            );
+            assert!(
+                app.world()
+                    .resource::<ButtonInput<MouseButton>>()
+                    .just_released(MouseButton::Left)
+            );
+            mouse(
+                app.world_mut(),
+                window,
+                MouseButton::Left,
+                ButtonState::Pressed,
+            );
+            app.update();
+            assert!(
+                app.world()
+                    .resource::<ButtonInput<MouseButton>>()
+                    .just_pressed(MouseButton::Left)
+            );
+        }
+    }
     #[test]
     fn pointer_targets_reject_stale_rendered_generation() {
         let key = ServerKey(7);
