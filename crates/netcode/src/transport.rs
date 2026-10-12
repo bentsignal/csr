@@ -94,6 +94,8 @@ impl Server {
             }
         }
         for client in self.connection.clients_id() {
+            self.session
+                .observe_rtt(client, self.connection.rtt(client));
             // Bound decoded work per peer per update, even if it floods.
             for _ in 0..16 {
                 let Some(bytes) = self.connection.receive_message(client, CONTROL) else {
@@ -141,6 +143,9 @@ impl Server {
         }
         let ticks = self.clock.advance(elapsed);
         for _ in 0..ticks {
+            if self.session.world().tick >= MAX_PROTOCOL_COUNTER {
+                return Err("server timeline exhausted".into());
+            }
             let events = self.session.step();
             for client in self.connection.clients_id() {
                 if self.session.player_for(client).is_none() {
@@ -283,9 +288,13 @@ impl Client {
         if self.player().is_none() {
             return Err("not admitted to match".into());
         }
+        if view_tick > MAX_PROTOCOL_COUNTER {
+            return Err("view timeline exceeds protocol bounds".into());
+        }
         self.sequence = self
             .sequence
             .checked_add(1)
+            .filter(|sequence| *sequence <= MAX_PROTOCOL_COUNTER)
             .ok_or("input sequence overflow")?;
         self.pending.push_back(InputCommand {
             sequence: self.sequence,
@@ -335,11 +344,13 @@ impl Client {
                     version,
                     content,
                     tick_rate,
+                    server_tick,
                     ..
                 } => {
                     if *version != VERSION
                         || content != &self.content
                         || !sim::TICK_RATE_RANGE.contains(tick_rate)
+                        || *server_tick > MAX_PROTOCOL_COUNTER
                     {
                         return Err("server welcome does not match local content/protocol".into());
                     }
@@ -375,7 +386,9 @@ impl Client {
             if self.events.len() >= 512 {
                 return Err("client is not consuming match events".into());
             }
-            self.events.push_back(decode(&bytes)?);
+            let batch: EventBatch = decode(&bytes)?;
+            validate_events(&batch)?;
+            self.events.push_back(batch);
         }
         self.transport
             .send_packets(&mut self.connection)

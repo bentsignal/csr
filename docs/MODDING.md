@@ -115,12 +115,22 @@ for combined catalogs; the existing built-in catalogs have not all migrated.
 
 ## Next integration seams
 
-- Track C can send a dropped file to one background `Installed::install` worker,
-  display validation/progress and offer maps on the next selection. Loading
-  snapshots must stay separate from a running match.
-- The Windows launcher can register a per-user `.csrpack` association pointing
-  to a quoted executable and quoted `%1`. The same command must report errors
-  visibly and return to the menu, using the existing userdata layout.
+- Installed Windows copies register `.csrpack` per user during install/update.
+  Opening one validates and atomically installs it with visible progress and
+  cancellation, reports errors in a dialog, then opens the game if it is not
+  already running. A successful install into a running game shows a notification
+  and exits this launcher. Content is stored in the existing userdata root;
+  updateable app folders and the Legacy install remain read-only.
+  `csr --open-pack FILE` and `csr FILE.csrpack` use the same path.
+- Track C can queue dropped files through `packs::InstallJob::start(store,path)`.
+  `progress()` returns the stage and bounded byte counts; `cancel()` requests
+  cancellation; `poll()` returns an installed manifest/hash receipt, cancellation
+  or an error. Wait for that terminal result before ending a process or starting
+  the next queued job. Only an installed receipt permits success feedback/map-list
+  refresh. Cancellation before publication preserves the old pack and removes
+  the pending file; successful publication always reports success. Loading
+  snapshots stay separate from a running match. Window drops, catalog refresh
+  and selected ContentId session loading are frontend work still in progress.
 - Track A can advertise exact archive hashes/sizes, stage downloads outside
   active installed packs, validate bytes, then mount an explicit session set.
   A server's files must not replace the player's global pack set automatically.

@@ -25,7 +25,9 @@ pub const REPO_URL: &str = "https://github.com/bentsignal/global-offensive";
 /// the process) and applies an update downloaded by an earlier run.
 pub fn startup() {
     VelopackApp::build()
-        .on_before_uninstall_fast_callback(|_| crate::steam::remove_everywhere())
+        .on_after_install_fast_callback(|_| crate::fileassoc::register())
+        .on_after_update_fast_callback(|_| crate::fileassoc::register())
+        .on_before_uninstall_fast_callback(|_| { crate::fileassoc::remove(); crate::steam::remove_everywhere(); })
         .on_restarted(|version| crate::dialog::notify("CSGO Rewrite updated", &format!("You are now on version {version}.")))
         .run();
 }

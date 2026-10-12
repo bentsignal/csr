@@ -26,8 +26,8 @@ Minecraft code need work before multiplayer and public releases.
 | `third_party/minecraftoss` + `minecraft_terrain` (~154k lines) | Ported from decompiled Minecraft, no licence files, hard dependency of `level` and `client`; release zip also bundled Minecraft assets | **Removed** (decision 1) |
 | VR | `TickInput` carries tracked head/hand poses and an aim ray; hitscan uses the aim ray. Cameras are still single-view | **Seam in place, build later** |
 
-Tests: 231 passing tests, with two installed-data tests ignored by default
-(remote-pose verification, 2026-10-11), mostly on synthetic data.
+Tests: 258 passing tests, with two installed-data tests ignored by default
+(authoritative-rewind verification, 2026-10-11), mostly on synthetic data.
 Real-data checks are the `csr probe` / `csr sim` commands.
 
 ## Phase 0: take ownership
@@ -91,7 +91,11 @@ reconciliation; rendered-client prediction/interpolation integration remains.
 A bounded, read-only remote pose history now samples fractional snapshot
 times, guards teleport/respawn discontinuities and interpolates tracked
 head/hands independently of the aim ray. Dust II UDP checks exercise this
-at 64 and 128 tick; Bevy rendering and authoritative hit rewind remain open.
+at 64 and 128 tick; Bevy rendering and full hitbox fidelity remain open.
+A server-only bounded hull history now supports authoritative hitscan rewind
+without moving live actors. The server derives valid view ticks from its own
+RTT/caps and requires matching spawn epochs, teams and rounds. Coarse existing
+hit groups remain; MDL/VR hitboxes and rendered multiplayer proof are open.
 
 - [ ] Protocol: `TickInput` up (with **optional tracked head/hand poses and a
       separate aim ray**, reserved now for VR), full-state snapshots then
@@ -213,11 +217,15 @@ thing is uncanny. Fidelity is measured, never eyeballed:
 The archive-loader groundwork in [PR #15](https://github.com/bentsignal/global-offensive/pull/15)
 gives listed maps and loaded levels stable `ContentId`s and exposes
 `Level::load_from_vfs` for maps in mounted content packs. A synthetic pack
-loads without a game install. The interrupted pack-format draft remains
-in [PR #12](https://github.com/bentsignal/global-offensive/pull/12); the items
-below are still open.
+loads without a game install. [PR #17](https://github.com/bentsignal/global-offensive/pull/17)
+landed the bounded, data-only private pack format, atomic installation,
+transactional ContentId registry and selected-pack Level/VFS loading. A
+manifest-only Legacy recipe and a private Dust II asset pack both passed
+release probe/simulation and a rendered private-pack proof; PR #12 was closed
+as superseded. File opening and window-drop integration are the next seam;
+server downloads and other-game importers remain open.
 
-- [ ] Pack format `.csrpack`: a zip with `pack.toml` (id, version, origin,
+- [x] Pack format `.csrpack`: a zip with `pack.toml` (id, version, origin,
       provided `ContentId`s, content hash) plus data definitions and
       optional assets. Mounted into `vfs` as another search path.
 - [ ] A content registry keyed by `ContentId`, replacing hardcoded names

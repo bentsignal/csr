@@ -2,7 +2,8 @@
 
 Track A2 has a Bevy-free UDP session and a dedicated server. The rendered
 client still plays offline: joining from the classic menu, rendered-client
-integration, rendered interpolation, lag compensation, snapshot deltas, listen hosting and discovery
+integration, rendered interpolation, complete lag compensation, snapshot
+deltas, listen hosting and discovery
 remain open. This is an integration foundation, not a multiplayer release.
 
 ## Ownership and messages
@@ -28,6 +29,10 @@ The wire format is postcard. Channels are:
 | Input | Unreliable | Up to eight recent sequenced `TickInput`s |
 | State | Unreliable, fragmented | Full authoritative state with last applied input sequence |
 | Events | Reliable, ordered | Tick-stamped `GameEvent` batches |
+
+Protocol version 2 includes replicated spawn epochs and server-derived
+hitscan rewind ticks. See [LAGCOMP.md](LAGCOMP.md) for server timing/lifecycle
+bounds and the remaining hitbox fidelity scope.
 
 Inputs include the existing optional tracked head/hand poses and separate
 aim ray. The server rejects nonfinite values, clamps movement to 450, limits

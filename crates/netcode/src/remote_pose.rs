@@ -20,7 +20,7 @@ pub struct RenderPose {
     pub weapon: Option<ContentId>,
     pub tracked: Option<TrackedPose>,
     pub aim: Option<AimRay>,
-    life: f32,
+    life: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -102,7 +102,10 @@ impl PoseHistory {
         if self.latest_tick().is_some_and(|tick| state.tick <= tick) {
             return Ok(false);
         }
-        if state.tick_rate != self.rate || state.players.len() > 64 {
+        if state.tick > crate::protocol::MAX_PROTOCOL_COUNTER
+            || state.tick_rate != self.rate
+            || state.players.len() > 64
+        {
             return Err("incompatible remote pose snapshot".into());
         }
         let mut players = BTreeMap::new();
@@ -136,7 +139,10 @@ impl PoseHistory {
         player: PlayerId,
         render_tick: f64,
     ) -> Result<Option<RenderSample>, String> {
-        if !render_tick.is_finite() || render_tick < 0. {
+        if !render_tick.is_finite()
+            || render_tick < 0.
+            || render_tick > crate::protocol::MAX_LOCAL_TICK as f64
+        {
             return Err("invalid render timeline".into());
         }
         let Some(first) = self.frames.front() else {
@@ -231,7 +237,7 @@ impl RenderPose {
             weapon: player.active_weapon().map(|w| w.def.id.clone()),
             tracked: player.tracked,
             aim: player.aim,
-            life: player.respawn_at,
+            life: player.life_epoch,
         };
         if !pose.origin.is_finite()
             || !pose.origin.length_squared().is_finite()
@@ -241,7 +247,7 @@ impl RenderPose {
             || !pose.eye.length_squared().is_finite()
             || !pose.view_angles.is_finite()
             || !pose.punch.is_finite()
-            || !pose.life.is_finite()
+            || (pose.alive && pose.life == 0)
         {
             return Err("nonfinite remote pose".into());
         }
@@ -383,7 +389,7 @@ mod tests {
             world.tick = 4;
             world.players[0].movement.origin = Vec3::X * if change == 0 { 512. } else { 10. };
             if change == 1 {
-                world.players[0].respawn_at = 2.;
+                world.players[0].life_epoch += 1;
             }
             if change == 2 {
                 world.players[0].team = Team::Terrorist;
@@ -508,6 +514,11 @@ mod tests {
         assert_eq!(history.latest_tick(), Some(0));
         assert!(history.sample(id, f64::NAN).is_err());
         assert!(history.sample(id, -1.).is_err());
+        assert!(history.sample(id, u64::MAX as f64).is_err());
+        world.tick = u64::MAX;
+        world.players[0].tracked = None;
+        assert!(history.push(&world.state()).is_err());
+        assert_eq!(history.latest_tick(), Some(0));
     }
     #[test]
     fn antipodal_quaternions_do_not_spin_equivalent_head_orientations() {

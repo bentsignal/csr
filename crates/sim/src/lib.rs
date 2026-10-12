@@ -24,6 +24,7 @@
 pub mod bots;
 pub mod loadout;
 pub mod objectives;
+pub mod rewind;
 pub mod state;
 pub mod rng;
 pub mod rules;
@@ -144,6 +145,9 @@ pub struct TickInput {
     /// Weapon aim, when it differs from the view (VR). Shots, knife swings
     /// and throws use it instead of [`TickInput::view_angles`].
     pub aim: Option<AimRay>,
+    /// Server-validated historical target tick. Clients do not choose this
+    /// field directly; the session derives it from the bounded view timeline.
+    pub rewind_tick: Option<u64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -160,6 +164,8 @@ pub struct Player {
     pub defuse_kit: bool,
     pub money: i32,
     pub alive: bool,
+    /// Replicated spawn/placement epoch. Historical hits cannot cross lives.
+    pub life_epoch: u64,
     pub respawn_at: f32,
     pub flash_until: f32,
     /// Ordered by inventory slot.
@@ -411,6 +417,8 @@ pub struct World {
     /// AI for the players with `is_bot`. They think at the start of every
     /// [`World::step`] on whoever runs the authoritative world.
     pub bots: bots::Bots,
+    /// Optional server-only hit hull history, never part of WorldState.
+    rewind: Option<rewind::History>,
     next_id: PlayerId,
     next_item: u32,
 }
@@ -465,6 +473,7 @@ impl World {
             tick_rate: DEFAULT_TICK_RATE,
             events: Vec::new(),
             bots: bots::Bots::default(),
+            rewind: None,
             next_id: 1,
             next_item: 1,
         }
@@ -492,6 +501,7 @@ impl World {
         let now = self.time() as f64;
         self.tick_rate = rate;
         self.tick = (now * rate as f64).round() as u64;
+        self.rewind = None;
     }
 
     pub fn competitive(&self) -> bool {
@@ -582,6 +592,7 @@ impl World {
             defuse_kit: false,
             money: if self.mode == GameMode::Special { 0 } else { self.rules.start_money },
             alive: false,
+            life_epoch: 0,
             respawn_at: 0.0,
             flash_until: 0.0,
             weapons: Vec::new(),
@@ -697,6 +708,7 @@ impl World {
             p.health = 100;
             p.flash_until = 0.0;
             p.alive = true;
+            p.life_epoch = p.life_epoch.saturating_add(1);
             p.plant_start = None;
         }
     }
@@ -1280,6 +1292,11 @@ impl World {
     }
 
     fn step_internal(&mut self, inputs: &[(PlayerId, TickInput)], think_bots: bool) {
+        if think_bots {
+            if let Some(history) = &mut self.rewind {
+                history.capture(self.tick, self.round.round, &self.players);
+            }
+        }
         // Bots decide first, from last tick's state and events (what they
         // heard). Explicit inputs win over a bot's own.
         let with_bots;
@@ -1329,8 +1346,12 @@ impl World {
                 buy: Purchase::None,
                 drop: false,
                 utility: 0,
+                rewind_tick: None,
                 ..self.players[i].last_input
             });
+            if !think_bots || self.players[i].is_bot {
+                input.rewind_tick = None;
+            }
             if let Some(aim) = &mut input.aim {
                 aim.direction = aim.direction.try_normalize().unwrap_or(Vec3::X);
                 // Keep the muzzle near the head: no shooting from outside
@@ -1486,7 +1507,7 @@ impl World {
                     self.throw_grenade(i);
                 } else if self.players[i].active_weapon().is_some_and(|w| w.is_melee()) {
                     self.melee_attack(i, time, stab);
-                } else { self.fire(i, time); }
+                } else { self.fire(i, time, input.rewind_tick); }
             }
             if self.players[i].alive && !self.items.is_empty() {
                 self.pickups(i, time);
@@ -1554,7 +1575,7 @@ impl World {
         };
     }
 
-    fn fire(&mut self, shooter: usize, time: f32) {
+    fn fire(&mut self, shooter: usize, time: f32, rewind_tick: Option<u64>) {
         let p = &self.players[shooter];
         let id = p.id;
         let team = p.team;
@@ -1602,7 +1623,8 @@ impl World {
                 if j == shooter || !other.alive || !team.enemy_of(other.team) {
                     continue;
                 }
-                let (mn, mx) = other.bounds();
+                let hull = self.target_hull(other, rewind_tick);
+                let (mn, mx) = (hull.mins, hull.maxs);
                 if let Some(t) = ray_box(eye, dir, mn, mx) {
                     if t <= world_dist && best.is_none_or(|(_, bt)| t < bt) {
                         best = Some((j, t));
@@ -1625,9 +1647,10 @@ impl World {
                     let hit = eye + dir * t;
                     self.events.push(GameEvent::Tracer { player: id, start: eye, end: hit });
                     let victim = &self.players[j];
-                    let (mn, mx) = victim.bounds();
+                    let hull = self.target_hull(victim, rewind_tick);
+                    let (mn, mx) = (hull.mins, hull.maxs);
                     let frac = ((hit.z - mn.z) / (mx.z - mn.z)).clamp(0.0, 1.0);
-                    let (_, vright, _) = movement::angle_vectors(Vec3::new(0.0, victim.view_angles.y, 0.0));
+                    let (_, vright, _) = movement::angle_vectors(Vec3::new(0.0, hull.yaw, 0.0));
                     let center = (mn + mx) * 0.5;
                     let side = ((hit - center).dot(vright) / 16.0).clamp(-1.0, 1.0);
                     let group = HitGroup::from_height(frac, side);

@@ -5,7 +5,7 @@
 //! tracked VR pose), dropped items, grenades in flight, smoke and fire, the
 //! bomb, and the rules and movement settings in force. It leaves out what
 //! both sides load from the map and the install (collision, spawns,
-//! objectives, the weapon catalog) and the server-only bot brains.
+//! objectives, the weapon catalog), server-only bot brains and hit history.
 //!
 //! A [`Snapshot`] is one tick as a client receives it: the state after the
 //! tick plus the [`GameEvent`]s it produced. Restoring a snapshot into a
@@ -101,6 +101,7 @@ impl World {
         self.bomb = s.bomb;
         self.next_id = s.next_id;
         self.next_item = s.next_item;
+        self.rewind = None;
     }
 
     /// The state after the last step plus that step's events.

@@ -1,4 +1,5 @@
 //! Transport-independent ownership and tick scheduling.
+use crate::lag::LagPolicy;
 use crate::protocol::*;
 use sim::{PlayerId, TickInput, World};
 use std::collections::{BTreeMap, HashMap};
@@ -13,6 +14,7 @@ struct Peer {
     acknowledged: u64,
     pending: BTreeMap<u64, InputCommand>,
     last_input_tick: u64,
+    rtt_seconds: f64,
 }
 
 pub struct Session {
@@ -20,19 +22,32 @@ pub struct Session {
     content: ContentManifest,
     peers: HashMap<u64, Peer>,
     departed_events: Vec<sim::GameEvent>,
+    lag: LagPolicy,
 }
 
 impl Session {
     pub fn new(world: World, content: ContentManifest) -> Result<Self, String> {
+        let policy = LagPolicy::prototype(world.tick_rate);
+        Self::with_lag_policy(world, content, policy)
+    }
+
+    pub fn with_lag_policy(
+        mut world: World,
+        content: ContentManifest,
+        policy: LagPolicy,
+    ) -> Result<Self, String> {
         content.validate()?;
         if !sim::TICK_RATE_RANGE.contains(&world.tick_rate) {
             return Err("unsupported tick rate".into());
         }
+        let lag = policy.validate(world.tick_rate)?;
+        world.configure_hit_history(lag.max_history_ticks, lag.teleport_distance)?;
         Ok(Self {
             world,
             content,
             peers: HashMap::new(),
             departed_events: Vec::new(),
+            lag,
         })
     }
 
@@ -44,6 +59,17 @@ impl Session {
     }
     pub fn player_for(&self, client: u64) -> Option<PlayerId> {
         self.peers.get(&client).map(|p| p.player)
+    }
+
+    /// Transport-observed latency only, never a client-supplied ping value.
+    pub fn observe_rtt(&mut self, client: u64, seconds: f64) {
+        if let Some(peer) = self.peers.get_mut(&client) {
+            peer.rtt_seconds = if seconds.is_finite() && seconds >= 0. {
+                seconds.min(2.)
+            } else {
+                0.
+            };
+        }
     }
 
     pub fn join(&mut self, client: u64, hello: ClientControl) -> ServerControl {
@@ -116,8 +142,11 @@ impl Session {
         // Validate the entire datagram before admitting any command.
         let mut accepted = Vec::new();
         for mut command in batch.0 {
-            if command.sequence == 0 {
-                return Err("input sequence starts at one".into());
+            if command.sequence == 0
+                || command.sequence > MAX_PROTOCOL_COUNTER
+                || command.view_tick > MAX_PROTOCOL_COUNTER
+            {
+                return Err("input counters exceed protocol bounds".into());
             }
             if command.sequence <= peer.acknowledged {
                 continue;
@@ -125,10 +154,14 @@ impl Session {
             if command.sequence - peer.acknowledged > 4096 {
                 return Err("input sequence too far ahead".into());
             }
-            if command.view_tick > self.world.tick {
-                return Err("view tick is in the future".into());
-            }
             command.input = validate_input(command.input)?;
+            command.input.rewind_tick = self.lag.accepted_tick(
+                self.world.tick,
+                self.world.oldest_hit_tick(),
+                command.view_tick,
+                self.world.tick_rate,
+                peer.rtt_seconds,
+            );
             accepted.push(command);
         }
         for command in accepted {
@@ -146,9 +179,18 @@ impl Session {
         let timeout = self.world.ticks(INPUT_TIMEOUT);
         let mut inputs = Vec::with_capacity(self.peers.len());
         for peer in self.peers.values_mut() {
-            if let Some((sequence, command)) = peer.pending.pop_first() {
+            if let Some((sequence, mut command)) = peer.pending.pop_first() {
                 peer.acknowledged = sequence;
                 peer.last_input_tick = self.world.tick;
+                command.input.rewind_tick = command.input.rewind_tick.and_then(|tick| {
+                    self.lag.accepted_tick(
+                        self.world.tick,
+                        self.world.oldest_hit_tick(),
+                        tick,
+                        self.world.tick_rate,
+                        peer.rtt_seconds,
+                    )
+                });
                 inputs.push((peer.player, command.input));
             } else if self.world.tick.saturating_sub(peer.last_input_tick) >= timeout {
                 let angles = self
@@ -344,6 +386,19 @@ mod tests {
         assert_eq!(s.snapshot_for(10).unwrap().acknowledged_input, 0);
         assert_eq!(s.snapshot_for(20).unwrap().acknowledged_input, 1);
         assert!(s.input(20, InputBatch(vec![command(5000)])).is_err());
+        for counter in 0..2 {
+            let mut malformed = command(2);
+            if counter == 0 {
+                malformed.view_tick = u64::MAX;
+            } else {
+                malformed.sequence = u64::MAX;
+            }
+            assert!(
+                s.input(10, InputBatch(vec![command(1), malformed]))
+                    .is_err()
+            );
+            assert!(s.peers[&10].pending.is_empty());
+        }
     }
     #[test]
     fn future_view_ticks_and_invalid_tracking_cannot_poison_the_world() {
@@ -351,8 +406,9 @@ mod tests {
         s.join(10, hello());
         let mut future = command(1);
         future.view_tick = 1;
-        assert!(s.input(10, InputBatch(vec![future])).is_err());
-        let mut invalid = command(1);
+        future.input.rewind_tick = Some(0); // Inner metadata is not trusted.
+        s.input(10, InputBatch(vec![future])).unwrap();
+        let mut invalid = command(2);
         invalid.input.tracked = Some(sim::TrackedPose {
             head: sim::Pose {
                 position: glam::Vec3::ZERO,
@@ -362,7 +418,8 @@ mod tests {
         });
         assert!(s.input(10, InputBatch(vec![invalid])).is_err());
         s.step();
-        assert_eq!(s.snapshot_for(10).unwrap().acknowledged_input, 0);
+        assert_eq!(s.snapshot_for(10).unwrap().acknowledged_input, 1);
+        assert_eq!(s.world.players[0].last_input.rewind_tick, None);
         assert!(s.world.players[0].movement.origin.is_finite());
     }
     #[test]
@@ -402,5 +459,107 @@ mod tests {
         assert_eq!(clock.advance(Duration::from_secs(1)), 8);
         assert_eq!(clock.discarded_wall_ticks, 120);
         assert_eq!(clock.advance(Duration::ZERO), 0);
+    }
+
+    #[test]
+    fn old_protocol_cannot_join_or_spawn_a_player() {
+        let mut s = session();
+        let mut old = hello();
+        if let ClientControl::Hello { version, .. } = &mut old {
+            *version = 1;
+        }
+        assert!(matches!(s.join(10, old), ServerControl::Rejected { .. }));
+        assert!(s.world.players.is_empty());
+    }
+
+    #[test]
+    fn rewind_is_revalidated_on_consume_and_never_upgrades_an_invalid_request() {
+        let mut s = session();
+        s.join(10, hello());
+        for _ in 0..16 {
+            s.step();
+        }
+        let mut c = command(1);
+        c.view_tick = s.world.tick - 2;
+        c.input.rewind_tick = Some(u64::MAX);
+        s.input(10, InputBatch(vec![c])).unwrap();
+        assert_eq!(s.peers[&10].pending[&1].input.rewind_tick, Some(14));
+        // Queued command ages beyond the server allowance before consumption.
+        for _ in 0..16 {
+            s.world.step(&[]);
+        }
+        s.step();
+        assert_eq!(s.world.players[0].last_input.rewind_tick, None);
+        let mut future = command(2);
+        future.view_tick = s.world.tick + 1;
+        s.input(10, InputBatch(vec![future])).unwrap();
+        s.world.step(&[]); // It is now a valid time, but was invalid on receipt.
+        s.step();
+        assert_eq!(s.world.players[0].last_input.rewind_tick, None);
+        assert_eq!(s.snapshot_for(10).unwrap().acknowledged_input, 2);
+    }
+
+    #[test]
+    fn only_valid_outer_view_metadata_can_produce_an_authoritative_historical_hit() {
+        let catalog = Arc::new(
+            weapons::Catalog::from_items_game(
+                r##"
+            "items_game" { "items" { "1" {
+                "name" "weapon_test" "baseitem" "1"
+                "item_type_name" "#CSGO_Type_Rifle"
+                "attributes" { "damage" "35" "range" "8192"
+                    "primary clip size" "30" "is full auto" "1" "cycletime" "0.1" }
+            } } }
+        "##,
+            )
+            .unwrap(),
+        );
+        for valid in [true, false] {
+            let world =
+                World::with_catalog(Arc::new(collision::CollisionWorld::new()), catalog.clone());
+            let mut s = Session::new(world, manifest()).unwrap();
+            s.join(10, hello());
+            let mut target_hello = hello();
+            if let ClientControl::Hello { team, .. } = &mut target_hello {
+                *team = Team::Terrorist;
+            }
+            s.join(20, target_hello);
+            let shooter = s.player_for(10).unwrap();
+            let victim = s.player_for(20).unwrap();
+            s.world.players[0].movement = movement::PlayerMove::spawn_at(glam::Vec3::ZERO);
+            s.world.players[0].weapons = vec![sim::weapon::WeaponState::new(Arc::new(
+                catalog.get("weapon_test").unwrap().clone(),
+            ))];
+            s.world.players[0].active = 0;
+            s.world.players[1].movement = movement::PlayerMove::spawn_at(glam::Vec3::X * 100.);
+            s.world.players[1].armor = 0;
+            s.step(); // Tick zero target pose is now in server history.
+            s.world.players[1].movement.origin.y = 64.;
+            let input = InputCommand {
+                sequence: 1,
+                view_tick: if valid { 0 } else { 100 },
+                input: TickInput {
+                    buttons: movement::buttons::ATTACK,
+                    rewind_tick: Some(0),
+                    ..Default::default()
+                },
+            };
+            s.input(10, InputBatch(vec![input])).unwrap();
+            let events = s.step();
+            assert_eq!(
+                events
+                    .events
+                    .iter()
+                    .any(|e| matches!(e, sim::GameEvent::Damage {
+                attacker, victim: hit, .. } if *attacker == shooter && *hit == victim)),
+                valid
+            );
+            assert_eq!(s.world.player(victim).unwrap().health < 100, valid);
+            assert_eq!(s.world.player(victim).unwrap().movement.origin.y, 64.);
+            assert_eq!(
+                s.world.player(shooter).unwrap().last_input.rewind_tick,
+                valid.then_some(0)
+            );
+        }
     }
 }

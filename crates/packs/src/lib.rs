@@ -4,9 +4,12 @@
 
 mod container;
 mod install;
+mod job;
 #[cfg(test)]
 mod tests;
 pub use install::Installed;
+use job::Control;
+pub use job::{InstallJob, Outcome, Progress, Receipt, Stage};
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Cursor, Read, Write};
@@ -298,14 +301,24 @@ fn asset_path(path: &str) -> bool {
 /// Payload hash, independent of ZIP compression/order/timestamps. Metadata is
 /// excluded; use `Pack::archive_hash` to identify bytes advertised by a server.
 pub fn content_hash(files: &BTreeMap<String, Arc<[u8]>>) -> String {
+    content_hash_controlled(files, &Control::default()).expect("uncancellable content hash")
+}
+
+fn content_hash_controlled(
+    files: &BTreeMap<String, Arc<[u8]>>,
+    control: &Control,
+) -> Result<String, String> {
     let mut hash = Sha256::new();
     for (path, data) in files.iter().filter(|(p, _)| p.as_str() != MANIFEST) {
         hash.update(path.as_bytes());
         hash.update([0]);
         hash.update((data.len() as u64).to_le_bytes());
-        hash.update(data);
+        for chunk in data.chunks(job::CHUNK) {
+            control.check()?;
+            hash.update(chunk);
+        }
     }
-    digest(hash.finalize().as_slice())
+    Ok(digest(hash.finalize().as_slice()))
 }
 
 fn digest(bytes: &[u8]) -> String {
@@ -345,15 +358,37 @@ impl Pack {
     }
 
     pub fn open_with_limits(path: &Path, limits: Limits) -> Result<Self, String> {
+        Self::open_controlled(path, limits, &Control::default())
+    }
+
+    pub(crate) fn open_controlled(
+        path: &Path,
+        limits: Limits,
+        control: &Control,
+    ) -> Result<Self, String> {
+        control.update(Stage::Reading, 0, 0)?;
         let file = std::fs::File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
-        if file.metadata().map_err(|e| e.to_string())?.len() > limits.archive {
+        let size = file.metadata().map_err(|e| e.to_string())?.len();
+        if size > limits.archive {
             return Err("pack archive exceeds size limit".into());
         }
         let mut bytes = Vec::new();
-        file.take(limits.archive.saturating_add(1))
-            .read_to_end(&mut bytes)
-            .map_err(|e| e.to_string())?;
-        Self::from_bytes_with_limits(bytes, limits)
+        let mut reader = file.take(limits.archive.saturating_add(1));
+        let mut buffer = vec![0; job::CHUNK];
+        loop {
+            control.update(Stage::Reading, bytes.len() as u64, size)?;
+            let read = reader.read(&mut buffer).map_err(|e| e.to_string())?;
+            if read == 0 {
+                break;
+            }
+            // A file can grow after metadata was checked. Refuse the extra
+            // byte before Vec's geometric growth can exceed the archive budget.
+            if bytes.len() as u64 + read as u64 > limits.archive {
+                return Err("pack archive exceeds size limit".into());
+            }
+            bytes.extend_from_slice(&buffer[..read]);
+        }
+        Self::from_bytes_controlled(bytes, limits, control)
     }
 
     pub fn from_bytes(bytes: Vec<u8>) -> Result<Self, String> {
@@ -361,6 +396,15 @@ impl Pack {
     }
 
     pub fn from_bytes_with_limits(bytes: Vec<u8>, limits: Limits) -> Result<Self, String> {
+        Self::from_bytes_controlled(bytes, limits, &Control::default())
+    }
+
+    pub(crate) fn from_bytes_controlled(
+        bytes: Vec<u8>,
+        limits: Limits,
+        control: &Control,
+    ) -> Result<Self, String> {
+        control.update(Stage::Validating, 0, 0)?;
         if bytes.len() as u64 > limits.archive {
             return Err("pack archive exceeds size limit".into());
         }
@@ -374,6 +418,7 @@ impl Pack {
         let mut files = BTreeMap::new();
         let mut expanded = 0u64;
         for index in 0..zip.len() {
+            control.check()?;
             let mut entry = zip.by_index(index).map_err(|e| e.to_string())?;
             let is_dir = entry.is_dir();
             let name = canonical_path(if is_dir {
@@ -420,11 +465,27 @@ impl Pack {
             }
             let size = entry.size();
             let mut data = Vec::new();
-            entry
-                .by_ref()
-                .take(size.saturating_add(1))
-                .read_to_end(&mut data)
-                .map_err(|e| format!("{name}: {e}"))?;
+            let mut reader = entry.by_ref().take(size.saturating_add(1));
+            let mut buffer = vec![0; job::CHUNK];
+            loop {
+                control.update(
+                    Stage::Validating,
+                    expanded - size + data.len() as u64,
+                    limits.expanded,
+                )?;
+                let read = reader
+                    .read(&mut buffer)
+                    .map_err(|e| format!("{name}: {e}"))?;
+                if read == 0 {
+                    break;
+                }
+                // A lying expanded size must not trigger an extra Vec growth
+                // allocation before the final exact-length check.
+                if data.len() as u64 + read as u64 > size {
+                    return Err(format!("invalid expanded length: {name}"));
+                }
+                data.extend_from_slice(&buffer[..read]);
+            }
             if data.len() as u64 != size || data.len() as u64 > bound {
                 return Err(format!("invalid expanded length: {name}"));
             }
@@ -434,7 +495,7 @@ impl Pack {
         let manifest = Manifest::parse(
             std::str::from_utf8(manifest_bytes).map_err(|_| "pack.toml must be UTF-8")?,
         )?;
-        if content_hash(&files) != manifest.content_hash {
+        if content_hash_controlled(&files, control)? != manifest.content_hash {
             return Err("pack content hash mismatch".into());
         }
         files.remove(MANIFEST);
@@ -469,7 +530,12 @@ impl Pack {
                 return Err(format!("undeclared map: {path}"));
             }
         }
-        let archive_hash = digest(&Sha256::digest(&bytes));
+        let mut hash = Sha256::new();
+        for chunk in bytes.chunks(job::CHUNK) {
+            control.check()?;
+            hash.update(chunk);
+        }
+        let archive_hash = digest(&hash.finalize());
         Ok(Self {
             manifest,
             archive: bytes.into(),
