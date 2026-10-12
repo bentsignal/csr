@@ -51,28 +51,29 @@ pub fn run(args: &[String]) -> Option<i32> {
                 Ok(())
             }),
         _ => {
-            let (packs, errors) = store.load();
-            for pack in packs {
+            let catalog = store.catalog();
+            for entry in catalog.entries {
+                let manifest = entry.manifest();
                 println!(
                     "{} {} — {}",
-                    pack.manifest().id,
-                    pack.manifest().version,
-                    pack.manifest().name
+                    manifest.id,
+                    manifest.version,
+                    manifest.name
                 );
-                for map in &pack.manifest().maps {
+                for map in &manifest.maps {
                     println!(
                         "  {}: {} ({:?}, maps/{}.bsp)",
                         map.id, map.name, map.source, map.bsp
                     );
                 }
-                for resource in &pack.manifest().resources {
+                for resource in &manifest.resources {
                     println!("  {}: {}", resource.id, resource.path);
                 }
             }
-            if errors.is_empty() {
+            if catalog.errors.is_empty() {
                 Ok(())
             } else {
-                Err(errors.join("\n"))
+                Err(catalog.errors.join("\n"))
             }
         }
     };
