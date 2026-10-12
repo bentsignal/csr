@@ -6,8 +6,15 @@ use super::frontend_servers_data::{
 use bevy::{
     input::{ButtonState, keyboard::KeyboardInput},
     prelude::*,
+    ui::FocusPolicy,
 };
 use std::collections::HashMap;
+
+// The fullscreen movie image occupies global layer100. Bevy globally sorts
+// detached UI subtrees, so the browser and its overlays need distinct layers.
+const BROWSER_LAYER: i32 = 110;
+const ADD_LAYER: i32 = 120;
+const CONTEXT_LAYER: i32 = 130;
 
 #[derive(Clone, Default)]
 pub struct Fonts(pub HashMap<String, FontSource>);
@@ -141,7 +148,9 @@ fn control(
     commands.entity(parent).add_children(&[entity]);
     if enabled {
         if let Some(action) = action {
-            commands.entity(entity).insert((Button, action));
+            commands
+                .entity(entity)
+                .insert((Button, FocusPolicy::Block, action));
         }
     }
     let text_color = if !enabled {
@@ -201,7 +210,7 @@ pub fn spawn(
                 ..default()
             },
             UiTargetCamera(camera),
-            GlobalZIndex(100),
+            GlobalZIndex(BROWSER_LAYER),
         ))
         .id();
     let frame_entity = commands
@@ -260,7 +269,7 @@ pub fn spawn(
             if !snapshot.busy && !model.add_open {
                 commands
                     .entity(button)
-                    .insert((Button, UiAction::Tab(*tab)));
+                    .insert((Button, FocusPolicy::Block, UiAction::Tab(*tab)));
             }
             label(
                 commands,
@@ -442,6 +451,7 @@ fn render_rows(
         let entity = commands
             .spawn((
                 Button,
+                FocusPolicy::Block,
                 UiAction::Select(row.key, snapshot.generation),
                 node(Rect {
                     y,
@@ -507,15 +517,17 @@ fn render_rows(
                 let popup = commands
                     .spawn((
                         node(r),
-                        GlobalZIndex(120),
-                        BackgroundColor(color(def, "Button.BgColor")),
+                        GlobalZIndex(CONTEXT_LAYER),
+                        BackgroundColor(color(def, "Menu.BgColor")),
                     ))
                     .id();
                 commands.entity(list).add_children(&[popup]);
                 if !snapshot.busy && !model.add_open {
-                    commands
-                        .entity(popup)
-                        .insert((Button, UiAction::RemoveFavorite(key, snapshot.generation)));
+                    commands.entity(popup).insert((
+                        Button,
+                        FocusPolicy::Block,
+                        UiAction::RemoveFavorite(key, snapshot.generation),
+                    ));
                 }
                 label(
                     commands,
@@ -527,7 +539,7 @@ fn render_rows(
                         ..default()
                     },
                     "Default",
-                    "Button.TextColor",
+                    "Menu.TextColor",
                     def,
                     fonts,
                 )?;
@@ -553,7 +565,7 @@ fn render_add(
         .spawn((
             node(frame.rect),
             BackgroundColor(color(def, "Frame.BgColor")),
-            GlobalZIndex(110),
+            GlobalZIndex(ADD_LAYER),
         ))
         .id();
     commands.entity(parent).add_children(&[entity]);
@@ -1162,6 +1174,303 @@ mod tests {
             None
         );
     }
+    #[test]
+    fn enabled_control_blocks_underlying_rows_after_node_allocation() {
+        use bevy::ecs::world::CommandQueue;
+        let mut world = World::new();
+        let parent = world.spawn_empty().id();
+        let control_data = Control {
+            name: "owned-action".into(),
+            field_name: "owned-action".into(),
+            kind: "Button".into(),
+            rect: Rect {
+                width: 100.0,
+                height: 20.0,
+                ..default()
+            },
+            text: String::new(),
+            command: Some("connect".into()),
+            font: "Default".into(),
+            visible: true,
+            enabled: true,
+            default_button: false,
+        };
+        let definition = Definition {
+            browser: default(),
+            page: default(),
+            add: default(),
+            info: default(),
+            scheme: default(),
+            tokens: default(),
+        };
+        let mut queue = CommandQueue::default();
+        let mut commands = Commands::new(&mut queue, &world);
+        let entity = control(
+            &mut commands,
+            parent,
+            &control_data,
+            control_data.rect,
+            Some(UiAction::Command("connect".into(), 1)),
+            true,
+            &definition,
+            &Fonts::default(),
+        )
+        .unwrap();
+        queue.apply(&mut world);
+        assert!(world.get::<Button>(entity).is_some());
+        assert_eq!(world.get::<FocusPolicy>(entity), Some(&FocusPolicy::Block));
+    }
+
+    #[test]
+    fn context_uses_opaque_menu_roles_instead_of_transparent_button_roles() {
+        use bevy::ecs::world::CommandQueue;
+        use std::{collections::BTreeMap, sync::Arc};
+        // Synthetic runtime scheme: deliberately different Menu/Button roles
+        // ensure the production popup reads the declared menu appearance.
+        let scheme = br#"Scheme {
+            Colors { MenuBackground "12 34 56 255" MenuForeground "70 80 90 255" Blank "0 0 0 0" }
+            BaseSettings { Menu.BgColor MenuBackground Menu.TextColor MenuForeground Button.BgColor Blank Button.TextColor "1 2 3 255" }
+            Fonts { Default { "1" { name Synthetic tall "16" weight "500" } } }
+        }"#;
+        let mut game = vfs::Vfs::new();
+        game.push_back(
+            "synthetic scheme",
+            vfs::Mount::Memory(BTreeMap::from([(
+                "resource/sourcescheme.res".into(),
+                Arc::<[u8]>::from(&scheme[..]),
+            )])),
+        );
+        let mut files = BTreeMap::new();
+        files.insert(
+            "servers/serverbrowser_english.txt".into(),
+            Arc::<[u8]>::from(&b"lang { Tokens {} }"[..]),
+        );
+        for name in [
+            "dialogserverbrowser",
+            "customgamespage",
+            "dialogaddserver",
+            "dialoggameinfo",
+        ] {
+            files.insert(
+                format!("servers/{name}.res"),
+                Arc::<[u8]>::from(&b"root {}"[..]),
+            );
+        }
+        let mut platform = vfs::Vfs::new();
+        platform.push_back("synthetic layouts", vfs::Mount::Memory(files));
+        let def = Definition::load(&game, &platform).unwrap();
+        let mut fonts = Fonts::default();
+        fonts.insert("Default", Handle::<Font>::default());
+        let key = ServerKey(7);
+        let model = Model {
+            tab: Tab::Favorites,
+            selected: Some(key),
+            context_row: Some(key),
+            ..default()
+        };
+        let snapshot = Snapshot {
+            generation: 3,
+            rows: vec![data::ServerRow {
+                key,
+                endpoint: "localhost:27015".into(),
+                map: Some("synthetic_map".into()),
+                name: None,
+                players: None,
+                ping_ms: None,
+                favorite: true,
+                connectable: true,
+            }],
+            ..default()
+        };
+        let mut world = World::new();
+        let parent = world.spawn(Node::default()).id();
+        let mut queue = CommandQueue::default();
+        let mut commands = Commands::new(&mut queue, &world);
+        render_rows(
+            &mut commands,
+            parent,
+            Rect {
+                width: 600.0,
+                height: 300.0,
+                ..default()
+            },
+            &def,
+            &fonts,
+            &model,
+            &snapshot,
+        )
+        .unwrap();
+        queue.apply(&mut world);
+        let popup = world
+            .query::<(Entity, &UiAction)>()
+            .iter(&world)
+            .find_map(|(entity, action)| {
+                matches!(action, UiAction::RemoveFavorite(found, 3) if *found == key)
+                    .then_some(entity)
+            })
+            .unwrap();
+        assert_eq!(
+            world.get::<BackgroundColor>(popup).unwrap().0,
+            Color::srgba_u8(12, 34, 56, 255)
+        );
+        let wrapper = world.get::<Children>(popup).unwrap()[0];
+        let text = world.get::<Children>(wrapper).unwrap()[0];
+        assert_eq!(
+            world.get::<TextColor>(text).unwrap().0,
+            Color::srgba_u8(70, 80, 90, 255)
+        );
+        assert_eq!(world.get::<FocusPolicy>(popup), Some(&FocusPolicy::Block));
+    }
+
+    #[test]
+    fn browser_and_detached_overlays_own_a_layer_above_movie_on_the_same_camera() {
+        use bevy::{
+            app::{HierarchyPropagatePlugin, PropagateSet},
+            ecs::world::CommandQueue,
+            ui::{ComputedUiRenderTargetInfo, ComputedUiTargetCamera, UiScale},
+        };
+        let make = |name: &str| Control {
+            name: name.into(),
+            field_name: name.into(),
+            kind: "Panel".into(),
+            rect: Rect {
+                width: 600.0,
+                height: 300.0,
+                ..default()
+            },
+            text: String::new(),
+            command: None,
+            font: "Default".into(),
+            visible: true,
+            enabled: true,
+            default_button: false,
+        };
+        let mut scheme = data::Scheme::default();
+        for role in ["default", "uibold"] {
+            scheme.fonts.insert(
+                role.into(),
+                data::FontInfo {
+                    family: "synthetic".into(),
+                    size: 16.0,
+                    weight: 500,
+                },
+            );
+        }
+        let def = Definition {
+            browser: data::Layout {
+                controls: vec![make("CServerBrowserDialog"), make("GameTabs")],
+            },
+            page: data::Layout {
+                controls: vec![
+                    make("InternetGames"),
+                    Control {
+                        kind: "ListPanel".into(),
+                        ..make("gamelist")
+                    },
+                ],
+            },
+            add: data::Layout {
+                controls: vec![make("DialogAddServer")],
+            },
+            info: default(),
+            scheme,
+            tokens: default(),
+        };
+        let mut fonts = Fonts::default();
+        fonts.insert("Default", Handle::<Font>::default());
+        fonts.insert("UiBold", Handle::<Font>::default());
+        for (modal, context, expected_layers) in [
+            (false, false, vec![110]),
+            (true, false, vec![110, 120]),
+            (false, true, vec![110, 130]),
+        ] {
+            let mut app = App::new();
+            app.init_resource::<UiScale>()
+                .add_plugins(HierarchyPropagatePlugin::<ComputedUiTargetCamera>::new(
+                    PostUpdate,
+                ))
+                .add_plugins(HierarchyPropagatePlugin::<ComputedUiRenderTargetInfo>::new(
+                    PostUpdate,
+                ))
+                .configure_sets(
+                    PostUpdate,
+                    PropagateSet::<ComputedUiTargetCamera>::default(),
+                )
+                .configure_sets(
+                    PostUpdate,
+                    PropagateSet::<ComputedUiRenderTargetInfo>::default(),
+                )
+                .add_systems(Update, bevy::ui::update::propagate_ui_target_cameras);
+            let camera = app.world_mut().spawn(Camera2d).id();
+            let snapshot = Snapshot {
+                generation: 3,
+                rows: vec![data::ServerRow {
+                    key: ServerKey(7),
+                    endpoint: "localhost:27015".into(),
+                    map: None,
+                    name: None,
+                    players: None,
+                    ping_ms: None,
+                    favorite: true,
+                    connectable: true,
+                }],
+                ..default()
+            };
+            let model = Model {
+                tab: Tab::Favorites,
+                add_open: modal,
+                context_row: context.then_some(ServerKey(7)),
+                ..default()
+            };
+            let mut queue = CommandQueue::default();
+            let mut commands = Commands::new(&mut queue, app.world());
+            let view = spawn(
+                &mut commands,
+                camera,
+                Vec2::new(1920.0, 1080.0),
+                &def,
+                &fonts,
+                &model,
+                &snapshot,
+            )
+            .unwrap();
+            queue.apply(app.world_mut());
+            // Spawn the opaque fullscreen movie *after* the browser: global
+            // ordering must override entity/tree allocation order.
+            let movie = app
+                .world_mut()
+                .spawn((
+                    Node::default(),
+                    ImageNode::default(),
+                    UiTargetCamera(camera),
+                    GlobalZIndex(100),
+                ))
+                .id();
+            app.update();
+            let world = app.world_mut();
+            let mut layers = Vec::new();
+            for (entity, layer) in world.query::<(Entity, &GlobalZIndex)>().iter(world) {
+                if entity != movie {
+                    assert!(layer.0 > world.get::<GlobalZIndex>(movie).unwrap().0);
+                    assert_eq!(
+                        world.get::<ComputedUiTargetCamera>(entity).unwrap().get(),
+                        Some(camera)
+                    );
+                    layers.push(layer.0);
+                }
+            }
+            layers.sort_unstable();
+            assert_eq!(layers, expected_layers);
+            assert!(world.get::<Node>(view.root).is_some());
+            for (entity, _) in world.query::<(Entity, &UiAction)>().iter(world) {
+                assert_eq!(
+                    world.get::<ComputedUiTargetCamera>(entity).unwrap().get(),
+                    Some(camera)
+                );
+            }
+        }
+    }
+
     #[test]
     fn failed_font_load_removes_every_queued_tree_entity() {
         use bevy::ecs::world::CommandQueue;

@@ -51,7 +51,7 @@ impl Default for PackUi {
 }
 impl PackUi {
     pub(crate) fn blocks_movie(&self) -> bool {
-        self.open || self.blocked > 0 || self.hover
+        self.exit.is_some() || self.open || self.blocked > 0 || self.hover
     }
 }
 #[derive(Component, Clone)]
@@ -111,12 +111,12 @@ pub(crate) fn update(
     ui.feedback = (ui.feedback - time.delta_secs_f64()).max(0.);
     ui.hover = menu && all_buttons.iter().any(|value| *value != Interaction::None);
     let backend = ui.backend.get_mut().unwrap();
-    if menu && !ui.was_menu {
+    if menu && !ui.was_menu && ui.exit.is_none() {
         backend.flow.request_refresh();
     }
     ui.was_menu = menu;
     for event in focus.read() {
-        if menu && event.window == *window && event.focused {
+        if menu && event.window == *window && event.focused && ui.exit.is_none() {
             backend.flow.request_refresh();
         }
     }
@@ -509,7 +509,8 @@ pub(crate) fn gate_exit(mut ui: ResMut<PackUi>, mut messages: ResMut<Messages<Ap
         ui.open = true;
     } else {
         messages.write(exit);
-        ui.exit = None;
+        // Another owner may hold this message while its worker finishes.
+        // Keep input closed until App::should_exit actually terminates.
     }
 }
 

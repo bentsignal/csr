@@ -1,6 +1,5 @@
-// Compile the production leaf while the frontend owns its module declaration.
-#[path = "../src/remote_map.rs"]
-mod remote_map;
+// Exercise the production module declared by the frontend.
+use client::remote_map;
 
 use remote_map::{LocalMapRequest, PrepareError, manifest_for_level};
 use std::path::PathBuf;
