@@ -32,6 +32,8 @@ struct Data {
     state: AppState,
     menu_open: bool,
     loading: String,
+    player_name: String,
+    movie_ready: HashSet<String>,
 }
 enum Action {
     Sound(String),
@@ -39,14 +41,18 @@ enum Action {
     Convar(String, Value),
     Launch(crate::frontend_game::Selection, bool),
     Notice(String),
+    Host(crate::frontend_lobby::Start, String),
+    LobbyHome,
 }
 struct Bridge {
     data: Arc<Mutex<Data>>,
     actions: Arc<Mutex<Vec<Action>>>,
     seen: HashSet<(String, String)>,
     roots: HashMap<String, String>,
+    requested: HashSet<String>,
     options: crate::frontend_options::Scene,
     offline: crate::frontend_game::OfflineLaunch,
+    lobby: Arc<Mutex<crate::frontend_lobby::Scene>>,
 }
 
 fn show_single_player(path: &str, calls: &mut Calls) {
@@ -111,6 +117,19 @@ fn keyvalues(block: &kv::Block, localization: &crate::localize::Localization) ->
     )
 }
 
+impl Bridge {
+    fn close_lobby(&mut self, calls: &mut Calls) {
+        self.lobby.lock().unwrap().cancel();
+        for element in ["LobbyBrowser", "LobbyScreen", "StartSinglePlayer"] {
+            if let Some(path) = self.roots.get(element) {
+                calls.set(path, "_visible", false.into());
+            }
+        }
+        calls.call("_global.MainMenuMovie", "showPanel", vec![]);
+        self.actions.lock().unwrap().push(Action::LobbyHome);
+    }
+}
+
 impl Engine for Bridge {
     fn image(&mut self, url: &str) -> Option<Vec<u8>> {
         let id = url.strip_prefix("img://inventory_")?;
@@ -126,7 +145,9 @@ impl Engine for Bridge {
         args: &[Value],
         calls: &mut Calls,
     ) -> Option<Value> {
-        if self.seen.insert((object.into(), method.into()))
+        let seen_object = if object.starts_with("OwnedLobby") { "OwnedLobby" }
+            else if object.starts_with("OwnedPicker") { "OwnedPicker" } else { object };
+        if self.seen.insert((seen_object.into(), method.into()))
             || matches!(
                 method,
                 "BasePanelRunCommand" | "OnUpdateValue" | "SendUIEvent"
@@ -140,11 +161,82 @@ impl Engine for Bridge {
             }
         }
         let arg = |index: usize| args.get(index).map(Value::str).unwrap_or_default();
+        // Only our self-bound proxy labels carry epoch bookkeeping. Reject a
+        // stale label before dispatch, including zero-argument Start/getters.
+        if crate::frontend_lobby::Scene::owned_receiver(object) {
+            use crate::frontend_lobby::Api;
+            let data = self.data.lock().unwrap();
+            let mut lobby = self.lobby.lock().unwrap();
+            let Some((api, epoch)) = lobby.receiver(object) else { return None; };
+            if data.state != AppState::Menu { lobby.cancel(); return None; }
+            match (api, method) {
+                (Api::Lobby, "ChooseGameSettings") if args.is_empty() => {
+                    if lobby.choose(epoch) {
+                        if let Some(path) = self.roots.get("LobbyScreen") {
+                            calls.call(path, "hidePanelNoDestroy", vec![]);
+                        }
+                        if let Some(path) = self.roots.get("StartSinglePlayer") {
+                            lobby.show_picker(path, calls);
+                        } else { if self.requested.insert("StartSinglePlayer".into()) { calls.request_element("StartSinglePlayer"); } }
+                    }
+                }
+                (Api::Picker, "SetCustomBotDifficulty") => lobby.difficulty(epoch, args),
+                (Api::Picker, "CheckGameSettingsRequirements") => {
+                    let text = match args { [Value::String(text)] => Some(text.as_str()), _ => None };
+                    let result = lobby.check(epoch, &data.game_modes, text);
+                    if let Err(error) = &result { self.actions.lock().unwrap().push(Action::Notice(error.clone())); }
+                    return Some(result.is_ok().into());
+                }
+                (Api::Picker, "SetMatchmakingQuery") => {
+                    lobby.query(epoch, match args { [Value::String(text)] => Some(text.as_str()), _ => None });
+                }
+                (Api::Picker, "UpdatedSelections") => {
+                    if lobby.updated(epoch, args) {
+                        if let Some(path) = self.roots.get("LobbyScreen") { lobby.show(path, &data.player_name, calls); }
+                    }
+                }
+                (Api::Lobby, "LaunchGame") => {
+                    if let Some(start) = lobby.start(epoch, args) {
+                        self.actions.lock().unwrap().push(Action::Host(start, data.player_name.clone()));
+                    }
+                }
+                (Api::Lobby, "ConfirmExit") if args.is_empty() => {
+                    drop(lobby); drop(data); self.close_lobby(calls);
+                }
+                _ => (),
+            }
+            return None;
+        }
+        if object == "LobbyScreen" && method == "ConfirmExit" && args.is_empty()
+            && self.lobby.lock().unwrap().active() {
+            self.close_lobby(calls);
+            return None;
+        }
+        if matches!(object, "LobbyBrowser" | "LobbyScreen" | "StartSinglePlayer") && method == "OnUnload" {
+            if let Some(path) = arg(0).strip_prefix("mc:") { calls.set(path, "_visible", false.into()); }
+            let player_name = self.data.lock().unwrap().player_name.clone();
+            let mut lobby = self.lobby.lock().unwrap();
+            match object {
+                "StartSinglePlayer" => {
+                    lobby.chooser_unloaded();
+                    if lobby.phase() == crate::frontend_lobby::Phase::Lobby {
+                        if let Some(path) = self.roots.get("LobbyScreen") {
+                            lobby.show(path, &player_name, calls);
+                        }
+                    }
+                }
+                "LobbyScreen" => lobby.cancel(),
+                "LobbyBrowser" if lobby.phase() == crate::frontend_lobby::Phase::Browser => lobby.cancel(),
+                _ => (),
+            }
+            return None;
+        }
         if object == "MainMenu" && method == "IsMultiplayerPrivilegeEnabled" {
             // Community connections use our local transport without Steam.
             return Some(Value::Bool(matches!(self.data.lock().unwrap().state, AppState::Menu | AppState::Browser)));
         }
         if object == "StartSinglePlayer" {
+            if self.lobby.lock().unwrap().active() && method != "OnLoadFinished" && method != "OnReady" { return None; }
             let text = match args {
                 [Value::String(text)] => Some(text.as_str()),
                 _ => None,
@@ -194,9 +286,12 @@ impl Engine for Bridge {
                 _ => {}
             }
         }
+        if method == "OnReady" { self.data.lock().unwrap().movie_ready.insert(object.into()); }
         if method == "OnLoadFinished" && !object.starts_with("CScaleformComponent_") {
+            self.data.lock().unwrap().movie_ready.remove(object);
             if let Some(path) = arg(0).strip_prefix("mc:") {
                 self.roots.insert(object.into(), path.into());
+                self.requested.insert(object.into());
                 if object == "MainMenu" {
                     calls.call(path, "onUIShow", vec![]);
                     if !matches!(
@@ -206,10 +301,14 @@ impl Engine for Bridge {
                         calls.call(path, "hidePanelImmediate", vec![]);
                         calls.set(path, "_visible", false.into());
                     }
+                } else if matches!(object, "LobbyBrowser" | "LobbyScreen") {
+                    if self.data.lock().unwrap().state != AppState::Menu || !self.lobby.lock().unwrap().active() {
+                        calls.set(path, "_visible", false.into());
+                    }
                 } else if object == "PauseMenu" {
                     let data = self.data.lock().unwrap();
                     if data.state == AppState::Match && data.menu_open {
-                        for element in ["MainMenu", "StartSinglePlayer", "OptionsMenu"] {
+                        for element in ["MainMenu", "StartSinglePlayer", "OptionsMenu", "LobbyBrowser", "LobbyScreen"] {
                             if let Some(root) = self.roots.get(element) {
                                 calls.set(root, "_visible", false.into());
                             }
@@ -223,7 +322,31 @@ impl Engine for Bridge {
             }
             return None;
         }
+        if method == "OnReady" && matches!(object, "LobbyBrowser" | "LobbyScreen") {
+            let data = self.data.lock().unwrap();
+            let lobby = self.lobby.lock().unwrap();
+            if let Some(path) = self.roots.get(object) {
+                if data.state == AppState::Menu && lobby.active() {
+                    if object == "LobbyScreen" && lobby.phase() == crate::frontend_lobby::Phase::Lobby {
+                        lobby.show(path, &data.player_name, calls);
+                    } else if object == "LobbyBrowser" && lobby.phase() == crate::frontend_lobby::Phase::Browser {
+                        lobby.show_browser(path, &data.player_name, calls);
+                    } else { calls.set(path, "_visible", false.into()); }
+                } else { calls.set(path, "_visible", false.into()); }
+            }
+            return None;
+        }
         if method == "OnReady" && object == "StartSinglePlayer" {
+            let lobby = self.lobby.lock().unwrap();
+            if lobby.picker() {
+                if let Some(path) = self.roots.get(object) { lobby.show_picker(path, calls); }
+                return None;
+            }
+            if lobby.active() {
+                if let Some(path) = self.roots.get(object) { calls.set(path, "_visible", false.into()); }
+                return None;
+            }
+            drop(lobby);
             if let Some(path) = self.roots.get(object) {
                 if matches!(
                     self.data.lock().unwrap().state,
@@ -267,12 +390,41 @@ impl Engine for Bridge {
             if arg(1) == "bHidePanel" {
                 calls.call("_global.MainMenuMovie", "hidePanelImmediate", vec![]);
             }
+            if !matches!(command.as_str(), "ShowJoinPartyUI:competitive" | "ShowLobbyUI") {
+                self.lobby.lock().unwrap().cancel();
+                for element in ["LobbyBrowser", "LobbyScreen"] {
+                    if let Some(path) = self.roots.get(element) { calls.set(path, "_visible", false.into()); }
+                }
+            }
             match command.as_str() {
+                "ShowJoinPartyUI:competitive" => {
+                    let data = self.data.lock().unwrap();
+                    if data.state != AppState::Menu { return None; }
+                    let mut lobby = self.lobby.lock().unwrap();
+                    if lobby.begin(&data.game_modes) {
+                        self.actions.lock().unwrap().push(Action::Notice(crate::frontend_lobby::ADDRESS_NOTICE.into()));
+                        if let Some(path) = self.roots.get("LobbyBrowser") {
+                            lobby.show_browser(path, &data.player_name, calls);
+                        } else { if self.requested.insert("LobbyBrowser".into()) { calls.request_element("LobbyBrowser"); } }
+                    }
+                }
+                "ShowLobbyUI" => {
+                    let data = self.data.lock().unwrap();
+                    let mut lobby = self.lobby.lock().unwrap();
+                    if data.state == AppState::Menu && lobby.open_lobby() {
+                        if let Some(path) = self.roots.get("LobbyScreen") { lobby.show(path, &data.player_name, calls); }
+                        else { if self.requested.insert("LobbyScreen".into()) { calls.request_element("LobbyScreen"); } }
+                    }
+                }
                 "OpenCreateSinglePlayerGameDialog" => {
+                    self.lobby.lock().unwrap().cancel();
+                    for element in ["LobbyBrowser", "LobbyScreen"] {
+                        if let Some(path) = self.roots.get(element) { calls.set(path, "_visible", false.into()); }
+                    }
                     if let Some(path) = self.roots.get("StartSinglePlayer") {
                         show_single_player(path, calls);
                     } else {
-                        calls.request_element("StartSinglePlayer");
+                        if self.requested.insert("StartSinglePlayer".into()) { calls.request_element("StartSinglePlayer"); }
                     }
                 }
                 "OpenVideoSettingsDialog"
@@ -280,6 +432,7 @@ impl Engine for Bridge {
                 | "OpenGameSettingsDialog"
                 | "OpenMouseDialog"
                 | "OpenKeyboardMouseDialog" => {
+                    self.lobby.lock().unwrap().cancel();
                     let data = self.data.lock().unwrap();
                     self.options = crate::frontend_options::Scene::load(
                         &data.fs,
@@ -289,10 +442,13 @@ impl Engine for Bridge {
                     if let Some(path) = self.roots.get("OptionsMenu") {
                         self.options.show(path, &data.settings, calls);
                     } else {
-                        calls.request_element("OptionsMenu");
+                        if self.requested.insert("OptionsMenu".into()) { calls.request_element("OptionsMenu"); }
                     }
                 }
-                _ => self.actions.lock().unwrap().push(Action::Command(command)),
+                _ => {
+                    self.lobby.lock().unwrap().cancel();
+                    self.actions.lock().unwrap().push(Action::Command(command));
+                }
             }
             return None;
         }
@@ -306,6 +462,16 @@ impl Engine for Bridge {
             }
         }
         match (object, method) {
+            ("PartyList", "GetPartySessionSetting") => self.lobby.lock().unwrap().party_setting(&arg(0)),
+            ("PartyList", "GetPartySystemSetting") if arg(0) == "xuidHost" && self.lobby.lock().unwrap().active() => Some("0".into()),
+            ("LobbyScreen", "GetVoiceChatEnabled") => Some(false.into()),
+            ("GameTypes", "GetGameModeType") => data.game_modes.block("gameTypes")?.iter().find_map(|(kind, value)| {
+                value.as_block()?.block("gameModes")?.get(&arg(0)).map(|_| kind.to_string().into())
+            }),
+            ("GameTypes", "GetGameModeAttribute") => {
+                let value = data.game_modes.path(&["gameTypes", &arg(0), "gameModes", &arg(1)])?.as_block()?.str(&arg(2))?;
+                Some(data.localization.get(value).unwrap_or(value).into())
+            }
             ("OptionsMenu", "OnUpdateValue") => {
                 if let Some((name, value)) = self.options.value(
                     args.first()?,
@@ -406,7 +572,7 @@ impl Engine for Bridge {
             ("MyPersona", "GetXuid") => Some("0".into()),
             ("MyPersona", "GetXpPerLevel") => Some(5000.0.into()),
             ("MyPersona", "GetXp") | ("MyPersona", "GetLevel") => Some(0.0.into()),
-            ("FriendsList", "GetFriendName") if arg(0) == "0" => Some("You".into()),
+            ("FriendsList", "GetFriendName") if arg(0) == "0" => Some(data.player_name.clone().into()),
             ("GameTypes", "GetGameModeFromInts") => Some(
                 crate::frontend_game::mode_name(
                     &data.game_modes,
@@ -453,6 +619,7 @@ pub struct Frontend {
     requested: HashSet<String>,
     loaded: HashSet<String>,
     scene: Option<AppState>,
+    lobby: Arc<Mutex<crate::frontend_lobby::Scene>>,
     notice: Entity,
     notice_text: Entity,
     cancel: Entity,
@@ -461,6 +628,11 @@ pub struct Frontend {
 impl Frontend {
     pub(crate) fn camera(&self) -> Entity { self.camera }
     pub(crate) fn loaded(&self, name: &str) -> bool { self.loaded.contains(name) }
+    /// Authored OnReady received for the current cached movie; Loaded alone is earlier.
+    pub(crate) fn movie_ready(&self, name: &str) -> bool {
+        self.data.lock().unwrap().movie_ready.contains(name)
+    }
+    pub(crate) fn lobby_staged(&self) -> bool { self.lobby.lock().unwrap().staged() }
     /// Counts completed frame assignments to the Bevy image, not render loops.
     pub(crate) fn presented_serial(&self) -> u64 { self.presented_serial }
     pub(crate) fn send(&self, input: Input) {
@@ -506,7 +678,12 @@ pub(crate) fn setup(
         state: AppState::Menu,
         menu_open: menu.open(),
         loading: String::new(),
+        player_name: "You".into(),
+        movie_ready: HashSet::new(),
     }));
+    let lobby = Arc::new(Mutex::new(crate::frontend_lobby::Scene::new(
+        crate::frontend_lobby::Catalog::installed(&options.0, &menu.maps),
+    )));
     let actions = Arc::new(Mutex::new(vec![]));
     let image = images.add(Image::new(
         Extent3d {
@@ -618,6 +795,7 @@ pub(crate) fn setup(
         requested: HashSet::new(),
         loaded: HashSet::new(),
         scene: None,
+        lobby,
         notice,
         notice_text,
         cancel,
@@ -637,12 +815,13 @@ pub(crate) fn update(
     mut menu: ResMut<crate::menu::Menu>,
     state: Res<State<AppState>>,
     mut settings: ResMut<Settings>,
-    (data, loader, options, request, remote): (
+    (data, mut loader, options, request, remote, host_request): (
         Res<GameData>,
-        Res<crate::session::Loader>,
+        ResMut<crate::session::Loader>,
         Res<Options>,
         Res<crate::menu::LoadRequest>,
         Option<Res<crate::remote::RemoteClient>>,
+        Res<crate::hosting::HostRequest>,
     ),
     loc: Res<crate::localize::Localization>,
     (inventory, practice): (
@@ -767,8 +946,10 @@ pub(crate) fn update(
                 actions: front.actions.clone(),
                 seen: HashSet::new(),
                 roots: HashMap::new(),
+                requested: HashSet::new(),
                 options: Default::default(),
                 offline: Default::default(),
+                lobby: front.lobby.clone(),
             }),
         )));
     }
@@ -797,7 +978,11 @@ pub(crate) fn update(
             });
         }
     }
+    if scene != AppState::Menu && front.lobby.lock().unwrap().active() { front.lobby.lock().unwrap().cancel(); }
     if front.scene != Some(scene) {
+        for path in ["_global.LobbyMovie", "_level17"] {
+            front.send(Input::Set { path: path.into(), property: "_visible".into(), value: false.into() });
+        }
         // Movie animations and late callbacks can leave cached launch panels
         // visible. Own the root visibility across scenes, including descendants.
         for path in ["_global.MainMenuMovie", "_global.SinglePlayerMovie"] {
@@ -931,8 +1116,40 @@ pub(crate) fn update(
         }
     }
     let actions = std::mem::take(&mut *front.actions.lock().unwrap());
+    // Home/quit in this batch wins over a preceding queued Start.
+    if actions.iter().any(|action| matches!(action, Action::LobbyHome) ||
+        matches!(action, Action::Command(command) if matches!(command.to_ascii_lowercase().as_str(), "quit" | "quitgame" | "disconnect" | "openserverbrowser"))) {
+        front.lobby.lock().unwrap().cancel();
+        *host_request.0.lock().unwrap() = None;
+    }
     for action in actions {
         match action {
+            Action::Host(start, name) => {
+                if scene == AppState::Menu {
+                    let mut map = start.map;
+                    map.options.terrorist = menu.terrorist;
+                    let selected = crate::hosting::HostSelection {
+                        team: if map.options.terrorist { sim::Team::Terrorist } else { sim::Team::CounterTerrorist },
+                        map, config: netcode::host::HostConfig::default(), tick_rate: 128, name,
+                    };
+                    match selected.validate() {
+                        Ok(()) if front.lobby.lock().unwrap().consume(start.epoch) => { menu.status.clear(); *host_request.0.lock().unwrap() = Some(selected); }
+                        Ok(()) => (),
+                        Err(error) => {
+                            front.lobby.lock().unwrap().reject_start(start.epoch);
+                            front.send(Input::Call { path: "_global.LobbyMovie".into(), function: "SetNavOptions".into(), args: vec![false.into()] });
+                            menu.status = error;
+                        }
+                    }
+                }
+            }
+            Action::LobbyHome => {
+                // Home can race the queued HostRequest before Loading enters.
+                // Invalidate that serial even when Menu -> Menu is no transition.
+                loader.invalidate();
+                *host_request.0.lock().unwrap() = None;
+                menu.status.clear(); next.set(AppState::Menu);
+            }
             Action::Launch(selection, no_bots) => {
                 if matches!(scene, AppState::Menu | AppState::Browser) {
                     let mut selected = options.0.clone();
@@ -1252,6 +1469,54 @@ mod tests {
     use super::*;
 
     #[test]
+    fn owned_proxy_epoch_rejects_stale_query_completion_and_duplicate_zeroarg_start() {
+        use crate::frontend_lobby::{Api, Catalog, Scene};
+        let modes = kv::parse("gameTypes { classic { value 0 gameModes { competitive { value 1 mapgroupsSP { mg_de_dust2 0 } } } } } mapgroups { mg_de_dust2 { maps { de_dust2 0 } } } maps { de_dust2 {} }").unwrap();
+        let fs = Arc::new(vfs::Vfs::new());
+        let data = Arc::new(Mutex::new(Data {
+            inventory: InventoryView::new(&fs), fs, settings: Settings::default(),
+            localization: Default::default(), game_modes: modes.clone(),
+            state: AppState::Menu, menu_open: true, loading: String::new(), player_name: "You".into(), movie_ready: HashSet::new(),
+        }));
+        let mut scene = Scene::new(Catalog::installed(&crate::ClientOptions::default(), &["de_dust2".into()]));
+        assert!(scene.begin(&modes)); assert!(scene.open_lobby());
+        let old_lobby = scene.proxy(Api::Lobby);
+        let actions = Arc::new(Mutex::new(Vec::new()));
+        let mut bridge = Bridge { data, actions: actions.clone(), seen: Default::default(), roots: Default::default(), requested: Default::default(),
+            options: Default::default(), offline: Default::default(), lobby: Arc::new(Mutex::new(scene)) };
+        let mut calls = Calls::default();
+        bridge.call(&old_lobby, "ChooseGameSettings", &[], &mut calls);
+        let old_picker = bridge.lobby.lock().unwrap().proxy(Api::Picker);
+        bridge.lobby.lock().unwrap().cancel();
+        { let mut scene = bridge.lobby.lock().unwrap(); assert!(scene.begin(&modes)); assert!(scene.open_lobby()); }
+        let current_lobby = bridge.lobby.lock().unwrap().proxy(Api::Lobby);
+        bridge.call(&current_lobby, "ChooseGameSettings", &[], &mut calls);
+        let picker = bridge.lobby.lock().unwrap().proxy(Api::Picker);
+        assert!(!bridge.data.lock().unwrap().movie_ready.contains("LobbyScreen"));
+        bridge.call("LobbyScreen", "OnReady", &[], &mut calls);
+        assert!(bridge.data.lock().unwrap().movie_ready.contains("LobbyScreen"));
+        bridge.call("LobbyScreen", "OnLoadFinished", &["mc:_level16".into()], &mut calls);
+        assert!(!bridge.data.lock().unwrap().movie_ready.contains("LobbyScreen"));
+        let query = "System { network offline } Game { type classic mode competitive mapgroupname mg_de_dust2 skirmishmode undefined } Options { action create anytypemode 0 }";
+        assert_eq!(bridge.call(&old_picker, "CheckGameSettingsRequirements", &[query.into()], &mut calls), None);
+        bridge.call(&picker, "SetCustomBotDifficulty", &[0.0.into()], &mut calls);
+        assert_eq!(bridge.call(&picker, "CheckGameSettingsRequirements", &[query.into()], &mut calls), Some(true.into()));
+        bridge.call(&picker, "SetMatchmakingQuery", &[query.into()], &mut calls);
+        let selection = ["0".into(), "1".into(), Value::Number(f64::NAN), "mg_de_dust2".into(), 0.0.into()];
+        bridge.call(&old_picker, "UpdatedSelections", &selection, &mut calls);
+        bridge.call(&old_lobby, "LaunchGame", &[], &mut calls);
+        assert!(actions.lock().unwrap().is_empty());
+        bridge.call(&picker, "UpdatedSelections", &selection, &mut calls);
+        bridge.call("StartSinglePlayer", "OnUnload", &["mc:_level15".into()], &mut calls);
+        let lobby = bridge.lobby.lock().unwrap().proxy(Api::Lobby);
+        bridge.call(&lobby, "LaunchGame", &[], &mut calls);
+        bridge.call(&lobby, "LaunchGame", &[], &mut calls);
+        let actions = actions.lock().unwrap();
+        assert_eq!(actions.len(), 1);
+        assert!(matches!(&actions[0], Action::Host(start, name) if start.map.options.map == "de_dust2" && start.map.options.bots == 0 && name == "You"));
+    }
+
+    #[test]
     fn numeric_entry_updates_the_snapshot_before_the_following_native_getter() {
         let fs = Arc::new(vfs::Vfs::new());
         let data = Arc::new(Mutex::new(Data {
@@ -1263,6 +1528,8 @@ mod tests {
             state: AppState::Menu,
             menu_open: false,
             loading: String::new(),
+            player_name: "You".into(),
+        movie_ready: HashSet::new(),
         }));
         let actions = Arc::new(Mutex::new(Vec::new()));
         let mut bridge = Bridge {
@@ -1270,8 +1537,12 @@ mod tests {
             actions: actions.clone(),
             seen: HashSet::new(),
             roots: HashMap::new(),
+            requested: HashSet::new(),
             options: crate::frontend_options::Scene::default(),
             offline: crate::frontend_game::OfflineLaunch::default(),
+            lobby: Arc::new(Mutex::new(crate::frontend_lobby::Scene::new(
+                crate::frontend_lobby::Catalog::installed(&crate::ClientOptions::default(), &[]),
+            ))),
         };
         let mut calls = Calls::default();
         bridge.call("GameInterface", "SetConvar", &["volume".into(), "0.33".into()], &mut calls);

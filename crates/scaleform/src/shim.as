@@ -60,6 +60,50 @@ _global.csrBindApi = function(alias, name) {
 _global.csrBindings = new Object();
 _global.csrBindings.bindApi = _global.csrBindApi;
 
+// Our epoch labels identify stale owned-menu callbacks. Keep only the live
+// alias, without placing each reopen generation in the ordinary API cache.
+_global.csrBindings.bindOwnedApi = function(alias, name) {
+    var prefix;
+    if (alias == "LobbyAPI") {
+        prefix = "OwnedLobby";
+    } else if (alias == "SinglePlayerAPI") {
+        prefix = "OwnedPicker";
+    } else {
+        return false;
+    }
+    if (typeof name != "string" || name.indexOf(prefix) != 0) {
+        return false;
+    }
+    var digits = name.substr(prefix.length);
+    if (digits.length == 0 || digits.length > 20 ||
+        (digits.length > 1 && digits.charAt(0) == "0")) {
+        return false;
+    }
+    var max = "18446744073709551615";
+    var comparison = 0;
+    var i = 0;
+    while (i < digits.length) {
+        var code = digits.charCodeAt(i);
+        if (code < 48 || code > 57) {
+            return false;
+        }
+        if (digits.length == 20 && comparison == 0) {
+            var maxCode = max.charCodeAt(i);
+            if (code > maxCode) {
+                comparison = 1;
+            } else if (code < maxCode) {
+                comparison = -1;
+            }
+        }
+        i = i + 1;
+    }
+    if (comparison > 0) {
+        return false;
+    }
+    _global[alias] = _global.csrMakeProxy(name);
+    return true;
+};
+
 // The authored options callbacks can lose their row index after mouse updates.
 // Resolve the validated row to the same clip used by the native ShowPanel path.
 _global.csrBindings.focusWidget = function(path, index) {

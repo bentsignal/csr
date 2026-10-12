@@ -9,6 +9,7 @@ pub mod session;
 pub mod frontend;
 mod frontend_inventory;
 mod frontend_game;
+mod frontend_lobby;
 mod frontend_options;
 mod frontend_flow;
 mod frontend_input;
