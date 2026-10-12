@@ -88,7 +88,7 @@ a possible observation surface; the current harness does not yet prove it
 receives those events. Event coordinates also do not establish complete
 ray origin, camera punch, or a historical event schema.
 
-1. Use a separately authorized owned native session, with the
+1. Use an owned native session, with the
    [userdata preservation boundary](FIDELITY.md), fixed position/view,
    verified weapon/ammo/mode, acknowledged settings and executable identity.
 2. Prove a receiver using public demo/event format documentation or a
