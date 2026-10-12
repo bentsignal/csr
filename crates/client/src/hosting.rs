@@ -79,6 +79,10 @@ impl Hosting {
         self.serial.is_none() && self.handle.is_none() && self.staged.is_none()
     }
 
+    pub(crate) fn exiting(&self) -> bool {
+        self.exit.is_some()
+    }
+
     pub(crate) fn stage(
         &mut self,
         serial: u64,
@@ -218,19 +222,28 @@ fn host_error(error: &netcode::host::HostError) -> String {
     .into()
 }
 
-pub(crate) fn gate_exit(mut hosting: ResMut<Hosting>, mut messages: ResMut<Messages<AppExit>>) {
-    for exit in messages.drain() {
-        if hosting.exit.as_ref().is_none_or(|old| !old.is_error()) {
-            hosting.exit = Some(exit);
+pub(crate) fn gate_exit(world: &mut World) {
+    let exits: Vec<_> = world.resource_mut::<Messages<AppExit>>().drain().collect();
+    let first = !world.resource::<Hosting>().exiting();
+    {
+        let mut hosting = world.resource_mut::<Hosting>();
+        for exit in exits {
+            if hosting.exit.as_ref().is_none_or(|old| !old.is_error()) {
+                hosting.exit = Some(exit);
+            }
         }
     }
-    let Some(exit) = hosting.exit.clone() else {
+    let Some(exit) = world.resource::<Hosting>().exit.clone() else {
         return;
     };
+    if first {
+        crate::remote_join::home(world);
+    }
+    let mut hosting = world.resource_mut::<Hosting>();
     hosting.cancel();
     hosting.reap();
     if hosting.handle.is_none() {
-        messages.write(exit);
+        world.write_message(exit);
     }
 }
 

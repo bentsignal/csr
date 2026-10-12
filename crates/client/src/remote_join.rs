@@ -134,6 +134,12 @@ fn fail(world: &mut World, message: String) {
 
 pub(crate) fn request(world: &mut World) {
     let selected = world.resource::<JoinRequest>().0.lock().unwrap().take();
+    if world
+        .get_resource::<crate::hosting::Hosting>()
+        .is_some_and(|hosting| hosting.exiting())
+    {
+        return;
+    }
     let Some(selected) = selected else {
         return;
     };

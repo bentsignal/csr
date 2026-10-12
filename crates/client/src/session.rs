@@ -250,7 +250,12 @@ pub(crate) fn begin_load(
     opts: Res<Options>,
     data: Res<GameData>,
     remote: Option<Res<crate::remote::RemoteClient>>,
+    hosting: Res<crate::hosting::Hosting>,
 ) {
+    if hosting.exiting() {
+        loader.invalidate();
+        return;
+    }
     if remote.is_some() {
         loader.invalidate();
         loader.status = "Contacting server…".into();
@@ -292,7 +297,12 @@ pub(crate) fn request_load(
     mut next: ResMut<NextState<AppState>>,
     menu: Res<crate::menu::Menu>,
     remote: Option<Res<crate::remote::RemoteClient>>,
+    hosting: Res<crate::hosting::Hosting>,
 ) {
+    if hosting.exiting() {
+        request.0.lock().unwrap().take();
+        return;
+    }
     if *state.get() == AppState::Match
         && !menu.in_match
         && !crate::remote_join::loading(remote.as_deref())
@@ -574,6 +584,86 @@ mod tests {
                 .resource::<crate::menu::Menu>()
                 .status
                 .is_empty()
+        );
+    }
+
+    #[test]
+    fn quit_revokes_pending_map_and_launches_while_a_downstream_exit_is_held() {
+        fn hold(mut messages: ResMut<Messages<AppExit>>) {
+            messages.drain().for_each(drop);
+        }
+        let mut app = loading_app(AppState::Loading);
+        app.init_resource::<crate::hosting::HostRequest>()
+            .init_resource::<crate::remote_join::JoinRequest>()
+            .init_resource::<crate::menu::LoadRequest>()
+            .add_systems(Last, (crate::hosting::gate_exit, hold).chain());
+        app.update();
+        let (tx, rx) = mpsc::channel();
+        {
+            let mut loader = app.world_mut().resource_mut::<Loader>();
+            loader.job = Some(Job {
+                serial: 100,
+                result: Mutex::new(rx),
+            });
+            loader.wanted = Some((
+                101,
+                Selection::Host(crate::hosting::HostSelection {
+                    map: ClientOptions::default().into(),
+                    config: netcode::host::HostConfig::default(),
+                    tick_rate: 128,
+                    name: "Queued host".into(),
+                    team: sim::Team::CounterTerrorist,
+                }),
+            ));
+        }
+        app.world_mut().write_message(AppExit::Success);
+        app.update();
+        assert!(app.should_exit().is_none());
+        assert!(app.world().resource::<Loader>().wanted.is_none());
+        *app.world()
+            .resource::<crate::remote_join::JoinRequest>()
+            .0
+            .lock()
+            .unwrap() = Some(crate::remote_join::Connect {
+            address: "127.0.0.1:27015".parse().unwrap(),
+            name: "Late join".into(),
+            team: sim::Team::CounterTerrorist,
+        });
+        *app.world()
+            .resource::<crate::menu::LoadRequest>()
+            .0
+            .lock()
+            .unwrap() = Some(ClientOptions::default().into());
+        app.add_systems(
+            Update,
+            (
+                crate::remote_join::request,
+                crate::hosting::request,
+                request_load,
+            )
+                .chain()
+                .before(poll_load),
+        )
+        .add_systems(OnEnter(AppState::Loading), begin_load);
+        app.world_mut()
+            .resource_mut::<NextState<AppState>>()
+            .set(AppState::Loading);
+        tx.send(Err("Old map worker finished during Quit".into()))
+            .unwrap();
+        app.update();
+        assert!(app.world().resource::<Loader>().job.is_none());
+        assert!(app.world().resource::<Loader>().wanted.is_none());
+        assert!(
+            !app.world()
+                .contains_resource::<crate::remote::RemoteClient>()
+        );
+        assert!(
+            app.world()
+                .resource::<crate::menu::LoadRequest>()
+                .0
+                .lock()
+                .unwrap()
+                .is_none()
         );
     }
 
