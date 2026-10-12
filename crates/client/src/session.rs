@@ -43,12 +43,14 @@ struct Job {
 #[derive(Clone)]
 enum Selection {
     Offline(crate::menu::MapRequest),
+    Host(crate::hosting::HostSelection),
     Remote(netcode::protocol::ServerInfo),
 }
 impl Selection {
     fn label(&self) -> String {
         match self {
             Self::Offline(request) => request.label(),
+            Self::Host(request) => request.map.label(),
             Self::Remote(info) => info.content.map_name.clone(),
         }
     }
@@ -57,6 +59,7 @@ impl Selection {
 pub(crate) struct LoadedMap {
     pub level: level::Level,
     pub remote: Option<crate::remote_join::Admission>,
+    pub host: Option<crate::hosting::PreparedHost>,
 }
 
 #[derive(Resource, Default)]
@@ -64,12 +67,25 @@ pub(crate) struct Loader {
     serial: u64,
     wanted: Option<(u64, Selection)>,
     selection: Option<crate::menu::MapRequest>,
+    host_selection: Option<crate::hosting::HostSelection>,
     job: Option<Job>,
     pub status: String,
     title: String,
 }
 
 impl Loader {
+    pub(crate) fn select_host(&mut self, selected: crate::hosting::HostSelection) {
+        self.host_selection = Some(selected);
+    }
+
+    pub(crate) fn bind_host_generation(
+        &mut self,
+        serial: u64,
+        info: netcode::protocol::ServerInfo,
+    ) {
+        self.wanted = Some((serial, Selection::Remote(info)));
+    }
+
     fn start(&mut self, game_dir: &std::path::Path) {
         if self.job.is_some() {
             return;
@@ -98,8 +114,66 @@ impl Loader {
                             .map(|level| LoadedMap {
                                 level,
                                 remote: None,
+                                host: None,
                             })
                             .map_err(|e| e.to_string())
+                    }
+                    Selection::Host(selected) => {
+                        if let Err(error) = selected.validate() {
+                            let _ = tx.send(Err(error));
+                            return;
+                        }
+                        let result = match &selected.map.pack {
+                            Some((store, entry, id)) => {
+                                level::Level::load_catalog_map(store, entry, id, Some(&game_dir))
+                            }
+                            None => level::Level::load(&selected.map.options.map, Some(&game_dir)),
+                        };
+                        result.map_err(|error| error.to_string()).and_then(|level| {
+                            let manifest = crate::remote_map::manifest_for_level(&level)
+                                .map_err(|error| error.to_string())?;
+                            let map_world = crate::remote_map::map_world_for_level(&level);
+                            let mut authority = map_world.clone();
+                            authority.set_tick_rate(selected.tick_rate);
+                            authority.bots =
+                                sim::bots::Bots::with_skill(0.6).with_nav(level.nav.clone());
+                            if !selected.map.options.deathmatch {
+                                authority.set_mode(
+                                    sim::GameMode::Competitive,
+                                    crate::competitive_rules(&level),
+                                );
+                            }
+                            let mine = selected.team;
+                            let theirs = if mine == sim::Team::Terrorist {
+                                sim::Team::CounterTerrorist
+                            } else {
+                                sim::Team::Terrorist
+                            };
+                            let bots = selected.map.options.bots;
+                            let names = |team| {
+                                if team == sim::Team::Terrorist {
+                                    &crate::BOT_NAMES_T
+                                } else {
+                                    &crate::BOT_NAMES_CT
+                                }
+                            };
+                            for i in 0..bots {
+                                authority.add_bot(names(theirs)[i as usize % 8], theirs);
+                            }
+                            for i in 0..bots.saturating_sub(1) {
+                                authority.add_bot(names(mine)[i as usize % 8], mine);
+                            }
+                            Ok(LoadedMap {
+                                level,
+                                remote: None,
+                                host: Some(crate::hosting::PreparedHost {
+                                    selection: selected,
+                                    authority,
+                                    map_world,
+                                    manifest,
+                                }),
+                            })
+                        })
                     }
                     Selection::Remote(info) => {
                         let (packs, archives) = match stores {
@@ -124,6 +198,7 @@ impl Loader {
                                 prepared.world,
                                 prepared.manifest,
                             )),
+                            host: None,
                         })
                         .map_err(|e| e.to_string())
                     }
@@ -166,6 +241,7 @@ impl Loader {
     pub(crate) fn invalidate(&mut self) {
         self.wanted = None;
         self.selection = None;
+        self.host_selection = None;
     }
 }
 
@@ -174,13 +250,24 @@ pub(crate) fn begin_load(
     opts: Res<Options>,
     data: Res<GameData>,
     remote: Option<Res<crate::remote::RemoteClient>>,
+    hosting: Res<crate::hosting::Hosting>,
 ) {
+    if hosting.exiting() {
+        loader.invalidate();
+        return;
+    }
     if remote.is_some() {
         loader.invalidate();
         loader.status = "Contacting server…".into();
         return;
     }
     loader.serial = loader.serial.wrapping_add(1);
+    if let Some(selected) = loader.host_selection.take() {
+        loader.title = selected.map.label();
+        loader.wanted = Some((loader.serial, Selection::Host(selected)));
+        loader.start(&data.game_dir);
+        return;
+    }
     let selection = loader
         .selection
         .take()
@@ -210,8 +297,16 @@ pub(crate) fn request_load(
     mut next: ResMut<NextState<AppState>>,
     menu: Res<crate::menu::Menu>,
     remote: Option<Res<crate::remote::RemoteClient>>,
+    hosting: Res<crate::hosting::Hosting>,
 ) {
-    if *state.get() == AppState::Match && !menu.in_match && !crate::remote_join::loading(remote.as_deref()) {
+    if hosting.exiting() {
+        request.0.lock().unwrap().take();
+        return;
+    }
+    if *state.get() == AppState::Match
+        && !menu.in_match
+        && !crate::remote_join::loading(remote.as_deref())
+    {
         next.set(AppState::Menu);
     }
     if *state.get() == AppState::Loading {
@@ -233,9 +328,10 @@ pub(crate) fn poll_load(
     mut next: ResMut<NextState<AppState>>,
     mut menu: ResMut<crate::menu::Menu>,
     remote: Option<Res<crate::remote::RemoteClient>>,
+    mut hosting: ResMut<crate::hosting::Hosting>,
 ) {
     let Some(job) = &loader.job else {
-        if loader.wanted.is_some() && *state.get() == AppState::Loading {
+        if loader.wanted.is_some() && *state.get() == AppState::Loading && !hosting.preparing() {
             menu.status = loader.status.clone();
             next.set(AppState::Menu);
         }
@@ -257,6 +353,14 @@ pub(crate) fn poll_load(
         if let Some(wanted) = wanted {
             match result {
                 Ok(loaded) => {
+                    if matches!(wanted, Selection::Host(_)) {
+                        if let Err(error) = hosting.stage(job.serial, loaded) {
+                            loader.invalidate();
+                            menu.status = error;
+                            next.set(AppState::Menu);
+                        }
+                        return;
+                    }
                     if let Selection::Remote(info) = &wanted {
                         if !remote.as_ref().is_some_and(|client| matches!(client.status(), netcode::remote_session::Status::AwaitingMap(current) if current == info)) {
                             loader.invalidate();
@@ -369,6 +473,7 @@ mod tests {
             .insert_resource(PendingLevel(Mutex::new(None)))
             .init_resource::<crate::menu::Menu>()
             .init_resource::<Loader>()
+            .init_resource::<crate::hosting::Hosting>()
             .add_systems(Update, poll_load);
         app
     }
@@ -394,6 +499,171 @@ mod tests {
         assert_eq!(
             *app.world().resource::<State<AppState>>().get(),
             AppState::Menu
+        );
+    }
+
+    #[test]
+    fn host_binding_without_a_map_job_does_not_report_loader_failure() {
+        let mut app = loading_app(AppState::Loading);
+        let (remote, info, _map) = waiting_remote(128);
+        app.insert_resource(remote);
+        app.world_mut().resource_mut::<Loader>().wanted = Some((7, Selection::Remote(info)));
+        // Passive host binding/offer publication occupies the same load generation.
+        app.world_mut()
+            .resource_mut::<crate::hosting::Hosting>()
+            .retain_generation_for_test(7);
+        app.update();
+        assert!(
+            app.world()
+                .resource::<crate::menu::Menu>()
+                .status
+                .is_empty()
+        );
+        assert!(!matches!(
+            app.world().resource::<NextState<AppState>>(),
+            NextState::Pending(AppState::Menu)
+        ));
+    }
+
+    #[test]
+    fn a_new_host_during_loading_waits_for_the_old_worker_and_keeps_its_selection() {
+        let mut app = loading_app(AppState::Loading);
+        app.init_resource::<crate::hosting::HostRequest>()
+            .init_resource::<crate::menu::LoadRequest>()
+            .add_systems(Update, crate::hosting::request.before(poll_load));
+        app.update();
+        app.add_systems(OnEnter(AppState::Loading), begin_load)
+            .add_systems(OnExit(AppState::Loading), cancel_load);
+        let (tx, rx) = mpsc::channel();
+        {
+            let mut loader = app.world_mut().resource_mut::<Loader>();
+            loader.serial = 100;
+            loader.job = Some(Job {
+                serial: 100,
+                result: Mutex::new(rx),
+            });
+            loader.wanted = Some((100, Selection::Offline(ClientOptions::default().into())));
+        }
+        *app.world()
+            .resource::<crate::hosting::HostRequest>()
+            .0
+            .lock()
+            .unwrap() = Some(crate::hosting::HostSelection {
+            map: ClientOptions {
+                map: "de_replacement_host".into(),
+                ..default()
+            }
+            .into(),
+            config: netcode::host::HostConfig::default(),
+            tick_rate: 128,
+            name: "Host".into(),
+            team: sim::Team::CounterTerrorist,
+        });
+        app.update();
+        app.update();
+        {
+            let loader = app.world().resource::<Loader>();
+            assert_eq!(loader.job.as_ref().unwrap().serial, 100);
+            assert!(
+                matches!(&loader.wanted, Some((101, Selection::Host(selected))) if selected.map.options.map == "de_replacement_host")
+            );
+        }
+        tx.send(Err("Discard this old map failure".into())).unwrap();
+        app.update();
+        assert_eq!(
+            app.world()
+                .resource::<Loader>()
+                .job
+                .as_ref()
+                .unwrap()
+                .serial,
+            101
+        );
+        assert!(
+            app.world()
+                .resource::<crate::menu::Menu>()
+                .status
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn quit_revokes_pending_map_and_launches_while_a_downstream_exit_is_held() {
+        fn hold(mut messages: ResMut<Messages<AppExit>>) {
+            messages.drain().for_each(drop);
+        }
+        let mut app = loading_app(AppState::Loading);
+        app.init_resource::<crate::hosting::HostRequest>()
+            .init_resource::<crate::remote_join::JoinRequest>()
+            .init_resource::<crate::menu::LoadRequest>()
+            .add_systems(Last, (crate::hosting::gate_exit, hold).chain());
+        app.update();
+        let (tx, rx) = mpsc::channel();
+        {
+            let mut loader = app.world_mut().resource_mut::<Loader>();
+            loader.job = Some(Job {
+                serial: 100,
+                result: Mutex::new(rx),
+            });
+            loader.wanted = Some((
+                101,
+                Selection::Host(crate::hosting::HostSelection {
+                    map: ClientOptions::default().into(),
+                    config: netcode::host::HostConfig::default(),
+                    tick_rate: 128,
+                    name: "Queued host".into(),
+                    team: sim::Team::CounterTerrorist,
+                }),
+            ));
+        }
+        app.world_mut().write_message(AppExit::Success);
+        app.update();
+        assert!(app.should_exit().is_none());
+        assert!(app.world().resource::<Loader>().wanted.is_none());
+        *app.world()
+            .resource::<crate::remote_join::JoinRequest>()
+            .0
+            .lock()
+            .unwrap() = Some(crate::remote_join::Connect {
+            address: "127.0.0.1:27015".parse().unwrap(),
+            name: "Late join".into(),
+            team: sim::Team::CounterTerrorist,
+        });
+        *app.world()
+            .resource::<crate::menu::LoadRequest>()
+            .0
+            .lock()
+            .unwrap() = Some(ClientOptions::default().into());
+        app.add_systems(
+            Update,
+            (
+                crate::remote_join::request,
+                crate::hosting::request,
+                request_load,
+            )
+                .chain()
+                .before(poll_load),
+        )
+        .add_systems(OnEnter(AppState::Loading), begin_load);
+        app.world_mut()
+            .resource_mut::<NextState<AppState>>()
+            .set(AppState::Loading);
+        tx.send(Err("Old map worker finished during Quit".into()))
+            .unwrap();
+        app.update();
+        assert!(app.world().resource::<Loader>().job.is_none());
+        assert!(app.world().resource::<Loader>().wanted.is_none());
+        assert!(
+            !app.world()
+                .contains_resource::<crate::remote::RemoteClient>()
+        );
+        assert!(
+            app.world()
+                .resource::<crate::menu::LoadRequest>()
+                .0
+                .lock()
+                .unwrap()
+                .is_none()
         );
     }
 
@@ -539,7 +809,10 @@ mod tests {
             ));
             app.insert_resource(remote);
             crate::remote_join::update(app.world_mut());
-            assert!(!app.world().contains_resource::<crate::remote::RemoteClient>());
+            assert!(
+                !app.world()
+                    .contains_resource::<crate::remote::RemoteClient>()
+            );
             assert!(
                 !app.world()
                     .contains_resource::<crate::remote_join::Admission>()
@@ -548,7 +821,12 @@ mod tests {
                 !app.world()
                     .contains_resource::<crate::remote_render_gate::RenderGate>()
             );
-            assert!(app.world().resource::<crate::menu::Menu>().status.contains("renderer"));
+            assert!(
+                app.world()
+                    .resource::<crate::menu::Menu>()
+                    .status
+                    .contains("renderer")
+            );
         }
     }
 
@@ -587,7 +865,10 @@ mod tests {
                 .contains_resource::<crate::remote::RemoteClient>()
         );
         assert!(app.world().resource::<Loader>().wanted.is_none());
-        assert!(matches!(app.world().resource::<NextState<AppState>>(), NextState::Pending(AppState::Loading)));
+        assert!(matches!(
+            app.world().resource::<NextState<AppState>>(),
+            NextState::Pending(AppState::Loading)
+        ));
     }
 
     #[test]

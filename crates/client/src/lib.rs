@@ -9,6 +9,7 @@ pub mod session;
 pub mod frontend;
 mod frontend_inventory;
 mod frontend_game;
+mod frontend_lobby;
 mod frontend_options;
 mod frontend_flow;
 mod frontend_input;
@@ -57,6 +58,7 @@ pub mod frontend_servers;
 mod server_browser;
 mod browser_flow;
 pub mod remote_join;
+pub mod hosting;
 mod remote_flow;
 pub mod xr_input;
 pub mod props;
@@ -167,6 +169,8 @@ impl Plugin for CsgoPlugin {
             .init_state::<AppState>()
             .init_resource::<session::Loader>()
             .init_resource::<remote_join::JoinRequest>()
+            .init_resource::<hosting::HostRequest>()
+            .init_resource::<hosting::Hosting>()
             .init_resource::<pack_ui::PackUi>()
             .init_resource::<server_browser::Browser>()
             .add_observer(session::own_entity::<Transform>)
@@ -175,14 +179,14 @@ impl Plugin for CsgoPlugin {
             .insert_resource(Time::<Fixed>::from_hz(sim::DEFAULT_TICK_RATE as f64))
             .add_systems(Startup, (ui_assets::load, case_ui::setup, menu_scene::setup, menu::setup, frontend::setup, server_browser::setup).chain())
             .add_systems(Update, (frontend::update, pack_ui::update, server_browser::update, server_browser::input, server_browser::draw, pack_ui::scroll, pack_ui::draw, frontend::input, frontend::cancel_loading).chain())
-            .add_systems(Last, (server_browser::gate_exit, pack_ui::gate_exit).chain().after(bevy::window::ExitSystems))
+            .add_systems(Last, (hosting::gate_exit, server_browser::gate_exit, pack_ui::gate_exit).chain().after(bevy::window::ExitSystems))
             .add_systems(Update, (menu::apply, audio::update).chain().after(player::update_camera))
             .add_systems(OnEnter(AppState::Loading), session::begin_load)
             .add_systems(OnExit(AppState::Loading), session::cancel_load)
             .add_systems(OnEnter(AppState::Match), (spawn_level, hud::setup, hud_art::setup, scope::setup, feedback::setup, utility_fx::setup, hud::mark_roots, session::match_ready).chain())
             .add_systems(OnExit(AppState::Match), session::clear_match)
             .add_systems(OnEnter(AppState::Menu), remote_join::home)
-            .add_systems(Update, (remote_join::request, remote::drive.run_if(resource_exists::<remote::RemoteClient>), remote_join::update, session::request_load, session::poll_load).chain().before(frontend::update).before(player::update_camera))
+            .add_systems(Update, (remote_join::request, hosting::request, remote::drive.run_if(resource_exists::<remote::RemoteClient>), hosting::update, remote_join::update, session::request_load, session::poll_load).chain().before(frontend::update).before(player::update_camera))
             .add_systems(
                 RunFixedMainLoop,
                 (menu::input, buymenu::input, player::look, player::grab_cursor).chain()
