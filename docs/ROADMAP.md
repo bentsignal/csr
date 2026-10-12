@@ -241,6 +241,8 @@ thing is uncanny. Fidelity is measured, never eyeballed:
 - [ ] Fix the gaps the harness finds, worst first: sounds (wrong files,
       missing events, volume and falloff), materials and lighting, then the
       feel of movement, recoil, animation and hit registration.
+      Dated recoil data and the unverified procedure:
+      [RECOIL_REFERENCE.md](RECOIL_REFERENCE.md).
 
 - [ ] Grenades: HE, flash, smoke, molotov/incendiary, decoy.
 - [ ] Wall penetration (surface properties) and hit groups from the models'
