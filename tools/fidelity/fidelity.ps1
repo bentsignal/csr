@@ -62,11 +62,16 @@ function Connect-Game([string]$map) {
         if ($Session) { Remove-GameLeftovers }
         $root = [IO.Path]::GetFullPath((Join-Path $Game 'csgo'))
         $before = @(Get-GameByproducts $root | ForEach-Object { $_.FullName })
+        $userdata = New-FidelityUserdataSnapshot
+        # Persist the original bytes before the native process can write them.
+        $script:Session = [pscustomobject]@{ Root = $root; Before = $before; ProcessId = $null; ProcessStart = $null; Userdata = $userdata }
+        $Session | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $SessionFile -Encoding UTF8
         Write-Host "Starting CS:GO Legacy ($map)..."
         # -insecure: no VAC session; -netconport: console over TCP for this script.
         $process = Start-Process -FilePath $exe -ArgumentList "-insecure -novid -nojoy -windowed -noborder -w $Width -h $Height -netconport $Port +map $map" -WindowStyle Hidden -PassThru
-        $script:Session = [pscustomobject]@{ Root = $root; Before = $before; ProcessId = $process.Id; ProcessStart = $process.StartTime.ToUniversalTime().ToString('o') }
-        $Session | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $SessionFile -Encoding UTF8
+        $Session.ProcessId = $process.Id
+        $Session.ProcessStart = $process.StartTime.ToUniversalTime().ToString('o')
+        $Session | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $SessionFile -Encoding UTF8
     }
     $con = [CsrFidelity.NetCon]::Connect($Port, 120000)
     $deadline = (Get-Date).AddSeconds(150)
@@ -111,7 +116,10 @@ function Stop-Game($con) {
 # (gigabytes) into csgo\; remove only known files absent before our session.
 function Remove-GameLeftovers {
     if (-not $Session -or (Get-OwnedGameProcess $Session)) { return }
+    Assert-NoLiveLegacyGame
     if ([IO.Path]::GetFullPath($Session.Root).TrimEnd('\') -ne [IO.Path]::GetFullPath((Join-Path $Game 'csgo')).TrimEnd('\')) { throw 'Recorded cleanup folder does not match this Legacy install.' }
+    $restored = Restore-FidelityUserdataSnapshot $Session.Userdata
+    if ($restored) { Write-Host "Restored $restored exact native preference snapshots (including original nonexistence)." }
     $removed = Remove-SessionByproducts $Session
     if ($removed) { Write-Host "Removed $removed new session byproducts." }
     Remove-Item -LiteralPath $SessionFile -ErrorAction SilentlyContinue

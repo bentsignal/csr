@@ -32,6 +32,15 @@ simulation-time capture deadline. `CSR_SOUND_PROBE` is ignored in interactive
 sessions. Console commands are acknowledged before a probe's waits begin;
 the real game restarts after freeze-time settings are applied.
 
+Before a native launch, the harness snapshots the active Steam account's
+Legacy-named config/video files and their existence under both supported app
+IDs. Exact bytes are retained privately in the session record. After its owned
+process exits, it restores those bytes or removes only known files that did not
+exist before launch. Restoration refuses reparse points, invalid snapshots and
+any live Legacy process. Older sessions without snapshots cannot reconstruct
+or restore their previous preferences. The fake-directory session tests cover
+this boundary without reading the runner's real player profile.
+
 The harness records its process ID/start time and the existing byproduct
 paths before launch. It closes only its own game process, preserves existing
 files, skips junctions and removes new known byproducts without recursive
