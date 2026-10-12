@@ -12,8 +12,9 @@ The inherited code is a **real, playable single-player base**. Phase 0 and
 the installer/updater release are complete. Gameplay now lives in the fixed
 tick sim; dedicated multiplayer, prediction and local content packs have
 landed. Rendered joining has passed two-client lifecycle checks at both tick
-rates; the browser's final context presentation check is in progress. Fidelity,
-full classic UI coverage and VR remain unfinished.
+rates, and the local browser's add/join/reopen/remove flow has passed with
+fresh inspected captures. Fidelity, full classic UI coverage and VR remain
+unfinished.
 
 | Area | State | Call |
 |---|---|---|
@@ -23,7 +24,7 @@ full classic UI coverage and VR remain unfinished.
 | Gameplay glue in `client` (bots, loadouts, skins, overworld rules run in Bevy systems, not `sim`) | Moved into `sim` (Track A) | **Done** |
 | Main menu | Installed Scaleform movies, persistent menu/loading/match flow, offline/pause/options bridge | **Extend and measure** |
 | Cases / inventory / cosmetics data | Works locally | **Keep data, rewrite UI** |
-| Netcode, server, browser | Renet UDP, dedicated server, full snapshots, prediction/interpolation, coarse rewind; rendered local browser/join checks in progress | **Finish integration, then hosting/discovery** |
+| Netcode, server, browser | Renet UDP, dedicated server, full snapshots, prediction/interpolation, coarse rewind; verified rendered local favorites/browser joining at 64 and 128 tick | **Menu hosting and wider discovery next** |
 | Install detection | Current Legacy app 4465480 and older beta layout supported | **Done** |
 | Distribution | CI, portable zip, Velopack installer/updater; v0.3.0 published | **Done; private channel remains** |
 | `third_party/minecraftoss` + `minecraft_terrain` (~154k lines) | Ported from decompiled Minecraft, no licence files, hard dependency of `level` and `client`; release zip also bundled Minecraft assets | **Removed** (decision 1) |
@@ -161,7 +162,9 @@ byte-identical to 2018.
       the process. Bounded loading/cancellation, native offline GO, pause
       Resume/Exit and a rendered Dust II → home → Inferno lifecycle proof.
       [PR #10](https://github.com/bentsignal/global-offensive/pull/10).
-- [ ] Connect the server browser and rendered network joins to that state machine.
+- [x] Connect the local server browser and rendered network joins to that
+      state machine, with render preparation, neutral pause, Home cancellation
+      and clean offline reload. Native browser sizing/fidelity remains unmeasured.
 - [x] **Spike: play Valve's own SWFs with [Ruffle](https://github.com/ruffle-rs/ruffle)**
       (Rust Flash player, MIT/Apache, wgpu), read from the player's install
       at runtime, with the Scaleform game API stubbed. It works: the home

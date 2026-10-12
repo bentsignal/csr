@@ -41,9 +41,24 @@ the exit message. Missing installed browser definitions return Home with an erro
 The opt-in loopback engine proof (`CSR_TEST_REMOTE=127.0.0.1:port`, with
 `--screenshot`) exercises discovery, exact local preparation, authority, neutral
 pause, Home teardown and offline reload. Each scene transition waits for its
-actual screenshot callback. Private captures and isolated player data stay
-outside the repository. The browser interaction proof and final graphical
-checks are still being completed on this draft.
+actual screenshot callback and fresh uploaded movie frames after loading.
+Private captures and isolated player data stay outside the repository.
+
+Verification on 2026-10-12: two actual rendered clients at both 64 and 128 tick
+completed Ready, neutral pause with advancing authority, Home teardown and
+offline reload. All sixteen fresh captures were inspected. The browser fixture
+(`CSR_TEST_BROWSER=localhost:port`) completed authored Play/Community entry,
+Favorites, typed hostname Add/OK, persisted discovery, row Connect, rendered
+Ready, Home, authored re-entry, context removal and Escape Close; all seven
+fresh captures were saved and inspected. Context uses the installed opaque
+Menu roles, and browser/modal/context layers sit above the movie image.
+The lifecycle executable was built at `b26e4c0`; the final browser executable
+at `cf729cd`. The later browser-only change does not alter the remote lifecycle.
+
+These fixtures own Bevy engine inputs and explicitly set their own window
+focus. They do not verify operating-system interaction/focus or original-game
+pixel parity. Native frame sizing/context geometry and sparse Home news remain
+fidelity work; see [SERVER_BROWSER.md](SERVER_BROWSER.md).
 
 Public directory discovery, LAN browsing, menu hosting and automatic server
 content acquisition remain open. The current browser exposes local address
