@@ -523,7 +523,7 @@ mod tests {
     }
 
     #[test]
-    fn incomplete_scene_capture_never_starts_remote_admission() {
+    fn missing_scene_materials_close_without_starting_remote_admission() {
         for rate in [64, 128] {
             let (remote, info, map) = waiting_remote(rate);
             let mut app = loading_app(AppState::Match);
@@ -538,21 +538,16 @@ mod tests {
             ));
             app.insert_resource(remote);
             crate::remote_join::update(app.world_mut());
-            assert_eq!(
-                app.world()
-                    .resource::<crate::remote::RemoteClient>()
-                    .status(),
-                &netcode::remote_session::Status::AwaitingMap(info)
-            );
+            assert!(!app.world().contains_resource::<crate::remote::RemoteClient>());
             assert!(
-                app.world()
+                !app.world()
                     .contains_resource::<crate::remote_join::Admission>()
             );
             assert!(
                 !app.world()
                     .contains_resource::<crate::remote_render_gate::RenderGate>()
             );
-            assert!(app.world().resource::<Loader>().status.contains("renderer"));
+            assert!(app.world().resource::<crate::menu::Menu>().status.contains("renderer"));
         }
     }
 

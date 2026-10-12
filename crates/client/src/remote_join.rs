@@ -25,12 +25,12 @@ pub struct Connect {
 pub struct JoinRequest(pub Mutex<Option<Connect>>);
 
 pub(crate) fn local_stores() -> Result<(packs::Installed, workshop::Store), String> {
+    let current = std::env::current_dir().map_err(|e| format!("Could not locate player data: {e}"))?;
     let data = match std::env::var_os("CSR_DATA_DIR") {
         Some(path) => PathBuf::from(path),
-        None => {
-            std::env::current_dir().map_err(|e| format!("Could not locate player data: {e}"))?
-        }
+        None => current.clone(),
     };
+    let data = if data.is_absolute() { data } else { current.join(data) };
     Ok((packs::Installed::new(&data), workshop::Store::new(&data)))
 }
 
@@ -176,10 +176,21 @@ pub(crate) fn update(world: &mut World) {
                     return;
                 }
                 world.resource_mut::<Loader>().status = "Preparing the map renderer…".into();
-                // Fail closed until exact currently owned scene assets have
-                // been captured after deferred spawn commands are applied.
+                // OnEnter(Match) has applied spawn commands before this Update.
+                // Capture owners rather than transient asset-store differences.
                 if !world.resource::<Admission>().assets_captured {
-                    return;
+                    match crate::remote_scene_assets::gather(world) {
+                        Ok(assets) => {
+                            let mut admission = world.resource_mut::<Admission>();
+                            admission.meshes = assets.meshes;
+                            admission.images = assets.images;
+                            admission.assets_captured = true;
+                        }
+                        Err(_) => {
+                            fail(world, "The map renderer could not prepare its assets".into());
+                            return;
+                        }
+                    }
                 }
                 if world.resource::<Admission>().ticket.is_none() {
                     let admission = world.resource::<Admission>();

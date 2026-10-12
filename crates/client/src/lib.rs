@@ -50,6 +50,7 @@ pub mod player;
 pub mod remote;
 pub mod remote_map;
 pub mod remote_render_gate;
+pub mod remote_scene_assets;
 pub mod remote_join;
 mod remote_flow;
 pub mod props;
