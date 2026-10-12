@@ -1917,6 +1917,7 @@ dependencies = [
  "raw-window-handle",
  "rodio",
  "scaleform",
+ "sha2 0.10.9",
  "sim",
  "vfs",
  "vmt",
