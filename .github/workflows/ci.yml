@@ -35,6 +35,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - run: Add-Content $env:GITHUB_PATH "$env:USERPROFILE\.cargo\bin"
+      - run: powershell -NoProfile -File tools/test-release-version.ps1
       - run: cargo test --workspace --locked
       - run: powershell -NoProfile -File tools/fidelity/test-session.ps1
       - run: cargo build --profile play -p launcher --locked
