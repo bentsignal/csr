@@ -453,6 +453,7 @@ pub struct Frontend {
 }
 
 impl Frontend {
+    pub(crate) fn camera(&self) -> Entity { self.camera }
     pub(crate) fn send(&self, input: Input) {
         if let Some(movie) = &self.movie {
             movie.lock().unwrap().send(input);
@@ -920,7 +921,7 @@ pub(crate) fn update(
                         selected.bots = 0;
                     }
                     menu.status.clear();
-                    *request.0.lock().unwrap() = Some(selected);
+                    *request.0.lock().unwrap() = Some(selected.into());
                 }
             }
             Action::Notice(message) => menu.status = message,
@@ -977,10 +978,12 @@ pub(crate) fn cancel_loading(
 
 pub(crate) fn input(
     front: Res<Frontend>,
+    mut ownership: Local<crate::frontend_input::Ownership>,
+    packs: Option<Res<crate::pack_ui::PackUi>>,
     enabled: Res<crate::player::InputEnabled>,
     state: Res<State<AppState>>,
     menu: Res<crate::menu::Menu>,
-    window: Single<&Window, With<PrimaryWindow>>,
+    window: Single<(Entity, &Window), With<PrimaryWindow>>,
     mouse: Res<ButtonInput<MouseButton>>,
     mut keys: MessageReader<KeyboardInput>,
     mut wheel: MessageReader<MouseWheel>,
@@ -988,9 +991,13 @@ pub(crate) fn input(
     buttons: Res<ButtonInput<KeyCode>>,
     mut focus: MessageReader<WindowFocused>,
 ) {
-    if crate::frontend_flow::enabled() || !enabled.0 || !front.visible || front.failed.is_some() {
+    let (window_entity, window) = *window;
+    let blocked = packs.is_some_and(|packs| packs.blocks_movie()) || crate::frontend_flow::enabled() || !enabled.0 || !front.visible || front.failed.is_some() || !window.focused;
+    for input in ownership.transition(blocked, window.focused) { front.send(input); }
+    if blocked {
         keys.clear();
         wheel.clear();
+        focus.clear();
         return;
     }
     cursor.visible = true;
@@ -1001,24 +1008,25 @@ pub(crate) fn input(
         return;
     };
     let movie = movie.lock().unwrap();
+    let mut send = |input: Input| { ownership.record(&input); movie.send(input); };
     if let Some(position) = window.cursor_position() {
         let scale = window.scale_factor() as f64;
         let (x, y) = (position.x as f64 * scale, position.y as f64 * scale);
-        movie.send(Input::MouseMove { x, y });
+        send(Input::MouseMove { x, y });
         for (button, mapped) in [
             (MouseButton::Left, scaleform::MouseButton::Left),
             (MouseButton::Right, scaleform::MouseButton::Right),
             (MouseButton::Middle, scaleform::MouseButton::Middle),
         ] {
             if mouse.just_pressed(button) {
-                movie.send(Input::MouseDown {
+                send(Input::MouseDown {
                     x,
                     y,
                     button: mapped,
                 });
             }
             if mouse.just_released(button) {
-                movie.send(Input::MouseUp {
+                send(Input::MouseUp {
                     x,
                     y,
                     button: mapped,
@@ -1027,10 +1035,10 @@ pub(crate) fn input(
         }
     }
     for event in focus.read() {
-        movie.send(Input::Focus(event.focused));
+        if event.window == window_entity { send(Input::Focus(event.focused)); }
     }
     for event in wheel.read() {
-        movie.send(Input::MouseWheel {
+        send(Input::MouseWheel {
             lines: event.y as f64
                 / if event.unit == MouseScrollUnit::Pixel {
                     40.0
@@ -1047,13 +1055,13 @@ pub(crate) fn input(
         }
         if let Some((name, vkey)) = key(event.key_code) {
             if event.state == ButtonState::Pressed {
-                movie.send(Input::Edit {
+                send(Input::Edit {
                     name: name.clone(),
                     control,
                     shift,
                 });
             }
-            movie.send(Input::Key {
+            send(Input::Key {
                 name,
                 vkey,
                 down: event.state == ButtonState::Pressed,
@@ -1062,7 +1070,7 @@ pub(crate) fn input(
         if event.state == ButtonState::Pressed && !control {
             if let Some(text) = &event.text {
                 for ch in text.chars().filter(|ch| !ch.is_control()) {
-                    movie.send(Input::Char(ch));
+                    send(Input::Char(ch));
                 }
             }
         }
@@ -1123,7 +1131,7 @@ pub(crate) fn capture_menu(
     mut commands: Commands,
     mut exit: MessageWriter<AppExit>,
 ) {
-    if crate::frontend_flow::enabled() {
+    if crate::pack_ui::proof_enabled() || crate::frontend_flow::enabled() {
         return;
     }
     let started = started_at.get_or_insert_with(std::time::Instant::now);
