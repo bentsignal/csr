@@ -289,6 +289,41 @@ mod tests {
     }
 
     #[test]
+    fn changed_same_rate_policy_reprobes_before_ready() {
+        let mut old = server(128, 8);
+        let address = old.address();
+        let mut remote =
+            RemoteSession::discover(address, "Local".into(), Team::CounterTerrorist).unwrap();
+        discover(&mut old, &mut remote);
+        drop(old);
+        let mut world = map();
+        world.set_tick_rate(128);
+        let policy = crate::lag::LagPolicy {
+            interpolation_allowance_ticks: 1,
+            ..crate::lag::LagPolicy::prototype(128)
+        };
+        let mut changed = Server::bind(
+            address,
+            Session::with_lag_policy(world, manifest(), policy).unwrap(),
+            4,
+        )
+        .unwrap();
+        remote.provide_map(map(), manifest()).unwrap();
+        discover(&mut changed, &mut remote);
+        assert_eq!(remote.server_info().unwrap().tick_rate, 128);
+        assert_eq!(
+            remote.server_info().unwrap().interpolation_allowance_ticks,
+            1
+        );
+        assert!(remote.predicted_world().is_none());
+        assert!(remote.pose_history().is_none());
+        for _ in 0..16 {
+            changed.update(Duration::from_secs_f64(1. / 128.)).unwrap();
+        }
+        assert!(changed.session().world().players.is_empty());
+    }
+
+    #[test]
     fn hostile_effect_packet_closes_before_renderer_exposure_and_clears_queues() {
         let mut server = server(128, 8);
         let mut remote =
@@ -437,6 +472,12 @@ impl RemoteSession {
     pub fn player(&self) -> Option<PlayerId> {
         self.predictor.as_ref().map(Predictor::player_id)
     }
+    pub fn pending_inputs(&self) -> Option<usize> {
+        self.predictor.as_ref().map(Predictor::pending_inputs)
+    }
+    pub fn acknowledged_input(&self) -> Option<u64> {
+        self.predictor.as_ref().map(Predictor::acknowledged_input)
+    }
     pub fn take_events(&mut self) -> Option<EventBatch> {
         if self.status != Status::Ready {
             return None;
@@ -545,6 +586,12 @@ impl RemoteSession {
                 self.joining_elapsed = Duration::ZERO;
             }
             return Ok(());
+        }
+        if let Some(current) = client.server_info() {
+            current.validate().map_err(Error::InvalidState)?;
+            if Some(current) != self.info.as_ref() {
+                return self.reprobe();
+            }
         }
         if let Some(ServerControl::Welcome {
             version,

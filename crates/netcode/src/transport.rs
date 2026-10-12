@@ -74,6 +74,16 @@ impl Server {
     pub fn discarded_wall_ticks(&self) -> u64 {
         self.clock.discarded_wall_ticks
     }
+    fn info(&self) -> ServerInfo {
+        ServerInfo {
+            version: VERSION,
+            tick_rate: self.session.world().tick_rate,
+            snapshot_interval_ticks: self.snapshot_every as u32,
+            max_unlag_ticks: self.session.lag_policy().max_history_ticks,
+            interpolation_allowance_ticks: self.session.lag_policy().interpolation_allowance_ticks,
+            content: self.session.content().clone(),
+        }
+    }
 
     /// Drive IO once and advance the sim only for elapsed fixed ticks.
     pub fn update(&mut self, elapsed: Duration) -> Result<usize, String> {
@@ -109,17 +119,7 @@ impl Server {
                     }
                     Ok(ClientControl::Inspect { version }) => {
                         let reply = if version == VERSION {
-                            ServerControl::Info(ServerInfo {
-                                version: VERSION,
-                                tick_rate: self.session.world().tick_rate,
-                                snapshot_interval_ticks: self.snapshot_every as u32,
-                                max_unlag_ticks: self.session.lag_policy().max_history_ticks,
-                                interpolation_allowance_ticks: self
-                                    .session
-                                    .lag_policy()
-                                    .interpolation_allowance_ticks,
-                                content: self.session.content().clone(),
-                            })
+                            ServerControl::Info(self.info())
                         } else {
                             ServerControl::Rejected {
                                 reason: "incompatible protocol version".into(),
@@ -132,6 +132,13 @@ impl Server {
                         let reply = self.session.join(client, hello);
                         if matches!(reply, ServerControl::Welcome { .. }) {
                             self.pending_hellos.remove(&client);
+                            // Reliable control ordering carries current policy before
+                            // admission, including changes during local map loading.
+                            self.connection.send_message(
+                                client,
+                                CONTROL,
+                                encode(&ServerControl::Info(self.info()))?,
+                            );
                         }
                         self.connection
                             .send_message(client, CONTROL, encode(&reply)?);
@@ -380,9 +387,6 @@ impl Client {
             let reply: ServerControl = decode(&bytes)?;
             match &reply {
                 ServerControl::Info(info) => {
-                    if self.content.is_some() {
-                        return Err("unexpected discovery response".into());
-                    }
                     info.validate()?;
                     self.server_info = Some(info.clone());
                     continue;
@@ -412,6 +416,11 @@ impl Client {
                         || Some(content) != self.content.as_ref()
                         || !sim::TICK_RATE_RANGE.contains(tick_rate)
                         || *server_tick > MAX_PROTOCOL_COUNTER
+                        || !self.server_info.as_ref().is_some_and(|info| {
+                            info.version == *version
+                                && info.tick_rate == *tick_rate
+                                && info.content == *content
+                        })
                     {
                         return Err("server welcome does not match local content/protocol".into());
                     }
