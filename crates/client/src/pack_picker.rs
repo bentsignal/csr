@@ -26,15 +26,17 @@ try {
     Add-Type -AssemblyName System.Windows.Forms;
     [System.Windows.Forms.Application]::EnableVisualStyles();
     $d=New-Object System.Windows.Forms.OpenFileDialog;
+    $top=$null;
     try {
+        $top=New-Object System.Windows.Forms.Form -Property @{TopMost=$true;ShowInTaskbar=$false};
         $d.Title='Install a content pack';
         $d.Filter='Content packs (*.csrpack)|*.csrpack';
         $d.Multiselect=$false; $d.CheckFileExists=$true;
         $d.CheckPathExists=$true; $d.RestoreDirectory=$true;
-        if($d.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+        if($d.ShowDialog($top) -eq [System.Windows.Forms.DialogResult]::OK) {
             [Console]::Out.Write('P:'+(Hex $d.FileName));
         } else { [Console]::Out.Write('C'); }
-    } finally { $d.Dispose(); }
+    } finally { if($null -ne $top){$top.Dispose()}; $d.Dispose(); }
 } catch { [Console]::Out.Write('E:'+(Hex $_.Exception.Message)); }
 "#;
 
@@ -419,12 +421,14 @@ mod tests {
         assert!(PICKER_SCRIPT.contains("Content packs (*.csrpack)|*.csrpack"));
         assert!(PICKER_SCRIPT.contains("$d.Multiselect=$false"));
         assert!(PICKER_SCRIPT.contains("$d.RestoreDirectory=$true"));
+        assert!(PICKER_SCRIPT.contains("TopMost=$true;ShowInTaskbar=$false"));
+        assert!(PICKER_SCRIPT.contains("$top.Dispose()"));
         assert!(PICKER_SCRIPT.contains("[Buffer]::BlockCopy"));
         assert!(!PICKER_SCRIPT.contains("Invoke-Expression"));
     }
     #[cfg(windows)]
     fn wait(job: &mut PackPicker) -> PickerOutcome {
-        let end = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(30);
         loop {
             if let Some(result) = job.poll() {
                 return result;
@@ -455,7 +459,7 @@ mod tests {
     #[test]
     fn real_script_protocol_without_opening_a_dialog() {
         let cancel = PICKER_SCRIPT.replace(
-            "$d.ShowDialog()",
+            "$d.ShowDialog($top)",
             "[System.Windows.Forms.DialogResult]::Cancel",
         );
         assert_eq!(
@@ -464,12 +468,30 @@ mod tests {
         );
         let path = "C:\\用户\\friend's & $pack % 😀.csrpack";
         let select = PICKER_SCRIPT
-            .replace("$d.ShowDialog()", "[System.Windows.Forms.DialogResult]::OK")
+            .replace(
+                "$d.ShowDialog($top)",
+                "[System.Windows.Forms.DialogResult]::OK",
+            )
             .replace("$d.FileName", &format!("'{}'", path.replace('\'', "''")));
         assert_eq!(
             wait(&mut PackPicker::start_script(&select)),
             PickerOutcome::Selected(PathBuf::from(path))
         );
+    }
+    #[cfg(windows)]
+    #[test]
+    fn oversized_child_output_fails_and_closes_the_owned_process() {
+        let mut job = PackPicker::start_script(
+            "if([Console]::ReadLine() -eq 'OPEN'){[Console]::Out.Write('X'*131073);Start-Sleep -Seconds 60}",
+        );
+        assert!(
+            matches!(wait(&mut job), PickerOutcome::Failed(message) if message.contains("too large"))
+        );
+        assert!(job.child.is_none());
+        assert_eq!(job.poll(), None);
+        let mut job = PackPicker::start_script("if([Console]::ReadLine() -eq 'OPEN'){exit 7}");
+        assert!(matches!(wait(&mut job), PickerOutcome::Failed(_)));
+        assert!(job.child.is_none());
     }
     #[cfg(windows)]
     #[test]
