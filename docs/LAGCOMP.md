@@ -43,6 +43,11 @@ These interpolation defaults are explicit prototype policy, pending Legacy
 measurement. Both allowances can be reduced by the server; history never
 exceeds one second. Dedicated development hosts may use
 `--max-unlag-ticks N --interpolation-ticks N`. Clients cannot change policy.
+The interpolation allowance is a total extra view-age budget. It is not an
+instruction to subtract the entire allowance from the last received snapshot:
+that would add snapshot scheduling age again. Render integration must estimate
+the server timeline and choose a delay within the budget, while respecting
+the command protocol's last-authoritative-tick bound.
 
 ## Historical queries and lifecycle
 
@@ -50,7 +55,8 @@ Only the authoritative World records the optional history. Frames retain
 minimal hull/yaw/lifecycle data for at most 64 actors and at most
 `max_history_ticks + 1` ticks. They retain no inventory, bot brains, map or
 collision clones and never enter `WorldState`. Restoring replicated state or
-changing server tick rate invalidates history.
+changing server tick rate disables history; a host must configure it again
+before recording on the new timeline.
 
 Hitscan queries historical target hulls without changing any live origin.
 Static map occlusion is evaluated against the current collision world.

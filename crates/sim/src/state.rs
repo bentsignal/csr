@@ -101,7 +101,7 @@ impl World {
         self.bomb = s.bomb;
         self.next_id = s.next_id;
         self.next_item = s.next_item;
-        if let Some(history) = &mut self.rewind { history.clear(); }
+        self.rewind = None;
     }
 
     /// The state after the last step plus that step's events.

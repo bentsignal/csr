@@ -2,7 +2,7 @@
 
 Track A2 has a Bevy-free UDP session and a dedicated server. The rendered
 client still plays offline: joining from the classic menu, rendered-client
-integration, interpolation, lag compensation, snapshot deltas, listen hosting and discovery
+integration, interpolation, complete lag compensation, snapshot deltas, listen hosting and discovery
 remain open. This is an integration foundation, not a multiplayer release.
 
 ## Ownership and messages

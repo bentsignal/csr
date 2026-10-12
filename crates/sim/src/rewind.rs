@@ -171,6 +171,9 @@ mod tests {
             let state = w.state();
             w.restore(state);
             assert!(w.oldest_hit_tick().is_none());
+            assert!(w.rewind.is_none());
+            w.step(&[]);
+            assert!(w.oldest_hit_tick().is_none());
             w.set_tick_rate(rate);
             assert!(w.rewind.is_none());
         }
