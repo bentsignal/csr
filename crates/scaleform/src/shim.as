@@ -112,6 +112,18 @@ _global.csrProbeRecord = function(value, path, depth) {
 // Explicit probe-only observation of absent runtime member lookups. Existing
 // resolvers are preserved, and absent members still resolve to undefined.
 _global.csrDiagnostics = new Object();
+_global.csrDiagnostics.observeGlobal = function() {
+    var previousResolver = _global.__resolve;
+    _global.csrProbeBudget = 128;
+    _global.__resolve = function(key) {
+        _global.csrProbeTrace("Missing", "_global." + key, "undefined");
+        if (typeof previousResolver == "function") {
+            return previousResolver.apply(this, [key]);
+        }
+        return undefined;
+    };
+    return true;
+};
 _global.csrDiagnostics.observeTarget = function(path) {
     var target = _global.csrResolve(path);
     if (target == undefined) {

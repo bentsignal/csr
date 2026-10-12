@@ -20,7 +20,9 @@ impl Engine for ProbeEngine {
         calls: &mut Calls,
     ) -> Option<Value> {
         if self.seen.insert((object.into(), method.into()))
+            || std::env::var_os("CSR_PROBE_VERBOSE").is_some()
             || method == "BasePanelRunCommand"
+            || method == "OnUpdateValue"
             || object == "csr"
         {
             tracing::info!("{object}.{method} {args:?}");
@@ -35,6 +37,17 @@ impl Engine for ProbeEngine {
             }
         }
         match (object, method) {
+            ("CScaleformComponent_GameTypes", "GetMapGroupAttribute")
+            | ("CScaleformComponent_GameTypes", "GetMapGroupAttributeSubKeys") => {
+                let doc = kv::parse(&self.fs.as_ref()?.read_string("gamemodes.txt")?).ok()?;
+                let group = doc.block("GameModes.txt")?.block("mapgroups")?.block(&args.first()?.str())?;
+                let attribute = args.get(1)?.str();
+                if method == "GetMapGroupAttributeSubKeys" {
+                    return Some(Value::List(group.block(&attribute)?.iter().map(|(name, _)| name.into()).collect()));
+                }
+                let text = group.str(&attribute)?;
+                return Some(self.tokens.get(text.trim_start_matches('#')).map_or(text, String::as_str).into());
+            }
             ("StartSinglePlayer", "OnReady") => {
                 if let Some(path) = self.roots.get(object) {
                     calls.call(
@@ -243,7 +256,7 @@ fn pointer_inputs(action: &str, args: &[Value]) -> anyhow::Result<Vec<Input>> {
 
 fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
-        .with_env_filter("warn,scaleform=info,menu_probe=info")
+        .with_env_filter("warn,scaleform=info,menu_probe=info,avm_warning=info")
         .init();
     let out =
         PathBuf::from(std::env::args().nth(1).ok_or_else(|| {
