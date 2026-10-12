@@ -175,7 +175,11 @@ fn actual_hosted_udp_delayed_death_survives_new_life_and_actor_removal_at_both_r
                 if owner.authoritative_state().unwrap().players.iter().any(|p| p.id == victim && p.alive && p.life_epoch > old_epoch) { break; }
             }
             assert!(owner.authoritative_state().unwrap().players.iter().any(|p| p.id == victim && p.alive && p.life_epoch > old_epoch));
-            assert!(owner.take_events().is_none());
+            // An older non-Kill batch may still be in flight when the fixture
+            // starts holding new batches; independent delivery is intentional.
+            while let Some(batch) = owner.take_events() {
+                assert!(batch.events.iter().all(|event| !matches!(event, sim::GameEvent::Kill { .. })));
+            }
             if remove {
                 guest.cancel();
                 for _ in 0..256 {
