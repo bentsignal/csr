@@ -1,6 +1,8 @@
 //! Front-end/match lifetime. Loading is bounded to one worker; cancelling
 //! discards its result, so a late map cannot replace a newer selection.
-use crate::{ClientOptions, GameData, LoadedLevel, Options, PendingLevel};
+#[cfg(test)]
+use crate::ClientOptions;
+use crate::{GameData, LoadedLevel, Options, PendingLevel};
 use bevy::prelude::*;
 use std::sync::{
     Mutex,

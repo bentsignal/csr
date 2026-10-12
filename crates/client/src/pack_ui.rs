@@ -147,7 +147,9 @@ pub(crate) fn update(
                     ui.feedback = 10.;
                 }
                 PickerOutcome::Failed(error) => backend.flow.notice = caption(&error),
-                PickerOutcome::Cancelled => {}
+                PickerOutcome::Cancelled => {
+                    backend.flow.notice = "File selection cancelled.".into();
+                }
             }
         }
     }
@@ -167,6 +169,9 @@ pub(crate) fn update(
                     backend.picker = Some(PackPicker::start())
                 }
                 Action::Cancel => {
+                    if let Some(picker) = &mut backend.picker {
+                        picker.cancel();
+                    }
                     backend.picker = None;
                     backend.flow.cancel();
                 }
@@ -488,6 +493,9 @@ pub(crate) fn gate_exit(mut ui: ResMut<PackUi>, mut messages: ResMut<Messages<Ap
         return;
     };
     let backend = ui.backend.get_mut().unwrap();
+    if let Some(picker) = &mut backend.picker {
+        picker.cancel();
+    }
     backend.picker = None;
     if backend.flow.busy() {
         backend.flow.cancel();
@@ -555,6 +563,7 @@ pub(crate) fn proof_enabled() -> bool {
 }
 pub(crate) struct Proof {
     start: std::time::Instant,
+    ready_at: Option<std::time::Instant>,
     entered: std::time::Instant,
     phase: u8,
     hash: String,
@@ -564,6 +573,7 @@ impl Default for Proof {
     fn default() -> Self {
         Self {
             start: std::time::Instant::now(),
+            ready_at: None,
             entered: std::time::Instant::now(),
             phase: 0,
             hash: String::new(),
@@ -619,8 +629,11 @@ pub(crate) fn proof(
             ));
     };
     let window_id = window.0;
+    if front.ready {
+        proof.ready_at.get_or_insert_with(std::time::Instant::now);
+    }
     match proof.phase {
-        0 if front.ready && *state.get() == AppState::Menu && proof.start.elapsed().as_secs() >= 5 => {
+        0 if front.ready && *state.get() == AppState::Menu && proof.ready_at.is_some_and(|ready| ready.elapsed().as_secs() >= 5) => {
             let source = std::path::PathBuf::from(std::env::var_os("CSR_TEST_PACK_FLOW").unwrap());
             drops.write(FileDragAndDrop::DroppedFile { window: window_id, path_buf: source }); proof.next();
         },
