@@ -250,6 +250,10 @@ impl Ragdoll {
                     .ok_or_else(|| invalid("ragdoll bone missing from MDL"))
             })
             .collect::<io::Result<_>>()?;
+        let mut unique_bones = HashSet::new();
+        if solid_bones.iter().any(|bone| !unique_bones.insert(*bone)) {
+            return Err(invalid("multiple solids bind to the same skeleton bone"));
+        }
         for (a, b) in &self.joint_merges {
             if !names.contains_key(&a.to_ascii_lowercase())
                 || !names.contains_key(&b.to_ascii_lowercase())
@@ -350,7 +354,7 @@ fn pair(v: &str) -> io::Result<(&str, &str)> {
 fn validate_tree(solids: &[Solid], constraints: &[Constraint], root: usize) -> io::Result<()> {
     let mut names = HashSet::new();
     for s in solids {
-        if !names.insert(s.name.as_str()) {
+        if !names.insert(s.name.to_ascii_lowercase()) {
             return Err(invalid("duplicate solid name"));
         }
     }

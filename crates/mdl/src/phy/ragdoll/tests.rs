@@ -137,6 +137,18 @@ fn binding_rejects_wrong_model_missing_or_ambiguous_bones() {
 }
 
 #[test]
+fn case_variant_solid_aliases_cannot_bind_independent_bodies_to_one_bone() {
+    // Names remain a connected, case-sensitively distinct tree in the file,
+    // but both would resolve to Pelvis under the binding's case normalization.
+    let ambiguous = metadata().replace("name Arm", "name PELVIS");
+    assert!(Ragdoll::parse(&file(&ambiguous, 2)).is_err());
+    // Binding also defends its boundary if a caller modifies parsed metadata.
+    let mut modified = Ragdoll::parse(&file(&metadata(), 2)).unwrap();
+    modified.solids[1].name = "PELVIS".into();
+    assert!(modified.bind(123, &bones()).is_err());
+}
+
+#[test]
 fn invalid_metadata_never_produces_partial_body() {
     for (from, to) in [
         ("index 1", "index 0"),

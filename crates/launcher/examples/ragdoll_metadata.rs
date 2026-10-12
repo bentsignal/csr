@@ -8,10 +8,14 @@ fn main() -> Result<(), Box<dyn Error>> {
         "models/player/custom_player/legacy/ctm_sas",
         "models/player/custom_player/legacy/tm_phoenix",
     ] {
-        let bytes = fs.read(&format!("{path}.mdl"))?;
+        let bytes = fs
+            .read(&format!("{path}.mdl"))
+            .ok_or("installed MDL is missing")?;
         let model = mdl::Model::load_header(&bytes)?;
         let checksum = u32::from_le_bytes(bytes[8..12].try_into()?);
-        let phy = fs.read(&format!("{path}.phy"))?;
+        let phy = fs
+            .read(&format!("{path}.phy"))
+            .ok_or("installed PHY is missing")?;
         let ragdoll = Ragdoll::parse(&phy)?;
         let binding = ragdoll.bind(checksum, &model.bones)?;
         assert_eq!(ragdoll.solids.len(), 16);
