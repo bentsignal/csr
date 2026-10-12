@@ -1,0 +1,18 @@
+[package]
+name = "packs"
+description = "Validated data-only content packs and ContentId registry"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+content.workspace = true
+vfs.workspace = true
+zip.workspace = true
+serde.workspace = true
+sha2 = "0.10"
+toml = { version = "1", default-features = false, features = ["parse", "display", "serde", "std"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem"] }

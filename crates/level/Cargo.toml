@@ -17,6 +17,7 @@ collision.workspace = true
 weapons.workspace = true
 nav.workspace = true
 workshop.workspace = true
+packs.workspace = true
 
 [dev-dependencies]
 zip.workspace = true

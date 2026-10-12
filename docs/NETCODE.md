@@ -2,7 +2,8 @@
 
 Track A2 has a Bevy-free UDP session and a dedicated server. The rendered
 client still plays offline: joining from the classic menu, rendered-client
-integration, interpolation, complete lag compensation, snapshot deltas, listen hosting and discovery
+integration, rendered interpolation, complete lag compensation, snapshot
+deltas, listen hosting and discovery
 remain open. This is an integration foundation, not a multiplayer release.
 
 ## Ownership and messages
@@ -99,7 +100,8 @@ beyond sent input and incompatible server rates are rejected before mutation.
 omits server bot thinking. It preserves `is_bot`, tracked poses and the
 separate aim ray. Remote actors repeat their last authoritative controls
 during replay, so their extrapolated positions can differ from new server AI
-decisions. This is not yet remote interpolation or lag compensation.
+decisions. Render remote actors from the separate pose history described
+below; predicted remote movement is not authoritative targeting truth.
 
 Predicted `GameEvent`s are cleared and are not returned by this API. Consume
 the transport's reliable authoritative event batches for effects, and use
@@ -112,6 +114,38 @@ state is outside `WorldState`; replay could otherwise apply shared damage
 twice. The `DynamicWorld` seam remains available to Track E, which must add
 replicated/replay-safe mod state before prediction can support it. Static
 content-pack BSPs use the same prediction path as installed CS:GO maps.
+
+## Remote rendering poses
+
+`netcode::remote_pose::PoseHistory` captures render data from newer
+authoritative `WorldState`s without retaining inventories, rules, events,
+bot decisions or collision worlds. Configure it from the welcome's tick
+rate, a snapshot capacity (2 through 128), an extrapolation cap in ticks,
+and a teleport distance in Source units. Rendering delay and these limits
+are caller policy; their defaults still require CS:GO Legacy measurements.
+Each history is bounded to 64 actors per frame. Clear it when changing
+maps or sessions.
+
+`sample(player, render_tick)` accepts a fractional server timeline and
+returns a separate `RenderPose`, the used timeline and the sampling mode.
+It interpolates position, eye, velocity, shortest-path view angles, tracked
+head/hand quaternions and the independent aim ray. Quaternions are checked
+and normalized before slerp; equivalent antipodal rotations do not spin.
+Movement extrapolation stops at the configured cap, holds dead actors,
+and does not run collision or gameplay. It leaves tracked offsets and aim
+orientation at the latest sample during extrapolation.
+
+Round transitions clear history. Teleports, team changes, death and respawn
+epochs snap to the newer pose instead of blending distinct lives, including
+a respawn whose death snapshot was lost. Stale snapshots cannot rewind the
+history, and invalid new poses are rejected before mutation. Actor admission
+and removal follow snapshot boundaries; missing actors are not invented.
+
+Use this output only for remote rendering. Continue using authoritative
+state for HUD/round/economy and the local predictor for local movement.
+When reporting the viewed tick in a command, obey the protocol's
+last-authoritative-tick limit even if rendering extrapolated beyond it.
+This module has no Bevy integration yet, and performs no hit rewind.
 
 Direct connect currently uses netcode.io's
 [Unsecure admission mode](https://docs.rs/renet_netcode/2.0.0/renet_netcode/enum.ClientAuthentication.html).
@@ -143,6 +177,10 @@ tracked poses, and confirms disconnect cleanup. It delays transport polling
 for four ticks while local controls change, requires pending input replay,
 checks all 128 acknowledgements and exact final reconciliation, and verifies
 predicted effects remain absent. It exits with `failures: 0`.
+It also samples fractional remote poses from decoded snapshots, checks exact
+snapshot poses against authority, validates tracked rotations and bounds the
+pose history. These are headless checks; rendered multiplayer proof remains
+client integration work.
 The default test data also exercises input ownership, atomic validation,
 duplicate/reordered commands, neutral controls after timeout, fixed-tick
 accumulation, reliable delivery after packet loss, and fragmented snapshot

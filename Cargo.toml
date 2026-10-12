@@ -20,6 +20,7 @@ members = [
     "crates/client",
     "crates/launcher",
     "crates/workshop",
+    "crates/packs",
 ]
 
 [workspace.package]
@@ -81,6 +82,7 @@ level = { path = "crates/level" }
 weapons = { path = "crates/weapons" }
 client = { path = "crates/client" }
 workshop = { path = "crates/workshop" }
+packs = { path = "crates/packs" }
 
 [profile.dev]
 opt-level = 1
