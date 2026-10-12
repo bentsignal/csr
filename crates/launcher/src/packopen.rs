@@ -81,7 +81,7 @@ pub fn run(source: PathBuf, data: &Path) -> Result<Option<Game>, String> {
             dialog::notify(
                 "Content pack installed",
                 &format!(
-                    "{} {} is ready to play.",
+                    "{} {} was installed.",
                     receipt.manifest.name, receipt.manifest.version
                 ),
             );

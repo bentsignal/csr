@@ -73,6 +73,7 @@ file cannot be installed, a message explains why. A successful install
 opens the game, or shows a notification if the game is already running.
 Cancelling before installation finishes keeps the previous pack version.
 Packs are kept with your other data and survive game updates.
+Choosing installed pack maps from the menu is still being added.
 
 
 UNINSTALLING
