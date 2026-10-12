@@ -100,7 +100,7 @@ pub fn process(
         match event {
             GameEvent::Fire { player, weapon, origin } => {
                 effects.attack(player, weapon.clone(), "ACT_VM_PRIMARYATTACK", now);
-                let sound = world.0.catalog.get(&weapon).map(|d| d.fire_sound.clone()).unwrap_or_default();
+                let sound = world.0.catalog.get(&weapon).map(|d| sounds.weapon_shot_entry(d).to_string()).unwrap_or_default();
                 if !sound.is_empty() {
                     sounds.play_with(&mut commands, fs, &mut sources, &sound, emit(player, origin));
                 }

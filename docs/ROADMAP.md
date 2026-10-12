@@ -221,6 +221,12 @@ byte-identical to 2018.
 
 ### Track D: Fidelity and gameplay completeness
 
+The 2026-10-12 desktop playtest confirms usable menu navigation and bot play,
+but identifies major remaining feel/presentation gaps. The owner clarified a
+2015 gameplay/audio baseline. The active measured backlog is
+[PLAYTEST_FEEDBACK.md](PLAYTEST_FEEDBACK.md); defer new feature polish until
+this base is faithful.
+
 The owner's first playtest (2026-10-11): "very far from one-to-one". Many
 sounds are wrong, textures look off, the gameplay feels wrong, and the whole
 thing is uncanny. Fidelity is measured, never eyeballed:
@@ -247,6 +253,10 @@ thing is uncanny. Fidelity is measured, never eyeballed:
       exact gain curves, DSP/occlusion, ricochets/near misses, map soundscapes
       and music. Evidence and limits: [FIDELITY.md](FIDELITY.md).
 - [ ] Ragdolls/death animations; burst, suppressor and revolver modes.
+      Installed death-pose/PHY and classic kill-feed metadata, authority
+      receipt gaps and remaining observation plan:
+      [DEATH_PRESENTATION.md](DEATH_PRESENTATION.md). No dynamics or
+      authored death-notice integration is complete.
 - [ ] Validate the map pool beyond Dust II (Mirage, Inferno, Nuke, Overpass,
       Train, Cache, Vertigo, Office, Italy, ...).
 - [ ] The inherited fidelity checklist below (M2–M4).
