@@ -2,6 +2,7 @@
 //! Validation, mounting and installation use one immutable byte snapshot.
 //! Private assets stay outside the repository and public releases.
 
+mod container;
 mod install;
 #[cfg(test)]
 mod tests;
@@ -363,6 +364,7 @@ impl Pack {
         if bytes.len() as u64 > limits.archive {
             return Err("pack archive exceeds size limit".into());
         }
+        container::preflight(&bytes, limits)?;
         let mut zip = zip::ZipArchive::new(Cursor::new(&bytes))
             .map_err(|e| format!("not a content pack: {e}"))?;
         if zip.len() > limits.entries {

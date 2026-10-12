@@ -372,3 +372,31 @@ fn reserved_origins_cannot_shadow_builtin_ids_or_replace_an_installed_pack() {
         assert_eq!(installed[0].manifest().provides, ["mod_map_arena"]);
     }
 }
+
+#[test]
+fn entry_count_and_directory_limits_are_checked_before_eager_zip_parsing() {
+    let mut bytes = build(&manifest(), &[("maps/arena_file.bsp", b"a")]).unwrap();
+    let end = bytes.len() - 22;
+    bytes[end + 8..end + 12].copy_from_slice(&[0xff; 4]);
+    assert!(
+        Pack::from_bytes(bytes)
+            .unwrap_err()
+            .contains("entry count limit")
+    );
+    let mut bytes = build(&manifest(), &[("maps/arena_file.bsp", b"a")]).unwrap();
+    let end = bytes.len() - 22;
+    bytes[end + 12..end + 16].copy_from_slice(&(9u32 << 20).to_le_bytes());
+    assert!(
+        Pack::from_bytes(bytes)
+            .unwrap_err()
+            .contains("metadata limits")
+    );
+    let mut bytes = build(&manifest(), &[("maps/arena_file.bsp", b"a")]).unwrap();
+    let end = bytes.len() - 22;
+    bytes[end + 8..end + 12].copy_from_slice(&[1, 0, 1, 0]);
+    assert!(
+        Pack::from_bytes(bytes)
+            .unwrap_err()
+            .contains("directory mismatch")
+    );
+}

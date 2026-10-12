@@ -98,6 +98,10 @@ refused. Only stored/deflate compression is accepted. Default limits are
 256 KiB manifest. CRC, exact expanded length and hashes are checked before
 anything is mounted or installed. These checks bound the container, not a
 complete audit of all inherited BSP/model/audio parsers.
+Directory counts and sizes are preflighted before ZIP's eager metadata parser;
+the directory budget is 8 MiB. Version 1 refuses ZIP64, split archives,
+self-extracting prefixes and trailing bytes. These restrictions fit its
+sub-4-GiB budgets and keep malformed headers from allocating unbounded tables.
 
 The payload `content_hash` is SHA-256 over files other than `pack.toml`, sorted
 by canonical lowercase path: path bytes, one zero byte, 8-byte little-endian
