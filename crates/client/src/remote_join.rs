@@ -78,15 +78,13 @@ pub(crate) fn ready(
 ) -> bool {
     *state.get() == AppState::Match
         && menu.in_match
-        && remote
-            .as_ref()
-            .is_none_or(|client| client.status() == &Status::Ready)
+        && remote.as_ref().is_none_or(|client| client.gameplay_ready())
 }
 pub(crate) fn offline(remote: Option<Res<RemoteClient>>) -> bool {
     remote.is_none()
 }
 pub(crate) fn loading(remote: Option<&RemoteClient>) -> bool {
-    remote.is_some_and(|client| client.status() != &Status::Ready)
+    remote.is_some_and(|client| !client.gameplay_ready())
 }
 
 fn cancel_preparation(world: &mut World) {
@@ -104,6 +102,18 @@ fn cancel_preparation(world: &mut World) {
 }
 
 pub(crate) fn home(world: &mut World) {
+    if let Some(request) = world.get_resource::<crate::hosting::HostRequest>() {
+        request.0.lock().unwrap().take();
+    }
+    if let Some(request) = world.get_resource::<JoinRequest>() {
+        request.0.lock().unwrap().take();
+    }
+    if let Some(request) = world.get_resource::<crate::menu::LoadRequest>() {
+        request.0.lock().unwrap().take();
+    }
+    if let Some(mut hosting) = world.get_resource_mut::<crate::hosting::Hosting>() {
+        hosting.cancel();
+    }
     cancel_preparation(world);
     crate::remote::clear(world);
     if let Some(mut loader) = world.get_resource_mut::<Loader>() {
@@ -256,12 +266,16 @@ pub(crate) fn update(world: &mut World) {
             world.resource_mut::<Loader>().status = "Synchronizing with server…".into()
         }
         Status::Ready => {
-            world.resource_mut::<Loader>().status.clear();
+            if world.resource::<RemoteClient>().gameplay_ready() {
+                world.resource_mut::<Loader>().status.clear();
+            } else {
+                world.resource_mut::<Loader>().status = "Starting server…".into();
+            }
         }
     }
 }
 
-fn error_message(error: &Error) -> String {
+pub(crate) fn error_message(error: &Error) -> String {
     match error {
         Error::Timeout => "The server did not respond. Check the address and try again.".into(),
         Error::ContentMismatch => {

@@ -11,7 +11,7 @@ use bevy::{
 use std::time::{Duration, Instant};
 
 pub(crate) fn enabled() -> bool {
-    std::env::var_os("CSR_TEST_REMOTE").is_some()
+    std::env::var_os("CSR_TEST_REMOTE").is_some() || std::env::var_os("CSR_TEST_HOST").is_some()
 }
 
 pub(crate) struct Proof {
@@ -92,7 +92,7 @@ pub(crate) fn update(world: &mut World, mut proof: Local<Proof>) {
     let state = *world.resource::<State<AppState>>().get();
     let ready = world
         .get_resource::<RemoteClient>()
-        .is_some_and(|client| client.status() == &netcode::remote_session::Status::Ready);
+        .is_some_and(|client| client.gameplay_ready());
     match proof.phase {
         0 => {
             if !world.resource::<crate::frontend::Frontend>().ready || state != AppState::Menu {
@@ -101,10 +101,14 @@ pub(crate) fn update(world: &mut World, mut proof: Local<Proof>) {
             if proof.ready_at.get_or_insert_with(Instant::now).elapsed() < Duration::from_secs(5) {
                 return;
             }
-            let Ok(address) = std::env::var("CSR_TEST_REMOTE")
-                .unwrap()
-                .parse::<std::net::SocketAddr>()
-            else {
+            let hosted = std::env::var_os("CSR_TEST_HOST").is_some();
+            let Ok(address) = std::env::var(if hosted {
+                "CSR_TEST_HOST"
+            } else {
+                "CSR_TEST_REMOTE"
+            })
+            .unwrap()
+            .parse::<std::net::SocketAddr>() else {
                 failed(world, "invalid loopback endpoint");
                 return;
             };
@@ -115,11 +119,37 @@ pub(crate) fn update(world: &mut World, mut proof: Local<Proof>) {
             let name =
                 std::env::var("CSR_TEST_REMOTE_NAME").unwrap_or_else(|_| "Rendered client".into());
             info!("remote flow: loopback engine-input fixture for {name}; no OS focus/input claim");
-            *world.resource::<JoinRequest>().0.lock().unwrap() = Some(Connect {
-                address,
-                name,
-                team: sim::Team::CounterTerrorist,
-            });
+            if hosted {
+                let map = crate::ClientOptions {
+                    bots: 1,
+                    deathmatch: true,
+                    ..world.resource::<crate::Options>().0.clone()
+                };
+                let tick_rate = std::env::var("CSR_TEST_HOST_RATE")
+                    .ok()
+                    .and_then(|rate| rate.parse().ok())
+                    .unwrap_or(128);
+                *world
+                    .resource::<crate::hosting::HostRequest>()
+                    .0
+                    .lock()
+                    .unwrap() = Some(crate::hosting::HostSelection {
+                    map: map.into(),
+                    config: netcode::host::HostConfig {
+                        bind: address,
+                        max_clients: 4,
+                    },
+                    tick_rate,
+                    name,
+                    team: sim::Team::CounterTerrorist,
+                });
+            } else {
+                *world.resource::<JoinRequest>().0.lock().unwrap() = Some(Connect {
+                    address,
+                    name,
+                    team: sim::Team::CounterTerrorist,
+                });
+            }
             proof.next();
         }
         1 if ready => {
@@ -211,6 +241,9 @@ pub(crate) fn update(world: &mut World, mut proof: Local<Proof>) {
             proof.next();
         }
         6 if state == AppState::Menu => {
+            if !world.resource::<crate::hosting::Hosting>().closed() {
+                return;
+            }
             let serial = world
                 .resource::<crate::frontend::Frontend>()
                 .presented_serial();

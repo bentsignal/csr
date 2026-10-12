@@ -196,14 +196,20 @@ impl LocalMapRequest {
         if manifest != self.advertised {
             return Err(PrepareError::ContentMismatch);
         }
-        let mut world = sim::World::with_catalog(level.collision.clone(), level.catalog.clone());
-        world.load_map(&level.bsp, level.overview().as_deref());
+        let world = map_world_for_level(&level);
         Ok(PreparedMap {
             level,
             world,
             manifest,
         })
     }
+}
+
+/// Construct one replay-safe map world from the retained parsed level.
+pub(crate) fn map_world_for_level(level: &level::Level) -> sim::World {
+    let mut world = sim::World::with_catalog(level.collision.clone(), level.catalog.clone());
+    world.load_map(&level.bsp, level.overview().as_deref());
+    world
 }
 
 /// Identity of the exact parsed bytes, never a post-mount VFS reread.
