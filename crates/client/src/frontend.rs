@@ -34,6 +34,7 @@ struct Data {
     loading: String,
     player_name: String,
     movie_ready: HashSet<String>,
+    pause_surface: crate::frontend_pause_surface::Tracker,
 }
 enum Action {
     Sound(String),
@@ -308,11 +309,33 @@ impl Engine for Bridge {
                 _ => {}
             }
         }
+        if object == crate::frontend_pause_surface::RECEIVER && method == crate::frontend_pause_surface::CALLBACK {
+            self.data.lock().unwrap().pause_surface.accept(args);
+            return Some(Value::Undefined);
+        }
+        if object == "OptionsMenu" && method == "OnCancel" {
+            let mut data = self.data.lock().unwrap();
+            if data.pause_surface.options_requested() {
+                data.pause_surface.options_cancelled();
+                if let Some(path) = self.roots.get("OptionsMenu") { calls.set(path, "_visible", false.into()); }
+                let base = if data.state == AppState::Match && data.menu_open { "PauseMenu" } else { "MainMenu" };
+                if let Some(path) = self.roots.get(base) {
+                    calls.set(path, "_visible", true.into());
+                    calls.call(path, "showPanel", vec![]);
+                }
+            }
+            return Some(Value::Undefined);
+        }
         if method == "OnReady" { self.data.lock().unwrap().movie_ready.insert(object.into()); }
         if method == "OnLoadFinished" && !object.starts_with("CScaleformComponent_") {
             self.data.lock().unwrap().movie_ready.remove(object);
             if let Some(path) = arg(0).strip_prefix("mc:") {
                 self.roots.insert(object.into(), path.into());
+                match object {
+                    "PauseMenu" => self.data.lock().unwrap().pause_surface.root(crate::frontend_pause_surface::Root::Pause, path),
+                    "OptionsMenu" => self.data.lock().unwrap().pause_surface.root(crate::frontend_pause_surface::Root::Options, path),
+                    _ => (),
+                }
                 self.requested.insert(object.into());
                 if object == "MainMenu" {
                     calls.call(path, "onUIShow", vec![]);
@@ -329,15 +352,17 @@ impl Engine for Bridge {
                     }
                 } else if object == "PauseMenu" {
                     let data = self.data.lock().unwrap();
-                    if data.state == AppState::Match && data.menu_open {
+                    if data.state == AppState::Match && data.menu_open && !data.pause_surface.options_requested() {
                         for element in ["MainMenu", "StartSinglePlayer", "OptionsMenu", "LobbyBrowser", "LobbyScreen"] {
                             if let Some(root) = self.roots.get(element) {
                                 calls.set(root, "_visible", false.into());
                             }
                         }
+                        calls.set(path, "_visible", true.into());
                         calls.call(path, "SetPlayerName", vec!["You".into()]);
                         calls.call(path, "showPanel", vec![]);
                     } else {
+                        calls.set(path, "_visible", false.into());
                         calls.call(path, "hidePanel", vec![]);
                     }
                 }
@@ -384,8 +409,9 @@ impl Engine for Bridge {
         if method == "OnReady" && object == "OptionsMenu" {
             if let Some(path) = self.roots.get(object) {
                 let data = self.data.lock().unwrap();
-                if matches!(data.state, AppState::Menu | AppState::Browser)
-                    || (data.state == AppState::Match && data.menu_open)
+                if data.pause_surface.options_requested()
+                    && (matches!(data.state, AppState::Menu | AppState::Browser)
+                        || (data.state == AppState::Match && data.menu_open))
                 {
                     self.options.show(path, &data.settings, calls);
                 } else {
@@ -458,7 +484,9 @@ impl Engine for Bridge {
                 | "OpenMouseDialog"
                 | "OpenKeyboardMouseDialog" => {
                     self.lobby.lock().unwrap().cancel();
-                    let data = self.data.lock().unwrap();
+                    let mut data = self.data.lock().unwrap();
+                    data.pause_surface.options_opened();
+                    if let Some(path) = self.roots.get("PauseMenu") { calls.set(path, "_visible", false.into()); }
                     self.options = crate::frontend_options::Scene::load(
                         &data.fs,
                         &command,
@@ -635,6 +663,7 @@ pub struct Frontend {
     actions: Arc<Mutex<Vec<Action>>>,
     image: Handle<Image>,
     presented_serial: u64,
+    worker_generation: u64,
     root: Entity,
     camera: Entity,
     visible: bool,
@@ -652,6 +681,7 @@ pub struct Frontend {
 
 impl Frontend {
     pub(crate) fn camera(&self) -> Entity { self.camera }
+    pub(crate) fn pause_surface_visible(&self) -> bool { self.data.lock().unwrap().pause_surface.visible() }
     pub(crate) fn loaded(&self, name: &str) -> bool { self.loaded.contains(name) }
     /// Authored OnReady received for the current cached movie; Loaded alone is earlier.
     pub(crate) fn movie_ready(&self, name: &str) -> bool {
@@ -707,6 +737,7 @@ pub(crate) fn setup(
         loading: String::new(),
         player_name: "You".into(),
         movie_ready: HashSet::new(),
+        pause_surface: Default::default(),
     }));
     let lobby = Arc::new(Mutex::new(crate::frontend_lobby::Scene::new(
         crate::frontend_lobby::Catalog::installed(&options.0, &menu.maps),
@@ -813,6 +844,7 @@ pub(crate) fn setup(
         actions,
         image,
         presented_serial: 0,
+        worker_generation: 0,
         root,
         camera,
         visible: false,
@@ -870,6 +902,8 @@ pub(crate) fn update(
         snapshot.state = scene;
         snapshot.menu_open = menu.open();
         snapshot.loading = loader.status.clone();
+        snapshot.pause_surface.activate(front.worker_generation,
+            scene == AppState::Match && matches!(menu.page, Some(crate::menu::Page::Main | crate::menu::Page::Pause)));
     }
     if settings.is_changed() {
         front.data.lock().unwrap().settings = settings.clone();
@@ -955,6 +989,13 @@ pub(crate) fn update(
         };
     }
     if visible && front.movie.is_none() && front.failed.is_none() {
+        let Some(generation) = front.worker_generation.checked_add(1) else {
+            front.failed = Some("The menu session limit was reached. Restart the game.".into());
+            return;
+        };
+        front.worker_generation = generation;
+        front.data.lock().unwrap().pause_surface.activate(generation,
+            scene == AppState::Match && matches!(menu.page, Some(crate::menu::Page::Main | crate::menu::Page::Pause)));
         let mut elements = vec!["MainMenu".into()];
         if scene == AppState::Match {
             elements.push("PauseMenu".into());
@@ -991,7 +1032,14 @@ pub(crate) fn update(
             });
         }
         if visible && scene == AppState::Match && front.ready {
+            let options_root = {
+                let mut data = front.data.lock().unwrap();
+                data.pause_surface.options_cancelled();
+                data.pause_surface.options_root().map(str::to_owned)
+            };
+            if let Some(path) = options_root { front.send(Input::Set { path, property: "_visible".into(), value: false.into() }); }
             front.request("PauseMenu");
+            front.send(Input::Set { path: "_level100".into(), property: "_visible".into(), value: true.into() });
             front.send(Input::Call {
                 path: "_level100".into(),
                 function: "showPanel".into(),
@@ -1005,8 +1053,18 @@ pub(crate) fn update(
             });
         }
     }
+    let sample = front.data.lock().unwrap().pause_surface.request(front.presented_serial);
+    if let Some(sample) = sample {
+        front.send(Input::Call { path: crate::frontend_pause_surface::SAMPLER_PATH.into(), function: crate::frontend_pause_surface::SAMPLER_METHOD.into(), args: sample.args() });
+    }
     if scene != AppState::Menu && front.lobby.lock().unwrap().active() { front.lobby.lock().unwrap().cancel(); }
     if front.scene != Some(scene) {
+        let options_root = {
+            let mut data = front.data.lock().unwrap();
+            data.pause_surface.options_cancelled();
+            data.pause_surface.options_root().map(str::to_owned)
+        };
+        if let Some(path) = options_root { front.send(Input::Set { path, property: "_visible".into(), value: false.into() }); }
         for path in ["_global.LobbyMovie", "_level17"] {
             front.send(Input::Set { path: path.into(), property: "_visible".into(), value: false.into() });
         }
@@ -1509,7 +1567,7 @@ mod tests {
         let data = Arc::new(Mutex::new(Data {
             inventory: InventoryView::new(&fs), fs, settings: Settings::default(),
             localization: Default::default(), game_modes: modes.clone(),
-            state: AppState::Menu, menu_open: true, loading: String::new(), player_name: "You".into(), movie_ready: HashSet::new(),
+            state: AppState::Menu, menu_open: true, loading: String::new(), player_name: "You".into(), movie_ready: HashSet::new(), pause_surface: Default::default(),
         }));
         let mut scene = Scene::new(Catalog::installed(&crate::ClientOptions::default(), &["de_dust2".into()]));
         assert!(scene.begin(&modes)); assert!(scene.open_lobby());
@@ -1605,6 +1663,7 @@ mod tests {
             loading: String::new(),
             player_name: "You".into(),
         movie_ready: HashSet::new(),
+        pause_surface: Default::default(),
         }));
         let actions = Arc::new(Mutex::new(Vec::new()));
         let mut bridge = Bridge {

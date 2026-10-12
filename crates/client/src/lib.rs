@@ -13,6 +13,7 @@ mod frontend_lobby;
 mod frontend_options;
 mod frontend_flow;
 mod frontend_input;
+mod frontend_pause_surface;
 mod pack_flow;
 mod pack_picker;
 mod pack_ui;

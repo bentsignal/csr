@@ -50,6 +50,10 @@ pub(crate) struct Tracker {
     visible: bool,
 }
 impl Tracker {
+    pub(crate) fn options_root(&self) -> Option<&str> {
+        self.options.as_deref()
+    }
+
     /// Owner identifies the movie-worker lifetime, not the host or sim tick.
     /// Repeating identical state is a no-op; inactive always refuses sampling.
     pub(crate) fn activate(&mut self, owner: u64, active: bool) {
