@@ -381,6 +381,11 @@ impl Pack {
             if read == 0 {
                 break;
             }
+            // A file can grow after metadata was checked. Refuse the extra
+            // byte before Vec's geometric growth can exceed the archive budget.
+            if bytes.len() as u64 + read as u64 > limits.archive {
+                return Err("pack archive exceeds size limit".into());
+            }
             bytes.extend_from_slice(&buffer[..read]);
         }
         Self::from_bytes_controlled(bytes, limits, control)
@@ -473,6 +478,11 @@ impl Pack {
                     .map_err(|e| format!("{name}: {e}"))?;
                 if read == 0 {
                     break;
+                }
+                // A lying expanded size must not trigger an extra Vec growth
+                // allocation before the final exact-length check.
+                if data.len() as u64 + read as u64 > size {
+                    return Err(format!("invalid expanded length: {name}"));
                 }
                 data.extend_from_slice(&buffer[..read]);
             }
