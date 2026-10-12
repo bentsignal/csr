@@ -240,7 +240,7 @@ impl Ragdoll {
                 return Err(invalid("ambiguous skeleton bone name"));
             }
         }
-        let solid_bones = self
+        let solid_bones: Vec<usize> = self
             .solids
             .iter()
             .map(|s| {
