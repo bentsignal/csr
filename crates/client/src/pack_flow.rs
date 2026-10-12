@@ -101,13 +101,19 @@ impl Flow {
             Some(Worker::Catalog(job)) => match job.poll() {
                 None => false,
                 Some(packs::CatalogOutcome::Loaded(catalog)) => {
+                    if self.cancelling {
+                        self.notice = "Content packs refreshed.".into();
+                    }
                     if self.catalog != catalog {
                         self.catalog = catalog;
                         self.revision = self.revision.wrapping_add(1);
                     }
                     true
                 }
-                Some(packs::CatalogOutcome::Cancelled) => true,
+                Some(packs::CatalogOutcome::Cancelled) => {
+                    self.notice = "Refresh cancelled.".into();
+                    true
+                }
                 Some(packs::CatalogOutcome::Failed(error)) => {
                     self.notice = format!("Could not refresh content packs: {}", caption(&error));
                     true
@@ -262,6 +268,7 @@ mod tests {
         assert!(flow.install(fixture.0.join("next.csrpack")).is_err());
         finish(&mut flow);
         assert!(flow.catalog.entries.is_empty());
+        assert_ne!(flow.status(), "Cancelling…");
         assert!(!flow.store.dir().join("friend_recipe.csrpack").exists());
         flow.request_refresh();
         finish(&mut flow);

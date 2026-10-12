@@ -11,6 +11,10 @@ mod frontend_inventory;
 mod frontend_game;
 mod frontend_options;
 mod frontend_flow;
+mod frontend_input;
+mod pack_flow;
+mod pack_picker;
+mod pack_ui;
 pub mod foley;
 mod sound_probe;
 pub mod surfaces;
@@ -150,12 +154,14 @@ impl Plugin for CsgoPlugin {
             .add_plugins(MaterialPlugin::<WorldMaterial>::default())
             .init_state::<AppState>()
             .init_resource::<session::Loader>()
+            .init_resource::<pack_ui::PackUi>()
             .add_observer(session::own_entity::<Transform>)
             .add_observer(session::own_entity::<Node>)
             .add_observer(session::own_entity::<bevy::audio::AudioPlayer>)
             .insert_resource(Time::<Fixed>::from_hz(sim::DEFAULT_TICK_RATE as f64))
             .add_systems(Startup, (ui_assets::load, case_ui::setup, menu_scene::setup, menu::setup, frontend::setup).chain())
-            .add_systems(Update, (frontend::update, frontend::input, frontend::cancel_loading).chain())
+            .add_systems(Update, (frontend::update, pack_ui::update, pack_ui::scroll, pack_ui::draw, frontend::input, frontend::cancel_loading).chain())
+            .add_systems(Last, pack_ui::gate_exit.after(bevy::window::ExitSystems))
             .add_systems(Update, (menu::apply, audio::update).chain().after(player::update_camera))
             .add_systems(OnEnter(AppState::Loading), session::begin_load)
             .add_systems(OnExit(AppState::Loading), session::cancel_load)
@@ -234,6 +240,7 @@ pub fn run(opts: ClientOptions) -> i32 {
     app.add_plugins(
         DefaultPlugins
             .set(WindowPlugin {
+                close_when_requested: false,
                 primary_window: Some(Window {
                     title: format!("CSGO Rewrite — {}", opts.map),
                     resolution: WindowResolution::new(opts.width, opts.height),
@@ -262,7 +269,7 @@ pub fn run(opts: ClientOptions) -> i32 {
     .insert_resource(load_request.clone())
     .insert_resource(player::InputEnabled(opts.screenshot.is_none()))
     .add_plugins(CsgoPlugin)
-    .insert_state(if frontend_flow::enabled() || std::env::var("CSR_TEST_MENU").as_deref() == Ok("main") { AppState::Menu }
+    .insert_state(if pack_ui::proof_enabled() || frontend_flow::enabled() || std::env::var("CSR_TEST_MENU").as_deref() == Ok("main") { AppState::Menu }
         else if opts.direct || opts.screenshot.is_some() { AppState::Loading } else { AppState::Menu });
     if opts.screenshot.is_some() {
         // Automated runs never have focus; don't let the unfocused 60 Hz
@@ -272,6 +279,7 @@ pub fn run(opts: ClientOptions) -> i32 {
             unfocused_mode: bevy::winit::UpdateMode::Continuous,
         })
         .add_systems(Update, frontend_flow::update.after(frontend::update).run_if(frontend_flow::enabled))
+        .add_systems(First, pack_ui::proof.run_if(pack_ui::proof_enabled))
         .add_systems(Update, smoke_test.run_if(in_state(AppState::Match)))
         .add_systems(Update, frontend::capture_menu.run_if(|state: Res<State<AppState>>| {
             *state.get() == AppState::Menu || (*state.get() == AppState::Match
@@ -579,7 +587,7 @@ fn smoke_test(
     level: Res<LoadedLevel>,
 ) {
     // Menu captures wait for the movie and its asynchronous fonts/widgets.
-    if frontend_flow::enabled() || std::env::var("CSR_TEST_MENU").as_deref() == Ok("pause") { return; }
+    if pack_ui::proof_enabled() || frontend_flow::enabled() || std::env::var("CSR_TEST_MENU").as_deref() == Ok("pause") { return; }
     *frame += 1;
 
     let opts = &options.0;
