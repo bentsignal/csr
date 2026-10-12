@@ -1,8 +1,8 @@
 # Multiplayer foundation
 
 Track A2 has a Bevy-free UDP session and a dedicated server. The rendered
-client still plays offline: joining from the classic menu, prediction,
-interpolation, lag compensation, snapshot deltas, listen hosting and discovery
+client still plays offline: joining from the classic menu, rendered-client
+integration, interpolation, lag compensation, snapshot deltas, listen hosting and discovery
 remain open. This is an integration foundation, not a multiplayer release.
 
 ## Ownership and messages
@@ -73,6 +73,42 @@ but its
 adds an identity provisioning dependency to the first direct-IP prototype.
 The simulation and session remain independent of either transport.
 
+## Prediction and reconciliation
+
+`netcode::prediction::Predictor` accepts a map-built `sim::World`, a validated
+server welcome, and the first authoritative `StateUpdate`. The caller must
+obtain that first state before sending player commands. Configure local fixed
+ticks from the welcome's `tick_rate`, rather than assuming every server is 128.
+For each fixed tick, check `can_predict()`, send a `TickInput` through the
+transport, and pass its returned sequence into `Predictor::predict` along with
+the same input and the last authoritative/render view tick.
+
+History holds at most 256 inputs. When it is full, wait for authority rather
+than dropping replay data or sending an input the predictor cannot retain.
+On a newer snapshot, `reconcile` validates acknowledgements and finite state,
+restores server truth, discards acknowledged inputs and replays the rest. Its
+result includes the final position error for future rendering correction.
+Stale state ticks are ignored; backwards acknowledgements, acknowledgements
+beyond sent input and incompatible server rates are rejected before mutation.
+
+`sim::World::step_prediction` shares the authoritative simulation path but
+omits server bot thinking. It preserves `is_bot`, tracked poses and the
+separate aim ray. Remote actors repeat their last authoritative controls
+during replay, so their extrapolated positions can differ from new server AI
+decisions. This is not yet remote interpolation or lag compensation.
+
+Predicted `GameEvent`s are cleared and are not returned by this API. Consume
+the transport's reliable authoritative event batches for effects, and use
+`authoritative_state()` for HUD economy/round truth. The predicted world is
+available for movement/rendering. Explicit provisional local effects and
+their deduplication remain rendered-client integration work.
+
+Dynamic external worlds are rejected because their mutable target/block
+state is outside `WorldState`; replay could otherwise apply shared damage
+twice. The `DynamicWorld` seam remains available to Track E, which must add
+replicated/replay-safe mod state before prediction can support it. Static
+content-pack BSPs use the same prediction path as installed CS:GO maps.
+
 Direct connect currently uses netcode.io's
 [Unsecure admission mode](https://docs.rs/renet_netcode/2.0.0/renet_netcode/enum.ClientAuthentication.html).
 It is a prototype connection mode, not authenticated identity. Clients use
@@ -99,7 +135,10 @@ content storage. No installed game files are changed.
 `--netcheck` connects two real UDP clients on an ephemeral loopback port,
 sends 128 commands each, checks decoded snapshots against authoritative
 history at the same tick, resolves installed weapon `ContentId`s, verifies
-tracked poses, and confirms disconnect cleanup. It exits with `failures: 0`.
+tracked poses, and confirms disconnect cleanup. It delays transport polling
+for four ticks while local controls change, requires pending input replay,
+checks all 128 acknowledgements and exact final reconciliation, and verifies
+predicted effects remain absent. It exits with `failures: 0`.
 The default test data also exercises input ownership, atomic validation,
 duplicate/reordered commands, neutral controls after timeout, fixed-tick
 accumulation, reliable delivery after packet loss, and fragmented snapshot

@@ -4429,6 +4429,7 @@ dependencies = [
  "ctrlc",
  "glam",
  "level",
+ "movement",
  "netcode",
  "sha1",
  "sim",

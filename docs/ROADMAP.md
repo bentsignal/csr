@@ -26,8 +26,8 @@ Minecraft code need work before multiplayer and public releases.
 | `third_party/minecraftoss` + `minecraft_terrain` (~154k lines) | Ported from decompiled Minecraft, no licence files, hard dependency of `level` and `client`; release zip also bundled Minecraft assets | **Removed** (decision 1) |
 | VR | `TickInput` carries tracked head/hand poses and an aim ray; hitscan uses the aim ray. Cameras are still single-view | **Seam in place, build later** |
 
-Tests: 213 passing tests, with two installed-data tests ignored by default
-(UDP-foundation verification, 2026-10-11), mostly on synthetic data.
+Tests: 221 passing tests, with two installed-data tests ignored by default
+(prediction-foundation verification, 2026-10-11), mostly on synthetic data.
 Real-data checks are the `csr probe` / `csr sim` commands.
 
 ## Phase 0: take ownership
@@ -83,7 +83,11 @@ dedicated executable, with reliable control/events, redundant inputs,
 fragmented full snapshots, content compatibility checks and 128-tick
 authority. A two-client Dust II loopback check exercises the installed
 catalog and tracked poses. Rendered-client join/prediction and the other
-items below remain open; see [NETCODE.md](NETCODE.md).
+items below remain open; see [NETCODE.md](NETCODE.md). A transport-independent
+predictor now restores snapshots and replays bounded unacknowledged inputs
+through the shared sim without inventing server AI or exposing replay events.
+The real two-client check includes delayed transport polling and exact final
+reconciliation; rendered-client prediction/interpolation integration remains.
 
 - [ ] Protocol: `TickInput` up (with **optional tracked head/hand poses and a
       separate aim ray**, reserved now for VR), full-state snapshots then
