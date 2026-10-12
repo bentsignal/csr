@@ -785,4 +785,5 @@ fn dynamic_mob_hits_preserve_bullet_and_knife_contact_positions() {
 }
 
 mod authority;
+mod aim;
 mod rewind;
