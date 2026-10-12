@@ -58,6 +58,7 @@ mod server_browser;
 mod browser_flow;
 pub mod remote_join;
 mod remote_flow;
+pub mod xr_input;
 pub mod props;
 pub mod scoreboard;
 pub mod scope;
