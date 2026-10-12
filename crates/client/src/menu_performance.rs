@@ -46,8 +46,9 @@ fn summary(values: &[f64]) -> (f64, f64, f64) {
     if values.is_empty() { return (0.0, f64::INFINITY, f64::INFINITY); }
     let mut values = values.to_vec();
     values.sort_by(f64::total_cmp);
+    // Nearest-rank percentile also reports the slow sample in tiny failed runs.
     (values.iter().sum::<f64>() / values.len() as f64,
-     values[((values.len()-1) as f64 * 0.95) as usize],
+     values[(values.len() as f64 * 0.95).ceil() as usize - 1],
      *values.last().unwrap())
 }
 
