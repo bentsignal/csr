@@ -405,6 +405,36 @@ fn worker_bind_error_and_invalid_authority_are_typed() {
 }
 
 #[test]
+fn delayed_cancel_and_preparing_publications_cannot_replace_terminal_result() {
+    for error in [
+        HostError::Cancelled,
+        HostError::Transport("owned socket failed".into()),
+    ] {
+        let shared = Shared {
+            stopped: AtomicBool::new(false),
+            status: Mutex::new(HostStatus::Binding),
+        };
+        // Cancel's atomic exchange happens before the worker publishes Closed,
+        // but its status publication can be delayed until after that result.
+        shared.stopped.store(true, Ordering::Release);
+        shared.publish(HostStatus::Closed(error.clone()));
+        shared.publish(HostStatus::Stopping);
+        shared.publish(HostStatus::Preparing {
+            local_address: config().bind,
+            info: ServerInfo {
+                version: VERSION,
+                tick_rate: 128,
+                snapshot_interval_ticks: 4,
+                max_unlag_ticks: 128,
+                interpolation_allowance_ticks: 8,
+                content: manifest(),
+            },
+        });
+        assert_eq!(*shared.status.lock().unwrap(), HostStatus::Closed(error));
+    }
+}
+
+#[test]
 fn actual_worker_begin_is_idempotent_and_cancel_invalidates_ready_client() {
     let mut handle = HostHandle::spawn(map(128), manifest(), config()).unwrap();
     wait(&mut handle, |s| matches!(s, HostStatus::Preparing { .. }));
