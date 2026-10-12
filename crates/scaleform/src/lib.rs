@@ -13,6 +13,7 @@
 //! [`Input`] and reads finished frames and [`Event`]s.
 
 mod defaults;
+mod capture;
 pub mod diff;
 mod host;
 mod rewrite;

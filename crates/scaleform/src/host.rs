@@ -518,15 +518,32 @@ impl Host {
         let submitted = started.map(|_| Instant::now());
         let renderer = <dyn Any>::downcast_mut::<WgpuRenderBackend<TextureTarget>>(player.renderer_mut())
             .ok_or("unexpected renderer")?;
-        let image = renderer.capture_frame().ok_or("no frame captured")?;
+        let target = renderer.target();
+        let (width, height) = (target.size.width, target.size.height);
+        let transfer = target.buffer.as_ref().ok_or("no frame captured")?;
+        let (buffer, dimensions) = transfer.buffer.inner();
+        let (rgba, wait_ms, copy_ms, alpha_ms) = ruffle_render_wgpu::utils::capture_image(
+            renderer.device(), buffer, dimensions, None,
+            |mapped, stride| {
+                let mapped_at = started.map(|_| Instant::now());
+                let mut rgba = crate::capture::copy_rows(mapped, width, height, stride as usize)?;
+                let copied_at = started.map(|_| Instant::now());
+                crate::capture::straight_alpha(&mut rgba);
+                let wait_ms = mapped_at.zip(submitted).map_or(0., |(end, begin)| end.duration_since(begin).as_secs_f64() * 1000.);
+                let copy_ms = copied_at.zip(mapped_at).map_or(0., |(end, begin)| end.duration_since(begin).as_secs_f64() * 1000.);
+                let alpha_ms = copied_at.map_or(0., |begin| begin.elapsed().as_secs_f64() * 1000.);
+                Ok::<_, &'static str>((rgba, wait_ms, copy_ms, alpha_ms))
+            },
+        )?;
         if let (Some(started), Some(submitted)) = (started, submitted) {
             self.render_trace_remaining -= 1;
-            tracing::info!(target: "scaleform::render_timing", width = image.width(), height = image.height(),
+            tracing::info!(target: "scaleform::render_timing", width, height,
                 submit_ms = submitted.duration_since(started).as_secs_f64() * 1000.,
                 capture_ms = submitted.elapsed().as_secs_f64() * 1000.,
-                "UI render timing (capture includes GPU wait, row copy and alpha conversion)");
+                wait_ms, copy_ms, alpha_ms,
+                "UI render timing");
         }
-        Ok((image.width(), image.height(), image.into_raw()))
+        Ok((width, height, rgba))
     }
 }
 
