@@ -10,7 +10,7 @@
 //!   default and paths such as `tools\toolsblack` rely on that
 //! * `//` line comments
 //! * platform conditionals such as `[$WIN32]` or `[!$X360 && !$PS3]`,
-//!   evaluated for a Windows PC
+//!   before or after a value/block, evaluated for a Windows PC
 //! * UTF-8 and UTF-16LE input (with BOM), as used by localisation files
 //!
 //! `#base` / `#include` directives are returned as ordinary entries named
@@ -250,23 +250,27 @@ fn parse_block(lexer: &mut Lexer, top_level: bool) -> Result<Block, ParseError> 
             }
             Some(Token::Str(s)) => s,
         };
-        let value = match lexer.next()? {
-            None => return Err(lexer.error(&format!("key '{key}' has no value"))),
-            Some(Token::Open) => Value::Block(parse_block(lexer, false)?),
-            Some(Token::Str(s)) => Value::Str(s),
-            Some(Token::Close) => {
-                return Err(lexer.error(&format!("key '{key}' followed by '}}'")));
-            }
-            Some(Token::Cond(_)) => {
-                return Err(lexer.error(&format!("key '{key}' followed by a conditional")));
-            }
+        let mut leading_condition = true;
+        let value = loop {
+            break match lexer.next()? {
+                None => return Err(lexer.error(&format!("key '{key}' has no value"))),
+                Some(Token::Open) => Value::Block(parse_block(lexer, false)?),
+                Some(Token::Str(s)) => Value::Str(s),
+                Some(Token::Close) => {
+                    return Err(lexer.error(&format!("key '{key}' followed by '}}'")));
+                }
+                Some(Token::Cond(expr)) => {
+                    leading_condition &= eval_condition(&expr);
+                    continue;
+                }
+            };
         };
         // Optional trailing conditional decides whether the pair counts.
         let keep = match lexer.peek_cond()? {
             Some(expr) => eval_condition(&expr),
             None => true,
         };
-        if keep {
+        if leading_condition && keep {
             block.entries.push((key, value));
         }
     }
@@ -473,7 +477,9 @@ pub fn to_string(block: &Block) -> String {
         }
     }
     fn escape(s: &str) -> String {
-        s.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n")
+        s.replace('\\', "\\\\")
+            .replace('"', "\\\"")
+            .replace('\n', "\\n")
     }
     let mut out = String::new();
     write(&mut out, block, 0);
@@ -520,6 +526,35 @@ mod tests {
     }
 
     #[test]
+    fn option_blocks_accept_conditions_between_key_and_value() {
+        let doc = parse(
+            r#"
+            options {
+                "Audio Device" [!$LINUX&&!$OSX] { convar sound_device_override type dropdown }
+                "Console" [$X360] { nested { value unavailable } }
+                "PC Value" [$WIN32] "enabled"
+                "Excluded Either Side" [$WIN32] { value unavailable } [$LINUX]
+                "Master Volume" { convar volume type slider minvalue 0 maxvalue 1 }
+            }
+        "#,
+        )
+        .unwrap();
+        let options = doc.block("options").unwrap();
+        assert_eq!(
+            options.block("Audio Device").unwrap().str("type"),
+            Some("dropdown")
+        );
+        assert_eq!(options.str("PC Value"), Some("enabled"));
+        assert!(options.get("Console").is_none());
+        assert!(options.get("Excluded Either Side").is_none());
+        assert_eq!(
+            options.block("Master Volume").unwrap().str("convar"),
+            Some("volume")
+        );
+        assert!(parse("key [$WIN32]").is_err());
+    }
+
+    #[test]
     fn backslashes_are_literal_by_default() {
         let doc = parse("\"$basetexture\" \"tools\\toolsblack\"").unwrap();
         assert_eq!(doc.str("$basetexture"), Some("tools\\toolsblack"));
@@ -544,7 +579,10 @@ mod tests {
             bytes.extend_from_slice(&u.to_le_bytes());
         }
         let doc = parse_bytes(&bytes).unwrap();
-        assert_eq!(doc.path(&["lang", "Tokens", "x"]).unwrap().as_str(), Some("y"));
+        assert_eq!(
+            doc.path(&["lang", "Tokens", "x"]).unwrap().as_str(),
+            Some("y")
+        );
     }
 
     #[test]
