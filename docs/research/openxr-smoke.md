@@ -126,14 +126,19 @@ SHA256 of reviewed archive bytes:
 - `bevy_mod_openxr-0.6.0.crate`: `af0560ba6db564db1e3b60dfc9abf359443a33ba9295acfd18aff8996b8f6288`
 - `bevy_mod_xr-0.6.0.crate`: `f2469b8e28ee37de403db2e6b415ffe91da27e27c99034df257658d76392fe80`
 
-The feature and exact published dependencies are wired. Compilation of the
-cleanup extension and actual example tests remain pending, followed by
-workspace/real-data/audio checks. The four pure acknowledgment tests passed
-using the exact extracted guard and test source with `rustc --test`; this does
-not compile or execute the Bevy/OpenXR world predicates or activate a runtime.
+The feature and exact published dependencies are wired. The combined example
+passes `cargo check` and builds with `--locked -j4 -p client --features xr-smoke
+--example xr_smoke`; all seven example tests pass, including the Bevy world
+predicate and loss handling. Normal-feature workspace and installed-data CI
+checks pass at the same source head. Remaining release/audio checks are pending.
+An owned runtime execution with a process-only `XR_RUNTIME_JSON` override to an
+absent file reports unavailable initialization, creates no stereo session and
+exits with the expected code 2. The active runtime configuration is unchanged;
+this tests the unavailable-runtime path, not the installed runtime or headset.
 Pure acknowledgment tests cover pre-session/pre-request observations, a failed
 message queue, main-only/render-only cleanup and revocation of an earlier clean
 render observation. A world-level test checks the shared flag, started flag and
 remaining XR camera without constructing a native session.
-No-runtime, connected-headset, focus transitions and loss cleanup require owned
-runtime executions before this work can be called verified.
+Connected-headset stereo rendering, focus transitions and actual session-loss
+cleanup still require owned runtime executions and headset observation before
+the hardware paths can be called verified.
