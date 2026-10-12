@@ -34,11 +34,15 @@ enum Input {
     Key(KeyCode, bool),
     Mouse(bool),
 }
-#[derive(Default, Debug)]
+// Bounded exact samples: overflow fails the proof rather than hiding later gaps.
+const MAX_CADENCE_SAMPLES: usize = 32_768;
+#[derive(Default)]
 struct Cadence {
     samples: u64,
     total: f64,
     maximum: f64,
+    intervals: Vec<f64>,
+    overflow: bool,
 }
 impl Cadence {
     fn record(&mut self, elapsed: f64) {
@@ -46,10 +50,42 @@ impl Cadence {
             self.samples += 1;
             self.total += elapsed;
             self.maximum = self.maximum.max(elapsed);
+            if self.intervals.len() < MAX_CADENCE_SAMPLES {
+                self.intervals.push(elapsed);
+            } else {
+                self.overflow = true;
+            }
         }
     }
+    fn mean(&self) -> f64 {
+        self.total / self.samples.max(1) as f64
+    }
+    fn p95(&self) -> f64 {
+        if self.intervals.is_empty() {
+            return f64::INFINITY;
+        }
+        let mut sorted = self.intervals.clone();
+        sorted.sort_unstable_by(f64::total_cmp);
+        sorted[(sorted.len() * 95).div_ceil(100) - 1]
+    }
+    fn summary(&self) -> String {
+        format!(
+            "samples={} elapsed_s={:.3} mean_ms={:.3} p95_ms={:.3} max_ms={:.3} overflow={}",
+            self.samples,
+            self.total,
+            self.mean() * 1000.0,
+            self.p95() * 1000.0,
+            self.maximum * 1000.0,
+            self.overflow
+        )
+    }
     fn responsive(&self) -> bool {
-        self.samples >= 20 && self.total / self.samples as f64 <= 0.1 && self.maximum <= 1.0
+        !self.overflow
+            && self.total >= 3.0
+            && self.samples >= 20
+            && self.mean() <= 1.0 / 30.0
+            && self.p95() <= 0.050
+            && self.maximum <= 0.250
     }
 }
 #[derive(Resource)]
@@ -298,7 +334,7 @@ fn step(world: &mut World, p: &mut Proof, frame: f64) -> Result<(), String> {
             p.inputs.push(Input::Mouse(false));
             p.enter(Stage::Release);
         }
-        Stage::Release if p.frames >= 2 => {
+        Stage::Release if p.frames >= 2 && p.elapsed() >= 0.25 => {
             p.key(binds[0], true);
             p.enter(Stage::Move);
         }
@@ -376,16 +412,19 @@ fn step(world: &mut World, p: &mut Proof, frame: f64) -> Result<(), String> {
                 return Err("Escape did not resume simulation promptly".into());
             }
         }
-        Stage::Resumed if p.elapsed() >= 1.0 => {
+        Stage::Resumed if p.elapsed() >= 1.0 && p.cadence.total >= 3.0 => {
             capture(world, p, 8, "04-resumed");
             if p.captures & 8 != 0 {
                 if !p.cadence.responsive() {
-                    return Err(format!("game frame gaps exceeded bounds: {:?}", p.cadence));
+                    return Err(format!(
+                        "game frame gaps exceeded bounds: {}",
+                        p.cadence.summary()
+                    ));
                 }
                 info!(
-                    "BOT_PERF failures: 0 captures=4 bots=5 tick={tick} pause_ms={:.1} cadence={:?}; engine input, no OS-input/GPU-present claim",
+                    "BOT_PERF failures: 0 captures=4 bots=5 tick={tick} pause_ms={:.1} {}; engine input, no OS-input/GPU-present claim",
                     p.pause_latency * 1000.0,
-                    p.cadence
+                    p.cadence.summary()
                 );
                 p.stage = Stage::Done;
                 world.write_message(AppExit::Success);
@@ -402,11 +441,46 @@ mod tests {
     #[test]
     fn cadence_rejects_a_stall_even_with_fast_average() {
         let mut c = Cadence::default();
-        for _ in 0..2000 {
+        for _ in 0..4000 {
             c.record(0.001);
         }
         assert!(c.responsive());
-        c.record(3.0);
+        c.record(0.251);
+        assert!(!c.responsive());
+    }
+    #[test]
+    fn cadence_rejects_slow_mean_and_tail_independently() {
+        let mut slow = Cadence::default();
+        for _ in 0..100 {
+            slow.record(0.04);
+        }
+        assert!(slow.p95() <= 0.05);
+        assert!(!slow.responsive());
+        let mut tail = Cadence::default();
+        for _ in 0..180 {
+            tail.record(0.02);
+        }
+        for _ in 0..20 {
+            tail.record(0.10);
+        }
+        assert!(tail.mean() < 1.0 / 30.0);
+        assert_eq!(tail.p95(), 0.10);
+        assert!(!tail.responsive());
+    }
+    #[test]
+    fn cadence_requires_three_seconds_and_fails_closed_on_sample_overflow() {
+        let mut c = Cadence::default();
+        for _ in 0..20 {
+            c.record(0.02);
+        }
+        assert!(!c.responsive());
+        for _ in 20..MAX_CADENCE_SAMPLES {
+            c.record(0.001);
+        }
+        assert!(c.responsive());
+        c.record(0.001);
+        assert!(c.overflow);
+        assert_eq!(c.intervals.len(), MAX_CADENCE_SAMPLES);
         assert!(!c.responsive());
     }
     #[test]
