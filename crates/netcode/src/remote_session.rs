@@ -328,6 +328,39 @@ mod tests {
     }
 
     #[test]
+    fn ready_policy_change_reprobes_and_discards_old_owned_state() {
+        let mut server = server(128, 8);
+        let mut remote =
+            RemoteSession::discover(server.address(), "Local".into(), Team::CounterTerrorist)
+                .unwrap();
+        ready(&mut server, &mut remote);
+        let mut changed = remote.server_info().unwrap().clone();
+        changed.interpolation_allowance_ticks = 1;
+        changed.validate().unwrap();
+        remote.events.push_back(EventBatch {
+            tick: 1,
+            events: vec![sim::GameEvent::Jump {
+                player: remote.player().unwrap(),
+            }],
+        });
+        remote.queued_events = 1;
+        server.inject_info(changed);
+        server.update(Duration::from_secs_f64(1. / 128.)).unwrap();
+        remote.update(1. / 128.).unwrap();
+        assert_eq!(remote.status(), &Status::Discovering);
+        assert!(remote.predicted_world().is_none());
+        assert!(remote.authoritative_state().is_none());
+        assert!(remote.pose_history().is_none());
+        assert!(remote.server_info().is_none());
+        assert!(remote.events.is_empty());
+        assert!(remote.take_events().is_none());
+        assert_eq!(remote.queued_events, 0);
+        discover(&mut server, &mut remote);
+        assert!(matches!(remote.status(), Status::AwaitingMap(_)));
+        assert!(remote.predicted_world().is_none());
+    }
+
+    #[test]
     fn hostile_effect_packet_closes_before_renderer_exposure_and_clears_queues() {
         let mut server = server(128, 8);
         let mut remote =

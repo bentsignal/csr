@@ -509,6 +509,17 @@ impl Server {
         self.snapshot_every = (rate / 32).max(1) as u64;
         self.session = session;
     }
+    pub(crate) fn inject_info(&mut self, info: ServerInfo) {
+        for client in self.connection.clients_id() {
+            if self.session.player_for(client).is_some() {
+                self.connection.send_message(
+                    client,
+                    CONTROL,
+                    encode(&ServerControl::Info(info.clone())).unwrap(),
+                );
+            }
+        }
+    }
     pub(crate) fn hold_admission(&mut self) {
         self.held_admissions = Some(Vec::new());
     }

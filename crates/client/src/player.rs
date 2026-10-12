@@ -73,6 +73,18 @@ impl LocalPlayer {
         self.spectating.unwrap_or(self.id)
     }
 
+    /// Discard camera life and unsent controls when an owned session stops
+    /// being ready; actor ids and life epochs may repeat after reconnection.
+    pub(crate) fn clear_remote_lifecycle(&mut self) {
+        self.remote_life = 0;
+        self.was_alive = false;
+        self.spectating = None;
+        self.latched = 0;
+        self.pending_slot = 0;
+        self.pending_drop = false;
+        self.pending_buys.clear();
+    }
+
     /// Camera lifecycle comes from authority, including lost death snapshots.
     pub fn sync_remote(&mut self, world: &sim::World, id: PlayerId) {
         if self.id != id { self.id = id; self.remote_life = 0; }

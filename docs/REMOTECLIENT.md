@@ -6,6 +6,10 @@ typed `Status`, and calls `provide_map` after its asynchronous installed-content
 validation/loading. `server_info` retains bounded metadata. `cancel` is
 idempotent and preserves the original closed error; `remote::clear` removes
 the resource and clears old render overrides and queued effects.
+Every non-ready transition also discards published local/tracked/remote poses,
+camera-life/unsent-control caches and the last-snapshot marker. The next
+baseline is restored even if a replacement session repeats the same actor ids,
+life epochs or authoritative tick.
 
 The root plugin must schedule `remote::drive` once per `Update`, before
 `player::update_camera`, characters, viewmodels, effects and HUD. It may run

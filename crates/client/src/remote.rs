@@ -67,8 +67,13 @@ impl RemoteClient {
         let previous = matches!(self.status, Status::Closed(_)).then(|| self.status.clone());
         self.session.cancel();
         self.status = previous.unwrap_or_else(|| self.session.status().clone());
+        self.clear_publication();
+    }
+    fn clear_publication(&mut self) {
         self.frame = RenderFrame::default();
         self.last_advance = None;
+        self.last_published = None;
+        self.snapshot_age = 0.;
     }
     fn close(&mut self, error: Error) {
         self.cancel();
@@ -105,6 +110,10 @@ pub fn drive(
 ) {
     let client = &mut *client;
     if matches!(client.status, Status::Closed(_)) {
+        client.clear_publication();
+        if let Some(local) = local.as_mut() {
+            local.clear_remote_lifecycle();
+        }
         poses.clear_overrides();
         pending.0.clear();
         if let Some(world) = world.as_mut() {
@@ -119,16 +128,20 @@ pub fn drive(
         client.status = client.session.status().clone();
     }
     if client.status != Status::Ready {
+        client.clear_publication();
+        if let Some(local) = local.as_mut() {
+            local.clear_remote_lifecycle();
+        }
         poses.clear_overrides();
-        if matches!(client.status, Status::Closed(_)) {
-            pending.0.clear();
-            if let Some(world) = world.as_mut() {
-                world.0.events.clear();
-            }
+        pending.0.clear();
+        if let Some(world) = world.as_mut() {
+            world.0.events.clear();
         }
         return;
     }
     let (Some(world), Some(local)) = (world.as_mut(), local.as_mut()) else {
+        client.clear_publication();
+        poses.clear_overrides();
         return;
     };
     let authority = client.session.authoritative_state().unwrap();
@@ -630,5 +643,82 @@ mod tests {
                 .is_empty()
         );
         assert!(app.world().resource::<RemoteClient>().frame.local.is_none());
+    }
+    #[test]
+    fn rediscovery_clears_publication_and_same_tick_baseline_is_restored() {
+        let (mut app, server, _) = setup();
+        let id = app.world().resource::<crate::player::LocalPlayer>().id;
+        let tick = app
+            .world()
+            .resource::<RemoteClient>()
+            .session
+            .authoritative_state()
+            .unwrap()
+            .tick;
+        let probe = RemoteSession::discover(
+            server.address(),
+            "Probe".into(),
+            sim::Team::CounterTerrorist,
+        )
+        .unwrap();
+        // Retain a real admitted baseline to model rejoining a replacement
+        // session whose initial tick equals the previous publication's tick.
+        let admitted = {
+            let mut client = app.world_mut().resource_mut::<RemoteClient>();
+            client.frame.local_tracked = Some(sim::TrackedPose::default());
+            client.frame.local_aim = Some(sim::AimRay::default());
+            std::mem::replace(&mut client.session, probe)
+        };
+        app.world_mut()
+            .resource_mut::<crate::effects::PendingEvents>()
+            .0
+            .push(sim::GameEvent::Jump { player: id });
+        app.world_mut()
+            .resource_mut::<crate::player::SimWorld>()
+            .0
+            .player_mut(id)
+            .unwrap()
+            .money = 1;
+        app.world_mut()
+            .resource_mut::<crate::player::LocalPlayer>()
+            .yaw = 42.;
+        app.update();
+        let client = app.world().resource::<RemoteClient>();
+        assert_eq!(client.status(), &Status::Discovering);
+        assert!(client.frame.local.is_none());
+        assert!(client.frame.local_tracked.is_none());
+        assert!(client.frame.local_aim.is_none());
+        assert!(client.frame.remote.is_empty());
+        assert!(client.last_advance.is_none());
+        assert!(client.last_published.is_none());
+        assert_eq!(client.snapshot_age, 0.);
+        assert!(
+            app.world()
+                .resource::<crate::effects::PendingEvents>()
+                .0
+                .is_empty()
+        );
+        app.world_mut().resource_mut::<RemoteClient>().session = admitted;
+        app.update();
+        let client = app.world().resource::<RemoteClient>();
+        assert_eq!(client.status(), &Status::Ready);
+        assert_eq!(client.session.authoritative_state().unwrap().tick, tick);
+        assert_eq!(
+            app.world().resource::<crate::player::SimWorld>().0.state(),
+            *client.session.authoritative_state().unwrap()
+        );
+        assert_eq!(
+            app.world().resource::<crate::player::LocalPlayer>().yaw,
+            client
+                .session
+                .authoritative_state()
+                .unwrap()
+                .players
+                .iter()
+                .find(|p| p.id == id)
+                .unwrap()
+                .view_angles
+                .y
+        );
     }
 }
