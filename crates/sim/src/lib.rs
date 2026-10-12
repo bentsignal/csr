@@ -115,9 +115,13 @@ pub struct AimRay {
     pub direction: Vec3,
 }
 
-/// How far a tracked aim origin may be from the eye, units. Further offsets
-/// are pulled back so nobody shoots from outside their hull.
+/// How far a tracked aim origin may be from the current hull eye, units.
+/// Further offsets are pulled back before current-world muzzle admission.
 pub const MAX_AIM_OFFSET: f32 = 48.0;
+/// Conservative tracked-muzzle admission radius, matching collision's distance
+/// epsilon. It catches adjacent thin walls that a biased point trace can miss.
+/// Eyes within this margin of a solid suppress tracked attacks for that tick.
+pub const AIM_WALL_MARGIN: f32 = 0.03125;
 
 /// Input for one player for one tick.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -1352,17 +1356,6 @@ impl World {
             if !think_bots || self.players[i].is_bot {
                 input.rewind_tick = None;
             }
-            if let Some(aim) = &mut input.aim {
-                aim.direction = aim.direction.try_normalize().unwrap_or(Vec3::X);
-                // Keep the muzzle near the head: no shooting from outside
-                // the hull.
-                let eye = Vec3::Z * self.players[i].movement.view_offset();
-                aim.origin = eye + (aim.origin - eye).clamp_length_max(MAX_AIM_OFFSET);
-                if !aim.origin.is_finite() || !aim.direction.is_finite() {
-                    input.aim = None;
-                }
-            }
-
             // Buying and dropping.
             {
                 let (mn, mx) = self.players[i].bounds();
@@ -1442,7 +1435,6 @@ impl World {
                 let p = &mut self.players[i];
                 p.view_angles = input.view_angles;
                 p.tracked = input.tracked;
-                p.aim = input.aim;
                 // Dynamic-world fluids use the same collision sweeps as CS movement.
                 let swimming=collision.dynamic.as_ref().is_some_and(|d|d.point_contents(p.movement.origin+Vec3::Z*32.,contents::WATER)!=0);
                 if swimming {
@@ -1461,6 +1453,33 @@ impl World {
                     self.events.push(GameEvent::Land { player: id, speed });
                 }
             }
+
+            // Admit the tracked muzzle against current geometry and the current
+            // post-movement eye. A nearby hand must not begin beyond a wall.
+            if let Some(aim) = &mut input.aim {
+                let p = &self.players[i];
+                let eye_offset = Vec3::Z * p.movement.view_offset();
+                aim.direction = aim.direction.try_normalize().unwrap_or(Vec3::X);
+                aim.origin = eye_offset + (aim.origin - eye_offset).clamp_length_max(MAX_AIM_OFFSET);
+                if !aim.origin.is_finite() || !aim.direction.is_finite() {
+                    input.aim = None;
+                } else {
+                    let trace = collision.trace_box(
+                        p.eye(), p.movement.origin + aim.origin,
+                        Vec3::splat(-AIM_WALL_MARGIN), Vec3::splat(AIM_WALL_MARGIN),
+                        contents::MASK_SHOT,
+                    );
+                    if trace.hit() || trace.all_solid {
+                        aim.origin = eye_offset;
+                    }
+                    // Leaving a brush may be start-solid with fraction 1, so
+                    // falling back to that eye alone cannot safely fire.
+                    if trace.start_solid || trace.all_solid {
+                        input.buttons &= !(buttons::ATTACK | buttons::ATTACK2);
+                    }
+                }
+            }
+            self.players[i].aim = input.aim;
 
             // Firing.
             let attack = input.buttons & buttons::ATTACK != 0 && !frozen && !busy;
