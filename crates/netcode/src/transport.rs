@@ -107,6 +107,27 @@ impl Server {
                         self.connection.disconnect(client);
                         break;
                     }
+                    Ok(ClientControl::Inspect { version }) => {
+                        let reply = if version == VERSION {
+                            ServerControl::Info(ServerInfo {
+                                version: VERSION,
+                                tick_rate: self.session.world().tick_rate,
+                                snapshot_interval_ticks: self.snapshot_every as u32,
+                                max_unlag_ticks: self.session.lag_policy().max_history_ticks,
+                                interpolation_allowance_ticks: self
+                                    .session
+                                    .lag_policy()
+                                    .interpolation_allowance_ticks,
+                                content: self.session.content().clone(),
+                            })
+                        } else {
+                            ServerControl::Rejected {
+                                reason: "incompatible protocol version".into(),
+                            }
+                        };
+                        self.connection
+                            .send_message(client, CONTROL, encode(&reply)?);
+                    }
                     Ok(hello) => {
                         let reply = self.session.join(client, hello);
                         if matches!(reply, ServerControl::Welcome { .. }) {
@@ -189,10 +210,11 @@ pub struct Client {
     connection: RenetClient,
     transport: NetcodeClientTransport,
     catalog: Arc<weapons::Catalog>,
-    content: ContentManifest,
+    content: Option<ContentManifest>,
     hello: ClientControl,
     sent_hello: bool,
     welcome: Option<ServerControl>,
+    server_info: Option<ServerInfo>,
     pending: VecDeque<InputCommand>,
     sequence: u64,
     latest_tick: Option<u64>,
@@ -211,6 +233,28 @@ impl Client {
         catalog: Arc<weapons::Catalog>,
     ) -> Result<Self, String> {
         content.validate()?;
+        let hello = ClientControl::Hello {
+            version: VERSION,
+            name,
+            team,
+            content: content.clone(),
+        };
+        Self::open(server, hello, catalog, Some(content))
+    }
+    pub fn probe(server: SocketAddr) -> Result<Self, String> {
+        Self::open(
+            server,
+            ClientControl::Inspect { version: VERSION },
+            Arc::new(weapons::Catalog::default()),
+            None,
+        )
+    }
+    fn open(
+        server: SocketAddr,
+        hello: ClientControl,
+        catalog: Arc<weapons::Catalog>,
+        content: Option<ContentManifest>,
+    ) -> Result<Self, String> {
         let bind = if server.is_ipv4() {
             "0.0.0.0:0"
         } else {
@@ -229,12 +273,6 @@ impl Client {
             socket,
         )
         .map_err(|e| e.to_string())?;
-        let hello = ClientControl::Hello {
-            version: VERSION,
-            name,
-            team,
-            content: content.clone(),
-        };
         Ok(Self {
             connection: RenetClient::new(channels()),
             transport,
@@ -243,6 +281,7 @@ impl Client {
             hello,
             sent_hello: false,
             welcome: None,
+            server_info: None,
             pending: VecDeque::new(),
             sequence: 0,
             latest_tick: None,
@@ -254,6 +293,9 @@ impl Client {
     }
     pub fn welcome(&self) -> Option<&ServerControl> {
         self.welcome.as_ref()
+    }
+    pub fn server_info(&self) -> Option<&ServerInfo> {
+        self.server_info.as_ref()
     }
     pub fn failure(&self) -> Option<&str> {
         self.failure.as_deref()
@@ -328,10 +370,26 @@ impl Client {
             self.connection.send_message(CONTROL, encode(&self.hello)?);
             self.sent_hello = true;
         }
-        while let Some(bytes) = self.connection.receive_message(CONTROL) {
+        for _ in 0..16 {
+            let Some(bytes) = self.connection.receive_message(CONTROL) else {
+                break;
+            };
             let reply: ServerControl = decode(&bytes)?;
             match &reply {
-                ServerControl::Rejected { reason } => return Err(reason.clone()),
+                ServerControl::Info(info) => {
+                    if self.content.is_some() {
+                        return Err("unexpected discovery response".into());
+                    }
+                    info.validate()?;
+                    self.server_info = Some(info.clone());
+                    continue;
+                }
+                ServerControl::Rejected { reason } => {
+                    if reason.len() > 256 || reason.chars().any(char::is_control) {
+                        return Err("invalid rejection metadata".into());
+                    }
+                    return Err(reason.clone());
+                }
                 ServerControl::ContentRequired { version, content } => {
                     if *version != VERSION {
                         return Err("incompatible content request protocol".into());
@@ -348,7 +406,7 @@ impl Client {
                     ..
                 } => {
                     if *version != VERSION
-                        || content != &self.content
+                        || Some(content) != self.content.as_ref()
                         || !sim::TICK_RATE_RANGE.contains(tick_rate)
                         || *server_tick > MAX_PROTOCOL_COUNTER
                     {
@@ -358,7 +416,10 @@ impl Client {
             }
             self.welcome = Some(reply);
         }
-        while let Some(bytes) = self.connection.receive_message(SNAPSHOT) {
+        for _ in 0..32 {
+            let Some(bytes) = self.connection.receive_message(SNAPSHOT) else {
+                break;
+            };
             if bytes.len() > MAX_MESSAGE {
                 return Err("snapshot exceeds limit".into());
             }
@@ -382,7 +443,10 @@ impl Client {
                 .retain(|command| command.sequence > state.acknowledged_input);
             self.latest = Some(state);
         }
-        while let Some(bytes) = self.connection.receive_message(EVENTS) {
+        for _ in 0..64 {
+            let Some(bytes) = self.connection.receive_message(EVENTS) else {
+                break;
+            };
             if self.events.len() >= 512 {
                 return Err("client is not consuming match events".into());
             }
@@ -416,6 +480,39 @@ mod tests {
             map_hash: "0".repeat(40),
             catalog_hash: "1".repeat(40),
         }
+    }
+    #[test]
+    fn discovery_returns_bounded_metadata_without_admitting_gameplay() {
+        let session = Session::new(
+            World::new(Arc::new(collision::CollisionWorld::new())),
+            manifest(),
+        )
+        .unwrap();
+        let mut server = Server::bind("127.0.0.1:0".parse().unwrap(), session, 4).unwrap();
+        let mut probe = Client::probe(server.address()).unwrap();
+        let dt = Duration::from_secs_f64(1. / 128.);
+        for _ in 0..256 {
+            probe.update(dt).unwrap();
+            server.update(dt).unwrap();
+            if probe.server_info().is_some() {
+                break;
+            }
+        }
+        let info = probe.server_info().unwrap();
+        info.validate().unwrap();
+        assert_eq!(info.content, manifest());
+        assert_eq!(info.tick_rate, 128);
+        assert_eq!(info.snapshot_interval_ticks, 4);
+        assert_eq!(info.interpolation_allowance_ticks, 8);
+        assert!(server.session().world().players.is_empty());
+        assert!(probe.player().is_none());
+        assert!(probe.take_state().is_none());
+        assert!(probe.take_events().is_none());
+        probe.disconnect();
+        for _ in 0..8 {
+            server.update(dt).unwrap();
+        }
+        assert!(server.pending_hellos.is_empty());
     }
     #[test]
     fn malformed_fragment_indices_and_inconsistent_counts_disconnect_without_panicking() {
