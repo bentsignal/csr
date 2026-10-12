@@ -16,7 +16,7 @@ account identifiers, and private logs are outside the repository. See
 
 ## Current behavior
 
-`characters::update` explicitly includes `p.alive` in visibility. Dead
+`characters::sync` explicitly includes `p.alive` in visibility. Dead
 players' body and held-weapon meshes become hidden, and their pose update
 is skipped. The character cache survives until actor removal or team
 change. It has no corpse ownership or life-epoch tracking. The immediate
