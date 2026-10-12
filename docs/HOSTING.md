@@ -45,11 +45,25 @@ Private provenance/logs/captures remain under
 `rendered-host-controller-128`. These test the typed request and engine inputs,
 not operating-system input or the original lobby's complete player flow.
 
+Coordinated host and guest fixtures subsequently passed at both rates using
+executable SHA256
+`E9687E75490D6D770002D7F94C671F8A01A06E3937C0617D9602104AC01CE04A`.
+Both processes exited with code 0 and `failures: 0` in each run. The host
+observed two authoritative humans and one bot while the guest was connected,
+then one human after the guest returned Home and loaded offline. Both clients
+captured Ready, Pause, Home and offline reload; all sixteen images were
+reviewed. Private provenance, logs and captures remain under
+`rendered-host-guest-controller-64` and `rendered-host-guest-controller-128`
+in the same private evidence folder. The 64-tick source is `25e4796`; the
+128-tick source is its parent `e1fcdfb` plus the recorded fixture diff that
+became that commit. These still exercise typed hosting rather than the
+complete authored lobby path.
+
 The original lobby bridge is being integrated separately using observed
 ChooseGameSettings, checked query, UpdatedSelections and zero-argument
 LaunchGame callbacks. Its standalone mouse-driven probe completes mode/map,
 Accept, bot options and the original lobby Go. The integrated authored host
-flow and simultaneous guest proof must pass before this draft is complete.
+flow must pass before this draft is complete.
 Dynamic bot slot filling and original competitive warmup remain open.
 
 This is the existing unauthenticated address-based transport. It does not
