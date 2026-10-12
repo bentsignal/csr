@@ -6,9 +6,9 @@ does not edit the OpenXR runtime registration, Steam, headset settings or game
 configuration. The desktop camera is an independent preview, not a headset
 capture or stereo evidence.
 
-## Integration proposal
+## Optional build
 
-Root owns optional dependencies and the example entry. Proposed client feature:
+The client declares the optional dependencies and a feature-gated example:
 
 ```toml
 [features]
@@ -107,8 +107,7 @@ SHA256 of reviewed archive bytes:
 - `bevy_mod_openxr-0.6.0.crate`: `af0560ba6db564db1e3b60dfc9abf359443a33ba9295acfd18aff8996b8f6288`
 - `bevy_mod_xr-0.6.0.crate`: `f2469b8e28ee37de403db2e6b415ffe91da27e27c99034df257658d76392fe80`
 
-This leaf intentionally changes no Cargo declarations or central game files.
-Formatting/source review only; root must wire the optional feature, compile and
-test the actual example, then run mandatory workspace/real-data/audio checks.
+The feature and exact published dependencies are wired. Compilation and actual
+example tests remain pending, followed by workspace/real-data/audio checks.
 No-runtime, connected-headset, focus transitions and loss cleanup require owned
 runtime executions before this work can be called verified.
