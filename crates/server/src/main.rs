@@ -1,5 +1,6 @@
 //! Dedicated server, intentionally independent of the Bevy client.
 use netcode::{
+    lag::LagPolicy,
     prediction::{Predictor, Reconciliation},
     protocol::{ContentManifest, InputCommand, StateUpdate},
     remote_pose::{PoseHistory, SampleMode},
@@ -26,6 +27,7 @@ struct Options {
     deathmatch: bool,
     ticks: Option<u64>,
     netcheck: bool,
+    lag: LagPolicy,
 }
 
 fn options(args: &[String]) -> Result<Options, String> {
@@ -38,7 +40,10 @@ fn options(args: &[String]) -> Result<Options, String> {
         deathmatch: false,
         ticks: None,
         netcheck: false,
+        lag: LagPolicy::prototype(128),
     };
+    let mut max_unlag = None;
+    let mut interpolation = None;
     let mut args = args.iter().peekable();
     if args.peek().is_some_and(|s| !s.starts_with('-')) {
         out.map = args.next().unwrap().clone();
@@ -47,6 +52,22 @@ fn options(args: &[String]) -> Result<Options, String> {
         match arg.as_str() {
             "--deathmatch" => out.deathmatch = true,
             "--netcheck" => out.netcheck = true,
+            "--max-unlag-ticks" => {
+                max_unlag = Some(
+                    args.next()
+                        .ok_or("--max-unlag-ticks needs a number")?
+                        .parse()
+                        .map_err(|_| "invalid history tick count")?,
+                );
+            }
+            "--interpolation-ticks" => {
+                interpolation = Some(
+                    args.next()
+                        .ok_or("--interpolation-ticks needs a number")?
+                        .parse()
+                        .map_err(|_| "invalid interpolation tick count")?,
+                );
+            }
             "--bind" => {
                 out.bind = args
                     .next()
@@ -99,6 +120,14 @@ fn options(args: &[String]) -> Result<Options, String> {
     if out.ticks == Some(0) {
         return Err("--ticks must be positive".into());
     }
+    out.lag = LagPolicy::prototype(out.tick_rate);
+    if let Some(ticks) = max_unlag {
+        out.lag.max_history_ticks = ticks;
+    }
+    if let Some(ticks) = interpolation {
+        out.lag.interpolation_allowance_ticks = ticks;
+    }
+    out.lag = out.lag.validate(out.tick_rate)?;
     Ok(out)
 }
 
@@ -106,7 +135,7 @@ fn main() {
     let args: Vec<_> = std::env::args().skip(1).collect();
     if args.iter().any(|s| s == "--help" || s == "-h") {
         println!(
-            "CSGO Rewrite dedicated server\ncsr-server [MAP] [--bind IP:PORT] [--tickrate 128] [--bots N] [--maxplayers N]\n           [--deathmatch] [--ticks N] [--netcheck]\nReads CS:GO Legacy automatically; CSR_GAME_DIR overrides.\nDirect-IP prototype: no Steam identity or server browser yet."
+            "CSGO Rewrite dedicated server\ncsr-server [MAP] [--bind IP:PORT] [--tickrate 128] [--bots N] [--maxplayers N]\n           [--deathmatch] [--ticks N] [--netcheck]\n           [--max-unlag-ticks N] [--interpolation-ticks N]\nReads CS:GO Legacy automatically; CSR_GAME_DIR overrides.\nDirect-IP prototype: no Steam identity or server browser yet."
         );
         return;
     }
@@ -168,7 +197,7 @@ fn run(options: Options) -> Result<(), String> {
             },
         );
     }
-    let session = Session::new(world, content.clone())?;
+    let session = Session::with_lag_policy(world, content.clone(), options.lag)?;
     if options.netcheck {
         return netcheck(session, level.catalog);
     }
@@ -287,6 +316,7 @@ fn netcheck(session: Session, catalog: Arc<weapons::Catalog>) -> Result<(), Stri
     let mut snapshots = [0; 2];
     let mut acks = [0; 2];
     let mut maximum_replay = 0;
+    let mut rewound_inputs = 0;
     let rate = server.session().world().tick_rate;
     let mut poses = [
         PoseHistory::new(rate, 16, 8, 128.)?,
@@ -342,6 +372,19 @@ fn netcheck(session: Session, catalog: Arc<weapons::Catalog>) -> Result<(), Stri
             server.session().world().tick,
             server.session().world().state(),
         );
+        for player in &server.session().world().players {
+            if ids.contains(&player.id) {
+                if let Some(view) = player.last_input.rewind_tick {
+                    if view > server.session().world().tick
+                        || server.session().world().tick - view
+                            > server.session().world().tick_rate as u64 + 1
+                    {
+                        return Err("server exposed an out-of-bounds rewind tick".into());
+                    }
+                    rewound_inputs += 1;
+                }
+            }
+        }
         for (n, client) in clients.iter_mut().enumerate() {
             if delayed {
                 continue;
@@ -387,6 +430,9 @@ fn netcheck(session: Session, catalog: Arc<weapons::Catalog>) -> Result<(), Stri
     if maximum_replay == 0 {
         return Err("delayed IO did not exercise prediction replay".into());
     }
+    if rewound_inputs == 0 {
+        return Err("real UDP inputs did not exercise server rewind validation".into());
+    }
     if interpolated_samples < 16 {
         return Err("decoded snapshots did not exercise remote pose interpolation".into());
     }
@@ -422,11 +468,12 @@ fn netcheck(session: Session, catalog: Arc<weapons::Catalog>) -> Result<(), Stri
         return Err("disconnected players remain in simulation".into());
     }
     println!(
-        "UDP netcheck: 2 clients, {} tick, snapshots {:?}, acknowledged {:?}, ContentId resolution and VR poses verified\nPrediction: delayed IO, up to {} replayed inputs, no replayed effects, fully reconciled\nRemote poses: {} fractional samples, bounded history, separate from authoritative state\nfailures: 0",
+        "UDP netcheck: 2 clients, {} tick, snapshots {:?}, acknowledged {:?}, ContentId resolution and VR poses verified\nPrediction: delayed IO, up to {} replayed inputs, no replayed effects, fully reconciled\nServer rewind: {} bounded view requests applied\nRemote poses: {} fractional samples, bounded history, separate from authoritative state\nfailures: 0",
         server.session().world().tick_rate,
         snapshots,
         acks,
         maximum_replay,
+        rewound_inputs,
         interpolated_samples
     );
     Ok(())
@@ -504,5 +551,18 @@ mod tests {
         assert!(options(&["--bind".into(), "no".into()]).is_err());
         assert!(options(&["--bots".into(), "64".into()]).is_err());
         assert!(options(&["--unknown".into()]).is_err());
+        assert!(options(&["--max-unlag-ticks".into(), "129".into()]).is_err());
+        assert!(options(&["--interpolation-ticks".into(), "129".into()]).is_err());
+        let configured = options(&[
+            "--tickrate".into(),
+            "64".into(),
+            "--max-unlag-ticks".into(),
+            "32".into(),
+            "--interpolation-ticks".into(),
+            "2".into(),
+        ])
+        .unwrap();
+        assert_eq!(configured.lag.max_history_ticks, 32);
+        assert_eq!(configured.lag.interpolation_allowance_ticks, 2);
     }
 }

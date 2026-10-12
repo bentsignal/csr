@@ -114,13 +114,18 @@ impl Predictor {
         if !self.can_predict() {
             return Err("prediction history is full; awaiting authority".into());
         }
-        if self.last_sent.checked_add(1) != Some(command.sequence) {
+        if command.sequence > MAX_PROTOCOL_COUNTER
+            || self.last_sent.checked_add(1) != Some(command.sequence)
+        {
             return Err("prediction input sequence is not consecutive".into());
         }
         if command.view_tick > self.authoritative.tick {
             return Err("prediction view tick is in the future".into());
         }
         command.input = validate_input(command.input)?;
+        if self.world.tick >= MAX_LOCAL_TICK {
+            return Err("local prediction timeline exhausted".into());
+        }
         self.world.step_prediction(&[(self.player, command.input)]);
         self.pending.push_back(command);
         self.last_sent = command.sequence;
@@ -296,9 +301,24 @@ mod tests {
         let mut invalid_physics = update(&authority, 2);
         invalid_physics.snapshot.state.config.gravity = f32::NAN;
         assert!(predictor.reconcile(invalid_physics).is_err());
+        let mut invalid_tick = update(&authority, 2);
+        invalid_tick.snapshot.state.tick = u64::MAX;
+        assert!(predictor.reconcile(invalid_tick).is_err());
         assert_eq!(predictor.world().state(), before);
         assert_eq!(predictor.pending_inputs(), 1);
         assert_eq!(predictor.acknowledged_input(), 1);
+    }
+
+    #[test]
+    fn exhausted_local_timeline_is_rejected_before_advancing_or_retaining_input() {
+        let (authority, _, welcome) = fixture(128);
+        let mut predictor =
+            Predictor::new(authority.clone(), welcome, update(&authority, 0)).unwrap();
+        predictor.world.tick = MAX_LOCAL_TICK;
+        let before = predictor.world().state();
+        assert!(predictor.predict(command(1)).is_err());
+        assert_eq!(predictor.world().state(), before);
+        assert_eq!(predictor.pending_inputs(), 0);
     }
 
     #[test]
