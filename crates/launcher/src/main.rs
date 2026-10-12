@@ -22,6 +22,7 @@
 
 mod art;
 mod dialog;
+mod fileassoc;
 mod mapcmd;
 mod packcmd;
 mod probe;
