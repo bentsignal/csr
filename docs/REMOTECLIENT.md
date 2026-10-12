@@ -42,6 +42,8 @@ death snapshot; mouse look survives ordinary snapshot corrections.
 and at most 63 remote read-only `RenderSample`s. `RenderPoses` has an opt-in
 override map for these already sampled poses, consumed by existing camera,
 character and weapon rendering. It never writes poses into gameplay state.
+Local prediction retains the existing 140 units/s stair-eye easing and clears
+that offset on new lives, teleports and corrections at the same timeline tick.
 Cancellation/closure clears overrides. Ordinary offline sampling remains the
 existing fixed-tick interpolation when no override map is populated.
 

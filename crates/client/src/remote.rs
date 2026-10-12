@@ -222,7 +222,9 @@ pub fn drive(
         ..Default::default()
     };
     let predicted = client.session.predicted_world().unwrap();
-    frame.local = predicted.player(id).map(crate::interpolation::Pose::player);
+    frame.local = predicted
+        .player(id)
+        .map(|actor| poses.capture_prediction(actor, predicted.tick, predicted.dt()));
     if let Some(actor) = predicted.player(id) {
         frame.local_tracked = actor.tracked;
         frame.local_aim = actor.aim;
