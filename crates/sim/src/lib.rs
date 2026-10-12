@@ -1521,7 +1521,14 @@ impl World {
                             fire = true;
                         }
                     }
-                    weapon::think(w, time, dt, ducked, fire);
+                    // A loaded automatic trigger remains a burst during its
+                    // shot cooldown. `fire` alone is false on those ticks and
+                    // would recover the entire recoil step between AK shots.
+                    // Reloads, dry weapons and a held semiautomatic trigger
+                    // still recover normally when they cannot sustain fire.
+                    let recoil_firing = fire || (attack && can_fire && w.def.full_auto
+                        && w.reload_end.is_none() && w.clip > 0);
+                    weapon::think(w, time, dt, ducked, recoil_firing);
                 }
             }
             if fire {
