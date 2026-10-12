@@ -10,4 +10,20 @@ The Add Server field accepts bounded UTF-8 editing, selection, Backspace/Delete 
 
 This is a functional adapter of declared resource bounds/styles. Native engine sizing overrides, column widths, row padding, title-bar controls and tab widths have not been measured against the original application. Those details are not claimed as completed 1:1 fidelity. The declared resource frame and child extents disagree; the adapter preserves the declared bounds rather than asserting an invented original size. Address horizontal scrolling, native browser filtering and measured context-menu geometry remain gaps. A localized favorite-removal context action is provided through the caller-owned gesture; only its localization is observed, and its bounds/activation are explicitly unmeasured. The Internet projection is manually probed endpoints, not an invented Steam directory; the backend status must state that scope.
 
+Integrated 1920x1080 engine-fixture captures show the list and Connect control
+extending approximately 28 pixels beyond the declared frame's right edge. This
+remains unresolved native-sizing fidelity work; the context readability fix does
+not alter those bounds or invent a native sizing override.
+
+The context action uses the installed `Menu.BgColor` and `Menu.TextColor` roles.
+The actual Legacy `resource/sourcescheme.res` sets an opaque menu background;
+its `Button.BgColor` instead aliases a fully transparent color, which let the
+underlying map-cell text show through the removal action. Menu roles prevent
+that bleed while preserving the context geometry and input ownership. The
+installed `MenuBorder` aliases `RaisedBorder`; native border geometry remains
+unmeasured and this change does not invent one. These observations were verified
+read-only against `csgo/pak01_dir.vpk` / `pak01_203.vpk`, member
+`resource/sourcescheme.res`, SHA256
+`203a3d4dc559bb6e44d03e86532ef00fd0c1f6ce327a5dced8898992de919f81`.
+
 For an offscreen private render, `cargo run -p client --example server_browser -- <private-capture-directory>` mounts the installed resources and supplies local system font files at runtime. It renders an explicitly synthetic localhost favorite with unknown metadata and types an address through the actual leaf keyboard path. It opens no window and performs no network requests. Captures must stay outside the repository.
