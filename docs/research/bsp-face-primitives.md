@@ -58,6 +58,10 @@ minimum length and face-local indices are validated. A face may consume at
 most 65536 primitive indices, including repeated ranges, bounding expansion
 even when hostile metadata repeats the same list. Partial primitive/index
 records reject the BSP. High-bit-only counts do not request primitives.
+The required launcher `probe` checks every referenced planar face and counts
+unsupported or malformed topology as a failure, including dedicated vertices;
+unused primitive records are not interpreted as render topology. A partially
+rendered map cannot receive a zero-failure probe result from this seam.
 
 Asset-free tests cover a concave notch, a collinear boundary split, strip
 alternation/connectors, masked counts and multiple lists, malformed metadata,
