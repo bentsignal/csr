@@ -1,7 +1,7 @@
 //! One bounded installation worker shared by file opening and window drops.
 //! Cancellation is checked during reads, decompression, hashing and writes;
 //! publication is the commit point. A completed publish always reports success.
-use crate::{Installed, Limits, Manifest, Pack};
+use crate::{Catalog, Installed, Limits, Manifest, Pack};
 use std::path::PathBuf;
 use std::sync::{
     Arc, Mutex,
@@ -89,53 +89,48 @@ pub enum Outcome {
     Failed(String),
 }
 
-pub struct InstallJob {
+struct Job<T> {
     control: Control,
-    result: mpsc::Receiver<Outcome>,
+    result: mpsc::Receiver<T>,
     finished: bool,
+    failure: fn(String) -> T,
 }
-impl InstallJob {
-    /// Callers queue rather than spawn unbounded concurrent jobs. The worker
-    /// holds no Bevy/UI objects and stores only a small receipt after finishing.
-    pub fn start(store: Installed, source: PathBuf) -> Self {
+impl<T: Send + 'static> Job<T> {
+    fn start(
+        name: &str,
+        task: impl FnOnce(Control) -> T + Send + 'static,
+        failure: fn(String) -> T,
+    ) -> Self {
         let control = Control::default();
         let worker = control.clone();
         let (sender, result) = mpsc::channel();
-        std::thread::spawn(move || {
-            let outcome = (|| {
-                let pack = Pack::open_controlled(&source, Limits::default(), &worker)?;
-                store.install_controlled(&pack, &worker)?;
-                Ok(Receipt {
-                    manifest: pack.manifest().clone(),
-                    archive_hash: pack.archive_hash().into(),
-                })
-            })();
-            let outcome = match outcome {
-                Ok(receipt) => Outcome::Installed(Box::new(receipt)),
-                Err(e) if e == CANCELLED => Outcome::Cancelled,
-                Err(e) => Outcome::Failed(e),
-            };
-            let _ = sender.send(outcome);
-        });
+        let failed = sender.clone();
+        let spawned = std::thread::Builder::new()
+            .name(name.into())
+            .spawn(move || {
+                let _ = sender.send(task(worker));
+            });
+        if let Err(error) = spawned {
+            let _ = failed.send(failure(format!("could not start {name} worker: {error}")));
+        }
         Self {
             control,
             result,
             finished: false,
+            failure,
         }
     }
-    pub fn progress(&self) -> Progress {
+    fn progress(&self) -> Progress {
         *self
             .control
             .progress
             .lock()
             .unwrap_or_else(|e| e.into_inner())
     }
-    pub fn cancel(&self) {
+    fn cancel(&self) {
         self.control.cancel();
     }
-    /// Returns the terminal result once. A cancelled worker must finish cleanup
-    /// before a caller closes its process or starts the next queued installation.
-    pub fn poll(&mut self) -> Option<Outcome> {
+    fn poll(&mut self) -> Option<T> {
         if self.finished {
             return None;
         }
@@ -147,15 +142,84 @@ impl InstallJob {
             Err(mpsc::TryRecvError::Empty) => None,
             Err(mpsc::TryRecvError::Disconnected) => {
                 self.finished = true;
-                Some(Outcome::Failed(
-                    "pack installation worker stopped unexpectedly".into(),
-                ))
+                Some((self.failure)("pack worker stopped unexpectedly".into()))
             }
         }
     }
 }
-impl Drop for InstallJob {
+impl<T> Drop for Job<T> {
     fn drop(&mut self) {
-        self.cancel();
+        self.control.cancel();
+    }
+}
+
+pub struct InstallJob(Job<Outcome>);
+impl InstallJob {
+    /// Callers queue rather than spawn unbounded concurrent jobs. The worker
+    /// holds no Bevy/UI objects and stores only a small receipt after finishing.
+    pub fn start(store: Installed, source: PathBuf) -> Self {
+        Self(Job::start(
+            "pack-install",
+            move |worker| {
+                let outcome = (|| {
+                    let pack = Pack::open_controlled(&source, Limits::default(), &worker)?;
+                    store.install_controlled(&pack, &worker)?;
+                    Ok(Receipt {
+                        manifest: pack.manifest().clone(),
+                        archive_hash: pack.archive_hash().into(),
+                    })
+                })();
+                match outcome {
+                    Ok(receipt) => Outcome::Installed(Box::new(receipt)),
+                    Err(e) if e == CANCELLED => Outcome::Cancelled,
+                    Err(e) => Outcome::Failed(e),
+                }
+            },
+            Outcome::Failed,
+        ))
+    }
+    pub fn progress(&self) -> Progress {
+        self.0.progress()
+    }
+    pub fn cancel(&self) {
+        self.0.cancel();
+    }
+    /// Returns the terminal result once. A cancelled worker must finish cleanup
+    /// before a caller closes its process or starts the next queued installation.
+    pub fn poll(&mut self) -> Option<Outcome> {
+        self.0.poll()
+    }
+}
+
+#[derive(Debug)]
+pub enum CatalogOutcome {
+    Loaded(Catalog),
+    Cancelled,
+    Failed(String),
+}
+
+/// Queue a scan on the frontend's one-worker refresh flow. Completed scans
+/// retain definitions/hashes only and never change a running level's mounts.
+pub struct CatalogJob(Job<CatalogOutcome>);
+impl CatalogJob {
+    pub fn start(store: Installed) -> Self {
+        Self(Job::start(
+            "pack-catalog",
+            move |worker| match store.catalog_controlled(&worker) {
+                Ok(catalog) => CatalogOutcome::Loaded(catalog),
+                Err(e) if e == CANCELLED => CatalogOutcome::Cancelled,
+                Err(e) => CatalogOutcome::Failed(e),
+            },
+            CatalogOutcome::Failed,
+        ))
+    }
+    pub fn progress(&self) -> Progress {
+        self.0.progress()
+    }
+    pub fn cancel(&self) {
+        self.0.cancel();
+    }
+    pub fn poll(&mut self) -> Option<CatalogOutcome> {
+        self.0.poll()
     }
 }

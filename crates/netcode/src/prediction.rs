@@ -105,6 +105,25 @@ impl Predictor {
     }
     pub fn can_predict(&self) -> bool {
         self.pending.len() < self.capacity
+            && self.world.tick < MAX_LOCAL_TICK
+            && self.last_sent < MAX_PROTOCOL_COUNTER
+    }
+
+    /// Canonicalize and validate a command before transport advances a sequence.
+    /// This does not mutate prediction or retain input.
+    pub fn prepare(&self, input: sim::TickInput, view_tick: u64) -> Result<InputCommand, String> {
+        if !self.can_predict() {
+            return Err("prediction cannot advance".into());
+        }
+        if view_tick > self.authoritative.tick {
+            return Err("prediction view tick is in the future".into());
+        }
+        let input = validate_input(input)?;
+        Ok(InputCommand {
+            sequence: self.last_sent + 1,
+            view_tick,
+            input,
+        })
     }
 
     /// The sequence is the one returned by Client::send_input. Do not send

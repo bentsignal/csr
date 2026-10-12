@@ -2,8 +2,8 @@
 use serde::{Deserialize, Serialize};
 use sim::{GameEvent, PlayerId, Snapshot, Team, TickInput};
 
-pub const VERSION: u32 = 2;
-pub const PROTOCOL_ID: u64 = 0x4353_5257_0000_0002;
+pub const VERSION: u32 = 3;
+pub const PROTOCOL_ID: u64 = 0x4353_5257_0000_0003;
 pub const CONTROL: u8 = 0;
 pub const INPUT: u8 = 1;
 pub const SNAPSHOT: u8 = 2;
@@ -17,6 +17,70 @@ pub const MAX_PROTOCOL_COUNTER: u64 = MAX_LOCAL_TICK - crate::prediction::MAX_PE
 pub(crate) fn validate_events(batch: &EventBatch) -> Result<(), String> {
     if batch.tick > MAX_PROTOCOL_COUNTER || batch.events.len() > 4096 {
         return Err("invalid event batch bounds".into());
+    }
+    let text = |value: &str| {
+        !value.is_empty()
+            && value.len() <= 128
+            && !value.chars().any(char::is_control)
+            && !value.contains(['/', '\\', ':'])
+    };
+    let position = |value: glam::Vec3| value.is_finite() && value.length_squared().is_finite();
+    for event in &batch.events {
+        use GameEvent::*;
+        let valid = match event {
+            Fire {
+                player,
+                weapon,
+                origin,
+            }
+            | Melee {
+                player,
+                weapon,
+                origin,
+                ..
+            }
+            | Scope {
+                player,
+                weapon,
+                origin,
+                ..
+            } => *player != 0 && text(weapon) && position(*origin),
+            Tracer { player, start, end } => *player != 0 && position(*start) && position(*end),
+            Impact {
+                player,
+                pos,
+                normal,
+                ..
+            } => *player != 0 && position(*pos) && position(*normal),
+            Damage {
+                victim,
+                health,
+                pos,
+                ..
+            } => *victim != 0 && *health >= 0 && position(*pos),
+            Kill { victim, weapon, .. } => *victim != 0 && text(weapon),
+            Land { player, speed } => *player != 0 && speed.is_finite() && *speed >= 0.,
+            Pickup { player, item } => *player != 0 && text(item),
+            Dropped { player, item, pos } => *player != 0 && text(item) && position(*pos),
+            DecoyShot { player, pos }
+            | UtilityThrown { player, pos, .. }
+            | UtilityDetonated { player, pos, .. } => *player != 0 && position(*pos),
+            BombPlanted { player, site, pos } => {
+                *player != 0 && site.is_ascii_uppercase() && position(*pos)
+            }
+            BombExploded { pos } => position(*pos),
+            StatTrakKill { owner: player, .. }
+            | Reload { player }
+            | Jump { player }
+            | Purchase { player, .. }
+            | PlantStart { player }
+            | DefuseStart { player, .. }
+            | BombDefused { player } => *player != 0,
+            RoundStart { .. } | FreezeEnd | RoundEnd { .. } | Halftime | MatchEnd { .. } => true,
+        };
+        if !valid {
+            return Err("invalid authoritative event payload".into());
+        }
     }
     Ok(())
 }
@@ -65,6 +129,9 @@ impl ContentManifest {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum ClientControl {
+    Inspect {
+        version: u32,
+    },
     Hello {
         version: u32,
         name: String,
@@ -76,6 +143,7 @@ pub enum ClientControl {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum ServerControl {
+    Info(ServerInfo),
     Welcome {
         version: u32,
         player: PlayerId,
@@ -90,6 +158,34 @@ pub enum ServerControl {
         version: u32,
         content: ContentManifest,
     },
+}
+
+/// Bounded discovery metadata only. Frontends resolve installed definitions;
+/// receiving it never selects a host path, URL, pack mount or download.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ServerInfo {
+    pub version: u32,
+    pub tick_rate: u32,
+    pub snapshot_interval_ticks: u32,
+    pub max_unlag_ticks: u32,
+    pub interpolation_allowance_ticks: u32,
+    pub content: ContentManifest,
+}
+impl ServerInfo {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.version != VERSION
+            || !sim::TICK_RATE_RANGE.contains(&self.tick_rate)
+            || self.snapshot_interval_ticks == 0
+            || self.snapshot_interval_ticks > self.tick_rate
+            || self.max_unlag_ticks == 0
+            || self.max_unlag_ticks > self.tick_rate
+            || self.interpolation_allowance_ticks > self.max_unlag_ticks
+        {
+            return Err("invalid server discovery bounds".into());
+        }
+        self.content.validate()?;
+        Ok(())
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -246,6 +342,8 @@ pub(crate) fn validate_state(
     let mut ids = std::collections::HashSet::new();
     for actor in &world.players {
         if actor.id == 0
+            || actor.name.len() > 64
+            || actor.name.chars().any(char::is_control)
             || !ids.insert(actor.id)
             || (actor.alive && actor.life_epoch == 0)
             || actor
@@ -343,6 +441,69 @@ fn validate_weapon(weapon: &sim::weapon::WeaponState) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn authoritative_effects_reject_nonfinite_and_unbounded_payloads() {
+        use glam::Vec3;
+        let events = vec![
+            GameEvent::Fire {
+                player: 1,
+                weapon: "weapon_test".into(),
+                origin: Vec3::NAN,
+            },
+            GameEvent::Impact {
+                player: 1,
+                pos: Vec3::ZERO,
+                normal: Vec3::INFINITY,
+                surface: 0,
+            },
+            GameEvent::Tracer {
+                player: 1,
+                start: Vec3::ZERO,
+                end: Vec3::splat(f32::MAX),
+            },
+            GameEvent::Land {
+                player: 1,
+                speed: f32::NAN,
+            },
+            GameEvent::Kill {
+                attacker: 1,
+                victim: 2,
+                weapon: "../host/file".into(),
+                headshot: false,
+            },
+            GameEvent::Dropped {
+                player: 1,
+                item: "x".repeat(129),
+                pos: Vec3::ZERO,
+            },
+        ];
+        for event in events {
+            assert!(
+                validate_events(&EventBatch {
+                    tick: 1,
+                    events: vec![event]
+                })
+                .is_err()
+            );
+        }
+        assert!(
+            validate_events(&EventBatch {
+                tick: 1,
+                events: vec![
+                    GameEvent::Fire {
+                        player: 1,
+                        weapon: "weapon_test".into(),
+                        origin: Vec3::ZERO
+                    },
+                    GameEvent::Land {
+                        player: 1,
+                        speed: 100.
+                    },
+                ]
+            })
+            .is_ok()
+        );
+    }
     #[test]
     fn vr_input_round_trips_without_camera_assumptions() {
         let input = TickInput {

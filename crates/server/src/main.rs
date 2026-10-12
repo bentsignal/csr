@@ -1,4 +1,5 @@
 //! Dedicated server, intentionally independent of the Bevy client.
+mod remotecheck;
 use netcode::{
     lag::LagPolicy,
     prediction::{Predictor, Reconciliation},
@@ -27,6 +28,7 @@ struct Options {
     deathmatch: bool,
     ticks: Option<u64>,
     netcheck: bool,
+    remotecheck: bool,
     lag: LagPolicy,
 }
 
@@ -40,6 +42,7 @@ fn options(args: &[String]) -> Result<Options, String> {
         deathmatch: false,
         ticks: None,
         netcheck: false,
+        remotecheck: false,
         lag: LagPolicy::prototype(128),
     };
     let mut max_unlag = None;
@@ -52,6 +55,7 @@ fn options(args: &[String]) -> Result<Options, String> {
         match arg.as_str() {
             "--deathmatch" => out.deathmatch = true,
             "--netcheck" => out.netcheck = true,
+            "--remotecheck" => out.remotecheck = true,
             "--max-unlag-ticks" => {
                 max_unlag = Some(
                     args.next()
@@ -135,7 +139,7 @@ fn main() {
     let args: Vec<_> = std::env::args().skip(1).collect();
     if args.iter().any(|s| s == "--help" || s == "-h") {
         println!(
-            "CSGO Rewrite dedicated server\ncsr-server [MAP] [--bind IP:PORT] [--tickrate 128] [--bots N] [--maxplayers N]\n           [--deathmatch] [--ticks N] [--netcheck]\n           [--max-unlag-ticks N] [--interpolation-ticks N]\nReads CS:GO Legacy automatically; CSR_GAME_DIR overrides.\nDirect-IP prototype: no Steam identity or server browser yet."
+            "CSGO Rewrite dedicated server\ncsr-server [MAP] [--bind IP:PORT] [--tickrate 128] [--bots N] [--maxplayers N]\n           [--deathmatch] [--ticks N] [--netcheck | --remotecheck]\n           [--max-unlag-ticks N] [--interpolation-ticks N]\nReads CS:GO Legacy automatically; CSR_GAME_DIR overrides.\nDirect-IP prototype: no Steam identity or server browser yet."
         );
         return;
     }
@@ -180,7 +184,7 @@ fn run(options: Options) -> Result<(), String> {
         .unwrap_or_default();
     let rules = RulesConfig::from_cvars(&sim::rules::parse_cfg(&cfg));
     world.set_mode(
-        if options.deathmatch || options.netcheck {
+        if options.deathmatch || options.netcheck || options.remotecheck {
             GameMode::Deathmatch
         } else {
             GameMode::Competitive
@@ -198,6 +202,9 @@ fn run(options: Options) -> Result<(), String> {
         );
     }
     let session = Session::with_lag_policy(world, content.clone(), options.lag)?;
+    if options.remotecheck {
+        return remotecheck::run(session);
+    }
     if options.netcheck {
         return netcheck(session, level.catalog);
     }

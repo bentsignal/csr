@@ -4,5 +4,6 @@ pub mod lag;
 pub mod prediction;
 pub mod protocol;
 pub mod remote_pose;
+pub mod remote_session;
 pub mod session;
 pub mod transport;

@@ -2,14 +2,16 @@
 //! Validation, mounting and installation use one immutable byte snapshot.
 //! Private assets stay outside the repository and public releases.
 
+mod catalog;
 mod container;
 mod install;
 mod job;
 #[cfg(test)]
 mod tests;
+pub use catalog::{Catalog, CatalogEntry};
 pub use install::Installed;
 use job::Control;
-pub use job::{InstallJob, Outcome, Progress, Receipt, Stage};
+pub use job::{CatalogJob, CatalogOutcome, InstallJob, Outcome, Progress, Receipt, Stage};
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Cursor, Read, Write};
