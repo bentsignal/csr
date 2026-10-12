@@ -86,6 +86,9 @@ pub struct Mesh {
 pub struct Model {
     pub name: String,
     pub version: i32,
+    /// Authored model-space eye-position metadata. Not the gameplay camera or
+    /// a calibrated headset pivot; consumers must establish that binding.
+    pub eye_position: Vec3,
     pub hull_min: Vec3,
     pub hull_max: Vec3,
     pub view_min: Vec3,
@@ -125,6 +128,9 @@ pub struct Attachment {
     pub name: String,
     pub bone: usize,
     pub position: Vec3,
+    /// Exact local basis columns from the authored 3x4 transform, in Source
+    /// axes. Retained as a matrix without quaternion normalization/retargeting.
+    pub rotation: glam::Mat3,
 }
 
 fn read_attachments(m: R<'_>, bone_count: usize) -> io::Result<Vec<Attachment>> {
@@ -139,8 +145,9 @@ fn read_attachments(m: R<'_>, bone_count: usize) -> io::Result<Vec<Attachment>> 
         if bone<0 || bone as usize>=bone_count {return Err(invalid("attachment bone out of range"));}
         let name=(at as i64+m.i32(at)? as i64).try_into().map_err(|_|invalid("negative attachment name"))?;
         let position=Vec3::new(m.f32(at+24)?,m.f32(at+40)?,m.f32(at+56)?);
-        if !position.is_finite(){return Err(invalid("non-finite attachment position"));}
-        out.push(Attachment{name:m.cstr(name)?,bone:bone as usize,position});
+        let rotation=glam::Mat3::from_cols(m.vec3(at+12)?,m.vec3(at+28)?,m.vec3(at+44)?).transpose();
+        if !position.is_finite() || !rotation.is_finite(){return Err(invalid("non-finite attachment transform"));}
+        out.push(Attachment{name:m.cstr(name)?,bone:bone as usize,position,rotation});
     }
     Ok(out)
 }
@@ -201,6 +208,9 @@ impl Model {
 
     fn read_animation_data(&mut self, mdl: &[u8]) -> io::Result<()> {
         let m = R(mdl);
+        let eye_position=m.vec3(80)?;
+        if !eye_position.is_finite(){return Err(invalid("non-finite model eye position"));}
+        self.eye_position=eye_position;
         self.bones = skeleton::read_bones(&m, m.i32(156)?.max(0) as usize, m.i32(160)?.max(0) as usize)?;
         self.attachments = read_attachments(m, self.bones.len())?;
         self.hitboxes = skeleton::read_hitboxes(&m, m.i32(172)?.max(0) as usize, m.i32(176)?.max(0) as usize)
@@ -468,6 +478,45 @@ mod tests {
         assert_eq!(a[0].name,"1");assert_eq!(a[0].position,Vec3::new(2.0,3.0,9.0));
         assert!(read_attachments(R(&data),0).is_err());
         data[240..244].copy_from_slice(&100i32.to_le_bytes());assert!(read_attachments(R(&data),1).is_err());
+    }
+
+    #[test]
+    fn attachment_basis_preserves_rows_translation_and_rejects_invalid_metadata() {
+        let mut data=vec![0u8;512];
+        for (at,n) in [(240,1i32),(244,300),(300,92),(308,0)] {data[at..at+4].copy_from_slice(&n.to_le_bytes());}
+        data[392..394].copy_from_slice(b"1\0");
+        // Deliberately not an orthonormal basis: parsing retains authored
+        // components rather than silently projecting/scaling them into a quat.
+        let rows=[2.0f32,3.0,4.0,11.0,5.0,6.0,7.0,13.0,8.0,9.0,10.0,17.0];
+        for (i,value) in rows.iter().enumerate() {data[312+i*4..316+i*4].copy_from_slice(&value.to_le_bytes());}
+        let attachment=read_attachments(R(&data),1).unwrap().remove(0);
+        assert_eq!(attachment.rotation.x_axis,Vec3::new(2.,5.,8.));
+        assert_eq!(attachment.rotation.y_axis,Vec3::new(3.,6.,9.));
+        assert_eq!(attachment.rotation.z_axis,Vec3::new(4.,7.,10.));
+        assert_eq!(attachment.position,Vec3::new(11.,13.,17.));
+        assert_eq!(attachment.rotation*Vec3::X+attachment.position,Vec3::new(13.,18.,25.));
+        assert!(read_attachments(R(&data[..380]),1).is_err());
+        data[316..320].copy_from_slice(&f32::NAN.to_le_bytes());
+        assert!(read_attachments(R(&data),1).is_err());
+    }
+
+    #[test]
+    fn eye_metadata_is_loaded_without_becoming_a_camera_height() {
+        let mut data=vec![0u8;408]; data[..4].copy_from_slice(b"IDST");
+        data[4..8].copy_from_slice(&48i32.to_le_bytes()); data[12..20].copy_from_slice(b"fixture\0");
+        for (i,value) in [1.25f32,-2.5,73.0].iter().enumerate() {data[80+i*4..84+i*4].copy_from_slice(&value.to_le_bytes());}
+        let model=Model::load_header(&data).unwrap();
+        assert_eq!(model.eye_position,Vec3::new(1.25,-2.5,73.));
+        assert!(model.bones.is_empty());
+        // Full geometry-loading entry point also reads the same metadata;
+        // an empty valid synthetic VVD/VTX carries no third-party geometry.
+        let mut vvd=vec![0u8;64];vvd[..4].copy_from_slice(b"IDSV");vvd[4..8].copy_from_slice(&4i32.to_le_bytes());
+        let mut vtx=vec![0u8;36];vtx[..4].copy_from_slice(&7i32.to_le_bytes());
+        assert_eq!(Model::load(&data,&vvd,&vtx).unwrap().eye_position,model.eye_position);
+        assert!(Model::load_header(&data[..91]).is_err());
+        data[80..84].copy_from_slice(&f32::INFINITY.to_le_bytes());
+        assert!(Model::load_header(&data).is_err());
+        assert!(Model::load(&data,&vvd,&vtx).is_err());
     }
 
     #[test]
