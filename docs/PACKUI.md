@@ -40,6 +40,18 @@ hit testing on the map row, hash-bound rendered match, Home teardown and malform
 file rollback. Captures are saved beside the requested image. This harness does
 not claim an operating-system file-drop or native-picker interaction test.
 
-Rendered proof and full workspace/Legacy checks are pending on the integration
-head. Actual native-picker interaction is also pending: the Windows automation
-helper reports that its native pipe is unavailable after retry and reset.
+The frozen integration source `0f7b19f` passed two independent private rendered
+flows at 1920x1080, one Legacy-backed recipe and one asset-bearing archive. Each
+used fresh isolated userdata and checked the selected archive hash and ContentId
+in the running match. Both completed install, pointer Play, background reinstall
+without changing that match, Home teardown and malformed-install rollback with
+zero failures. All five captures per flow were visually inspected; background
+success remains in Match and its notice leaves the ammunition display readable.
+The proof executable SHA-256 was
+`20ceda035328a0e1ceb47e42c389eaa4e04b0432bcc70af45b77c396177b1e7b`.
+Packs, userdata and captures remain outside the repository.
+
+Workspace tests and the exact-source CI checks passed. Actual native-picker
+interaction is still pending: the Windows automation helper reports that its
+native pipe is unavailable after retry and reset. The engine-input proof above
+does not replace that operating-system interaction check.

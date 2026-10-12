@@ -71,7 +71,7 @@ pub(crate) struct MapArea;
 pub(crate) fn scroll(
     mut wheel: MessageReader<bevy::input::mouse::MouseWheel>,
     ui: Res<PackUi>,
-    mut areas: Query<&mut ScrollPosition, With<MapArea>>,
+    mut areas: Query<(&ComputedNode, &mut ScrollPosition), With<MapArea>>,
 ) {
     let delta: f32 = wheel
         .read()
@@ -81,8 +81,10 @@ pub(crate) fn scroll(
         })
         .sum();
     if ui.open {
-        for mut position in &mut areas {
-            position.0.y = (position.0.y - delta).max(0.);
+        for (node, mut position) in &mut areas {
+            let maximum =
+                ((node.content_size().y - node.size().y) * node.inverse_scale_factor()).max(0.);
+            position.0.y = (position.0.y - delta).clamp(0., maximum);
         }
     }
 }
@@ -515,6 +517,59 @@ pub(crate) fn gate_exit(mut ui: ResMut<PackUi>, mut messages: ResMut<Messages<Ap
 mod tests {
     use super::*;
     #[test]
+    fn overscrolling_returns_up_on_the_next_wheel_and_clamps_after_resize() {
+        use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_message::<MouseWheel>()
+            .init_resource::<PackUi>()
+            .add_systems(Update, scroll);
+        app.world_mut().resource_mut::<PackUi>().open = true;
+        let area = app
+            .world_mut()
+            .spawn((
+                MapArea,
+                ScrollPosition::default(),
+                ComputedNode {
+                    size: Vec2::new(300., 100.),
+                    content_size: Vec2::new(300., 500.),
+                    inverse_scale_factor: 0.5,
+                    ..default()
+                },
+            ))
+            .id();
+        let window = app.world_mut().spawn_empty().id();
+        app.world_mut()
+            .resource_mut::<Messages<MouseWheel>>()
+            .write(MouseWheel {
+                unit: MouseScrollUnit::Pixel,
+                x: 0.,
+                y: -1_000_000.,
+                window,
+                phase: bevy::input::touch::TouchPhase::Moved,
+            });
+        app.update();
+        assert_eq!(app.world().get::<ScrollPosition>(area).unwrap().0.y, 200.);
+        app.world_mut()
+            .resource_mut::<Messages<MouseWheel>>()
+            .write(MouseWheel {
+                unit: MouseScrollUnit::Line,
+                x: 0.,
+                y: 1.,
+                window,
+                phase: bevy::input::touch::TouchPhase::Moved,
+            });
+        app.update();
+        assert_eq!(app.world().get::<ScrollPosition>(area).unwrap().0.y, 172.);
+        app.world_mut()
+            .get_mut::<ComputedNode>(area)
+            .unwrap()
+            .content_size
+            .y = 120.;
+        app.update();
+        assert_eq!(app.world().get::<ScrollPosition>(area).unwrap().0.y, 10.);
+    }
+    #[test]
     fn exit_waits_for_owned_catalog_cleanup_and_preserves_error_status() {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
@@ -674,21 +729,22 @@ pub(crate) fn proof(
             if backend.flow.busy() { return; }
             if !backend.flow.notice.ends_with("was installed.") || level.as_ref().is_none_or(|level| level.0.id.to_string() != proof.id || level.0.pack_archive_hash() != Some(proof.hash.as_str())) { error!("pack flow changed the running selection or failed background installation"); exit.write(AppExit::error()); return; }
             capture(&mut commands, "pack-background-install.png");
-            menu.in_match = false; menu.page = Some(crate::menu::Page::Main); proof.next();
+            proof.next();
         },
-        7 if *state.get() == AppState::Menu && level.is_none() && sim.is_none() && entities.is_empty() && proof.entered.elapsed().as_secs() >= 3 => {
+        7 if proof.entered.elapsed().as_millis() >= 250 => { menu.in_match = false; menu.page = Some(crate::menu::Page::Main); proof.next(); },
+        8 if *state.get() == AppState::Menu && level.is_none() && sim.is_none() && entities.is_empty() && proof.entered.elapsed().as_secs() >= 3 => {
             capture(&mut commands, "pack-returned-home.png");
             let mut broken = std::path::PathBuf::from(std::env::var_os("CSR_TEST_PACK_FLOW").unwrap()); broken.set_file_name("Broken content.csrpack");
             drops.write(FileDragAndDrop::DroppedFile { window: window_id, path_buf: broken }); proof.next();
         },
-        8 if proof.entered.elapsed().as_secs_f64() > 1. => {
+        9 if proof.entered.elapsed().as_secs_f64() > 1. => {
             let backend = ui.backend.get_mut().unwrap();
             if !backend.flow.busy() {
                 if !backend.flow.notice.starts_with("Could not install") || !backend.flow.catalog.entries.iter().any(|entry| entry.archive_hash() == proof.hash) { error!("pack flow did not retain the previous pack after failure"); exit.write(AppExit::error()); return; }
                 capture(&mut commands, "pack-rejected.png"); proof.next();
             }
         },
-        9 if proof.entered.elapsed().as_secs() >= 1 => { info!("pack flow: install -> catalog -> pointer Play -> bound match -> background install -> Home -> malformed rollback; failures: 0"); exit.write(AppExit::Success); proof.next(); },
+        10 if proof.entered.elapsed().as_secs() >= 1 => { info!("pack flow: install -> catalog -> pointer Play -> bound match -> background install -> Home -> malformed rollback; failures: 0"); exit.write(AppExit::Success); proof.next(); },
         _ => {},
     }
 }
