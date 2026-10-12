@@ -7,8 +7,18 @@ pub(crate) struct Ownership {
     blocked: bool,
     keys: BTreeMap<String, u32>,
     buttons: Vec<MouseButton>,
+    cursor: Option<(f64, f64)>,
 }
 impl Ownership {
+    /// Physical movie coordinates: a stationary render frame is not new input.
+    /// Button events remain independent of whether this returns a movement.
+    pub fn mouse_move(&mut self, x: f64, y: f64) -> Option<Input> {
+        if self.blocked || !x.is_finite() || !y.is_finite() || self.cursor == Some((x, y)) {
+            return None;
+        }
+        self.cursor = Some((x, y));
+        Some(Input::MouseMove { x, y })
+    }
     pub fn record(&mut self, input: &Input) {
         match input {
             Input::Key {
@@ -29,11 +39,15 @@ impl Ownership {
                 }
             }
             Input::MouseUp { button, .. } => self.buttons.retain(|held| held != button),
+            Input::Focus(_) => self.cursor = None,
             _ => {}
         }
     }
     pub fn transition(&mut self, blocked: bool, focused: bool) -> Vec<Input> {
         let mut events = Vec::new();
+        if blocked != self.blocked {
+            self.cursor = None;
+        }
         if blocked && !self.blocked {
             // Releasing outside the stage cannot activate an obscured button.
             events.push(Input::MouseMove { x: -1., y: -1. });
@@ -63,6 +77,88 @@ impl Ownership {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn stationary_frames_coalesce_but_physical_position_and_scale_changes_send() {
+        let mut owner = Ownership::default();
+        assert!(matches!(
+            owner.mouse_move(20., 30.),
+            Some(Input::MouseMove { x: 20., y: 30. })
+        ));
+        for _ in 0..10_000 {
+            assert!(owner.mouse_move(20., 30.).is_none());
+        }
+        assert!(matches!(
+            owner.mouse_move(21., 30.),
+            Some(Input::MouseMove { x: 21., y: 30. })
+        ));
+        // Same logical cursor after a scale-factor change is new physical input.
+        assert!(matches!(
+            owner.mouse_move(21. * 2., 30. * 2.),
+            Some(Input::MouseMove { x: 42., y: 60. })
+        ));
+        assert!(owner.mouse_move(42., 60.).is_none());
+    }
+    #[test]
+    fn ownership_and_focus_restore_resend_stationary_hover_once() {
+        let mut owner = Ownership::default();
+        assert!(owner.mouse_move(20., 30.).is_some());
+        owner.transition(true, false);
+        assert!(owner.mouse_move(20., 30.).is_none());
+        owner.transition(false, true);
+        assert!(owner.mouse_move(20., 30.).is_some());
+        assert!(owner.mouse_move(20., 30.).is_none());
+        owner.record(&Input::Focus(true));
+        assert!(owner.mouse_move(20., 30.).is_some());
+        assert!(owner.mouse_move(20., 30.).is_none());
+    }
+    #[test]
+    fn movement_coalescing_preserves_held_buttons_and_balanced_releases() {
+        let mut owner = Ownership::default();
+        owner.mouse_move(20., 30.);
+        owner.record(&Input::MouseDown {
+            x: 20.,
+            y: 30.,
+            button: MouseButton::Left,
+        });
+        for _ in 0..100 {
+            assert!(owner.mouse_move(20., 30.).is_none());
+        }
+        assert_eq!(owner.buttons, vec![MouseButton::Left]);
+        let release = owner.transition(true, true);
+        assert_eq!(
+            release
+                .iter()
+                .filter(|input| matches!(
+                    input,
+                    Input::MouseUp {
+                        button: MouseButton::Left,
+                        ..
+                    }
+                ))
+                .count(),
+            1
+        );
+        assert!(owner.buttons.is_empty());
+        owner.transition(false, true);
+        assert!(owner.mouse_move(20., 30.).is_some());
+        owner.record(&Input::MouseDown {
+            x: 20.,
+            y: 30.,
+            button: MouseButton::Right,
+        });
+        assert!(owner.mouse_move(20., 30.).is_none());
+        owner.record(&Input::MouseUp {
+            x: 20.,
+            y: 30.,
+            button: MouseButton::Right,
+        });
+        assert!(
+            !owner
+                .transition(true, true)
+                .iter()
+                .any(|input| matches!(input, Input::MouseUp { .. }))
+        );
+    }
     #[test]
     fn overlay_releases_held_inputs_once_without_replaying_on_close() {
         let mut owner = Ownership::default();
