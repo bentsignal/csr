@@ -58,6 +58,7 @@ fn fixture(rate: u32) -> (Authority, HostHandle, LocalAdmission) {
     let shared = Arc::new(Shared {
         stopped: AtomicBool::new(false),
         status: Mutex::new(HostStatus::Preparing {
+            bound_address: server.address(),
             local_address: server.address(),
             info: server.info(),
         }),
@@ -341,13 +342,20 @@ fn owned_worker_wildcard_endpoint_cancel_socket_release_and_stale_ticket() {
         },
     )
     .unwrap();
-    let HostStatus::Preparing { local_address, .. } =
-        wait(&mut handle, |s| matches!(s, HostStatus::Preparing { .. }))
+    let HostStatus::Preparing {
+        bound_address,
+        local_address,
+        ..
+    } = wait(&mut handle, |s| matches!(s, HostStatus::Preparing { .. }))
     else {
         unreachable!()
     };
     assert!(local_address.ip().is_loopback());
+    assert!(bound_address.ip().is_unspecified());
+    assert_ne!(bound_address.port(), 0);
+    assert_eq!(bound_address.port(), local_address.port());
     let ticket = handle.take_local_admission().unwrap();
+    assert_eq!(ticket.address(), local_address);
     handle.cancel();
     handle.cancel();
     assert_eq!(
@@ -420,6 +428,7 @@ fn delayed_cancel_and_preparing_publications_cannot_replace_terminal_result() {
         shared.publish(HostStatus::Closed(error.clone()));
         shared.publish(HostStatus::Stopping);
         shared.publish(HostStatus::Preparing {
+            bound_address: "0.0.0.0:27015".parse().unwrap(),
             local_address: config().bind,
             info: ServerInfo {
                 version: VERSION,
@@ -436,8 +445,21 @@ fn delayed_cancel_and_preparing_publications_cannot_replace_terminal_result() {
 
 #[test]
 fn actual_worker_begin_is_idempotent_and_cancel_invalidates_ready_client() {
-    let mut handle = HostHandle::spawn(map(128), manifest(), config()).unwrap();
-    wait(&mut handle, |s| matches!(s, HostStatus::Preparing { .. }));
+    let mut wildcard = config();
+    wildcard.bind = "0.0.0.0:0".parse().unwrap();
+    let mut handle = HostHandle::spawn(map(128), manifest(), wildcard).unwrap();
+    let HostStatus::Preparing {
+        bound_address,
+        local_address,
+        ..
+    } = wait(&mut handle, |s| matches!(s, HostStatus::Preparing { .. }))
+    else {
+        unreachable!()
+    };
+    assert!(bound_address.ip().is_unspecified());
+    assert!(local_address.ip().is_loopback());
+    assert_ne!(bound_address.port(), 0);
+    assert_eq!(bound_address.port(), local_address.port());
     let mut local = RemoteSession::local(
         handle.take_local_admission().unwrap(),
         "Owner".into(),
@@ -462,7 +484,16 @@ fn actual_worker_begin_is_idempotent_and_cancel_invalidates_ready_client() {
     assert_eq!(local.submitted_sequence(), Some(1));
     handle.begin(&local).unwrap();
     handle.begin(&local).unwrap();
-    wait(&mut handle, |s| matches!(s, HostStatus::Running { .. }));
+    let HostStatus::Running {
+        bound_address: running_bound,
+        local_address: running_local,
+        ..
+    } = wait(&mut handle, |s| matches!(s, HostStatus::Running { .. }))
+    else {
+        unreachable!()
+    };
+    assert_eq!(running_bound, bound_address);
+    assert_eq!(running_local, local_address);
     let mut observed = 0;
     while observed == 0 {
         local.update(0.001).unwrap();

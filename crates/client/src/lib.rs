@@ -13,6 +13,7 @@ mod frontend_lobby;
 mod frontend_options;
 mod frontend_flow;
 mod frontend_input;
+mod frontend_pause_surface;
 mod pack_flow;
 mod pack_picker;
 mod pack_ui;
@@ -59,6 +60,8 @@ mod server_browser;
 mod browser_flow;
 pub mod remote_join;
 pub mod hosting;
+mod host_sharing;
+mod host_sharing_ui;
 mod remote_flow;
 pub mod xr_input;
 pub mod props;
@@ -171,15 +174,16 @@ impl Plugin for CsgoPlugin {
             .init_resource::<remote_join::JoinRequest>()
             .init_resource::<hosting::HostRequest>()
             .init_resource::<hosting::Hosting>()
+            .init_resource::<host_sharing_ui::Ui>()
             .init_resource::<pack_ui::PackUi>()
             .init_resource::<server_browser::Browser>()
             .add_observer(session::own_entity::<Transform>)
             .add_observer(session::own_entity::<Node>)
             .add_observer(session::own_entity::<bevy::audio::AudioPlayer>)
             .insert_resource(Time::<Fixed>::from_hz(sim::DEFAULT_TICK_RATE as f64))
-            .add_systems(Startup, (ui_assets::load, case_ui::setup, menu_scene::setup, menu::setup, frontend::setup, server_browser::setup).chain())
-            .add_systems(Update, (frontend::update, pack_ui::update, server_browser::update, server_browser::input, server_browser::draw, pack_ui::scroll, pack_ui::draw, frontend::input, frontend::cancel_loading).chain())
-            .add_systems(Last, (hosting::gate_exit, server_browser::gate_exit, pack_ui::gate_exit).chain().after(bevy::window::ExitSystems))
+            .add_systems(Startup, (ui_assets::load, case_ui::setup, menu_scene::setup, menu::setup, frontend::setup, server_browser::setup, host_sharing_ui::setup).chain())
+            .add_systems(Update, (frontend::update, host_sharing_ui::update, pack_ui::update, server_browser::update, server_browser::input, server_browser::draw, pack_ui::scroll, pack_ui::draw, frontend::input, frontend::cancel_loading).chain())
+            .add_systems(Last, (hosting::gate_exit, host_sharing_ui::gate_exit, server_browser::gate_exit, pack_ui::gate_exit).chain().after(bevy::window::ExitSystems))
             .add_systems(Update, (menu::apply, audio::update).chain().after(player::update_camera))
             .add_systems(OnEnter(AppState::Loading), session::begin_load)
             .add_systems(OnExit(AppState::Loading), session::cancel_load)

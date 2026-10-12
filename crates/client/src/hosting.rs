@@ -71,6 +71,19 @@ impl Hosting {
         }
     }
 
+    /// A live server's actual socket; the private admission address remains separate.
+    pub(crate) fn share_binding(&self) -> Option<(u64, std::net::SocketAddr)> {
+        if self.exit.is_some() {
+            return None;
+        }
+        let serial = self.serial?;
+        match self.handle.as_ref()?.status() {
+            HostStatus::Preparing { bound_address, .. }
+            | HostStatus::Running { bound_address, .. } => Some((serial, bound_address)),
+            _ => None,
+        }
+    }
+
     pub(crate) fn preparing(&self) -> bool {
         self.serial.is_some()
     }

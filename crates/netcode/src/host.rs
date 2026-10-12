@@ -62,10 +62,14 @@ pub enum HostError {
 pub enum HostStatus {
     Binding,
     Preparing {
+        /// Exact socket bind, including an OS-allocated port. A wildcard IP
+        /// is a listening scope, not an address to give another player.
+        bound_address: SocketAddr,
         local_address: SocketAddr,
         info: ServerInfo,
     },
     Running {
+        bound_address: SocketAddr,
         local_address: SocketAddr,
         owner: PlayerId,
     },
@@ -213,6 +217,7 @@ impl HostHandle {
         let HostStatus::Preparing {
             local_address,
             info,
+            ..
         } = self.status()
         else {
             return None;
@@ -377,7 +382,8 @@ fn run(
     }
     let server = Server::bind(config.bind, session, config.max_clients)
         .map_err(|e| HostError::Bind(bounded(e)))?;
-    let address = local_address(server.address());
+    let bound_address = server.address();
+    let address = local_address(bound_address);
     let info = server.info();
     info.validate()
         .map_err(|e| HostError::InvalidAuthority(bounded(e)))?;
@@ -388,6 +394,7 @@ fn run(
         admission_elapsed: None,
     };
     shared.publish(HostStatus::Preparing {
+        bound_address,
         local_address: address,
         info,
     });
@@ -403,6 +410,7 @@ fn run(
                     authority.begin(player, through)?;
                     previous = Instant::now();
                     shared.publish(HostStatus::Running {
+                        bound_address,
                         local_address: address,
                         owner: player,
                     });

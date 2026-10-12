@@ -60,6 +60,30 @@ _global.csrBindApi = function(alias, name) {
 _global.csrBindings = new Object();
 _global.csrBindings.bindApi = _global.csrBindApi;
 
+// Our passive surface bookkeeping, not a game callback. The owner/epoch/serial
+// and registered loader paths are echoed literally; the engine rejects stale
+// responses. Read only standard Flash properties, never authored instructions.
+_global.csrBindings.samplePauseSurface = function(owner, epoch, serial, pausePath, optionsPath) {
+    var pause = _global.csrResolve(pausePath);
+    var options = _global.csrResolve(optionsPath);
+    var pauseExists = typeof pause == "movieclip" && String(pause) == pausePath;
+    var optionsExists = optionsPath != "" && typeof options == "movieclip" && String(options) == optionsPath;
+    var pauseVisible;
+    var pauseAlpha;
+    var optionsVisible;
+    var optionsAlpha;
+    if (pauseExists) {
+        pauseVisible = pause._visible;
+        pauseAlpha = pause._alpha;
+    }
+    if (optionsExists) {
+        optionsVisible = options._visible;
+        optionsAlpha = options._alpha;
+    }
+    csrEI.call("OwnedPauseSurface.Visibility", owner, epoch, serial, pausePath, optionsPath,
+        pauseExists, pauseVisible, pauseAlpha, optionsExists, optionsVisible, optionsAlpha);
+};
+
 // Our epoch labels identify stale owned-menu callbacks. Keep only the live
 // alias, without placing each reopen generation in the ordinary API cache.
 _global.csrBindings.bindOwnedApi = function(alias, name) {

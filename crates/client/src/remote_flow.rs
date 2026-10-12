@@ -452,6 +452,13 @@ pub(crate) fn update(world: &mut World, mut proof: Local<Proof>) {
                 failed(world, "pause stopped authority or retained gameplay input");
                 return;
             }
+            if crate::host_sharing_ui::proof_enabled() {
+                match crate::host_sharing_ui::prove_copy(world) {
+                    Ok(true) => (),
+                    Ok(false) => return,
+                    Err(error) => { failed(world, &error); return; }
+                }
+            }
             capture(world, "remote-paused.png");
             proof.next();
         }
@@ -460,6 +467,13 @@ pub(crate) fn update(world: &mut World, mut proof: Local<Proof>) {
             .is_some_and(|captures| captures.0 >= 2)
             && proof.entered.elapsed() > Duration::from_millis(250) =>
         {
+            if crate::host_sharing_ui::proof_enabled() {
+                match crate::host_sharing_ui::prove_settings(world) {
+                    Ok(true) => (),
+                    Ok(false) => return,
+                    Err(error) => { failed(world, &error); return; }
+                }
+            }
             let mut menu = world.resource_mut::<crate::menu::Menu>();
             menu.in_match = false;
             menu.page = Some(crate::menu::Page::Main);
@@ -489,6 +503,13 @@ pub(crate) fn update(world: &mut World, mut proof: Local<Proof>) {
             {
                 failed(world, "Home retained remote or match resources");
                 return;
+            }
+            if crate::host_sharing_ui::proof_enabled() {
+                let receipt = world.resource::<crate::host_sharing_ui::Ui>().receipt();
+                if receipt.host_generation.is_some() || !receipt.candidates.is_empty() {
+                    failed(world, "Home retained host address receipts");
+                    return;
+                }
             }
             capture(world, "remote-returned-home.png");
             proof.next();
