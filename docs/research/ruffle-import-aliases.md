@@ -37,9 +37,29 @@ denied, full formatting, and diff checks. Its exact-head
 passed before squash merge. Independent review checked named-export ordering,
 generation guards, owned strings, GC tracing, and prototype cloning.
 
-Application workspace, release Dust II probe/simulation, sound decoding, and
-private rendered-menu checks remain pending for this pin update. The library
-regressions establish alias correctness; they do not establish that a specific
-original menu control is restored. That requires fresh screenshots and actual
-mouse-driven engine evidence from the integrated application. Original menu
-geometry and broader fidelity remain separate measurement work.
+After merging master `d0ba18562ad0456524558215309351c50f358e42`, the combined
+application source `7f831e25e88e057b87c5505892569d4414823ecf` passed workspace
+tests (442 passed, zero failed, four existing ignored), release Dust II probe
+and ten-round simulation (both `failures: 0`), and soundcheck (1,425 decoded,
+zero unsupported/crashing). Locked full dependency metadata and the asset
+guard passed. Private logs are under
+`%USERPROFILE%\csr-fidelity\ruffle-pin-43-7f831e2`.
+
+Fresh original-movie pointer evidence is under
+`%USERPROFILE%\csr-fidelity\host-lobby-staged-mouse-go-final`, with
+`evidence.json`, logs, and `called-18/19/20/23/24.png`. The images show selected
+Dust II with enabled ACCEPT, the No Bots dialog, a clean reopened lobby, and
+GO press/release. Native callbacks reached `UpdatedSelections` with the staged
+Dust II selection, then `LobbyScreen.LaunchGame()` after pointer events. All
+five image hashes and the copied probe executable hash were independently
+checked. The helper is `1a69e9e224765cc40e7ccb020812ccd0e84a559b`; executable
+SHA256 is `ca7a4c2445715a9e74f5d629b10ace5102aa19ffae2a8860dcf77bc58093dc4f`.
+
+The private combined Ruffle source
+`b77177b7413f311f3d8d3bf153f2afd79766d7d7` has the same entire Git tree as
+the immutable pin: `8954058b4a5ae349ab5cdcc3d5f2961e1e063438`. This supports
+restored authored-control rendering and pointer callbacks for the exact pinned
+library. The proof used owned engine fixtures for roster/privacy/getter data
+and Ruffle mouse events; no server or game was launched. Production hosting
+integration, original engine defaults, menu geometry, and broader fidelity
+remain separate work. Captures and executables stay private and outside Git.
