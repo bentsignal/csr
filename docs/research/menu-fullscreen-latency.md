@@ -38,3 +38,30 @@ still need the coordinated build/proof slot before a passing claim.
 No movie clock, FIFO barrier, resolution, sampling mode, quality setting or
 responsiveness threshold has changed. A nonblocking readback would be a
 separate correction if measured GPU wait remains dominant.
+
+## Completing a queued FIFO boundary
+
+A separate diagnostic-only baseline at full resolution confirmed that capture
+is not the only cost. In the fixture's steady 3–23 second interval, 375 input
+turns all exhausted their elapsed budget. Mean/p95 input duration was
+17.011/19.612 ms, movie step 24.253/41.415 ms, and render/capture
+11.343/12.479 ms. The worst 128.189 ms receipt waited through two complete
+step/render phases after its send. The 8 ms quantum is checked between calls,
+so it cannot interrupt an indivisible mouse-move action.
+
+After elapsed expiry, the scheduler now snapshots at most one existing FIFO
+boundary under the queue lock: its front non-motion event, or one front motion
+and the non-motion event immediately following it. These one or two events
+complete before the unconditional progress opportunity. They must fit the
+remaining 256-event count cap. Work appended by the producer after the
+snapshot cannot extend this completion. A pure-motion queue has no eligible
+boundary and retains its existing scheduling cost.
+
+This applies equally to clicks, keys, focus, resize and engine commands. It
+does not move an event ahead of earlier motion, discard barriers, privilege
+the diagnostic receipt or change authored VM timing. The elapsed quantum is
+still a soft limit: one boundary completion may add up to two indivisible
+calls, and those calls cannot be preempted. Synthetic causal tests cover
+arrivals during a slow motion, protected producer coalescing, the count cap,
+pure-motion progress and shutdown after a queued inactive transition. Final
+responsiveness still requires the original unrelaxed full-resolution gate.

@@ -308,6 +308,9 @@ impl Drop for InputReceiver {
 }
 trait InputSource<T> {
     fn try_input(&self) -> Result<T, TryRecvError>;
+    /// Take at most one FIFO boundary that already exists at this checkpoint.
+    /// Sources without inspectable adjacency retain the ordinary finite batch.
+    fn take_boundary(&self, _remaining: usize) -> Vec<T> { Vec::new() }
 }
 impl InputSource<Input> for InputReceiver {
     fn try_input(&self) -> Result<Input, TryRecvError> {
@@ -320,6 +323,21 @@ impl InputSource<Input> for InputReceiver {
         } else {
             TryRecvError::Disconnected
         })
+    }
+    fn take_boundary(&self, remaining: usize) -> Vec<Input> {
+        let mut queue = self.0.lock().unwrap();
+        let count = match queue.pending.front() {
+            Some(Input::MouseMove { .. }) => match queue.pending.get(1) {
+                Some(input) if !matches!(input, Input::MouseMove { .. }) => 2,
+                _ => return Vec::new(),
+            },
+            Some(_) => 1,
+            None => return Vec::new(),
+        };
+        if count > remaining { return Vec::new(); }
+        // Snapshot under one lock before running callbacks. Producer work
+        // appended while these events execute cannot extend this completion.
+        queue.pending.drain(..count).collect()
     }
 }
 impl<T> InputSource<T> for Receiver<T> {
@@ -334,8 +352,11 @@ const WORKER_TRACE_LIMIT: usize = 65_536;
 
 /// A progress opportunity follows every finite input batch, including batches
 /// whose producer keeps the queue nonempty. Barriers are never reordered.
-/// The elapsed budget is checked between calls: it cannot preempt one slow
-/// movie action or the synchronous GPU readback.
+/// After elapsed expiry, at most one existing FIFO boundary completes before
+/// progress: a non-motion event, with its preceding motion if necessary. This
+/// prevents one slow motion from repeatedly deferring a queued click/key while
+/// keeping pure-motion turns unchanged. All calls still count toward the cap.
+/// The elapsed budget cannot preempt a slow movie action or GPU readback.
 enum InputTurn<T> {
     Input(T),
     Progress {
@@ -376,6 +397,10 @@ fn service_input_turn_until<T, E>(
         }
         if expired() {
             time_exhausted = true;
+            for message in input.take_boundary(budget - count) {
+                service(InputTurn::Input(message))?;
+                count += 1;
+            }
             break;
         }
     }
@@ -844,31 +869,173 @@ mod worker_tests {
     }
 
     #[test]
-    fn zero_elapsed_budget_still_services_one_input_before_progress() {
+    fn expired_motion_completes_queued_focus_loss_before_progress() {
         let (sender, receiver) = input_queue();
         sender.send(motion(1));
         sender.send(Input::Focus(false));
-        let mut count = 0;
+        let mut delivered = Vec::new();
+        let mut focused = true;
         service_input_turn_until(
             &receiver,
             INPUT_TURN_BUDGET,
             || true,
             |turn| {
                 match turn {
-                    InputTurn::Input(_) => count += 1,
+                    InputTurn::Input(input) => {
+                        if let Input::Focus(value) = input { focused = value; }
+                        delivered.push(format!("{input:?}"));
+                    }
                     InputTurn::Progress {
                         count,
                         budget_exhausted,
                     } => {
-                        assert_eq!(count, 1);
+                        assert_eq!(count, 2);
                         assert!(budget_exhausted);
+                        assert!(!focused);
                     }
                 }
                 Ok::<_, ()>(())
             },
         )
         .unwrap();
-        assert_eq!(count, 1);
-        assert!(matches!(receiver.try_input(), Ok(Input::Focus(false))));
+        assert_eq!(delivered, vec![format!("{:?}", motion(1)), "Focus(false)".into()]);
+        assert!(matches!(receiver.try_input(), Err(std::sync::mpsc::TryRecvError::Empty)));
+    }
+
+    #[test]
+    fn expired_pure_motion_keeps_progress_and_latest_pending_position() {
+        let (sender, receiver) = input_queue();
+        sender.send(motion(0));
+        let mut progress = 0;
+        service_input_turn_until(&receiver, INPUT_TURN_BUDGET, || true, |turn| {
+            match turn {
+                InputTurn::Input(input) => {
+                    assert!(matches!(input, Input::MouseMove { x: 0., .. }));
+                    for n in 1..1000 { sender.send(motion(n)); }
+                }
+                InputTurn::Progress { count, budget_exhausted } => {
+                    assert_eq!(count, 1); assert!(budget_exhausted); progress += 1;
+                }
+            }
+            Ok::<_, ()>(())
+        }).unwrap();
+        assert_eq!(progress, 1);
+        assert!(matches!(receiver.try_input(), Ok(Input::MouseMove { x: 999., .. })));
+    }
+
+    #[test]
+    fn slow_motion_finishes_one_existing_click_key_or_command_boundary_in_order() {
+        let barriers = vec![
+            Input::MouseDown { x: 99., y: -99., button: MouseButton::Left },
+            Input::MouseUp { x: 99., y: -99., button: MouseButton::Left },
+            Input::Key { name: "KEY_A".into(), vkey: 65, down: true },
+            Input::Inspect("_global.csrPerformanceProbe.1".into()),
+            Input::Resize { width: 2560, height: 1440 },
+            Input::SetActive(false),
+        ];
+        for barrier in barriers {
+            let (sender, receiver) = input_queue();
+            sender.send(motion(0));
+            let mut delivered = Vec::new();
+            let mut progress = 0;
+            service_input_turn_until(&receiver, INPUT_TURN_BUDGET, || true, |turn| {
+                match turn {
+                    InputTurn::Input(input) => {
+                        delivered.push(format!("{input:?}"));
+                        if delivered.len() == 1 {
+                            // Arrives while the first indivisible motion runs.
+                            for n in 1..100 { sender.send(motion(n)); }
+                            sender.send(barrier.clone());
+                            sender.send(motion(100));
+                        }
+                    }
+                    InputTurn::Progress { count, budget_exhausted } => {
+                        assert_eq!(count, 3); assert!(budget_exhausted); progress += 1;
+                    }
+                }
+                Ok::<_, ()>(())
+            }).unwrap();
+            assert_eq!(delivered, vec![format!("{:?}", motion(0)), format!("{:?}", motion(99)), format!("{barrier:?}")]);
+            assert_eq!(progress, 1);
+            assert!(matches!(receiver.try_input(), Ok(Input::MouseMove { x: 100., .. })));
+        }
+    }
+
+    #[test]
+    fn insufficient_remaining_count_leaves_motion_and_its_boundary_queued() {
+        let (sender, receiver) = input_queue();
+        sender.send(motion(0));
+        let key = Input::Key { name: "KEY_ENTER".into(), vkey: 13, down: true };
+        service_input_turn_until(&receiver, 2, || true, |turn| {
+            match turn {
+                InputTurn::Input(input) => {
+                    assert!(matches!(input, Input::MouseMove { x: 0., .. }));
+                    sender.send(motion(1)); sender.send(key.clone());
+                }
+                InputTurn::Progress { count, .. } => assert_eq!(count, 1),
+            }
+            Ok::<_, ()>(())
+        }).unwrap();
+        assert!(matches!(receiver.try_input(), Ok(Input::MouseMove { x: 1., .. })));
+        assert_eq!(format!("{:?}", receiver.try_input().unwrap()), format!("{key:?}"));
+        // The same two-event snapshot fits exactly, never exceeding the cap.
+        sender.send(motion(2)); sender.send(key.clone());
+        assert_eq!(receiver.take_boundary(2).len(), 2);
+        assert!(matches!(receiver.try_input(), Err(std::sync::mpsc::TryRecvError::Empty)));
+    }
+
+    #[test]
+    fn boundary_snapshot_does_not_chase_producer_or_coalesce_through_reserved_key() {
+        let (sender, receiver) = input_queue();
+        sender.send(motion(0));
+        let key = Input::Key { name: "KEY_A".into(), vkey: 65, down: true };
+        let release = Input::MouseUp { x: 199., y: -199., button: MouseButton::Left };
+        let mut delivered = Vec::new();
+        service_input_turn_until(&receiver, INPUT_TURN_BUDGET, || true, |turn| {
+            match turn {
+                InputTurn::Input(input) => {
+                    delivered.push(format!("{input:?}"));
+                    if delivered.len() == 1 {
+                        for n in 1..100 { sender.send(motion(n)); }
+                        sender.send(key.clone());
+                    } else {
+                        // More barriers arrive during completion. Only the
+                        // already reserved boundary may finish this turn.
+                        for n in 100..200 { sender.send(motion(n)); }
+                        sender.send(release.clone());
+                    }
+                }
+                InputTurn::Progress { count, .. } => assert_eq!(count, 3),
+            }
+            Ok::<_, ()>(())
+        }).unwrap();
+        assert_eq!(delivered, vec![format!("{:?}", motion(0)), format!("{:?}", motion(99)), format!("{key:?}")]);
+        assert!(matches!(receiver.try_input(), Ok(Input::MouseMove { x: 199., .. })));
+        assert_eq!(format!("{:?}", receiver.try_input().unwrap()), format!("{release:?}"));
+        assert!(matches!(receiver.try_input(), Ok(Input::MouseMove { x: 199., .. })));
+        assert_eq!(format!("{:?}", receiver.try_input().unwrap()), format!("{release:?}"));
+    }
+
+    #[test]
+    fn shutdown_flushes_boundary_then_disconnects_without_repeating_progress() {
+        let (sender, receiver) = input_queue();
+        sender.send(motion(0)); sender.send(Input::SetActive(false));
+        drop(sender);
+        let mut active = true;
+        let mut progress = 0;
+        assert!(service_input_turn_until(&receiver, INPUT_TURN_BUDGET, || true, |turn| {
+            match turn {
+                InputTurn::Input(Input::SetActive(value)) => active = value,
+                InputTurn::Input(_) => (),
+                InputTurn::Progress { count, .. } => {
+                    assert_eq!(count, 2); assert!(!active); progress += 1;
+                }
+            }
+            Ok::<_, ()>(())
+        }).unwrap());
+        assert!(!service_input_turn_until(&receiver, INPUT_TURN_BUDGET, || true, |_| -> Result<(), ()> {
+            panic!("disconnected queue cannot deliver or tick again")
+        }).unwrap());
+        assert_eq!(progress, 1);
     }
 }
