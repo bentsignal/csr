@@ -57,9 +57,16 @@ orientation and FOV for both eyes. Rechecking validity avoids treating the
 backend's retained last-known pose buffer as fresh tracking.
 
 Completion requests runtime exit, responds to STOPPING with end, and responds
-to EXITING/LOSS_PENDING with destruction. Success requires the backend's
-both-world destruction acknowledgment, no remaining main-world session and no
-XR cameras. Runtime/instance/event loss invalidates an otherwise completed
+to EXITING/LOSS_PENDING with destruction. Success requires an example-owned
+cleanup acknowledgment from both worlds after observing a real session and
+actually queuing its destruction. A shared atomic probe records render cleanup
+in `RenderSystems::PostCleanup`, ordered after the public `destroy_xr_session`;
+the main world independently checks its cleanup before exiting. Both predicates
+require removal of the session, frame waiter/stream, swapchain/images/current
+session configuration, primary/reference spaces, XR camera components and both
+eye texture registrations. The session-started flag must be absent or false,
+and the published shared destruction flag must exist and be false.
+Runtime/instance/event loss invalidates an otherwise completed
 observation. Thirty engine observations do **not** certify successful compositor
 submission or headset visual fidelity: published `end_frame` logs its errors
 without exposing a success result. Any such error invalidates a hardware run.
@@ -94,6 +101,18 @@ against removed resources. It cannot
 repair blocking native drivers, process aborts or prove visual output without
 hardware observation.
 
+The published destroyed message is not used as a completion condition. Its
+main-world detector remembers the shared flag's previous value, but the main
+destroy chain and that detector have no ordering relationship. With pipelined
+rendering disabled, render cleanup can clear the flag before the detector ever
+observes it as true. The example's probe avoids that missed transition without
+changing dependency code. Initial empty worlds cannot acknowledge cleanup;
+neither can a main-only cleanup or a render observation made before the request.
+The render check runs after extracted resource commands have been applied, so
+the backend's private main-to-render staging bundle cannot hide transferred
+session resources from the predicate. The example still owns only one session
+and disables restart.
+
 ## Source provenance and verification
 
 Reviewed exact published source archives extracted under
@@ -107,7 +126,14 @@ SHA256 of reviewed archive bytes:
 - `bevy_mod_openxr-0.6.0.crate`: `af0560ba6db564db1e3b60dfc9abf359443a33ba9295acfd18aff8996b8f6288`
 - `bevy_mod_xr-0.6.0.crate`: `f2469b8e28ee37de403db2e6b415ffe91da27e27c99034df257658d76392fe80`
 
-The feature and exact published dependencies are wired. Compilation and actual
-example tests remain pending, followed by workspace/real-data/audio checks.
+The feature and exact published dependencies are wired. Compilation of the
+cleanup extension and actual example tests remain pending, followed by
+workspace/real-data/audio checks. The four pure acknowledgment tests passed
+using the exact extracted guard and test source with `rustc --test`; this does
+not compile or execute the Bevy/OpenXR world predicates or activate a runtime.
+Pure acknowledgment tests cover pre-session/pre-request observations, a failed
+message queue, main-only/render-only cleanup and revocation of an earlier clean
+render observation. A world-level test checks the shared flag, started flag and
+remaining XR camera without constructing a native session.
 No-runtime, connected-headset, focus transitions and loss cleanup require owned
 runtime executions before this work can be called verified.

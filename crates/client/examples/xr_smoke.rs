@@ -2,8 +2,12 @@
 //! Run only via the optional xr-smoke feature. Never changes the active runtime.
 use bevy::{
     audio::AudioPlugin,
+    camera::ManualTextureViewHandle,
     prelude::*,
-    render::pipelined_rendering::PipelinedRenderingPlugin,
+    render::{
+        Render, RenderApp, RenderSystems, pipelined_rendering::PipelinedRenderingPlugin,
+        texture::ManualTextureViews,
+    },
     window::{ExitCondition, WindowCloseRequested},
     winit::WinitSettings,
 };
@@ -11,10 +15,14 @@ use bevy_mod_openxr::{
     add_xr_plugins,
     environment_blend_mode::OxrEnvironmentBlendModes,
     graphics::GraphicsBackend,
-    init::OxrInitPlugin,
+    init::{OxrInitPlugin, destroy_xr_session},
     poll_events::{OxrEventHandlerExt, OxrEventIn},
     reference_space::OxrReferenceSpacePlugin,
-    resources::{OxrFrameState, OxrInstance, OxrSessionConfig, OxrSessionStarted, OxrSystemId},
+    render::XR_TEXTURE_INDEX,
+    resources::{
+        OxrCurrentSessionConfig, OxrFrameState, OxrFrameStream, OxrFrameWaiter, OxrInstance,
+        OxrSessionConfig, OxrSessionStarted, OxrSwapchain, OxrSwapchainImages, OxrSystemId,
+    },
     session::OxrSession,
     types::AppInfo,
 };
@@ -22,10 +30,10 @@ use bevy_mod_xr::{
     camera::XrCamera,
     session::{
         XrBeginSessionMessage, XrCreateSessionMessage, XrDestroySessionMessage,
-        XrEndSessionMessage, XrRequestExitMessage, XrSessionDestroyedMessage, XrSessionPlugin,
+        XrDestroySessionRender, XrEndSessionMessage, XrRequestExitMessage, XrSessionPlugin,
         XrState, XrStateChanged,
     },
-    spaces::XrPrimaryReferenceSpace,
+    spaces::{XrPrimaryReferenceSpace, XrReferenceSpace},
 };
 use openxr::{
     EnvironmentBlendMode, Event, ReferenceSpaceType, SessionState, ViewConfigurationType,
@@ -33,7 +41,10 @@ use openxr::{
 use std::{
     num::NonZeroU8,
     panic::{AssertUnwindSafe, catch_unwind},
-    sync::{Arc, Condvar, Mutex},
+    sync::{
+        Arc, Condvar, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
     thread::{self, JoinHandle},
     time::{Duration, Instant},
 };
@@ -159,6 +170,16 @@ fn run(start: Instant) -> AppExit {
         eprintln!("xr smoke: {error}; no stereo session created; failures: 1");
         return failure(2);
     }
+    let cleanup = CleanupProbe::default();
+    app.sub_app_mut(RenderApp)
+        .insert_resource(cleanup.clone())
+        .add_systems(
+            Render,
+            observe_render_cleanup
+                .in_set(RenderSystems::PostCleanup)
+                .after(destroy_xr_session),
+        );
+    app.insert_resource(cleanup);
     app.insert_resource(Smoke::new(start))
         .insert_resource(ClearColor(Color::srgb(0.025, 0.035, 0.055)))
         .insert_resource(WinitSettings::continuous())
@@ -199,6 +220,93 @@ fn validate_runtime(world: &World) -> Result<(), String> {
         );
     }
     Ok(())
+}
+
+/// This example owns one session and never restarts it. Do not let initially
+/// empty worlds, or the backend's unordered destroyed message, certify cleanup.
+#[derive(Resource, Clone, Default)]
+struct CleanupProbe(Arc<CleanupSignals>);
+
+#[derive(Default)]
+struct CleanupSignals {
+    seen_session: AtomicBool,
+    requested: AtomicBool,
+    render_clean: AtomicBool,
+}
+impl CleanupSignals {
+    fn observe_session(&self, present: bool) {
+        if present {
+            self.seen_session.store(true, Ordering::Release);
+        }
+    }
+
+    fn request_destroy(&self, queued: bool) {
+        if queued && self.seen_session.load(Ordering::Acquire) {
+            self.requested.store(true, Ordering::Release);
+        }
+    }
+
+    fn requested_for_session(&self) -> bool {
+        self.seen_session.load(Ordering::Acquire) && self.requested.load(Ordering::Acquire)
+    }
+
+    fn observe_render(&self, clean: bool) {
+        self.render_clean
+            .store(self.requested_for_session() && clean, Ordering::Release);
+    }
+
+    fn complete(&self, main_clean: bool) -> bool {
+        self.requested_for_session() && self.render_clean.load(Ordering::Acquire) && main_clean
+    }
+}
+
+/// Check actual public resources in each world. Frame state and retained pose
+/// data contain no session ownership; they are deliberately not an acknowledgment.
+fn world_cleanup_complete(world: &mut World) -> bool {
+    !world.contains_resource::<OxrSession>()
+        && !world.contains_resource::<OxrFrameWaiter>()
+        && !world.contains_resource::<OxrFrameStream>()
+        && !world.contains_resource::<OxrSwapchain>()
+        && !world.contains_resource::<OxrSwapchainImages>()
+        && !world.contains_resource::<OxrCurrentSessionConfig>()
+        && !world.contains_resource::<XrPrimaryReferenceSpace>()
+        && world.query::<&XrCamera>().iter(world).next().is_none()
+        && world
+            .query::<&XrReferenceSpace>()
+            .iter(world)
+            .next()
+            .is_none()
+        && world
+            .get_resource::<ManualTextureViews>()
+            .is_none_or(|views| {
+                !views.contains_key(&ManualTextureViewHandle(XR_TEXTURE_INDEX))
+                    && !views.contains_key(&ManualTextureViewHandle(XR_TEXTURE_INDEX + 1))
+            })
+        && world
+            .get_resource::<OxrSessionStarted>()
+            .is_none_or(|started| !started.0)
+        && world
+            .get_resource::<XrDestroySessionRender>()
+            .is_some_and(|flag| !flag.0.load(Ordering::Acquire))
+}
+
+fn observe_render_cleanup(world: &mut World) {
+    let cleanup = world.resource::<CleanupProbe>().clone();
+    if cleanup.0.requested_for_session() {
+        // ExtractCommands has already applied transferred session resources.
+        // If the backend flag-clearing system is later than this observer, the
+        // false flag predicate simply waits for the following render iteration.
+        cleanup.0.observe_render(world_cleanup_complete(world));
+    }
+}
+
+fn queue_destroy(world: &mut World, smoke: &mut Smoke) {
+    world.insert_resource(XrState::Exiting {
+        should_restart: false,
+    });
+    let queued = world.write_message(XrDestroySessionMessage).is_some();
+    world.resource::<CleanupProbe>().0.request_destroy(queued);
+    smoke.destroy_sent = queued;
 }
 
 #[derive(Resource)]
@@ -343,6 +451,10 @@ fn setup(
 // explicit, without mandatory Res parameters during destruction/fallback.
 fn drive(world: &mut World) {
     let mut smoke = world.remove_resource::<Smoke>().unwrap();
+    let cleanup = world.resource::<CleanupProbe>().clone();
+    cleanup
+        .0
+        .observe_session(world.contains_resource::<OxrSession>());
     let state = world
         .get_resource::<XrState>()
         .copied()
@@ -403,8 +515,7 @@ fn drive(world: &mut World) {
             smoke.stop("runtime requested exit", false);
         }
         if !smoke.destroy_sent {
-            smoke.destroy_sent = true;
-            world.write_message(XrDestroySessionMessage);
+            queue_destroy(world, &mut smoke);
             info!("xr smoke: requested both-world session destruction; restart disabled");
         }
     }
@@ -421,27 +532,16 @@ fn drive(world: &mut World) {
                 smoke.request_sent = true;
                 info!("xr smoke: requested orderly runtime exit");
             } else if world.contains_resource::<OxrSession>() {
-                world.insert_resource(XrState::Exiting {
-                    should_restart: false,
-                });
-                world.write_message(XrDestroySessionMessage);
-                smoke.destroy_sent = true;
+                queue_destroy(world, &mut smoke);
                 info!("xr smoke: destroying session that never began");
             }
         }
-        let destroyed = world
-            .resource_mut::<Messages<XrSessionDestroyedMessage>>()
-            .drain()
-            .next()
-            .is_some();
-        if destroyed && !smoke.exit_sent {
-            let remaining = world.query::<&XrCamera>().iter(world).count();
-            let clean = !world.contains_resource::<OxrSession>() && remaining == 0;
+        if !smoke.exit_sent && cleanup.0.complete(world_cleanup_complete(world)) {
             info!(
-                "xr smoke: destruction acknowledged; remaining XR cameras {remaining}; reason {reason}; observations {}; headset visual fidelity unverified",
+                "xr smoke: main and render cleanup verified; session/frame/swapchain/reference resources, XR cameras and eye textures removed, started/destruction flags false; reason {reason}; observations {}; headset visual fidelity unverified",
                 smoke.observations
             );
-            world.write_message(if success && clean {
+            world.write_message(if success {
                 AppExit::Success
             } else {
                 failure(2)
@@ -534,9 +634,76 @@ fn finite_view(view: &openxr::View) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn empty_worlds_and_unobserved_session_requests_cannot_acknowledge_cleanup() {
+        let signals = CleanupSignals::default();
+        signals.request_destroy(true);
+        signals.observe_render(true);
+        assert!(!signals.complete(true));
+        // A request made before observing a session cannot qualify retroactively.
+        signals.observe_session(true);
+        signals.observe_render(true);
+        assert!(!signals.complete(true));
+    }
+
+    #[test]
+    fn real_session_without_a_queued_destroy_cannot_acknowledge_cleanup() {
+        let signals = CleanupSignals::default();
+        signals.observe_session(true);
+        signals.request_destroy(false);
+        signals.observe_render(true);
+        assert!(!signals.complete(true));
+    }
+
+    #[test]
+    fn both_worlds_must_independently_verify_cleanup_after_the_request() {
+        let signals = CleanupSignals::default();
+        signals.observe_session(true);
+        signals.request_destroy(true);
+        assert!(!signals.complete(true)); // Main-only cleanup is insufficient.
+        signals.observe_render(false);
+        assert!(!signals.complete(true));
+        signals.observe_render(true);
+        assert!(!signals.complete(false)); // Render-only cleanup is insufficient.
+        assert!(signals.complete(true));
+        signals.observe_render(false);
+        assert!(!signals.complete(true)); // A later dirty render world revokes it.
+    }
+
+    #[test]
+    fn render_observation_before_request_does_not_count_as_cleanup() {
+        let signals = CleanupSignals::default();
+        signals.observe_session(true);
+        signals.observe_render(true);
+        signals.request_destroy(true);
+        assert!(!signals.complete(true));
+        signals.observe_render(true);
+        assert!(signals.complete(true));
+    }
+
+    #[test]
+    fn world_predicate_requires_the_shared_flag_and_quiescent_frame_loop() {
+        let mut world = World::new();
+        assert!(!world_cleanup_complete(&mut world));
+        let flag = Arc::new(AtomicBool::new(true));
+        world.insert_resource(XrDestroySessionRender(flag.clone()));
+        assert!(!world_cleanup_complete(&mut world));
+        flag.store(false, Ordering::Release);
+        world.insert_resource(OxrSessionStarted(true));
+        assert!(!world_cleanup_complete(&mut world));
+        world.resource_mut::<OxrSessionStarted>().0 = false;
+        assert!(world_cleanup_complete(&mut world));
+        let camera = world.spawn(XrCamera(0)).id();
+        assert!(!world_cleanup_complete(&mut world));
+        world.despawn(camera);
+        assert!(world_cleanup_complete(&mut world));
+    }
+
     #[test]
     fn loss_destroy_quiesces_frame_loop_and_never_requests_a_restart() {
         let mut world = World::new();
+        world.init_resource::<CleanupProbe>();
         world.insert_resource(Smoke::new(Instant::now()));
         world.insert_resource(XrState::Exiting {
             should_restart: true,
@@ -545,7 +712,6 @@ mod tests {
         world.init_resource::<ButtonInput<KeyCode>>();
         world.init_resource::<Messages<WindowCloseRequested>>();
         world.init_resource::<Messages<XrDestroySessionMessage>>();
-        world.init_resource::<Messages<XrSessionDestroyedMessage>>();
         world.init_resource::<Messages<AppExit>>();
         drive(&mut world);
         assert!(!world.resource::<OxrSessionStarted>().0);
@@ -554,6 +720,13 @@ mod tests {
             1
         );
         assert!(!world.resource::<Smoke>().create_sent);
+        assert_eq!(
+            world.resource::<XrState>(),
+            &XrState::Exiting {
+                should_restart: false
+            }
+        );
+        assert!(!world.resource::<CleanupProbe>().0.requested_for_session());
         assert!(matches!(
             world.resource::<Smoke>().stop,
             Some((_, _, false))
