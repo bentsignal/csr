@@ -266,6 +266,13 @@ fn next_purchase(world: &World, bot: &Player, team: &crate::tactics::Coordinator
 }
 
 impl Bots {
+    /// Release only the departed bot's server-only bookkeeping. Surviving
+    /// brains, navigation, skill and the team's current plan remain intact.
+    pub(crate) fn forget_player(&mut self, id: PlayerId) {
+        self.brains.remove(&id);
+        self.team.forget_player(id);
+    }
+
     pub fn with_skill(skill: f32) -> Self {
         Self {
             skill: skill.clamp(0.0, 1.0),
@@ -1029,6 +1036,91 @@ mod tests {
 
 #[cfg(test)] mod regression_tests {
     use super::*;
+    #[test]
+    fn removed_bot_bookkeeping_stays_bounded_through_replacement_churn() {
+        for rate in [64, 128] {
+            let mut collision = collision::CollisionWorld::new();
+            collision.finalize();
+            let mut world = World::with_catalog(
+                Arc::new(collision),
+                Arc::new(weapons::Catalog { weapons: Vec::new() }),
+            );
+            world.set_tick_rate(rate);
+            let human = world.add_player("remaining human", Team::CounterTerrorist);
+            let mut previous = human;
+            for _ in 0..128 {
+                let bot = world.add_bot("replacement", Team::Terrorist);
+                assert!(bot > previous, "replacement must receive a fresh actor id");
+                previous = bot;
+                world.step(&[]);
+                assert_eq!(world.bots.brains.len(), 1);
+                // Team roles may be assigned at a round boundary and contacts
+                // can arrive during combat, independently of brain creation.
+                world.bots.team.roles.insert(bot, crate::tactics::Role::Entry);
+                world.bots.team.reserve.insert(bot, 1000);
+                let now = world.time();
+                world.bots.team.report(crate::tactics::Contact {
+                    team: Team::CounterTerrorist,
+                    enemy: bot,
+                    pos: Vec3::X,
+                    observed: now,
+                    available: now,
+                    visual: true,
+                });
+                world.bots.team.defuser = Some(bot);
+                assert!(world.remove_player(bot));
+                assert!(world.bots.brains.is_empty());
+                assert!(!world.bots.team.roles.contains_key(&bot));
+                assert!(!world.bots.team.reserve.contains_key(&bot));
+                assert!(world.bots.team.contacts.iter().all(|contact| world.player(contact.enemy).is_some()));
+                assert!(world.bots.team.contacts.len() <= world.players.len() * 2);
+                assert!(world.bots.team.roles.len() <= world.players.len());
+                assert!(world.bots.team.reserve.len() <= world.players.len());
+                assert!(world.bots.team.defuser.is_none());
+                assert_eq!(world.players.len(), 1);
+                assert!(world.player(human).is_some());
+                assert!(!world.remove_player(bot));
+            }
+        }
+    }
+
+    #[test]
+    fn bot_removal_preserves_surviving_brain_and_team_plan() {
+        let mut collision = collision::CollisionWorld::new();
+        collision.finalize();
+        let mut world = World::with_catalog(
+            Arc::new(collision),
+            Arc::new(weapons::Catalog { weapons: Vec::new() }),
+        );
+        let removed = world.add_bot("departing", Team::Terrorist);
+        let survivor = world.add_bot("remaining", Team::CounterTerrorist);
+        world.step(&[]);
+        world.bots.brains.get_mut(&survivor).unwrap().next_utility = 123.;
+        let now = world.time();
+        world.bots.team.report(crate::tactics::Contact {
+            team: Team::Terrorist,
+            enemy: survivor,
+            pos: Vec3::Y,
+            observed: now,
+            available: now,
+            visual: true,
+        });
+        world.bots.team.defuser = Some(survivor);
+        let brain = format!("{:?}", world.bots.brains[&survivor]);
+        let plans = format!("{:?}", world.bots.team.plans);
+        let skill = world.bots.skill;
+        assert!(world.remove_player(removed));
+        assert_eq!(world.bots.brains.len(), 1);
+        assert_eq!(format!("{:?}", world.bots.brains[&survivor]), brain);
+        assert_eq!(format!("{:?}", world.bots.team.plans), plans);
+        assert_eq!(world.bots.team.defuser, Some(survivor));
+        assert_eq!(world.bots.team.contacts.len(), 1);
+        assert_eq!(world.bots.team.contacts[0].enemy, survivor);
+        assert!(world.bots.team.roles.contains_key(&survivor));
+        assert!(world.bots.team.reserve.contains_key(&survivor));
+        assert_eq!(world.bots.skill, skill);
+    }
+
     #[test] fn unseen_targets_remain_at_last_seen_position_and_cannot_be_fired_at() {
         let mut collision = collision::CollisionWorld::new();
         let surf = collision.surface_id("wall");

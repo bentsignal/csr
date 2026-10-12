@@ -642,7 +642,10 @@ impl World {
                 bomb.defuser = None;
             }
         }
-        self.players.remove(i);
+        let removed = self.players.remove(i);
+        if removed.is_bot {
+            self.bots.forget_player(id);
+        }
         true
     }
 
