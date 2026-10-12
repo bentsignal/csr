@@ -1,8 +1,12 @@
 //! Gather current scene owners after spawn commands/resources are applied.
 //! Asset-store differences include temporary orphans and are not ownership.
 use crate::{
-    characters::CharacterModels, items::GroundModels, material::WorldMaterial,
-    remote_render_gate::MAX_SCENE_ASSETS, session::MatchEntity, skinning::SkinnedAsset,
+    characters::CharacterModels,
+    items::GroundModels,
+    material::WorldMaterial,
+    remote_render_gate::MAX_SCENE_ASSETS,
+    session::{MatchEntity, Persistent},
+    skinning::SkinnedAsset,
     viewmodel::ViewModels,
 };
 use bevy::{asset::AssetId, prelude::*};
@@ -57,7 +61,7 @@ pub fn gather(world: &mut World) -> Result<SceneAssets, GatherError> {
         Option<&Mesh3d>,
         Option<&MeshMaterial3d<WorldMaterial>>,
         Option<&ImageNode>,
-    ), With<MatchEntity>>();
+    ), (With<MatchEntity>, Without<Persistent>)>();
     for (mesh, material, image) in query.iter(world) {
         if let Some(mesh) = mesh {
             owners.meshes.insert(mesh.0.id());
@@ -240,6 +244,7 @@ mod tests {
         world.spawn((MatchEntity, Mesh3d(scene_mesh.clone()), MeshMaterial3d(mat)));
         world.spawn((
             crate::session::Persistent,
+            MatchEntity,
             Mesh3d(old_mesh.clone()),
             MeshMaterial3d(old_mat),
             ImageNode::new(old_image),

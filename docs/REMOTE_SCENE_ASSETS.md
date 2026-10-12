@@ -3,7 +3,8 @@
 Call `remote_scene_assets::gather(&mut World)` after scene spawn commands and
 resources have been applied. It returns deterministic, deduplicated Mesh/Image
 AssetIds for MatchEntity mesh/material/image-node components and the retained
-CharacterModels, ViewModels and GroundModels assets. Models that have not yet
+CharacterModels, ViewModels and GroundModels assets. Persistent entities are
+excluded even if generic ownership previously added MatchEntity. Models that have not yet
 spawned instances remain owners. Every bound image field of their WorldMaterial
 is included, covering reused fallback textures, lightmaps, prop lighting and
 cosmetic surfaces. ViewModels exposes a read-only `assets()` iterator including
