@@ -5,7 +5,7 @@ use scaleform::{Calls, Value};
 use std::collections::HashMap;
 
 pub(super) const ADDRESS_NOTICE: &str =
-    "Share the server address to invite friends. Anyone with the address can join.";
+    "Start the server, then open Pause to copy an address.";
 
 /// Map requests originate in a trusted catalog. Native text only indexes it;
 /// it never constructs a filesystem/archive path or a pack identity.
