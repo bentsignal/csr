@@ -87,6 +87,8 @@ pub(crate) struct Proof {
     ready_at: Option<Instant>,
     phase: Phase,
     step: usize,
+    pointer: Option<(Entity, Vec2, u64, Instant)>,
+    pointer_diagnostic: Duration,
     endpoint: String,
     key: Option<ServerKey>,
     map: String,
@@ -100,6 +102,8 @@ impl Default for Proof {
             ready_at: None,
             phase: Phase::Start,
             step: 0,
+            pointer: None,
+            pointer_diagnostic: Duration::ZERO,
             endpoint: String::new(),
             key: None,
             map: String::new(),
@@ -111,6 +115,8 @@ impl Proof {
     fn enter(&mut self, phase: Phase) {
         self.phase = phase;
         self.step = 0;
+        self.pointer = None;
+        self.pointer_diagnostic = Duration::ZERO;
         self.entered = Instant::now();
         info!("browser flow: entered {phase:?}");
     }
@@ -218,44 +224,133 @@ fn click_ui(
     button: MouseButton,
     matches: impl Fn(&UiAction) -> bool,
 ) -> bool {
+    if proof.step == 2 {
+        let input = world.resource::<ButtonInput<MouseButton>>();
+        let observed = proof
+            .pointer
+            .and_then(|(entity, _, _, _)| world.get::<Interaction>(entity).copied());
+        let model = browser(world).map(|(model, snapshot)| {
+            (
+                model.tab,
+                model.add_open,
+                model.context_row,
+                snapshot.generation,
+                snapshot.busy,
+            )
+        });
+        info!(
+            "browser flow: {:?} releasing {button:?}: observed interaction {observed:?}, pressed {}, just_pressed {}, model {model:?}",
+            proof.phase,
+            input.pressed(button),
+            input.just_pressed(button)
+        );
+        mouse(world, id, button, ButtonState::Released);
+        return true;
+    }
+    // A backend publication can replace the entire view. Tabs are unstamped,
+    // whereas commands/rows are rejected when their captured generation is old.
+    // Wait for a laid-out, current view and its actual Bevy hit before pressing.
+    if !proof.settled() {
+        return false;
+    }
+    let Some((_, snapshot)) = browser(world) else {
+        return false;
+    };
+    if snapshot.busy {
+        proof.step = 0;
+        proof.pointer = None;
+        return false;
+    }
+    let candidate = world
+        .query_filtered::<(
+            Entity,
+            &UiAction,
+            &ComputedNode,
+            &UiGlobalTransform,
+            &Interaction,
+        ), With<Button>>()
+        .iter(world)
+        .find_map(|(entity, action, node, transform, interaction)| {
+            (matches(action)
+                && current_action(action, snapshot.generation)
+                && node.size().min_element() > 0.0)
+                .then_some((
+                    entity,
+                    transform.affine().translation,
+                    *interaction,
+                    action.clone(),
+                ))
+        });
+    let Some((entity, position, interaction, action)) = candidate else {
+        proof.step = 0;
+        proof.pointer = None;
+        return false;
+    };
+    let window = world.get::<Window>(id).unwrap();
+    if !position.is_finite()
+        || position.x < 0.0
+        || position.y < 0.0
+        || position.x >= window.physical_width() as f32
+        || position.y >= window.physical_height() as f32
+    {
+        return false;
+    }
+    let same_target = proof.pointer.is_some_and(|(old, point, generation, _)| {
+        old == entity && point.distance(position) < 0.5 && generation == snapshot.generation
+    });
+    if !same_target {
+        proof.step = 0;
+    }
     match proof.step {
         0 => {
-            let position = world
-                .query::<(&UiAction, &ComputedNode, &UiGlobalTransform)>()
-                .iter(world)
-                .find_map(|(action, node, transform)| {
-                    (matches(action) && node.size().min_element() > 0.0)
-                        .then_some(transform.affine().translation)
-                });
-            let Some(position) = position else {
-                return false;
-            };
-            let window = world.get::<Window>(id).unwrap();
-            if !position.is_finite()
-                || position.x < 0.0
-                || position.y < 0.0
-                || position.x >= window.physical_width() as f32
-                || position.y >= window.physical_height() as f32
-            {
-                return false;
-            }
             info!(
-                "browser flow: {:?} pointer {position:?}, {button:?}",
-                proof.phase
+                "browser flow: {:?} pointer {position:?}, {button:?}, entity {entity:?}, action {action:?}, generation {}",
+                proof.phase, snapshot.generation
             );
             point(world, id, position);
+            proof.pointer = Some((entity, position, snapshot.generation, Instant::now()));
             proof.step = 1;
             false
         }
         1 => {
+            if interaction != Interaction::Hovered {
+                if proof.entered.elapsed() >= proof.pointer_diagnostic {
+                    let hovered: Vec<_> = world
+                        .query::<(&Interaction, &UiAction)>()
+                        .iter(world)
+                        .filter(|(hit, _)| **hit != Interaction::None)
+                        .map(|(hit, action)| format!("{hit:?} {action:?}"))
+                        .collect();
+                    let cursor = world.get::<Window>(id).unwrap().physical_cursor_position();
+                    warn!(
+                        "browser flow: {:?} waiting for target hover: {entity:?} {action:?} {interaction:?}; physical cursor {cursor:?}; actual hits {hovered:?}",
+                        proof.phase
+                    );
+                    proof.pointer_diagnostic = proof.entered.elapsed() + Duration::from_secs(2);
+                }
+                return false;
+            }
+            if proof.pointer.unwrap().3.elapsed() < Duration::from_millis(100) {
+                return false;
+            }
+            info!(
+                "browser flow: {:?} pressing hovered {entity:?} {action:?}, generation {}",
+                proof.phase, snapshot.generation
+            );
             mouse(world, id, button, ButtonState::Pressed);
             proof.step = 2;
             false
         }
-        _ => {
-            mouse(world, id, button, ButtonState::Released);
-            true
-        }
+        _ => unreachable!(),
+    }
+}
+fn current_action(action: &UiAction, generation: u64) -> bool {
+    match action {
+        UiAction::Command(_, captured)
+        | UiAction::Select(_, captured)
+        | UiAction::Connect(_, captured)
+        | UiAction::RemoveFavorite(_, captured) => *captured == generation,
+        UiAction::Tab(_) | UiAction::Address => true,
     }
 }
 fn click_movie(world: &mut World, proof: &mut Proof, id: Entity, x: f64, y: f64) -> bool {
@@ -829,6 +924,21 @@ pub(crate) fn update(world: &mut World, mut proof: Local<Proof>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn pointer_targets_reject_stale_rendered_generation() {
+        let key = ServerKey(7);
+        for action in [
+            UiAction::Command("AddServerByName".into(), 11),
+            UiAction::Select(key, 11),
+            UiAction::Connect(key, 11),
+            UiAction::RemoveFavorite(key, 11),
+        ] {
+            assert!(current_action(&action, 11));
+            assert!(!current_action(&action, 12));
+        }
+        assert!(current_action(&UiAction::Tab(Tab::Favorites), 12));
+        assert!(current_action(&UiAction::Address, 12));
+    }
     #[test]
     fn proof_target_accepts_only_the_owned_localhost_fixture() {
         assert_eq!(target("localhost:027015"), Ok("localhost:27015".into()));
