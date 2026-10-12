@@ -8,6 +8,10 @@ metadata; they do not establish exact 2015 death behavior. No native death
 sequence, original kill-feed invocation, or rendered death-notice layout
 was observed in this audit.
 
+The subsequent [death receipt foundation](DEATH_RECEIPTS.md) addresses the
+event-context gap below. It does not implement corpse dynamics or the
+authored death-notice surface; the remaining observations still apply.
+
 The readers inspect model headers, animation descriptions, PHY geometry
 and key/value metadata, SWF tags, and named function declarations. They
 skip original function bodies. Raw assets, extracted images, game scripts,

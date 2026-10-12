@@ -36,11 +36,16 @@ pub struct Server {
     snapshots: Sender,
     #[cfg(test)]
     held_admissions: Option<Vec<(u64, ServerControl)>>,
+    #[cfg(test)]
+    held_events: Option<Vec<(u64, Vec<u8>)>>,
 }
 
 #[cfg(test)]
 #[path = "transport_snapshot_tests.rs"]
 mod snapshot_tests;
+#[cfg(test)]
+#[path = "transport_event_tests.rs"]
+mod event_tests;
 
 impl Server {
     pub fn bind(address: SocketAddr, session: Session, max_clients: usize) -> Result<Self, String> {
@@ -76,6 +81,8 @@ impl Server {
             snapshots: Sender::default(),
             #[cfg(test)]
             held_admissions: None,
+            #[cfg(test)]
+            held_events: None,
         })
     }
     pub fn address(&self) -> SocketAddr {
@@ -83,6 +90,16 @@ impl Server {
     }
     pub fn session(&self) -> &Session {
         &self.session
+    }
+    fn send_events(&mut self, client: u64, bytes: Vec<u8>) {
+        #[cfg(test)]
+        if let Some(held) = &mut self.held_events {
+            assert!(held.len() < 128);
+            assert!(held.iter().map(|(_, bytes)| bytes.len()).sum::<usize>() + bytes.len() <= MAX_MESSAGE);
+            held.push((client, bytes));
+            return;
+        }
+        self.connection.send_message(client, EVENTS, bytes);
     }
     pub(crate) fn client_connected(&self, client: u64) -> bool {
         self.connection.is_connected(client)
@@ -260,8 +277,7 @@ impl Server {
                     continue;
                 }
                 if !events.events.is_empty() {
-                    self.connection
-                        .send_message(client, EVENTS, encode(&events)?);
+                    self.send_events(client, encode(&events)?);
                 }
             }
         }
@@ -346,6 +362,7 @@ pub struct Client {
     latest_ack: u64,
     latest: Option<StateUpdate>,
     events: VecDeque<EventBatch>,
+    queued_events: usize,
     failure: Option<String>,
     snapshots: Cache,
     // One pending latest receipt/recovery, plus at most 512 total control
@@ -455,6 +472,7 @@ impl Client {
             latest_ack: 0,
             latest: None,
             events: VecDeque::new(),
+            queued_events: 0,
             failure: None,
             snapshots: Cache::default(),
             snapshot_feedback: None,
@@ -490,7 +508,20 @@ impl Client {
         self.latest.take()
     }
     pub fn take_events(&mut self) -> Option<EventBatch> {
-        self.events.pop_front()
+        let batch = self.events.pop_front()?;
+        self.queued_events -= batch.events.len();
+        Some(batch)
+    }
+    fn queue_events(&mut self, batch: EventBatch) -> Result<(), String> {
+        validate_events(&batch)?;
+        if self.events.len() >= 512
+            || self.queued_events.saturating_add(batch.events.len()) > MAX_EVENTS
+        {
+            return Err("client is not consuming match events".into());
+        }
+        self.queued_events += batch.events.len();
+        self.events.push_back(batch);
+        Ok(())
     }
 
     /// One call per local simulation tick; batches repeat unacknowledged input
@@ -529,6 +560,8 @@ impl Client {
         let result = self.poll(elapsed);
         if let Err(reason) = &result {
             self.failure = Some(reason.clone());
+            self.events.clear();
+            self.queued_events = 0;
             self.transport.disconnect();
         }
         result
@@ -658,12 +691,8 @@ impl Client {
             let Some(bytes) = self.connection.receive_message(EVENTS) else {
                 break;
             };
-            if self.events.len() >= 512 {
-                return Err("client is not consuming match events".into());
-            }
             let batch: EventBatch = decode(&bytes)?;
-            validate_events(&batch)?;
-            self.events.push_back(batch);
+            self.queue_events(batch)?;
         }
         self.transport
             .send_packets(&mut self.connection)
@@ -682,6 +711,8 @@ impl Client {
         Ok(())
     }
     pub fn disconnect(&mut self) {
+        self.events.clear();
+        self.queued_events = 0;
         self.snapshots = Cache::default();
         self.snapshot_feedback = None;
         self.transport.disconnect();
@@ -715,6 +746,17 @@ impl Server {
                     CONTROL,
                     encode(&ServerControl::Info(info.clone())).unwrap(),
                 );
+            }
+        }
+    }
+    pub(crate) fn hold_events(&mut self) {
+        assert!(self.held_events.is_none());
+        self.held_events = Some(Vec::new());
+    }
+    pub(crate) fn release_events(&mut self) {
+        for (client, bytes) in self.held_events.take().unwrap_or_default() {
+            if self.session.player_for(client).is_some() && self.connection.is_connected(client) {
+                self.connection.send_message(client, EVENTS, bytes);
             }
         }
     }

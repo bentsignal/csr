@@ -48,6 +48,9 @@ fn fixture(rate: u32) -> (Authority, HostHandle, LocalAdmission) {
             ..Default::default()
         },
     );
+    fixture_world(world)
+}
+fn fixture_world(world: World) -> (Authority, HostHandle, LocalAdmission) {
     let owner_id = u64::from_le_bytes(renet_netcode::generate_random_bytes());
     let server = Server::bind(
         config().bind,
@@ -97,6 +100,137 @@ fn local_ready(authority: &mut Authority, ticket: LocalAdmission, rate: u32) -> 
         }
     }
     panic!("frozen local snapshot admission failed");
+}
+
+fn receipt_map(rate: u32) -> World {
+    let mut world = map(rate);
+    world.catalog = Arc::new(weapons::Catalog::from_items_game(r##"
+        "items_game" { "items" { "7" { "name" "weapon_ak47" "baseitem" "1"
+            "item_type_name" "#CSGO_Type_Rifle" "attributes" {
+                "damage" "200" "armor ratio" "2" "range" "8192"
+                "range modifier" "1" "primary clip size" "30"
+                "is full auto" "1" "cycletime" "0.1" } } } }
+    "##).unwrap());
+    world.spawns = vec![
+        sim::SpawnPoint { origin: glam::Vec3::new(0., 0., 1.), yaw: 0., team: Team::Terrorist },
+        sim::SpawnPoint { origin: glam::Vec3::new(100., 0., 1.), yaw: 180., team: Team::CounterTerrorist },
+    ];
+    world
+}
+
+#[test]
+fn actual_hosted_udp_delayed_death_survives_new_life_and_actor_removal_at_both_rates() {
+    for rate in [64, 128] {
+        for remove in [false, true] {
+            let (mut authority, mut handle, ticket) = fixture_world(receipt_map(rate));
+            let mut owner = RemoteSession::local(ticket, "Owner at death".into(), Team::Terrorist).unwrap();
+            owner.provide_map(receipt_map(rate), manifest()).unwrap();
+            let dt = 1. / rate as f64;
+            for _ in 0..512 {
+                owner.update(dt).unwrap();
+                authority.update(Duration::from_secs_f64(dt)).unwrap();
+                if owner.status() == &Status::Ready { break; }
+            }
+            assert_eq!(owner.status(), &Status::Ready);
+            authority.begin(owner.player().unwrap(), 0).unwrap();
+            let mut guest = RemoteSession::discover(authority.server.address(), "Victim at death".into(), Team::CounterTerrorist).unwrap();
+            for _ in 0..512 {
+                guest.update(dt).unwrap();
+                authority.update(Duration::from_secs_f64(dt)).unwrap();
+                owner.update(dt).unwrap();
+                if matches!(guest.status(), Status::AwaitingMap(_)) { break; }
+            }
+            guest.provide_map(receipt_map(rate), manifest()).unwrap();
+            for _ in 0..512 {
+                guest.update(dt).unwrap();
+                authority.update(Duration::from_secs_f64(dt)).unwrap();
+                owner.update(dt).unwrap();
+                if guest.status() == &Status::Ready && owner.authoritative_state().unwrap().players.len() == 2 { break; }
+            }
+            assert_eq!(guest.status(), &Status::Ready);
+            let victim = guest.player().unwrap();
+            let old_epoch = authority.server.session().world().player(victim).unwrap().life_epoch;
+            let original_pose = authority.server.session().world().player(victim).unwrap().movement.origin;
+            let original_tick = authority.server.session().world().tick;
+            while owner.take_events().is_some() {}
+            while guest.take_events().is_some() {}
+            // Only reliable event delivery is delayed. Snapshots continue on
+            // their independent channel and reconcile a newer life first.
+            authority.server.hold_events();
+            let view = owner.authoritative_state().unwrap().tick;
+            owner.advance_inputs(dt, view, |_| sim::TickInput { buttons: movement::buttons::ATTACK, ..Default::default() }).unwrap();
+            for _ in 0..64 {
+                authority.update(Duration::from_secs_f64(dt)).unwrap();
+                owner.update(dt).unwrap();
+                guest.update(dt).unwrap();
+                if !authority.server.session().world().player(victim).unwrap().alive { break; }
+            }
+            assert!(!authority.server.session().world().player(victim).unwrap().alive);
+            let view = owner.authoritative_state().unwrap().tick;
+            owner.advance_inputs(dt, view, |_| sim::TickInput::default()).unwrap();
+            for _ in 0..(rate * 3) {
+                authority.update(Duration::from_secs_f64(dt)).unwrap();
+                owner.update(dt).unwrap();
+                guest.update(dt).unwrap();
+                if owner.authoritative_state().unwrap().players.iter().any(|p| p.id == victim && p.alive && p.life_epoch > old_epoch) { break; }
+            }
+            assert!(owner.authoritative_state().unwrap().players.iter().any(|p| p.id == victim && p.alive && p.life_epoch > old_epoch));
+            // An older non-Kill batch may still be in flight when the fixture
+            // starts holding new batches; independent delivery is intentional.
+            while let Some(batch) = owner.take_events() {
+                assert!(batch.events.iter().all(|event| !matches!(event, sim::GameEvent::Kill { .. })));
+            }
+            if remove {
+                guest.cancel();
+                for _ in 0..256 {
+                    authority.update(Duration::from_secs_f64(dt)).unwrap();
+                    owner.update(dt).unwrap();
+                    if authority.server.session().world().player(victim).is_none()
+                        && owner.authoritative_state().unwrap().players.iter().all(|p| p.id != victim) { break; }
+                }
+                assert!(authority.server.session().world().player(victim).is_none());
+            }
+            authority.server.release_events();
+            let mut deaths = Vec::new();
+            let mut guest_deaths = 0;
+            for _ in 0..64 {
+                authority.update(Duration::from_secs_f64(dt)).unwrap();
+                owner.update(dt).unwrap();
+                if !remove { guest.update(dt).unwrap(); }
+                while let Some(batch) = owner.take_events() {
+                    for event in batch.events {
+                        if let sim::GameEvent::Kill { victim: id, death, .. } = event {
+                            assert_eq!(id, victim);
+                            deaths.push(death);
+                        }
+                    }
+                }
+                if !remove {
+                    while let Some(batch) = guest.take_events() {
+                        guest_deaths += batch.events.iter().filter(|event| matches!(event, sim::GameEvent::Kill { .. })).count();
+                    }
+                }
+            }
+            assert_eq!(deaths.len(), 1);
+            assert_eq!(guest_deaths, if remove { 0 } else { 1 });
+            let death = &deaths[0];
+            assert_eq!(death.key.victim, victim);
+            assert_eq!(death.key.life_epoch, old_epoch);
+            assert!(death.key.tick >= original_tick && death.key.tick < owner.authoritative_state().unwrap().tick);
+            assert_eq!(death.pose.origin, original_pose);
+            assert_eq!(death.victim_name, "Victim at death");
+            assert_eq!(death.victim_team, Team::CounterTerrorist);
+            let attacker = death.attacker.as_ref().unwrap();
+            assert_eq!((attacker.id, attacker.name.as_str(), attacker.team), (owner.player().unwrap(), "Owner at death", Team::Terrorist));
+            assert!((death.hit.unwrap().direction - glam::Vec3::X).length() < 0.0001);
+            assert!(owner.predicted_world().unwrap().events.is_empty());
+            handle.cancel();
+            assert_eq!(owner.update(0.), Err(Error::Cancelled));
+            assert!(owner.take_events().is_none());
+            guest.cancel();
+            assert!(guest.take_events().is_none());
+        }
+    }
 }
 
 #[test]

@@ -7,6 +7,8 @@ use std::time::Duration;
 
 const MAX_PENDING: usize = 32;
 const INPUT_TIMEOUT: f32 = 0.25;
+pub(crate) const TRACKED_HEAD_LIMIT: f32 = 96.;
+pub(crate) const TRACKED_HAND_LIMIT: f32 = 128.;
 
 #[derive(Default)]
 struct Peer {
@@ -273,9 +275,9 @@ pub(crate) fn validate_input(mut input: TickInput) -> Result<TickInput, String> 
     }
     if let Some(tracked) = &mut input.tracked {
         for (pose, maximum) in [
-            (&mut tracked.head, 96.),
-            (&mut tracked.left_hand, 128.),
-            (&mut tracked.right_hand, 128.),
+            (&mut tracked.head, TRACKED_HEAD_LIMIT),
+            (&mut tracked.left_hand, TRACKED_HAND_LIMIT),
+            (&mut tracked.right_hand, TRACKED_HAND_LIMIT),
         ] {
             if !pose.position.is_finite()
                 || !pose.rotation.is_finite()
