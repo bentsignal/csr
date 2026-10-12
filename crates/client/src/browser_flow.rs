@@ -1,5 +1,7 @@
 //! Opt-in browser-to-remote engine proof. Inputs, captures and userdata are owned
 //! fixtures, not an operating-system mouse/keyboard interaction claim.
+//! The installed main browser RES has no Close control. Final closing exercises
+//! the implemented Escape handler; native window-chrome geometry is unmeasured.
 use crate::{
     frontend::Frontend,
     frontend_servers::UiAction,
@@ -790,13 +792,7 @@ pub(crate) fn update(world: &mut World, mut proof: Local<Proof>) {
             capture_then(world, &mut proof, "browser-removed.png", Phase::Close)
         }
         Phase::Close => {
-            if click_ui(
-                world,
-                &mut proof,
-                id,
-                MouseButton::Left,
-                |action| matches!(action, UiAction::Command(command, _) if command == "Close"),
-            ) {
+            if escape(world, &mut proof, id) {
                 proof.enter(Phase::AwaitClosed);
             }
         }
@@ -821,7 +817,7 @@ pub(crate) fn update(world: &mut World, mut proof: Local<Proof>) {
                 return;
             }
             info!(
-                "browser flow: authored Play -> Community -> Favorites -> actual Add/typed hostname/OK -> persisted discovery -> row Connect -> rendered Ready -> engine Home -> authored reopen -> right-click context removal -> Close; seven ScreenshotCaptured saves; failures: 0"
+                "browser flow: authored Play -> Community -> Favorites -> actual Add/typed hostname/OK -> persisted discovery -> row Connect -> rendered Ready -> engine Home -> authored reopen -> right-click context removal -> Escape Close; seven ScreenshotCaptured saves; failures: 0"
             );
             proof.enter(Phase::Done);
             world.write_message(AppExit::Success);
