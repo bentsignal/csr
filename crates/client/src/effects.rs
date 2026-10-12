@@ -19,6 +19,22 @@ pub struct KillFeedEntry {
     pub text: String,
     pub local_involved: bool,
     pub time: f32,
+    /// Immutable authority, retained inside the existing bounded feed rather
+    /// than a separate unconsumed corpse queue. No physical impulse is implied.
+    pub death: sim::death::DeathReceipt,
+}
+
+impl KillFeedEntry {
+    fn new(attacker: sim::PlayerId, weapon: &str, headshot: bool,
+        death: sim::death::DeathReceipt, local: sim::PlayerId, time: f32) -> Self {
+        let gun = if weapon == "planted_c4" { "bomb" } else { weapon.trim_start_matches("weapon_") };
+        let text = match &death.attacker {
+            Some(actor) => format!("{}  [{}{}]  {}", actor.name, gun,
+                if headshot { " HS" } else { "" }, death.victim_name),
+            None => format!("[{gun}]  {}", death.victim_name),
+        };
+        Self { text, local_involved: attacker == local || death.key.victim == local, time, death }
+    }
 }
 
 #[derive(Resource, Default)]
@@ -146,22 +162,8 @@ pub fn process(
                     effects.last_hit_headshot = group == sim::weapon::HitGroup::Head;
                 }
             }
-            GameEvent::Kill { attacker, victim, weapon, headshot } => {
-                let name = |id| world.0.player(id).map_or("?".to_string(), |p| p.name.clone());
-                let gun = match weapon.as_str() {
-                    "planted_c4" => "bomb",
-                    w => w.trim_start_matches("weapon_"),
-                };
-                let text = if attacker == sim::WORLD {
-                    format!("[{gun}]  {}", name(victim))
-                } else {
-                    format!("{}  [{}{}]  {}", name(attacker), gun, if headshot { " HS" } else { "" }, name(victim))
-                };
-                effects.kill_feed.push(KillFeedEntry {
-                    text,
-                    local_involved: attacker == local.id || victim == local.id,
-                    time: now,
-                });
+            GameEvent::Kill { attacker, weapon, headshot, death, .. } => {
+                effects.kill_feed.push(KillFeedEntry::new(attacker, &weapon, headshot, death, local.id, now));
                 if effects.kill_feed.len() > 6 {
                     effects.kill_feed.remove(0);
                 }
@@ -292,6 +294,39 @@ pub fn draw(effects: Res<Effects>, time: Res<Time>, mut gizmos: Gizmos) {
 #[cfg(test)]
 mod attack_tests {
     use super::*;
+    #[test]
+    fn delayed_feed_keeps_authority_names_and_life_after_lookup_disappears() {
+        let mut world = sim::World::new(std::sync::Arc::new(collision::CollisionWorld::new()));
+        let victim = world.add_player("victim <old> & name", sim::Team::CounterTerrorist);
+        world.damage_environment(victim, 1000, "planted_c4");
+        let (attacker, weapon, headshot, death) = world.events.iter().find_map(|event| match event {
+            GameEvent::Kill { attacker, weapon, headshot, death, .. } => Some((*attacker, weapon.clone(), *headshot, death.clone())),
+            _ => None,
+        }).unwrap();
+        world.player_mut(victim).unwrap().name = "new name".into();
+        world.respawn(victim);
+        assert!(world.player(victim).unwrap().life_epoch > death.key.life_epoch);
+        world.remove_player(victim);
+        let entry = KillFeedEntry::new(attacker, &weapon, headshot, death.clone(), victim, 10.);
+        assert_eq!(entry.text, "[bomb]  victim <old> & name");
+        assert!(entry.local_involved);
+        assert_eq!(entry.death, death);
+    }
+    #[test]
+    fn player_feed_retains_original_team_context_and_existing_text_format() {
+        let mut world = sim::World::new(std::sync::Arc::new(collision::CollisionWorld::new()));
+        let victim = world.add_player("victim", sim::Team::CounterTerrorist);
+        world.damage_environment(victim, 1000, "environment");
+        let mut death = world.events.into_iter().find_map(|event| match event {
+            GameEvent::Kill { death, .. } => Some(death), _ => None,
+        }).unwrap();
+        death.attacker = Some(sim::death::DeathActor { id: 2, name: "original attacker".into(), team: sim::Team::Terrorist });
+        let entry = KillFeedEntry::new(2, "weapon_ak47", true, death, 3, 1.);
+        assert_eq!(entry.text, "original attacker  [ak47 HS]  victim");
+        assert!(!entry.local_involved);
+        assert_eq!(entry.death.attacker.as_ref().unwrap().team, sim::Team::Terrorist);
+        assert_eq!(entry.death.victim_team, sim::Team::CounterTerrorist);
+    }
     #[test]
     fn drawing_a_weapon_never_replays_previous_attacks() {
         let mut effects = Effects::default();

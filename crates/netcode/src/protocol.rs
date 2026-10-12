@@ -2,8 +2,8 @@
 use serde::{Deserialize, Serialize};
 use sim::{GameEvent, PlayerId, Snapshot, Team, TickInput};
 
-pub const VERSION: u32 = 4;
-pub const PROTOCOL_ID: u64 = 0x4353_5257_0000_0004;
+pub const VERSION: u32 = 5;
+pub const PROTOCOL_ID: u64 = 0x4353_5257_0000_0005;
 pub const CONTROL: u8 = 0;
 pub const INPUT: u8 = 1;
 pub const SNAPSHOT: u8 = 2;
@@ -59,7 +59,10 @@ pub(crate) fn validate_events(batch: &EventBatch) -> Result<(), String> {
                 pos,
                 ..
             } => *victim != 0 && *health >= 0 && position(*pos),
-            Kill { victim, weapon, .. } => *victim != 0 && text(weapon),
+            Kill { attacker, victim, weapon, headshot, death } => {
+                *victim != 0 && text(weapon)
+                    && validate_death(death, *attacker, *victim, *headshot, batch.tick)
+            }
             Land { player, speed } => *player != 0 && speed.is_finite() && *speed >= 0.,
             Pickup { player, item } => *player != 0 && text(item),
             Dropped { player, item, pos } => *player != 0 && text(item) && position(*pos),
@@ -84,6 +87,47 @@ pub(crate) fn validate_events(batch: &EventBatch) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// Check the whole immutable receipt before enqueueing any event. Actor lookup
+/// is deliberately absent: a newer snapshot may have respawned/removed them.
+fn validate_death(
+    death: &sim::death::DeathReceipt,
+    attacker: PlayerId,
+    victim: PlayerId,
+    headshot: bool,
+    batch_tick: u64,
+) -> bool {
+    let name = |value: &str| value.len() <= 64 && !value.chars().any(char::is_control);
+    let vector = |value: glam::Vec3| value.is_finite() && value.length_squared().is_finite();
+    let unit = |length: f32| length.is_finite() && (length - 1.).abs() <= 0.001;
+    if death.key.victim != victim || death.key.life_epoch == 0
+        || death.key.tick > batch_tick || death.key.tick > MAX_PROTOCOL_COUNTER
+        || !name(&death.victim_name)
+        || !vector(death.pose.origin) || !vector(death.pose.view_angles)
+        || !vector(death.pose.velocity) || !death.pose.duck_amount.is_finite()
+        || !(0. ..=1.).contains(&death.pose.duck_amount)
+    { return false; }
+    match &death.attacker {
+        Some(actor) if attacker != sim::WORLD && actor.id == attacker && name(&actor.name) => {},
+        None if attacker == sim::WORLD => {},
+        _ => return false,
+    }
+    if let Some(tracked) = &death.pose.tracked {
+        for (pose, maximum) in [
+            (&tracked.head, crate::session::TRACKED_HEAD_LIMIT),
+            (&tracked.left_hand, crate::session::TRACKED_HAND_LIMIT),
+            (&tracked.right_hand, crate::session::TRACKED_HAND_LIMIT),
+        ] {
+            if !vector(pose.position) || pose.position.length() > maximum + 0.001
+                || !pose.rotation.is_finite() || !unit(pose.rotation.length_squared())
+            { return false; }
+        }
+    }
+    death.hit.is_none_or(|hit| {
+        vector(hit.direction) && unit(hit.direction.length_squared()) && vector(hit.position)
+            && headshot == (hit.group == sim::weapon::HitGroup::Head)
+    })
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -447,11 +491,25 @@ fn validate_weapon(weapon: &sim::weapon::WeaponState) -> Result<(), String> {
 }
 
 #[cfg(test)]
+pub(crate) fn test_death_event() -> GameEvent {
+    let mut world = sim::World::new(std::sync::Arc::new(collision::CollisionWorld::new()));
+    let victim = world.add_player("victim <old> & name", Team::CounterTerrorist);
+    world.damage_environment(victim, 1000, "environment");
+    world.events.into_iter().find(|event| matches!(event, GameEvent::Kill { .. })).unwrap()
+}
+
+#[cfg(test)]
+#[path = "death_protocol_tests.rs"]
+mod death_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     #[test]
     fn authoritative_effects_reject_nonfinite_and_unbounded_payloads() {
         use glam::Vec3;
+        let mut invalid_kill = test_death_event();
+        if let GameEvent::Kill { weapon, .. } = &mut invalid_kill { *weapon = "../host/file".into(); }
         let events = vec![
             GameEvent::Fire {
                 player: 1,
@@ -473,12 +531,7 @@ mod tests {
                 player: 1,
                 speed: f32::NAN,
             },
-            GameEvent::Kill {
-                attacker: 1,
-                victim: 2,
-                weapon: "../host/file".into(),
-                headshot: false,
-            },
+            invalid_kill,
             GameEvent::Dropped {
                 player: 1,
                 item: "x".repeat(129),

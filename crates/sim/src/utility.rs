@@ -319,7 +319,7 @@ impl World {
                 pos: chest,
             });
             if self.players[i].health <= 0 {
-                self.kill(i, attacker, kind.name(), false);
+                self.kill(i, attacker, kind.name(), false, None);
                 if let Some(a) = attacker {
                     if friendly || a == i {
                         self.players[a].kills = self.players[a].kills.saturating_sub(1);
@@ -336,6 +336,28 @@ impl World {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn lethal_he_and_fire_capture_notice_without_inventing_hit_rays() {
+        for rate in [64, 128] {
+            for kind in [Kind::He, Kind::Molotov] {
+                let mut w = arena();
+                w.set_tick_rate(rate);
+                let owner = w.add_player("thrower", Team::Terrorist);
+                let victim = w.add_player("victim", Team::CounterTerrorist);
+                w.players[0].movement.origin = Vec3::X * 1000.;
+                w.players[1].movement.origin = Vec3::ZERO;
+                w.blast_utility(owner, kind, Vec3::Z * 32., 140., 1000.);
+                let death = w.events.iter().find_map(|e| match e {
+                    GameEvent::Kill { victim: id, death, .. } if *id == victim => Some(death),
+                    _ => None,
+                }).unwrap();
+                assert!(death.hit.is_none());
+                assert_eq!(death.attacker.as_ref().unwrap().id, owner);
+                assert_eq!(death.attacker.as_ref().unwrap().name, "thrower");
+                assert_eq!(death.pose.origin, Vec3::ZERO);
+            }
+        }
+    }
     fn arena() -> World {
         let mut c = collision::CollisionWorld::new();
         c.finalize();

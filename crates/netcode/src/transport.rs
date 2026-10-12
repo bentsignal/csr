@@ -36,6 +36,8 @@ pub struct Server {
     snapshots: Sender,
     #[cfg(test)]
     held_admissions: Option<Vec<(u64, ServerControl)>>,
+    #[cfg(test)]
+    held_events: Option<Vec<(u64, Vec<u8>)>>,
 }
 
 #[cfg(test)]
@@ -76,6 +78,8 @@ impl Server {
             snapshots: Sender::default(),
             #[cfg(test)]
             held_admissions: None,
+            #[cfg(test)]
+            held_events: None,
         })
     }
     pub fn address(&self) -> SocketAddr {
@@ -83,6 +87,16 @@ impl Server {
     }
     pub fn session(&self) -> &Session {
         &self.session
+    }
+    fn send_events(&mut self, client: u64, bytes: Vec<u8>) {
+        #[cfg(test)]
+        if let Some(held) = &mut self.held_events {
+            assert!(held.len() < 128);
+            assert!(held.iter().map(|(_, bytes)| bytes.len()).sum::<usize>() + bytes.len() <= MAX_MESSAGE);
+            held.push((client, bytes));
+            return;
+        }
+        self.connection.send_message(client, EVENTS, bytes);
     }
     pub(crate) fn client_connected(&self, client: u64) -> bool {
         self.connection.is_connected(client)
@@ -260,8 +274,7 @@ impl Server {
                     continue;
                 }
                 if !events.events.is_empty() {
-                    self.connection
-                        .send_message(client, EVENTS, encode(&events)?);
+                    self.send_events(client, encode(&events)?);
                 }
             }
         }
@@ -715,6 +728,17 @@ impl Server {
                     CONTROL,
                     encode(&ServerControl::Info(info.clone())).unwrap(),
                 );
+            }
+        }
+    }
+    pub(crate) fn hold_events(&mut self) {
+        assert!(self.held_events.is_none());
+        self.held_events = Some(Vec::new());
+    }
+    pub(crate) fn release_events(&mut self) {
+        for (client, bytes) in self.held_events.take().unwrap_or_default() {
+            if self.session.player_for(client).is_some() && self.connection.is_connected(client) {
+                self.connection.send_message(client, EVENTS, bytes);
             }
         }
     }

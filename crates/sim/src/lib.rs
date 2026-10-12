@@ -22,6 +22,7 @@
 //! snapshot, and [`World::state_hash`] checks determinism.
 
 pub mod bots;
+pub mod death;
 pub mod loadout;
 pub mod objectives;
 pub mod rewind;
@@ -376,7 +377,7 @@ pub enum GameEvent {
     Impact { player: PlayerId, pos: Vec3, normal: Vec3, surface: u32 },
     Damage { attacker: PlayerId, victim: PlayerId, health: i32, group: HitGroup, pos: Vec3 },
     /// `attacker` is [`WORLD`] for the bomb.
-    Kill { attacker: PlayerId, victim: PlayerId, weapon: String, headshot: bool },
+    Kill { attacker: PlayerId, victim: PlayerId, weapon: String, headshot: bool, death: death::DeathReceipt },
     Reload { player: PlayerId },
     Jump { player: PlayerId },
     Land { player: PlayerId, speed: f32 },
@@ -988,7 +989,7 @@ impl World {
                 pos: at,
             });
             if self.players[i].health <= 0 {
-                self.kill(i, None, "planted_c4", false);
+                self.kill(i, None, "planted_c4", false, None);
             }
         }
     }
@@ -1582,7 +1583,7 @@ impl World {
             };
             def.armor_ratio = 1.7;
             def.range_modifier = 1.0;
-            self.apply_damage(shooter, victim, &def, distance, HitGroup::Chest, eye + dir * distance);
+            self.apply_damage(shooter, victim, &def, distance, HitGroup::Chest, eye + dir * distance, Some(dir));
         }
         if external.is_none() && best.is_none() && tr.hit() {
             if let Some(dynamic) = &self.collision.dynamic {
@@ -1676,7 +1677,7 @@ impl World {
                     let center = (mn + mx) * 0.5;
                     let side = ((hit - center).dot(vright) / 16.0).clamp(-1.0, 1.0);
                     let group = HitGroup::from_height(frac, side);
-                    self.apply_damage(shooter, j, &def, t, group, hit);
+                    self.apply_damage(shooter, j, &def, t, group, hit, Some(dir));
                 }
                 None => {
                     self.events.push(GameEvent::Tracer { player: id, start: eye, end: tr.end });
@@ -1709,7 +1710,7 @@ impl World {
         }
     }
 
-    fn apply_damage(&mut self, attacker: usize, victim: usize, def: &weapons::WeaponDefinition, distance: f32, group: HitGroup, pos: Vec3) {
+    fn apply_damage(&mut self, attacker: usize, victim: usize, def: &weapons::WeaponDefinition, distance: f32, group: HitGroup, pos: Vec3, direction: Option<Vec3>) {
         let v = &self.players[victim];
         let (health_dmg, armor_dmg) = weapon::damage(def, distance, group, v.armor, v.helmet);
         let attacker_id = self.players[attacker].id;
@@ -1725,7 +1726,8 @@ impl World {
             pos,
         });
         if self.players[victim].health <= 0 {
-            self.kill(victim, Some(attacker), &def.class_name, group == HitGroup::Head);
+            let hit = direction.map(|direction| death::DeathHit { direction, position: pos, group });
+            self.kill(victim, Some(attacker), &def.class_name, group == HitGroup::Head, hit);
             if self.competitive() && self.players[attacker].team.enemy_of(self.players[victim].team) {
                 let award = (def.kill_award as f32 * self.rules.kill_award_factor) as i32;
                 let a = &mut self.players[attacker];
@@ -1741,10 +1743,11 @@ impl World {
         if amount == 0 { return; }
         self.players[victim].health -= amount;
         self.events.push(GameEvent::Damage { attacker: WORLD, victim: id, health: amount, group: HitGroup::Chest, pos: self.players[victim].eye() });
-        if self.players[victim].health <= 0 { self.kill(victim, None, cause, false); }
+        if self.players[victim].health <= 0 { self.kill(victim, None, cause, false, None); }
     }
 
-    fn kill(&mut self, victim: usize, attacker: Option<usize>, weapon: &str, headshot: bool) {
+    fn kill(&mut self, victim: usize, attacker: Option<usize>, weapon: &str, headshot: bool, hit: Option<death::DeathHit>) {
+        let death = death::DeathReceipt::capture(&self.players[victim], attacker.map(|a| &self.players[a]), self.tick, self.round.round, hit);
         let now = self.time();
         let v = &mut self.players[victim];
         v.health = 0;
@@ -1781,6 +1784,7 @@ impl World {
             victim: victim_id,
             weapon: weapon.to_string(),
             headshot,
+            death,
         });
         self.death_drops(victim);
     }

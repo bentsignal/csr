@@ -384,6 +384,34 @@ mod tests {
     }
 
     #[test]
+    fn malformed_late_death_receipt_closes_without_publishing_valid_prefix() {
+        for rate in [64, 128] {
+            let mut server = server(rate, rate / 16);
+            let mut remote = RemoteSession::discover(server.address(), "Local".into(), Team::CounterTerrorist).unwrap();
+            ready(&mut server, &mut remote);
+            let mut death = crate::protocol::test_death_event();
+            if let sim::GameEvent::Kill { death, .. } = &mut death {
+                death.pose.velocity.x = f32::NAN;
+            }
+            server.inject_events(&EventBatch {
+                tick: server.session().world().tick,
+                events: vec![sim::GameEvent::Jump { player: remote.player().unwrap() }, death],
+            });
+            server.update(Duration::from_secs_f64(1. / rate as f64)).unwrap();
+            let mut rejected = false;
+            for _ in 0..32 {
+                if remote.update(1. / rate as f64).is_err() { rejected = true; break; }
+                server.update(Duration::from_secs_f64(1. / rate as f64)).unwrap();
+            }
+            assert!(rejected);
+            assert!(matches!(remote.status(), Status::Closed(_)));
+            assert!(remote.take_events().is_none());
+            assert!(remote.predicted_world().is_none());
+            assert!(remote.pose_history().is_none());
+        }
+    }
+
+    #[test]
     fn snapshots_overtaking_admission_recover_without_exposing_or_replaying_effects() {
         let mut server = server(128, 8);
         let mut remote =

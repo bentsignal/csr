@@ -168,7 +168,7 @@ fn stattrak_counts_only_enemy_kills_with_the_original_owners_item() {
         gun.cosmetic_owner=Some(if owner_is_attacker{attacker}else{victim});
         gun.cosmetic=Some(weapon::Cosmetic{serial:42,paint:801,seed:1,wear:0.05,stattrak:Some(10),souvenir:None,stickers:[None;4]});
         w.players[0].weapons=vec![gun];w.players[0].active=0;
-        w.events.clear();w.kill(1,Some(0),"weapon_ak47",false);
+        w.events.clear();w.kill(1,Some(0),"weapon_ak47",false,None);
         assert_eq!(w.events.iter().filter(|e|matches!(e,GameEvent::StatTrakKill{owner,serial:42} if *owner==attacker)).count(),expected);
         assert_eq!(w.players[0].active_weapon().unwrap().cosmetic.unwrap().stattrak,Some(10+expected as u32));
     }
@@ -311,7 +311,7 @@ fn elimination_pays_winner_and_loss_bonus() {
     let def = Arc::new(w.catalog.get("weapon_hkp2000").unwrap().clone());
     let (ti, cti) = (w.index_of(t).unwrap(), w.index_of(ct).unwrap());
     w.players[ti].health = 1;
-    w.apply_damage(cti, ti, &def, 100.0, HitGroup::Chest, Vec3::ZERO);
+    w.apply_damage(cti, ti, &def, 100.0, HitGroup::Chest, Vec3::ZERO, None);
     let events = run(&mut w, 0.1, &[]);
     assert!(events.contains(&GameEvent::RoundEnd { reason: RoundEndReason::TerroristsEliminated }));
     assert_eq!(w.round.score_ct, 1);
@@ -527,7 +527,7 @@ fn planted_bomb_keeps_round_live_after_last_terrorist_dies() {
     run(&mut w, 1.1, &[]);
     plant(&mut w, t);
     let ti = w.index_of(t).unwrap();
-    w.kill(ti, None, "test", false);
+    w.kill(ti, None, "test", false, None);
     // The normal round timer can expire while the bomb is ticking.
     w.rules.round_time = 1.0;
     let events = run(&mut w, 0.1, &[]);
@@ -657,7 +657,7 @@ fn switching_reloading_dropping_and_death_cancel_scope() {
             0 => world.step(&[(id, TickInput { weapon_slot: 3, ..Default::default() })]),
             1 => world.step(&[(id, TickInput { buttons: buttons::RELOAD, ..Default::default() })]),
             2 => world.step(&[(id, TickInput { drop: true, ..Default::default() })]),
-            _ => world.kill(0, None, "test", false),
+            _ => world.kill(0, None, "test", false, None),
         }
         for weapon in &world.player(id).unwrap().weapons {
             assert_eq!((weapon.zoom_level, weapon.resume_zoom), (0, None), "action {action}");
@@ -810,3 +810,4 @@ fn dynamic_mob_hits_preserve_bullet_and_knife_contact_positions() {
 mod authority;
 mod aim;
 mod rewind;
+mod death;
