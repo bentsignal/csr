@@ -81,6 +81,11 @@ struct Shared {
 impl Shared {
     fn publish(&self, status: HostStatus) {
         let mut current = self.status.lock().unwrap_or_else(|e| e.into_inner());
+        // Cancellation can exchange the stop flag, then be descheduled until
+        // after the worker publishes its final result. Terminal means terminal.
+        if matches!(&*current, HostStatus::Closed(_)) {
+            return;
+        }
         if self.stopped.load(Ordering::Acquire)
             && !matches!(status, HostStatus::Stopping | HostStatus::Closed(_))
         {
