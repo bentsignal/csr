@@ -7,6 +7,7 @@
 pub mod audio;
 pub mod session;
 pub mod frontend;
+mod frontend_display;
 mod frontend_inventory;
 mod frontend_game;
 mod frontend_lobby;
@@ -63,6 +64,7 @@ pub mod hosting;
 mod host_sharing;
 mod host_sharing_ui;
 mod menu_performance;
+mod display_proof;
 mod remote_flow;
 mod bot_performance;
 pub mod xr_input;
@@ -321,6 +323,11 @@ pub fn run(opts: ClientOptions) -> i32 {
         app.init_resource::<menu_performance::Proof>()
             .add_systems(First, menu_performance::motion)
             .add_systems(Update, menu_performance::measure.after(frontend::input));
+    }
+    if display_proof::enabled() {
+        app.init_resource::<display_proof::Proof>()
+            .add_systems(First, display_proof::request)
+            .add_systems(Update, display_proof::measure.after(menu::apply).after(frontend::input));
     }
     let result = app.run();
     match result { AppExit::Success=>0,AppExit::Error(code)=>code.get() as i32 }

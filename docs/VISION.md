@@ -140,6 +140,14 @@ Online-only elements (Overwatch, store prices, news, friends) are recreated
 locally. Friends become our own server's player list; news can come from our
 GitHub releases; the store becomes the local case/cosmetic system.
 
+Owner clarification from the 2026-10-12 desktop playtest: the baseline gameplay,
+weapon sounds, movement, animation and HUD should feel like opening CS:GO in
+2015. In particular, use the original AK-47 firing sound and the correct
+silenced M4A1-S sound. Keep the supplied classic Scaleform menu references.
+Later quality-of-life additions follow a faithful base. Installed 2023 Legacy
+data is a development reference, not proof that a sound or mechanic matches
+2015; historical content still follows the runtime-only content rules.
+
 ### 8. VR cross-play (later, but designed for now)
 
 - The owner plays in **VR on a Quest** (through Steam Link or a similar

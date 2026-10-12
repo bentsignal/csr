@@ -351,7 +351,8 @@ pub fn inaccuracy(w: &WeaponState, ctx: AccuracyContext) -> f32 {
     base + w.alt_stat("inaccuracy move", a.inaccuracy_move) * move_frac + air + w.accuracy_penalty
 }
 
-/// Advances timers that run every tick whether or not the player fires.
+/// Advances timers every tick. `firing` includes a loaded automatic trigger
+/// held through its shot cooldown, not just a shot emitted on this tick.
 pub fn think(w: &mut WeaponState, time: f32, dt: f32, ducked: bool, firing: bool) {
     if time >= w.next_attack && w.reload_end.is_none() {
         if let Some(level) = w.resume_zoom.take() { w.set_zoom(level, time); }

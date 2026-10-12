@@ -147,7 +147,7 @@ mod tests {
         bsp.edges = vec![[0,1],[1,2],[2,3],[3,0]];
         bsp.surfedges = vec![0,1,2,3];
         bsp.planes = vec![Plane { normal: Vec3::Z, dist: 0.0, kind: 2 }];
-        bsp.faces = vec![Face { plane: 0, side: 0, first_edge: 0, num_edges: 4, texinfo: 0, dispinfo: 0, styles: [0,255,255,255], light_offset: 0, lightmap_mins: [-128,-126], lightmap_size: [57,41] }];
+        bsp.faces = vec![Face { plane: 0, side: 0, first_edge: 0, num_edges: 4, texinfo: 0, dispinfo: 0, styles: [0,255,255,255], light_offset: 0, lightmap_mins: [-128,-126], lightmap_size: [57,41], num_prims: 0, first_prim_id: 0 }];
         bsp.dispinfos = vec![DispInfo { start_position: Vec3::ZERO, disp_vert_start: 0, disp_tri_start: 0, power: 2, flags: 0, contents: 1, map_face: 0 }];
         bsp.disp_verts = vec![DispVert { vec: Vec3::Z, dist: 0.0, alpha: 0.0 };25];
         let mesh = build(&bsp,0).unwrap();

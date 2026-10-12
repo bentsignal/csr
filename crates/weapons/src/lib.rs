@@ -87,7 +87,9 @@ pub struct WeaponDefinition {
     pub recoil: Recoil,
     pub view_model: String,
     pub world_model: String,
-    /// Soundscript entry for a shot, e.g. `Weapon_AK47.Single`.
+    /// Soundscript entry for the default equipped shot, e.g. `Weapon_AK47.Single`.
+    /// Suppressor-equipped definitions use their `sound_special1` entry.
+    /// Removing a suppressor is not currently represented in weapon state.
     pub fire_sound: String,
     pub zoom_in_sound: String,
     pub zoom_out_sound: String,
@@ -285,12 +287,29 @@ fn build(index: &str, class_name: &str, r: &Resolved) -> WeaponDefinition {
         },
         view_model: f("model_player"),
         world_model: f("model_world"),
-        fire_sound: f("visuals/sound_single_shot"),
+        fire_sound: default_fire_sound(r),
         zoom_in_sound: f("zoom_in_sound"),
         zoom_out_sound: f("zoom_out_sound"),
         kill_award: ai("kill award").unwrap_or(300),
         attributes: r.attributes.clone(),
     }
+}
+
+fn default_fire_sound(r: &Resolved) -> String {
+    // Installed Legacy schemas distinguish the ordinary shot from the shot
+    // with the default equipped suppressor. `has silencer` also appears on
+    // permanently suppressed weapons; do not infer it from class/name text.
+    let suppressed = r.attributes.get("has silencer")
+        .and_then(|value| kv::parse_f32(value))
+        .is_some_and(|value| value > 0.0);
+    if suppressed {
+        if let Some(sound) = r.fields.get("visuals/sound_special1")
+            .filter(|sound| !sound.trim().is_empty())
+        {
+            return sound.clone();
+        }
+    }
+    r.fields.get("visuals/sound_single_shot").cloned().unwrap_or_default()
 }
 
 fn classify(class_name: &str, fields: &HashMap<String, String>) -> WeaponClass {
@@ -377,5 +396,62 @@ mod tests {
         assert_eq!(ak.range_modifier, 0.98);
         assert_eq!(ak.recoil.seed, 223);
         assert!((ak.rpm() - 600.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn suppressed_default_uses_inherited_special_shot_and_item_override_wins() {
+        let cat = Catalog::from_items_game(r#"
+            "items_game" {
+                "prefabs" {
+                    "base" { "attributes" { "has silencer" "1" }
+                        "visuals" { "sound_single_shot" "Test.Unsuppressed"
+                            "sound_special1" "Test.Suppressed" } }
+                    "derived" { "prefab" "base" }
+                }
+                "items" {
+                    "1" { "name" "weapon_test_attached" "baseitem" "1" "prefab" "derived" }
+                    "2" { "name" "weapon_test_plain" "baseitem" "1" "prefab" "derived"
+                        "attributes" { "has silencer" "0" } }
+                    "3" { "name" "weapon_test_fixed" "baseitem" "1" "prefab" "derived"
+                        "attributes" { "has silencer" { "value" "2" } }
+                        "visuals" { "sound_special1" "Test.Fixed" } }
+                }
+            }
+        "#).unwrap();
+        assert_eq!(cat.get("weapon_test_attached").unwrap().fire_sound, "Test.Suppressed");
+        assert_eq!(cat.get("weapon_test_plain").unwrap().fire_sound, "Test.Unsuppressed");
+        assert_eq!(cat.get("weapon_test_fixed").unwrap().fire_sound, "Test.Fixed");
+    }
+
+    #[test]
+    fn special_sound_does_not_replace_plain_shot_without_suppressor_metadata() {
+        let cat = Catalog::from_items_game(r#"
+            "items_game" { "items" {
+                "1" { "name" "weapon_test" "baseitem" "1"
+                    "visuals" { "sound_single_shot" "Test.Plain"
+                        "sound_special1" "Test.OtherAction" } }
+            } }
+        "#).unwrap();
+        assert_eq!(cat.get("weapon_test").unwrap().fire_sound, "Test.Plain");
+    }
+
+    #[test]
+    fn incomplete_suppressor_metadata_preserves_existing_shot_fallback() {
+        let cat = Catalog::from_items_game(r#"
+            "items_game" { "prefabs" {
+                "base" { "attributes" { "has silencer" "1" }
+                    "visuals" { "sound_single_shot" "Test.Fallback" } }
+            } "items" {
+                "1" { "name" "weapon_test_missing" "baseitem" "1" "prefab" "base" }
+                "2" { "name" "weapon_test_empty" "baseitem" "1" "prefab" "base"
+                    "visuals" { "sound_special1" " " } }
+                "3" { "name" "weapon_test_unknown" "baseitem" "1" "prefab" "base"
+                    "attributes" { "has silencer" "unknown" }
+                    "visuals" { "sound_special1" "Test.Unknown" } }
+            } }
+        "#).unwrap();
+        for name in ["weapon_test_missing", "weapon_test_empty", "weapon_test_unknown"] {
+            assert_eq!(cat.get(name).unwrap().fire_sound, "Test.Fallback");
+        }
     }
 }
