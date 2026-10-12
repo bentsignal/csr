@@ -91,10 +91,15 @@ Accept and the complete Go footer remain unobscured. Provenance under
 plus its saved fixture diff, the alive-guard flag and executable SHA256
 `452FA2CDA0E6FAFAF380388EA40F7E995BEA79FE53A69DC741616B197D08DF6C`.
 
-The combined locked workspace passes 465 tests with four ignored. Current
-release Dust II probe/sim and audio checks, a fresh Competitive rerun and
-exact-head CI are the remaining final gates; this still is not OS-input or
-1:1 visual fidelity proof.
+The same executable also passes a fresh Competitive cancellation/reopen and
+host+guest lifecycle under `rendered-host-guest-authored-competitive-128-final`.
+It preserves the expected mid-round spectator admission (two humans, one alive)
+rather than changing competitive spawn policy to satisfy the fixture.
+
+The combined locked workspace passes 465 tests with four ignored. Release
+Dust II probe and ten-round sim both report zero failures; soundcheck decodes
+all 1,425 sounds with no unsupported or crashing files. Exact-head CI gates
+merging. This still is not OS-input or 1:1 visual fidelity proof.
 
 Dynamic bot slot filling and original competitive warmup remain open.
 

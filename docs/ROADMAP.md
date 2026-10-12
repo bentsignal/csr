@@ -120,7 +120,15 @@ and [REMOTE_JOIN.md](REMOTE_JOIN.md).
 - [ ] Full character-model and tracked VR hitboxes.
 - [x] `csr-server <map>`: headless dedicated executable without Bevy
       rendering, configurable tick rate and server-owned bots.
-- [ ] Listen server from the menu ("host a game") and dynamic bot slot filling.
+- [x] Listen server through the original Create Lobby, checked settings and Go
+      controls. One retained map worker and render-gated passive owner admission;
+      independent 128-tick authority, owned Home/Quit cleanup and cached movie
+      cancellation. Authored Competitive/Deathmatch host+guest proofs, including
+      two active Deathmatch humans; controller lifecycle also verified at 64 tick.
+      See [HOSTING.md](HOSTING.md).
+- [ ] Dynamic bot slot filling and original competitive warmup. Existing static
+      bots remain; [BOT_POPULATION.md](BOT_POPULATION.md) records measured
+      2023 Legacy fill behavior separately from the 2018 target.
 - [x] Local address/favorites discovery and IP/hostname join backend.
 - [ ] LAN discovery and public server directory.
 - [ ] Hosting needs map data (BSP, nav, `items_game.txt`). A home PC host
@@ -165,6 +173,10 @@ byte-identical to 2018.
 - [x] Connect the local server browser and rendered network joins to that
       state machine, with render preparation, neutral pause, Home cancellation
       and clean offline reload. Native browser sizing/fidelity remains unmeasured.
+- [x] Original lobby and host chooser: trusted installed map catalog, checked
+      query staging, one-use Go, epoch-guarded cached lifecycle and restoration
+      before offline Practice. Pointer cancellation/reopen and host+guest
+      screenshots verified; the added address notice preserves native controls.
 - [x] **Spike: play Valve's own SWFs with [Ruffle](https://github.com/ruffle-rs/ruffle)**
       (Rust Flash player, MIT/Apache, wgpu), read from the player's install
       at runtime, with the Scaleform game API stubbed. It works: the home
