@@ -203,13 +203,13 @@ impl Engine for Bridge {
                         calls.set(path, "_visible", false.into());
                     }
                 } else if object == "PauseMenu" {
-                    for element in ["MainMenu", "StartSinglePlayer", "OptionsMenu"] {
-                        if let Some(root) = self.roots.get(element) {
-                            calls.set(root, "_visible", false.into());
-                        }
-                    }
                     let data = self.data.lock().unwrap();
                     if data.state == AppState::Match && data.menu_open {
+                        for element in ["MainMenu", "StartSinglePlayer", "OptionsMenu"] {
+                            if let Some(root) = self.roots.get(element) {
+                                calls.set(root, "_visible", false.into());
+                            }
+                        }
                         calls.call(path, "SetPlayerName", vec!["You".into()]);
                         calls.call(path, "showPanel", vec![]);
                     } else {
@@ -234,8 +234,14 @@ impl Engine for Bridge {
         }
         if method == "OnReady" && object == "OptionsMenu" {
             if let Some(path) = self.roots.get(object) {
-                self.options
-                    .show(path, &self.data.lock().unwrap().settings, calls);
+                let data = self.data.lock().unwrap();
+                if matches!(data.state, AppState::Menu | AppState::Browser)
+                    || (data.state == AppState::Match && data.menu_open)
+                {
+                    self.options.show(path, &data.settings, calls);
+                } else {
+                    calls.set(path, "_visible", false.into());
+                }
             }
             return None;
         }
