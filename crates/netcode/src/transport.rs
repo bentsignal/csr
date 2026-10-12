@@ -31,6 +31,7 @@ pub struct Server {
     snapshot_every: u64,
     pending_hellos: std::collections::HashMap<u64, Duration>,
     elapsed: Duration,
+    preparing_snapshot_elapsed: Duration,
     #[cfg(test)]
     held_admissions: Option<Vec<(u64, ServerControl)>>,
 }
@@ -65,6 +66,7 @@ impl Server {
             snapshot_every: (rate / 32).max(1) as u64,
             pending_hellos: Default::default(),
             elapsed: Duration::ZERO,
+            preparing_snapshot_elapsed: Duration::ZERO,
             #[cfg(test)]
             held_admissions: None,
         })
@@ -75,10 +77,13 @@ impl Server {
     pub fn session(&self) -> &Session {
         &self.session
     }
+    pub(crate) fn client_connected(&self, client: u64) -> bool {
+        self.connection.is_connected(client)
+    }
     pub fn discarded_wall_ticks(&self) -> u64 {
         self.clock.discarded_wall_ticks
     }
-    fn info(&self) -> ServerInfo {
+    pub(crate) fn info(&self) -> ServerInfo {
         ServerInfo {
             version: VERSION,
             tick_rate: self.session.world().tick_rate,
@@ -91,6 +96,28 @@ impl Server {
 
     /// Drive IO once and advance the sim only for elapsed fixed ticks.
     pub fn update(&mut self, elapsed: Duration) -> Result<usize, String> {
+        self.update_inner(elapsed, None)
+    }
+
+    /// Host-only admission: real-time IO continues, but the sim and bot
+    /// decisions stay frozen. Inspect never creates a player; only the
+    /// privately reserved local client may send Hello in this phase.
+    pub(crate) fn prepare(&mut self, elapsed: Duration, owner: u64) -> Result<(), String> {
+        self.update_inner(elapsed, Some(owner)).map(|_| ())
+    }
+
+    pub(crate) fn begin(&mut self, owner: u64, through: u64) -> Result<(), String> {
+        if self.session.player_for(owner).is_none() {
+            return Err("local owner has not been admitted".into());
+        }
+        self.session.discard_owner_inputs(owner, through)?;
+        // Loading/admission wall time must never become simulation catch-up.
+        self.clock = TickClock::new(self.session.world().tick_rate)?;
+        self.preparing_snapshot_elapsed = Duration::ZERO;
+        Ok(())
+    }
+
+    fn update_inner(&mut self, elapsed: Duration, preparing: Option<u64>) -> Result<usize, String> {
         self.elapsed = self.elapsed.saturating_add(elapsed);
         self.connection.update(elapsed);
         self.transport
@@ -133,6 +160,16 @@ impl Server {
                             .send_message(client, CONTROL, encode(&reply)?);
                     }
                     Ok(hello) => {
+                        if preparing.is_some_and(|owner| owner != client) {
+                            self.connection.send_message(
+                                client,
+                                CONTROL,
+                                encode(&ServerControl::Rejected {
+                                    reason: "host is preparing local admission".into(),
+                                })?,
+                            );
+                            continue;
+                        }
                         let reply = self.session.join(client, hello);
                         if matches!(reply, ServerControl::Welcome { .. }) {
                             #[cfg(test)]
@@ -162,6 +199,11 @@ impl Server {
                 let Some(bytes) = self.connection.receive_message(client, INPUT) else {
                     break;
                 };
+                // Do not queue controls while frozen. Begin's trusted sender
+                // cutoff also rejects these commands if later retransmitted.
+                if preparing.is_some() {
+                    continue;
+                }
                 if decode::<InputBatch>(&bytes)
                     .and_then(|batch| self.session.input(client, batch))
                     .is_err()
@@ -178,7 +220,11 @@ impl Server {
                 self.connection.disconnect(client);
             }
         }
-        let ticks = self.clock.advance(elapsed);
+        let ticks = if preparing.is_some() {
+            0
+        } else {
+            self.clock.advance(elapsed)
+        };
         for _ in 0..ticks {
             if self.session.world().tick >= MAX_PROTOCOL_COUNTER {
                 return Err("server timeline exhausted".into());
@@ -195,7 +241,28 @@ impl Server {
             }
         }
         // Send one latest state per IO update; never enqueue stale catch-up states.
-        if ticks > 0 && self.session.world().tick % self.snapshot_every < ticks as u64 {
+        // Frozen tick snapshots are needed for the local predictor to become
+        // Ready. Repeat on bounded wall-clock cadence because snapshots may
+        // arrive before their independent reliable admission channel.
+        let prepared_snapshot = if preparing.is_some() {
+            self.preparing_snapshot_elapsed =
+                self.preparing_snapshot_elapsed.saturating_add(elapsed);
+            let interval = Duration::from_secs_f64(
+                self.snapshot_every as f64 / self.session.world().tick_rate as f64,
+            );
+            let due = self.preparing_snapshot_elapsed >= interval;
+            if due {
+                self.preparing_snapshot_elapsed = Duration::from_nanos(
+                    (self.preparing_snapshot_elapsed.as_nanos() % interval.as_nanos()) as u64,
+                );
+            }
+            due
+        } else {
+            false
+        };
+        if prepared_snapshot
+            || (ticks > 0 && self.session.world().tick % self.snapshot_every < ticks as u64)
+        {
             for client in self.connection.clients_id() {
                 if let Some(state) = self.session.snapshot_for(client) {
                     let bytes = encode(&state)?;
@@ -271,13 +338,51 @@ impl Client {
         catalog: Arc<weapons::Catalog>,
         content: Option<ContentManifest>,
     ) -> Result<Self, String> {
+        Self::open_with_id(
+            server,
+            hello,
+            catalog,
+            content,
+            u64::from_le_bytes(renet_netcode::generate_random_bytes()),
+        )
+    }
+
+    pub(crate) fn connect_local(
+        server: SocketAddr,
+        name: String,
+        team: Team,
+        content: ContentManifest,
+        catalog: Arc<weapons::Catalog>,
+        client_id: u64,
+    ) -> Result<Self, String> {
+        content.validate()?;
+        Self::open_with_id(
+            server,
+            ClientControl::Hello {
+                version: VERSION,
+                name,
+                team,
+                content: content.clone(),
+            },
+            catalog,
+            Some(content),
+            client_id,
+        )
+    }
+
+    fn open_with_id(
+        server: SocketAddr,
+        hello: ClientControl,
+        catalog: Arc<weapons::Catalog>,
+        content: Option<ContentManifest>,
+        client_id: u64,
+    ) -> Result<Self, String> {
         let bind = if server.is_ipv4() {
             "0.0.0.0:0"
         } else {
             "[::]:0"
         };
         let socket = UdpSocket::bind(bind).map_err(|e| e.to_string())?;
-        let client_id = u64::from_le_bytes(renet_netcode::generate_random_bytes());
         let transport = NetcodeClientTransport::new(
             now(),
             ClientAuthentication::Unsecure {
@@ -309,6 +414,9 @@ impl Client {
     }
     pub fn welcome(&self) -> Option<&ServerControl> {
         self.welcome.as_ref()
+    }
+    pub(crate) fn submitted_sequence(&self) -> u64 {
+        self.sequence
     }
     pub fn server_info(&self) -> Option<&ServerInfo> {
         self.server_info.as_ref()
