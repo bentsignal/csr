@@ -129,7 +129,7 @@ mod tests {
     use super::*;
     #[test]
     fn muzzle_uses_attachment_offset_in_animated_bone_space() {
-        let model=mdl::Model {attachments:vec![mdl::Attachment{name:"1".into(),bone:0,position:glam::Vec3::new(0.0,3.0,9.0)}],..Default::default()};
+        let model=mdl::Model {attachments:vec![mdl::Attachment{name:"1".into(),bone:0,position:glam::Vec3::new(0.0,3.0,9.0),rotation:glam::Mat3::IDENTITY}],..Default::default()};
         let pose=[glam::Mat4::from_translation(glam::Vec3::new(10.0,20.0,30.0))];
         assert_eq!(muzzle_position(&model,&pose,false),Some(glam::Vec3::new(10.0,23.0,39.0)));
         assert!(muzzle_position(&model,&[],false).is_none());
