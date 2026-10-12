@@ -2,8 +2,8 @@
 
 The owner's manual playtest reported an unsuppressed M4A1-S shot and an AK-47
 sound that did not match the requested 2015 era. These are separate issues:
-the first has an installed-schema selection bug; the second needs historical
-waveform provenance before an era override can claim fidelity.
+the first has an installed-schema selection bug; the second uses a verified
+retained waveform pair, while broader era mixing/DSP fidelity remains unmeasured.
 
 ## Installed selection evidence
 
@@ -52,30 +52,82 @@ from `3rd_Weapon_AK47.Single`. It is 288,436 bytes, stereo 44,100 Hz, SHA256
 `a504312e586d54332bc42b533242bb7b57ba8704439138a624bf4edc18f71903`.
 Its RIFF metadata contains no dated origin field. The newer file includes an
 ACID Pro software comment, which also does not establish its release date.
-These are candidate/provenance facts, not a claim that the retained variant is
-an exact 2015 waveform. No modern file is relabeled as classic.
+The [public release-data snapshot at December 31, 2015](https://github.com/SteamTracking/GameTracking/commit/fcb66c41571b716820b1e1c148e0cba9a318f772)
+records the earlier shot bindings in
+[soundscript metadata](https://github.com/SteamTracking/GameTracking/blob/fcb66c41571b716820b1e1c148e0cba9a318f772/csgo/csgo/scripts/game_sounds_weapons.txt)
+and their size/CRC in the
+[VPK directory metadata](https://github.com/SteamTracking/GameTracking/blob/fcb66c41571b716820b1e1c148e0cba9a318f772/csgo/csgo/pak01_dir.txt).
+Both downloaded text blobs were checked against their Git object hashes
+(`f5aa5ecb564d6117213086d47285e25438f44a35` and
+`3fe114205f6bc2f3aad1690bab6246e0ca4b01ea`) and kept private. This is a
+SteamTracking capture of publicly shipped Valve data, not an official Valve
+hosting location or a binary waveform download.
 
-Historical public soundscript/directory metadata and observed reference
-comparisons remain under investigation. Any eventual era policy must read the
-player's own verified bytes at runtime; no third-party sound is committed or
-downloaded into this repository. The default-suppressor correction does not
-complete the requested 2015 AK-47 fidelity target.
+| 2015 entry | Retained path under `sound/weapons/` | Historical bytes | Historical CRC32 | Computed installed match |
+|---|---|---:|---|---|
+| `Weapon_AK47.Single` | `ak47/ak47-1.wav` | 288436 | `e0fb8223` | size and CRC |
+| `Weapon_AK47.SingleDistant` | `ak47/ak47-1-distant.wav` | 203206 | `1207e18a` | size and CRC |
+| `Weapon_M4A1.Silenced` | `m4a1/m4a1-1.wav` | 44438 | `c909e01e` | size and CRC |
+| `Weapon_M4A1.SilencedDistant` | `m4a1/m4a1-1-distant.wav` | 23122 | `b994e5b9` | size and CRC |
+
+The retained M4A1-S near wave also has an iXML origin date of 2013-07-10.
+That corroborates its age; the historical entry binding and matching directory
+size/CRC provide the stronger era evidence. CRC/size are historical identifiers,
+not cryptographic proof of a complete original build. The runtime policy pins
+the independently computed current retained-file SHA256 values as well.
+
+USP-S remains a separate content gap: the 2015 `usp/usp1.wav` was 44068 bytes /
+CRC `2e40d830`, but the installed file is 45830 bytes / CRC `4199d4d7`.
+Its distant file also differs (historical 44068 / `3c84cb85`, installed
+144098 / `b58cd43a`). It receives the suppressed current-Legacy mapping fix,
+but no 2015 waveform substitution or era-fidelity label.
+
+## Runtime classic policy
+
+`SoundLibrary::load` defaults to `SoundEra::Classic2015`, with no player setup
+step. `load_with_era(InstalledLegacy)` is an explicit comparison seam.
+The profile applies only to exact `csgo_weapon_ak47` /
+`Weapon_AK47.Single` and `csgo_weapon_m4a1_silencer` /
+`Weapon_M4A1.Silenced` identities. Custom content IDs or shot bindings bypass it.
+Public soundscript entries and catalog definitions remain intact.
+
+Own internal entries clone the current parsed mixing/limits/crossfade metadata
+and replace only the verified near/distant waveforms. The complete pair must
+pass expected byte size, SHA256 and the actual audio decoder before either
+entry is published. Missing/changed/unsupported data or reserved entry-name
+collisions preserve the installed shot with at most two fixed diagnostics per
+load. No partial classic/modern pair is constructed.
+
+Verified decoded bytes are retained immutably, with separate internal audio
+cache keys. A subsequently mounted map or pack cannot shadow the old path and
+change those selected bytes. No sound data is committed or downloaded into the
+repository. **The cloned modern mix/DSP metadata has not been verified against
+2015.** This restores measured waveform identity for two stock weapon states;
+it does not claim complete 2015 audio/gameplay fidelity or all-weapon coverage.
 
 ## Verification
 
 Generated catalog regressions cover inherited suppressor state, item override
 to an unsuppressed weapon, permanent suppression, absent/empty special sounds,
 unrecognized suppressor metadata, and unrelated special actions.
-Build/test execution is pending the coordinated Cargo slot.
+The four focused weapons tests passed at `5aa6144` (three new cases plus the
+existing prefab test). New classic regressions cover atomic fallback,
+fingerprint mismatch, unsupported bytes, custom ID/binding exclusion,
+unchanged public entries, and both actual Bevy AudioSource byte identities
+after a synthetic pack shadows the verified paths. No audio device or GPU is
+needed for those generated tests; no copyrighted fixture bytes are used.
 
 Required checks are workspace tests, release Dust II probe/sim and the existing
 soundcheck decoding every weapon waveform. Targeted identity proof should
 assert installed M4A1-S/USP-S/M4A4/AK-47/MP5SD catalog entries and their existing
-sound-library wave paths, then compare M4A1-S/USP-S fire logs with owned Legacy
+sound-library wave paths (`cargo run -p launcher --example weapon_sound_identity`),
+then compare M4A1-S/USP-S fire logs with owned Legacy
 `snd_showstart` probes using ordinary inputs. Wave selection, decode success
 and 2015 sound fidelity are distinct assertions.
 
 Private extraction metadata and waveform hashes are in
 `C:/Users/shawn/csr-fidelity/weapon-sound-identity`; wave bytes were read only in
-memory. No native game launch, config write, Cargo or GPU run was performed for
-this initial checkpoint. No game function bodies or SDK source were inspected.
+memory. Classic client tests, the installed identity audit and full required
+checks await the next coordinated build slot. No native game launch or config
+write was performed; focused catalog tests used the agreed shared target.
+No game function bodies or SDK source were inspected.
