@@ -101,6 +101,42 @@ pub fn list_with(game_dir: &Path, fs: &vfs::Vfs, store: &workshop::Store) -> Vec
     out
 }
 
+/// Resolve identity through discovered install files and the fixed archive
+/// definitions. An ID's name is never interpreted as a filesystem path.
+pub(crate) fn definition(id: &content::ContentId, game_dir: &Path, fs: &vfs::Vfs, store: &workshop::Store) -> Result<MapEntry, String> {
+    if id.origin != content::GameOrigin::Csgo || id.kind != content::ContentKind::Map {
+        return Err(format!("{id} is not a CS:GO map definition"));
+    }
+    let mut matches = list_with(game_dir, fs, store).into_iter().filter(|entry| {
+        entry.id == *id && packs::valid_bsp_name(&entry.name)
+            && (entry.old.is_some() || install_source(fs, &entry.name).is_some())
+    });
+    let found = matches.next().ok_or_else(|| format!("map ContentId {id} is not in the local install/archive definitions"))?;
+    if matches.next().is_some() { return Err(format!("ambiguous local map ContentId {id}")); }
+    Ok(found)
+}
+
+/// Only the game-directory mounts may define built-in maps. A private pack or
+/// embedded BSP cannot turn its filename into an engine-owned stable identity.
+fn install_source(fs: &vfs::Vfs, name: &str) -> Option<String> {
+    let path = format!("maps/{name}.bsp");
+    fs.labels().into_iter().find(|label| {
+        (label.starts_with("vpk:") || label.starts_with("dir:")) && fs.exists_from(label, &path)
+    }).map(str::to_owned)
+}
+
+pub(crate) fn local_source(entry: &MapEntry, fs: &vfs::Vfs, store: &workshop::Store) -> Result<String, String> {
+    if entry.old.is_some() {
+        let label = format!("workshop:{}", store.root().display());
+        if entry.status == MapStatus::Ready && fs.exists_from(&label, &format!("maps/{}.bsp", entry.name)) {
+            return Ok(label);
+        }
+        Err(format!("archive {} is not installed in its verified local source", entry.id))
+    } else {
+        install_source(fs, &entry.name).ok_or_else(|| format!("installed map {} is no longer available", entry.id))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
