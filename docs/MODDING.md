@@ -75,7 +75,11 @@ Optional `[[resources]]` entries have `id` and `path`, for example
 Supported kinds are `model` (`.mdl`), `material` (`.vmt`) and `sound`
 (`.wav`, `.mp3`, `.ogg`). Every provided id must have exactly one definition;
 the declared map/resource must exist. Dependency files need no separate id.
-The origin is one lowercase component such as `csgo`, `iw4` or `mod`.
+The origin is `mod` or a custom lowercase component. Version 1 refuses built-in
+game namespaces (`csgo`, `t4`, `iw4`, `t5`, `iw5`, `t6`) and `mw2`, `minecraft`
+and `cs2`; private definitions cannot shadow engine-owned stable IDs. Legacy
+recipe aliases get new IDs such as `mod_map_dust2_recipe`. A future explicit
+override/importer API must define how built-in namespaces can be used.
 Unknown manifest fields, definitions and unsupported kinds are errors.
 
 Asset files are limited to `maps/` BSP/NAV, `materials/` VMT/VTF,

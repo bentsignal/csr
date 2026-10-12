@@ -328,3 +328,47 @@ fn malformed_crc_and_invalid_utf8_do_not_mount() {
             .contains("UTF-8")
     );
 }
+
+#[test]
+fn reserved_origins_cannot_shadow_builtin_ids_or_replace_an_installed_pack() {
+    let temp = Temp::new();
+    let m = manifest();
+    let bytes = build(&m, &[("maps/arena_file.bsp", b"original")]).unwrap();
+    let original = Pack::from_bytes(bytes.clone()).unwrap();
+    let store = Installed::new(&temp.0);
+    store.install_validated(&original).unwrap();
+    let target = store.dir().join("test_arena.csrpack");
+    for origin in [
+        "csgo",
+        "t4",
+        "iw4",
+        "t5",
+        "iw5",
+        "t6",
+        "mw2",
+        "minecraft",
+        "cs2",
+    ] {
+        let mut reserved = m.clone();
+        reserved.origin = origin.into();
+        reserved.provides = vec![format!("{origin}_map_arena")];
+        reserved.maps[0].id = reserved.provides[0].clone();
+        reserved.content_hash = original.manifest().content_hash.clone();
+        let incoming = temp.write(
+            "reserved.csrpack",
+            &raw_zip(&reserved, &[("maps/arena_file.bsp", b"original")]),
+        );
+        assert!(
+            store
+                .install(&incoming)
+                .unwrap_err()
+                .contains("reserved built-in origin"),
+            "{origin}"
+        );
+        assert_eq!(fs::read(&target).unwrap(), bytes, "{origin}");
+        let (installed, errors) = store.load();
+        assert!(errors.is_empty());
+        assert_eq!(installed.len(), 1);
+        assert_eq!(installed[0].manifest().provides, ["mod_map_arena"]);
+    }
+}

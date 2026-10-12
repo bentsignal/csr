@@ -166,6 +166,13 @@ impl Manifest {
         if !identifier(&self.origin) {
             return Err("invalid origin: use a single lowercase ContentId component".into());
         }
+        if !matches!(
+            GameOrigin::from_prefix(&self.origin),
+            GameOrigin::Mod | GameOrigin::Other(_)
+        ) || matches!(self.origin.as_str(), "mw2" | "minecraft" | "cs2")
+        {
+            return Err("reserved built-in origin: v1 private definitions must use mod or a custom namespace".into());
+        }
         if self.name.trim().is_empty() || self.name.len() > 256 || self.description.len() > 4096 {
             return Err("invalid pack name or description length".into());
         }
