@@ -10,6 +10,16 @@ pub const SNAPSHOT: u8 = 2;
 pub const EVENTS: u8 = 3;
 pub const MAX_INPUT_BATCH: usize = 8;
 pub const MAX_MESSAGE: usize = 256 * 1024;
+/// Exact f64 tick representation, with room for bounded local replay.
+pub const MAX_LOCAL_TICK: u64 = (1_u64 << 53) - 1;
+pub const MAX_PROTOCOL_COUNTER: u64 = MAX_LOCAL_TICK - crate::prediction::MAX_PENDING_INPUTS as u64;
+
+pub(crate) fn validate_events(batch: &EventBatch) -> Result<(), String> {
+    if batch.tick > MAX_PROTOCOL_COUNTER || batch.events.len() > 4096 {
+        return Err("invalid event batch bounds".into());
+    }
+    Ok(())
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ContentManifest {
@@ -171,13 +181,19 @@ pub(crate) fn validate_state(
     last_ack: u64,
 ) -> Result<(), String> {
     let Some(ServerControl::Welcome {
-        player, tick_rate, ..
+        player,
+        tick_rate,
+        server_tick,
+        ..
     }) = welcome
     else {
         return Err("state before admission".into());
     };
     let world = &state.snapshot.state;
     if world.tick_rate != *tick_rate
+        || *server_tick > MAX_PROTOCOL_COUNTER
+        || world.tick > MAX_PROTOCOL_COUNTER
+        || state.acknowledged_input > MAX_PROTOCOL_COUNTER
         || state.acknowledged_input > sent
         || state.acknowledged_input < last_ack
     {
@@ -406,5 +422,24 @@ mod tests {
         invalid = state;
         invalid.snapshot.state.players[0].last_input.rewind_tick = Some(1);
         assert!(validate_state(&invalid, Some(&welcome), 0, 0).is_err());
+        invalid.snapshot.state.players[0].last_input.rewind_tick = None;
+        invalid.snapshot.state.tick = u64::MAX;
+        assert!(validate_state(&invalid, Some(&welcome), 0, 0).is_err());
+        invalid.snapshot.state.tick = 0;
+        invalid.acknowledged_input = u64::MAX;
+        assert!(validate_state(&invalid, Some(&welcome), u64::MAX, 0).is_err());
+        let mut invalid_welcome = welcome;
+        if let ServerControl::Welcome { server_tick, .. } = &mut invalid_welcome {
+            *server_tick = u64::MAX;
+        }
+        invalid.acknowledged_input = 0;
+        assert!(validate_state(&invalid, Some(&invalid_welcome), 0, 0).is_err());
+        assert!(
+            validate_events(&EventBatch {
+                tick: u64::MAX,
+                events: vec![]
+            })
+            .is_err()
+        );
     }
 }

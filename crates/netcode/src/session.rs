@@ -142,8 +142,11 @@ impl Session {
         // Validate the entire datagram before admitting any command.
         let mut accepted = Vec::new();
         for mut command in batch.0 {
-            if command.sequence == 0 {
-                return Err("input sequence starts at one".into());
+            if command.sequence == 0
+                || command.sequence > MAX_PROTOCOL_COUNTER
+                || command.view_tick > MAX_PROTOCOL_COUNTER
+            {
+                return Err("input counters exceed protocol bounds".into());
             }
             if command.sequence <= peer.acknowledged {
                 continue;
@@ -383,6 +386,19 @@ mod tests {
         assert_eq!(s.snapshot_for(10).unwrap().acknowledged_input, 0);
         assert_eq!(s.snapshot_for(20).unwrap().acknowledged_input, 1);
         assert!(s.input(20, InputBatch(vec![command(5000)])).is_err());
+        for counter in 0..2 {
+            let mut malformed = command(2);
+            if counter == 0 {
+                malformed.view_tick = u64::MAX;
+            } else {
+                malformed.sequence = u64::MAX;
+            }
+            assert!(
+                s.input(10, InputBatch(vec![command(1), malformed]))
+                    .is_err()
+            );
+            assert!(s.peers[&10].pending.is_empty());
+        }
     }
     #[test]
     fn future_view_ticks_and_invalid_tracking_cannot_poison_the_world() {

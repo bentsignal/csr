@@ -29,6 +29,12 @@ field. At receipt **and** command consumption, a requested tick must:
 - Have passed receipt validation; time spent queued cannot upgrade an
   originally invalid request into an accepted rewind.
 
+Welcome/snapshot/event ticks, input view ticks and sequence acknowledgements
+are capped at `2^53 - 257`. This preserves exact integer tick representation
+in the render timeline and leaves 256 ticks of bounded prediction headroom.
+Malformed counters are rejected before use; an invalid prediction timeline
+is never stepped. The local render/replay ceiling is `2^53 - 1`.
+
 RTT is observed by the server transport. Invalid/negative measurements add
 zero allowance, and large measurements cannot exceed the server cap. Future,
 expired and otherwise invalid view requests execute against current hulls;

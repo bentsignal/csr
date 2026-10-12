@@ -102,7 +102,10 @@ impl PoseHistory {
         if self.latest_tick().is_some_and(|tick| state.tick <= tick) {
             return Ok(false);
         }
-        if state.tick_rate != self.rate || state.players.len() > 64 {
+        if state.tick > crate::protocol::MAX_PROTOCOL_COUNTER
+            || state.tick_rate != self.rate
+            || state.players.len() > 64
+        {
             return Err("incompatible remote pose snapshot".into());
         }
         let mut players = BTreeMap::new();
@@ -136,7 +139,10 @@ impl PoseHistory {
         player: PlayerId,
         render_tick: f64,
     ) -> Result<Option<RenderSample>, String> {
-        if !render_tick.is_finite() || render_tick < 0. {
+        if !render_tick.is_finite()
+            || render_tick < 0.
+            || render_tick > crate::protocol::MAX_LOCAL_TICK as f64
+        {
             return Err("invalid render timeline".into());
         }
         let Some(first) = self.frames.front() else {
@@ -508,6 +514,11 @@ mod tests {
         assert_eq!(history.latest_tick(), Some(0));
         assert!(history.sample(id, f64::NAN).is_err());
         assert!(history.sample(id, -1.).is_err());
+        assert!(history.sample(id, u64::MAX as f64).is_err());
+        world.tick = u64::MAX;
+        world.players[0].tracked = None;
+        assert!(history.push(&world.state()).is_err());
+        assert_eq!(history.latest_tick(), Some(0));
     }
     #[test]
     fn antipodal_quaternions_do_not_spin_equivalent_head_orientations() {
