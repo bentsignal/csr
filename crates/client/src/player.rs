@@ -43,6 +43,8 @@ pub struct LocalPlayer {
     pub spectating: Option<PlayerId>,
     was_alive: bool,
     remote_life: u64,
+    /// Mouse buttons held when entering pointer capture, until their release.
+    capture_attacks: u32,
 }
 
 impl LocalPlayer {
@@ -65,6 +67,7 @@ impl LocalPlayer {
             spectating: None,
             was_alive: true,
             remote_life: 0,
+            capture_attacks: 0,
         }
     }
 
@@ -83,6 +86,15 @@ impl LocalPlayer {
         self.pending_slot = 0;
         self.pending_drop = false;
         self.pending_buys.clear();
+        self.capture_attacks = 0;
+    }
+
+    fn release_capture_attacks(&mut self, mouse: &ButtonInput<MouseButton>) {
+        for (button, attack) in [(MouseButton::Left, buttons::ATTACK), (MouseButton::Right, buttons::ATTACK2)] {
+            if !mouse.pressed(button) || mouse.just_released(button) {
+                self.capture_attacks &= !attack;
+            }
+        }
     }
 
     /// Camera lifecycle comes from authority, including lost death snapshots.
@@ -129,12 +141,14 @@ fn captured(cursor: &CursorOptions) -> bool {
 }
 
 pub fn grab_cursor(
+    mut local: ResMut<LocalPlayer>,
     mut cursor: Single<&mut CursorOptions, With<PrimaryWindow>>,
     mouse: Res<ButtonInput<MouseButton>>,
     enabled: Res<InputEnabled>,
     menu: Res<crate::buymenu::BuyMenu>,
     front: Res<crate::menu::Menu>,
 ) {
+    local.release_capture_attacks(&mouse);
     if !enabled.0 {
         return;
     }
@@ -144,6 +158,10 @@ pub fn grab_cursor(
         return;
     }
     if (mouse.just_pressed(MouseButton::Left) || menu.just_closed) && cursor.grab_mode == CursorGrabMode::None {
+        for (button, attack) in [(MouseButton::Left, buttons::ATTACK), (MouseButton::Right, buttons::ATTACK2)] {
+            if mouse.pressed(button) { local.capture_attacks |= attack; }
+        }
+        local.latched &= !local.capture_attacks;
         cursor.grab_mode = CursorGrabMode::Locked;
         cursor.visible = false;
     }
@@ -176,6 +194,7 @@ pub fn look(
     mut inspect: ResMut<crate::tracers::InspectRequest>,
     remote: Option<Res<crate::remote::RemoteClient>>,
 ) {
+    local.release_capture_attacks(&mouse);
     if front.open() {return;}
     if remote.as_ref().is_some_and(|r| r.status() != &netcode::remote_session::Status::Ready) { return; }
     if block.0 > 0 { if !mouse.pressed(MouseButton::Left) && !mouse.pressed(MouseButton::Right) {block.0=0;} return; }
@@ -229,8 +248,7 @@ pub fn look(
     if keys.just_pressed(settings.binds[8]) {
         b |= buttons::RELOAD;
     }
-    // `look` runs before `grab_cursor`, so the click that captures the
-    // mouse is never seen here as a shot.
+    // The shared sampler also guards held attacks after grab_cursor captures.
     if grabbed && alive && mouse.just_pressed(MouseButton::Left) {
         b |= buttons::ATTACK;
     }
@@ -313,7 +331,7 @@ pub fn sample_tick_input(local: &mut LocalPlayer, controls: &Controls<'_>) -> Ti
     TickInput {
         view_angles: glam::Vec3::new(local.pitch, local.yaw, 0.),
         forward_move, side_move,
-        buttons: held | std::mem::take(&mut local.latched),
+        buttons: (held | std::mem::take(&mut local.latched)) & !local.capture_attacks,
         weapon_slot: std::mem::take(&mut local.pending_slot),
         buy: if local.pending_buys.is_empty() { Purchase::None } else { local.pending_buys.remove(0) },
         drop: std::mem::take(&mut local.pending_drop),
@@ -467,6 +485,95 @@ pub fn update_camera(
 #[cfg(test)]
 mod remote_input_tests {
     use super::*;
+    #[derive(Resource, Default)]
+    struct Sampled(TickInput);
+
+    fn sample_after_capture(
+        mut local: ResMut<LocalPlayer>,
+        keys: Res<ButtonInput<KeyCode>>,
+        mouse: Res<ButtonInput<MouseButton>>,
+        settings: Res<crate::settings::Settings>,
+        cursor: Single<&CursorOptions, With<PrimaryWindow>>,
+        mut result: ResMut<Sampled>,
+    ) {
+        result.0 = sample_tick_input(&mut local, &Controls {
+            keys: &keys, mouse: &mouse, settings: &settings, enabled: true,
+            blocked: false, captured: captured(&cursor), buy_menu: false,
+        });
+    }
+
+    fn capture_app() -> App {
+        let mut world = sim::World::new(std::sync::Arc::new(collision::CollisionWorld::new()));
+        let id = world.add_player("Local", sim::Team::CounterTerrorist);
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .insert_resource(SimWorld(world))
+            .insert_resource(LocalPlayer::new(id, glam::Vec3::ZERO, 0.))
+            .insert_resource(InputEnabled(true))
+            .init_resource::<InputBlockFrames>()
+            .init_resource::<ButtonInput<KeyCode>>()
+            .init_resource::<ButtonInput<MouseButton>>()
+            .init_resource::<AccumulatedMouseMotion>()
+            .init_resource::<AccumulatedMouseScroll>()
+            .init_resource::<crate::settings::Settings>()
+            .init_resource::<crate::menu::Menu>()
+            .init_resource::<crate::buymenu::BuyMenu>()
+            .init_resource::<crate::tracers::InspectRequest>()
+            .init_resource::<Sampled>()
+            .add_systems(Update, (look, grab_cursor, sample_after_capture).chain());
+        app.world_mut().spawn((PrimaryWindow, CursorOptions {
+            grab_mode: CursorGrabMode::None, visible: true,
+            ..Default::default()
+        }));
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::KeyW);
+        app
+    }
+
+    #[test]
+    fn capture_press_stays_suppressed_while_held_without_blocking_movement() {
+        let mut app = capture_app();
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Left);
+        app.update();
+        assert_eq!(app.world().resource::<Sampled>().0.buttons & buttons::ATTACK, 0);
+        assert_eq!(app.world().resource::<Sampled>().0.forward_move, 450.);
+        assert_eq!(app.world_mut().query::<&CursorOptions>().single(app.world()).unwrap().grab_mode, CursorGrabMode::Locked);
+        for _ in 0..8 {
+            app.world_mut().resource_mut::<ButtonInput<MouseButton>>().clear();
+            // Even a previously queued mouse attack cannot bypass capture.
+            app.world_mut().resource_mut::<LocalPlayer>().latched |= buttons::ATTACK;
+            app.update();
+            assert_eq!(app.world().resource::<Sampled>().0.buttons & buttons::ATTACK, 0);
+            assert_eq!(app.world().resource::<Sampled>().0.forward_move, 450.);
+        }
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().release(MouseButton::Left);
+        app.update();
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().clear();
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Left);
+        app.update();
+        assert_ne!(app.world().resource::<Sampled>().0.buttons & buttons::ATTACK, 0);
+    }
+
+    #[test]
+    fn capture_guards_each_already_held_button_until_its_own_release() {
+        let mut app = capture_app();
+        for button in [MouseButton::Left, MouseButton::Right] {
+            app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(button);
+        }
+        app.update();
+        assert_eq!(app.world().resource::<Sampled>().0.buttons & (buttons::ATTACK | buttons::ATTACK2), 0);
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().clear();
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().release(MouseButton::Right);
+        // Bevy retains just_released alongside a new press in the same frame.
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Right);
+        app.update();
+        assert_eq!(app.world().resource::<Sampled>().0.buttons & buttons::ATTACK, 0);
+        assert_ne!(app.world().resource::<Sampled>().0.buttons & buttons::ATTACK2, 0);
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().clear();
+        app.update();
+        assert_eq!(app.world().resource::<Sampled>().0.buttons & buttons::ATTACK, 0);
+        assert_ne!(app.world().resource::<Sampled>().0.buttons & buttons::ATTACK2, 0);
+    }
+
     #[test]
     fn sampler_keeps_held_controls_and_consumes_complete_one_shot_requests_once() {
         let settings = crate::settings::Settings::default();
