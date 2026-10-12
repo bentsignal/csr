@@ -543,6 +543,7 @@ fn spawn_level(
         viewmodel::layer(),
         PlayerCamera,
         player::ViewModelCamera,
+        IsDefaultUiCamera,
         menu_blur::PostProcessSettings::default(),
     ));
     commands.insert_resource(local);

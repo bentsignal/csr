@@ -83,6 +83,151 @@ fn filter(root: &mut kv::Block, installed: &HashSet<String>, symbols: &HashSet<S
     }
 }
 
+/// The installed movie splits this native result on a comma.
+pub(super) fn map_group_subkeys(root: &kv::Block, group: &str, attribute: &str) -> String {
+    root.block("mapgroups")
+        .and_then(|groups| groups.block(group))
+        .and_then(|group| group.block(attribute))
+        .map(|block| {
+            block
+                .iter()
+                .map(|(name, _)| name)
+                .collect::<Vec<_>>()
+                .join(",")
+        })
+        .unwrap_or_default()
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct Selection {
+    pub map: String,
+    pub deathmatch: bool,
+}
+
+/// The native dialog validates, supplies the same query, then commits via OnOk.
+pub(super) struct OfflineLaunch {
+    difficulty: Option<u8>,
+    checked: Option<(String, Selection, bool)>,
+    staged: Option<(Selection, bool)>,
+}
+impl Default for OfflineLaunch {
+    fn default() -> Self {
+        Self {
+            difficulty: Some(3),
+            checked: None,
+            staged: None,
+        }
+    }
+}
+impl OfflineLaunch {
+    pub fn difficulty(&mut self, value: Option<f64>) {
+        self.checked = None;
+        self.staged = None;
+        self.difficulty = value
+            .filter(|value| {
+                value.is_finite() && value.fract() == 0.0 && (0.0..=5.0).contains(value)
+            })
+            .map(|value| value as u8);
+    }
+    pub fn check(&mut self, root: &kv::Block, text: Option<&str>) -> Result<(), String> {
+        self.checked = None;
+        self.staged = None;
+        let no_bots = match self.difficulty {
+            Some(0) => true,
+            Some(3) => false,
+            _ => {
+                return Err(
+                    "Choose No Bots or Medium Bots; other difficulties are not available yet."
+                        .into(),
+                );
+            }
+        };
+        let text = text.ok_or("Game settings could not be read.")?;
+        let selection = offline_selection(root, text)?;
+        self.checked = Some((text.into(), selection, no_bots));
+        Ok(())
+    }
+    pub fn query(&mut self, text: Option<&str>) {
+        self.staged = None;
+        if let Some((checked, selection, no_bots)) = self.checked.take() {
+            if text == Some(checked.as_str()) {
+                self.staged = Some((selection, no_bots));
+            }
+        }
+    }
+    pub fn commit(&mut self) -> Option<(Selection, bool)> {
+        self.staged.take()
+    }
+}
+
+/// Validates the serialized settings emitted by the installed offline GO button.
+/// Map names come only from the filtered local catalog, never from a UI path.
+pub(super) fn offline_selection(root: &kv::Block, text: &str) -> Result<Selection, String> {
+    if text.len() > 8192 || text.bytes().filter(|&byte| byte == b'{').count() > 32 {
+        return Err("Game settings are too large.".into());
+    }
+    let settings = kv::parse(text).map_err(|_| "Game settings could not be read.")?;
+    fn unique(block: &kv::Block) -> bool {
+        let mut keys = HashSet::new();
+        block.iter().all(|(key, value)| {
+            keys.insert(key.to_ascii_lowercase()) && value.as_block().is_none_or(unique)
+        })
+    }
+    if !unique(&settings)
+        || settings.block("System").and_then(|b| b.str("network")) != Some("offline")
+        || settings.block("Options").and_then(|b| b.str("action")) != Some("create")
+    {
+        return Err("These game settings are not available offline.".into());
+    }
+    let game = settings
+        .block("Game")
+        .ok_or("Choose a game mode and map.")?;
+    let kind = game.str("type").ok_or("Choose a game mode.")?;
+    let mode = game.str("mode").ok_or("Choose a game mode.")?;
+    let deathmatch = match (kind, mode) {
+        ("classic", "competitive") => false,
+        ("gungame", "deathmatch") => true,
+        _ => return Err("This game mode is not available yet.".into()),
+    };
+    if game
+        .str("skirmishmode")
+        .is_some_and(|value| value != "undefined")
+    {
+        return Err("This game mode is not available yet.".into());
+    }
+    let group = game.str("mapgroupname").ok_or("Choose a map.")?;
+    if root
+        .path(&["gameTypes", kind, "gameModes", mode, "mapgroupsSP"])
+        .and_then(kv::Value::as_block)
+        .and_then(|groups| groups.get(group))
+        .is_none()
+    {
+        return Err("This map is not available for the selected mode.".into());
+    }
+    let maps = root
+        .path(&["mapgroups", group, "maps"])
+        .and_then(kv::Value::as_block)
+        .ok_or("Choose an installed map.")?;
+    if maps.entries.len() != 1 {
+        return Err("Choose one map to play.".into());
+    }
+    let map = &maps.entries[0].0;
+    if !map
+        .bytes()
+        .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
+        || !root
+            .block("maps")
+            .is_some_and(|maps| maps.get(map).is_some())
+        || (!deathmatch && !map.starts_with("de_"))
+    {
+        return Err("Choose an installed map supported by this mode.".into());
+    }
+    Ok(Selection {
+        map: map.clone(),
+        deathmatch,
+    })
+}
+
 pub(super) fn mode_name(root: &kv::Block, game_type: f64, game_mode: f64) -> &str {
     let Some(types) = root.block("gameTypes") else {
         return "";
@@ -113,6 +258,83 @@ pub(super) fn mode_name(root: &kv::Block, game_type: f64, game_mode: f64) -> &st
 #[cfg(test)]
 mod tests {
     use super::*;
+    const REQUEST: &str = "System { network offline } Game { type classic mode competitive mapgroupname mg_de_dust2 skirmishmode undefined } Options { action create anytypemode 0 } Contexts {} Properties {}";
+
+    fn installed_modes() -> kv::Block {
+        kv::parse("gameTypes { classic { gameModes { competitive { mapgroupsSP { mg_de_dust2 0 } } } } gungame { gameModes { deathmatch { mapgroupsSP { mg_de_dust2 0 } } } } } mapgroups { mg_de_dust2 { maps { de_dust2 0 } } } maps { de_dust2 {} }").unwrap()
+    }
+
+    #[test]
+    fn launch_requires_the_checked_query_and_a_single_commit() {
+        let root = installed_modes();
+        let mut launch = OfflineLaunch::default();
+        assert!(launch.commit().is_none());
+        launch.check(&root, Some(REQUEST)).unwrap();
+        launch.query(Some("a changed query"));
+        assert!(launch.commit().is_none());
+        launch.difficulty(Some(0.0));
+        launch.check(&root, Some(REQUEST)).unwrap();
+        launch.query(Some(REQUEST));
+        assert!(launch.commit().unwrap().1);
+        assert!(launch.commit().is_none());
+        launch.check(&root, Some(REQUEST)).unwrap();
+        assert!(launch.check(&root, Some("invalid")).is_err());
+        launch.query(Some(REQUEST));
+        assert!(launch.commit().is_none());
+        for invalid in [Some(f64::NAN), Some(3.5), Some(4.0), None] {
+            launch.difficulty(invalid);
+            assert!(launch.check(&root, Some(REQUEST)).is_err());
+        }
+    }
+
+    #[test]
+    fn observed_offline_go_resolves_only_the_filtered_installed_map_and_mode() {
+        let root = installed_modes();
+        assert_eq!(
+            offline_selection(&root, REQUEST).unwrap(),
+            Selection {
+                map: "de_dust2".into(),
+                deathmatch: false,
+            }
+        );
+        let deathmatch = REQUEST.replace(
+            "type classic mode competitive",
+            "type gungame mode deathmatch",
+        );
+        assert!(offline_selection(&root, &deathmatch).unwrap().deathmatch);
+        for invalid in [
+            REQUEST.replace("offline", "online"),
+            REQUEST.replace("competitive", "casual"),
+            REQUEST.replace("mg_de_dust2", "../../maps/private"),
+            REQUEST.replace("network offline", "network offline NETWORK online"),
+            REQUEST.replace("skirmishmode undefined", "skirmishmode arbitrary"),
+            "nest {".repeat(33),
+            "x".repeat(8193),
+        ] {
+            assert!(offline_selection(&root, &invalid).is_err());
+        }
+        let mut unavailable = root;
+        unavailable
+            .get_mut("maps")
+            .unwrap()
+            .as_block_mut()
+            .unwrap()
+            .entries
+            .clear();
+        assert!(offline_selection(&unavailable, REQUEST).is_err());
+    }
+
+    #[test]
+    fn native_map_group_result_splits_into_map_keys_in_authored_order() {
+        let root = kv::parse("mapgroups { classic { maps { de_dust2 0 de_inferno 1 } } }").unwrap();
+        let native = map_group_subkeys(&root, "classic", "maps");
+        assert_eq!(
+            native.split(',').collect::<Vec<_>>(),
+            ["de_dust2", "de_inferno"]
+        );
+        assert_eq!(map_group_subkeys(&root, "absent", "maps"), "");
+        assert_eq!(map_group_subkeys(&root, "classic", "absent"), "");
+    }
     #[test]
     fn retains_mode_labels_but_filters_cards_and_reindexes_slots() {
         let mut root = kv::parse(r#"

@@ -179,7 +179,10 @@ pub(crate) fn clear_match(world: &mut World) {
         .iter(world)
         .collect();
     for entity in entities {
-        let _ = world.despawn(entity);
+        // Despawning a parent already removes its related children.
+        if world.get_entity(entity).is_ok() {
+            world.despawn(entity);
+        }
     }
     world.remove_resource::<LoadedLevel>();
     world.remove_resource::<crate::player::SimWorld>();
@@ -309,6 +312,10 @@ mod tests {
             .spawn((Persistent, Transform::default()))
             .id();
         let joint = app.world_mut().spawn(Transform::default()).id();
+        let child = app
+            .world_mut()
+            .spawn((Transform::default(), ChildOf(joint)))
+            .id();
         let hud = app.world_mut().spawn(Node::default()).id();
         // UI audio can receive its persistent marker in a later command,
         // after the generic match ownership observer has already tagged it.
@@ -321,6 +328,7 @@ mod tests {
         app.update();
         assert!(app.world().get_entity(camera).is_ok());
         assert!(app.world().get_entity(joint).is_err());
+        assert!(app.world().get_entity(child).is_err());
         assert!(app.world().get_entity(hud).is_err());
         assert!(app.world().get_entity(ui_sound).is_ok());
         assert_eq!(

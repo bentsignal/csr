@@ -37,6 +37,8 @@ enum Action {
     Sound(String),
     Command(String),
     Convar(String, Value),
+    Launch(crate::frontend_game::Selection, bool),
+    Notice(String),
 }
 struct Bridge {
     data: Arc<Mutex<Data>>,
@@ -44,9 +46,15 @@ struct Bridge {
     seen: HashSet<(String, String)>,
     roots: HashMap<String, String>,
     options: crate::frontend_options::Scene,
+    offline: crate::frontend_game::OfflineLaunch,
 }
 
 fn show_single_player(path: &str, calls: &mut Calls) {
+    calls.call(
+        "_global.csrBindings",
+        "bindApi",
+        vec!["SinglePlayerAPI".into(), "StartSinglePlayer".into()],
+    );
     calls.call(
         path,
         "InitDialogData",
@@ -131,6 +139,56 @@ impl Engine for Bridge {
             }
         }
         let arg = |index: usize| args.get(index).map(Value::str).unwrap_or_default();
+        if object == "StartSinglePlayer" {
+            let text = match args {
+                [Value::String(text)] => Some(text.as_str()),
+                _ => None,
+            };
+            match method {
+                "SetCustomBotDifficulty" => {
+                    self.offline.difficulty(match args {
+                        [Value::Number(value)] => Some(*value),
+                        _ => None,
+                    });
+                    return None;
+                }
+                "CheckGameSettingsRequirements" => {
+                    let data = self.data.lock().unwrap();
+                    let result = self.offline.check(&data.game_modes, text);
+                    let valid =
+                        result.is_ok() && matches!(data.state, AppState::Menu | AppState::Browser);
+                    if let Err(error) = result {
+                        self.actions.lock().unwrap().push(Action::Notice(error));
+                    }
+                    if !valid {
+                        self.offline.query(None);
+                    }
+                    return Some(Value::Bool(valid));
+                }
+                "SetMatchmakingQuery" => {
+                    self.offline.query(text);
+                    return None;
+                }
+                "OnOk" => {
+                    let selection = self.offline.commit();
+                    if args.is_empty()
+                        && matches!(
+                            self.data.lock().unwrap().state,
+                            AppState::Menu | AppState::Browser
+                        )
+                    {
+                        if let Some((selection, no_bots)) = selection {
+                            self.actions
+                                .lock()
+                                .unwrap()
+                                .push(Action::Launch(selection, no_bots));
+                        }
+                    }
+                    return None;
+                }
+                _ => {}
+            }
+        }
         if method == "OnLoadFinished" && !object.starts_with("CScaleformComponent_") {
             if let Some(path) = arg(0).strip_prefix("mc:") {
                 self.roots.insert(object.into(), path.into());
@@ -331,14 +389,9 @@ impl Engine for Bridge {
                     .unwrap_or("");
                 Some(data.localization.get(value).unwrap_or(value).into())
             }
-            ("GameTypes", "GetMapGroupAttributeSubKeys") => Some(Value::List(
-                data.game_modes
-                    .block("mapgroups")
-                    .and_then(|groups| groups.block(&arg(0)))
-                    .and_then(|group| group.block(&arg(1)))
-                    .map(|block| block.iter().map(|(name, _)| name.into()).collect())
-                    .unwrap_or_default(),
-            )),
+            ("GameTypes", "GetMapGroupAttributeSubKeys") => Some(
+                crate::frontend_game::map_group_subkeys(&data.game_modes, &arg(0), &arg(1)).into(),
+            ),
             _ => None,
         }
     }
@@ -525,7 +578,12 @@ pub(crate) fn update(
     mut menu: ResMut<crate::menu::Menu>,
     state: Res<State<AppState>>,
     mut settings: ResMut<Settings>,
-    (data, loader, options): (Res<GameData>, Res<crate::session::Loader>, Res<Options>),
+    (data, loader, options, request): (
+        Res<GameData>,
+        Res<crate::session::Loader>,
+        Res<Options>,
+        Res<crate::menu::LoadRequest>,
+    ),
     loc: Res<crate::localize::Localization>,
     (inventory, practice): (
         Res<crate::cosmetics::Inventory>,
@@ -647,6 +705,7 @@ pub(crate) fn update(
                 seen: HashSet::new(),
                 roots: HashMap::new(),
                 options: Default::default(),
+                offline: Default::default(),
             }),
         )));
     }
@@ -795,6 +854,19 @@ pub(crate) fn update(
     let actions = std::mem::take(&mut *front.actions.lock().unwrap());
     for action in actions {
         match action {
+            Action::Launch(selection, no_bots) => {
+                if matches!(state.get(), AppState::Menu | AppState::Browser) {
+                    let mut selected = options.0.clone();
+                    selected.map = selection.map;
+                    selected.deathmatch = selection.deathmatch;
+                    if no_bots {
+                        selected.bots = 0;
+                    }
+                    menu.status.clear();
+                    *request.0.lock().unwrap() = Some(selected);
+                }
+            }
+            Action::Notice(message) => menu.status = message,
             Action::Sound(path) => {
                 if let Some(entity) =
                     sounds.play_ui_wave(&mut commands, &data.vfs, &mut sources, &path)

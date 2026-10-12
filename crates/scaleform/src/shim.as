@@ -52,6 +52,14 @@ _global.csrApi = function(name) {
     return _global.csrApis[name];
 };
 
+// Element movies can overwrite their API aliases while loading. Bind the
+// native object after loading, before initializing the authored dialog.
+_global.csrBindApi = function(alias, name) {
+    _global[alias] = _global.csrApi(name);
+};
+_global.csrBindings = new Object();
+_global.csrBindings.bindApi = _global.csrBindApi;
+
 // Resolves "_global.MainMenuMovie.Panel" or "_level31.Panel" to an object.
 _global.csrResolve = function(path) {
     var parts = path.split(".");

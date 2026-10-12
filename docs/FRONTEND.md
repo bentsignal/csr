@@ -32,12 +32,21 @@ They do not decode game function bodies.
 - The authored pause movie renders during a match and follows menu visibility.
   Closing pause through a movie callback resumes the simulation clock, captures
   the cursor and blocks the closing click from firing a weapon. A regression
-  test covers that external transition; native Resume and Exit callbacks still
-  need a rendered interaction proof.
+  test covers that external transition. A physical Exit click returns to the
+  home screen in the same process; the combined Resume/second-map proof remains.
 - The offline map picker defaults to Competitive. Unsupported Casual, Wingman
   and War Games buttons are disabled using their authored controls. Mapgroups
   are filtered against installed maps and the original shared-library thumbnail
   exports, then indexed without gaps. Eight classic cards render on this install.
+- The original GO dialog validates serialized offline settings, submits that
+  exact query and commits through its native `OnOk`. Requests resolve only
+  supported modes and filtered installed maps, then use the existing map worker.
+  A real pointer sequence launches Dust II in the same process. No Bots and
+  Medium Bots are accepted; other difficulty choices receive visible feedback
+  until implemented. The current bot AI has not been measured for original
+  difficulty parity.
+- Gameplay HUD nodes explicitly target the match's default UI camera. The
+  higher-order menu camera can be inactive without hiding radar, health or ammo.
 - Audio and Keyboard/Mouse controls come from the installed settings scripts.
   Master Volume, Mouse Sensitivity and Reverse Mouse use their native slider and
   choice callbacks and persist through the existing settings store. Values are
@@ -48,8 +57,7 @@ They do not decode game function bodies.
 
 ## Remaining integration
 
-The offline GO callback still needs to reach the load request. Its full
-menu-to-match-to-menu-to-second-map flow needs a rendered proof. Slider focus,
+The full menu-to-match-to-menu-to-second-map flow still needs a rendered proof. Slider focus,
 keyboard navigation, numeric entry and restore-defaults
 behavior need further checks against the original movie's runtime contract.
 
@@ -87,8 +95,11 @@ volume slider, and `audio-drag-4.png` shows the pointer-driven 76% result with
 its matching number and saved config. The home capture's masked MAE is 19.77 against the reference;
 this integration has not reached the earlier offscreen spike's fidelity.
 `pause-2.png` shows the original pause movie with its Resume and Exit controls.
+`offline-launch-1.png` shows Dust II after the original GO sequence;
+`pause-exit-1.png` shows the return to home, and `match-hud-1.png` verifies the
+match camera with radar, crosshair, round timer, health and ammo visible.
 
-The combined integration checkpoint passes 263 workspace tests (two installed-data
+The combined integration checkpoint passes 288 workspace tests (four installed-data/helper
 tests ignored), three menu-probe tests, release Dust II probe and ten-round sim
 with zero failures, and the 1,425-file weapon/feedback/foley decode audit with
 zero unsupported or crashing sounds. These checks do not establish completion
