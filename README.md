@@ -21,8 +21,13 @@ the games can later be **stitched together** into one runtime. See
 
 You can load de_dust2 and play a local 5v5 competitive match against bots,
 with freeze time, buying, money, bomb planting/defusing, halftime and match
-results. Respawn deathmatch is also available. This is a playable prototype;
-wall penetration and multiplayer networking are still unfinished.
+results. Respawn deathmatch and desktop multiplayer are also available in the
+current source: host from the classic lobby or join through Community Server
+Browser. Prediction, lossless snapshot deltas and authoritative hit rewind
+have passed local two-client checks at 64 and 128 tick. This remains a playable
+prototype; full classic UI coverage, original gameplay/visual fidelity and VR
+are unfinished. The Pause invitation panel is pending verification in
+[PR #49](https://github.com/bentsignal/global-offensive/pull/49).
 
 | Area | State |
 |---|---|
@@ -44,17 +49,22 @@ wall penetration and multiplayer networking are still unfinished.
 | Bots | ✅ nav-mesh path-finding to callouts (Long A, Mid, bombsites...) |
 | Competitive rounds | ✅ freeze time, buy zones/menu, economy, halftime, match results; rules read from the install |
 | Bomb objectives | ✅ plant, interrupt, drop/pick up, defuse with/without kit, explosion and win conditions; objective-aware bots |
-| Main menu / settings | ✅ 2023 Panorama-style layout with a 3D character preview and installed fonts/art; direct map cards, mode/team selection, saved settings |
-| Inventory | ✅ local base-item collection, rotatable 3D previews and saved T/CT Deathmatch loadouts |
+| Main menu / settings | ✅ installed classic Scaleform movies, Practice, lobby hosting, browser joins and saved supported settings; full panel fidelity remains open |
+| Inventory | 🟡 local inventory/cosmetic data and installed capability metadata; complete classic panel actions and case opening remain open |
 | Hit feedback | ✅ surface impacts, blood masks/splats, original damage sounds, directional hurt feedback; optional hit marker |
 | Match UI | ✅ round/score HUD, plant/defuse progress, kill feed, spectating and Tab scoreboard |
 | Grenades | 🟡 bots buy and throw them; full parity pending |
-| Wall penetration, netcode, servers | ⏳ see [docs/ROADMAP.md](docs/ROADMAP.md) |
+| Multiplayer | ✅ dedicated and in-process menu hosting, prediction/reconciliation, bounded snapshot deltas and coarse hull rewind; local browser/favorites joins |
+| Wall penetration / full hitboxes | ⏳ see [docs/ROADMAP.md](docs/ROADMAP.md) |
+| VR | 🟡 input/network/render-metadata preparation and optional OpenXR smoke; playable VR, third-person IK and tracked hitboxes remain open |
 
 ## Download and play (Windows)
 
 **[Download the installer](https://github.com/bentsignal/global-offensive/releases/latest/download/CSGORewrite-win-Setup.exe)**
 (this link always gets the newest version; share it as is).
+
+The published installer is currently **v0.3.0**. The multiplayer paths below
+describe current source development for the next release.
 
 1. Run `CSGORewrite-win-Setup.exe`. Windows says "Windows protected your
    PC" because the game is not code-signed: click **More info**, then
@@ -94,24 +104,27 @@ repository.
 ## Run it
 
 On Windows, double-click **Play CSGO.cmd**. It builds the current source and
-opens the main menu. Choose **PLAY**, click a map card, pick mode and team, then **GO**.
-Cards lift and tilt on hover; the selected map keeps a green border.
-**INVENTORY** shows 36 installed base weapons with rotatable 3D previews.
-Equip a primary/pistol for T or CT; `config/inventory.cfg` saves the choice
-for your next Deathmatch spawn. Competitive retains its buy economy.
-**CASES** (also inside Inventory) opens the local cosmetic collection.
-Click **CONSOLE**, type **give_case Revolution 5**, and press Enter to add five
-Revolution Cases. Select the case, then **OPEN CASE**; no key is needed.
-The reel slows to the saved reward, which you can equip immediately.
-**MY SKINS** lists owned finishes with wear, seed and equipped state.
-Skins are cosmetic in both game modes and remain attached to dropped weapons.
-The local collection supplies 39 cases, 120 souvenir packages and 1,732 finishes,
-including rare knives/gloves, persistent StatTrak counters and applied stickers.
-Use **skins <search>** and **stickers <search>** to find IDs, then **give_skin**
-or **give_sticker** to grant specific items. Existing collections migrate on save.
-See [docs/COSMETICS.md](docs/COSMETICS.md) for commands and fidelity limits.
-Settings include video, audio, keyboard/mouse and crosshair customization.
-**APPLY / SAVE** persists settings in `config/user.cfg` (ignored by Git).
+opens the installed classic menu. Choose **PLAY > OFFLINE WITH BOTS** for
+Practice, select its map/mode/bot settings and choose **GO**.
+
+For hosting, choose **PLAY > PLAY WITH FRIENDS**, then **CREATE LOBBY**. Use
+the lobby's settings control to select a supported installed map and mode,
+accept the selection, then choose **GO**. Your PC runs the server while you
+play. Practice remains a separate offline path. The Pause **Invite friends**
+address-sharing controls are being verified in PR #49.
+
+To join an existing server, choose **PLAY > COMMUNITY SERVER BROWSER**.
+In Favorites, choose **Add a Server**, enter the host's address, select the
+server and choose **Connect**. Matching map/catalog content must already be
+installed locally; automatic server content downloads remain open. Public
+directory, LAN browsing and authenticated friends-only access remain open.
+
+Inventory/cosmetic data is retained locally; the classic inventory bridge now
+answers installed capability metadata. Complete inventory/case interactions
+still need integration and measurement. Developer grant/search commands and
+their limits are documented in [docs/COSMETICS.md](docs/COSMETICS.md).
+Supported video/audio/control settings are saved through the native panels;
+full settings and original reset-defaults fidelity remain open.
 
 From a terminal in this folder:
 

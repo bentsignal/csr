@@ -11,10 +11,12 @@ them are listed. Every item ends in a verified state (`cargo test`,
 The inherited code is a **real, playable single-player base**. Phase 0 and
 the installer/updater release are complete. Gameplay now lives in the fixed
 tick sim; dedicated multiplayer, prediction and local content packs have
-landed. Rendered joining has passed two-client lifecycle checks at both tick
-rates, and the local browser's add/join/reopen/remove flow has passed with
-fresh inspected captures. Fidelity, full classic UI coverage and VR remain
-unfinished.
+landed. Classic lobby hosting, lossless snapshot deltas and rendered joining
+have passed owned host/guest lifecycle checks. Joining runs at both tick rates;
+the local browser's add/join/reopen/remove flow has fresh inspected captures.
+The Pause invitation panel is pending [PR #49](https://github.com/bentsignal/global-offensive/pull/49).
+Inventory capability metadata is installed-data-driven, while complete panel
+actions, fidelity and playable VR remain unfinished.
 
 | Area | State | Call |
 |---|---|---|
@@ -23,12 +25,12 @@ unfinished.
 | Rendering, animation, viewmodels, sounds | Dust II validated; other maps unverified | **Keep** |
 | Gameplay glue in `client` (bots, loadouts, skins, overworld rules run in Bevy systems, not `sim`) | Moved into `sim` (Track A) | **Done** |
 | Main menu | Installed Scaleform movies, persistent menu/loading/match flow, offline/pause/options bridge | **Extend and measure** |
-| Cases / inventory / cosmetics data | Works locally | **Keep data, rewrite UI** |
-| Netcode, server, browser | Renet UDP, dedicated server, full snapshots, prediction/interpolation, coarse rewind; verified rendered local favorites/browser joining at 64 and 128 tick | **Menu hosting and wider discovery next** |
+| Cases / inventory / cosmetics data | Local data and installed native capability metadata; full classic panel actions/case opening remain open | **Keep data, extend measured bridge** |
+| Netcode, server, browser | Renet UDP, dedicated/menu hosting, lossless snapshot deltas, prediction/interpolation and coarse rewind; local favorites/browser joining at 64 and 128 tick | **Invitation UI, wider discovery and population policy next** |
 | Install detection | Current Legacy app 4465480 and older beta layout supported | **Done** |
 | Distribution | CI, portable zip, Velopack installer/updater; v0.3.0 published | **Done; private channel remains** |
 | `third_party/minecraftoss` + `minecraft_terrain` (~154k lines) | Ported from decompiled Minecraft, no licence files, hard dependency of `level` and `client`; release zip also bundled Minecraft assets | **Removed** (decision 1) |
-| VR | Networked poses/separate aim, calibrated pure input adapter, server wall admission; optional OpenXR smoke under verification | **Prepare and verify hardware before game integration** |
+| VR | Networked poses/separate aim, calibrated input, wall admission and retained render metadata; optional focused OpenXR smoke | **Compositor, calibration, game integration and IK remain open** |
 
 Workspace tests and installed-data `csr probe` / `csr sim` checks run for each
 change. Rendered integration also requires freshly saved and inspected images;
@@ -399,9 +401,9 @@ lightmaps, props and sun, HUD, and the weapon catalog.
 
 ### M5 — Play together
 
-- [ ] Server-authoritative netcode over UDP: input commands up, snapshot deltas down
-- [ ] Client prediction and reconciliation (reuses `sim::World::step`)
-- [ ] Lag compensation for hit registration
+- [x] Server-authoritative netcode over UDP: input commands up, bounded lossless snapshot deltas down
+- [x] Client prediction and reconciliation (reuses `sim::World::step`)
+- [x] Server-authorized coarse hull rewind; full model hitboxes remain open
 - [x] First-pass bots (wander, react, aim, burst fire)
 - [x] Bots using the map's `.nav` meshes
 - [x] Bot buying, bomb carrying/recovery, planting, guarding and defusing
