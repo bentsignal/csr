@@ -12,12 +12,14 @@ pub mod disp;
 pub mod visibility;
 pub mod lump;
 pub mod staticprops;
+pub mod primitives;
 
 use glam::{Vec3, Vec4};
 use std::io;
 
 pub use disp::DispMesh;
 pub use staticprops::{StaticProp, StaticProps};
+pub use primitives::{FaceMesh, FaceMeshError, Primitive};
 
 /// Lump indices used by this reader.
 pub mod lumps {
@@ -40,6 +42,8 @@ pub mod lumps {
     pub const DISPINFO: usize = 26;
     pub const DISP_VERTS: usize = 33;
     pub const GAME_LUMP: usize = 35;
+    pub const PRIMITIVES: usize = 37;
+    pub const PRIMINDICES: usize = 39;
     pub const PAKFILE: usize = 40;
     pub const CUBEMAPS: usize = 42;
     pub const TEXDATA_STRING_DATA: usize = 43;
@@ -149,6 +153,13 @@ pub struct Face {
     pub light_offset: i32,
     pub lightmap_mins: [i32; 2],
     pub lightmap_size: [i32; 2],
+    /// Raw primitive count plus the high-bit dynamic-shadow flag.
+    pub num_prims: u16,
+    pub first_prim_id: u16,
+}
+
+impl Face {
+    pub fn primitive_count(&self) -> usize { usize::from(self.num_prims & 0x7fff) }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -246,6 +257,8 @@ pub struct Bsp {
     pub texinfo: Vec<TexInfo>,
     /// Faces matching `lighting` (HDR set when the map has one).
     pub faces: Vec<Face>,
+    pub primitives: Vec<Primitive>,
+    pub primitive_indices: Vec<u16>,
     /// Raw `ColorRGBExp32` luxels.
     pub lighting: Vec<u8>,
     pub visibility: Vec<u8>,
@@ -356,6 +369,8 @@ impl Bsp {
                 light_offset: r.i32(20),
                 lightmap_mins: [r.i32(28), r.i32(32)],
                 lightmap_size: [r.i32(36), r.i32(40)],
+                num_prims: r.u16(48),
+                first_prim_id: r.u16(50),
             })
         };
         if !hdr_light.is_empty() {
@@ -370,6 +385,8 @@ impl Bsp {
             bsp.lighting = ldr_light;
             bsp.faces = parse_faces(&ldr_faces);
         }
+        bsp.primitives = primitives::parse(&get(lumps::PRIMITIVES)?)?;
+        bsp.primitive_indices = primitives::parse_indices(&get(lumps::PRIMINDICES)?)?;
 
         let leaf_version = header.lumps[lumps::LEAFS].version;
         let leaf_stride = if leaf_version == 0 && bsp.version <= 19 { 56 } else { 32 };
@@ -675,7 +692,7 @@ mod orientation_tests {
         let mut b = Bsp::default();
         b.texinfo.push(TexInfo { texture_vecs: [Vec4::ZERO;2], lightmap_vecs: [Vec4::ZERO;2], flags: surf::BUMPLIGHT, texdata:0 });
         b.lighting = vec![10,0,0,0, 20,0,0,0, 30,0,0,0, 40,0,0,0];
-        let face = Face {plane:0,side:0,first_edge:0,num_edges:0,texinfo:0,dispinfo:-1,styles:[0,255,255,255],light_offset:0,lightmap_mins:[0;2],lightmap_size:[0;2]};
+        let face = Face {plane:0,side:0,first_edge:0,num_edges:0,texinfo:0,dispinfo:-1,styles:[0,255,255,255],light_offset:0,lightmap_mins:[0;2],lightmap_size:[0;2],num_prims:0,first_prim_id:0};
         (b,face)
     }
     #[test] fn directional_layers_have_separate_offsets() {
