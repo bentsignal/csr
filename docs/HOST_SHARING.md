@@ -1,6 +1,13 @@
 # Host address sharing
 
-Integration pending. This leaf preserves the server's actual socket bind and
+The host's original Pause menu now includes a collapsed `Invite friends`
+control. Expanding it shows up to three address candidates per page, their
+`On this network` / `This PC` labels, explicit Copy buttons and Refresh.
+Leaving the card collapses it before returning input to the native movie.
+Native Options suspends the card; its observed Back/Cancel restores Pause only
+after fresh owned visibility proof. Rendered verification is still pending.
+
+The backend preserves the server's actual socket bind and
 allocated port separately from the loopback address used for private owner
 admission. A wildcard bind is a listening scope, not an endpoint to copy.
 `ServerInfo` and the network protocol are unchanged.
@@ -12,7 +19,7 @@ owned Windows adapter-enumeration worker, matching the socket's address family
 and actual port. It includes active preferred unicast interface addresses;
 IPv6 link-local addresses are excluded because their scope index belongs only
 to the host and cannot be copied as the friend's outgoing interface index.
-adapter enumeration does not establish remote or Internet reachability. No
+Adapter enumeration does not establish remote or Internet reachability. No
 public-IP lookup, network probe, firewall modification or directory request is
 made. LAN discovery remains separate unchecked work.
 
@@ -30,11 +37,27 @@ only the latest pending request can start after the one worker returns.
 Render an immutable `Receipt`; stamp Copy actions with its opaque `generation`
 and candidate `key`. `copy` rechecks current lifetime, revision, busy state and
 membership before writing a literal endpoint. UI ownership must consume its
-pointer/key gestures before native movie or gameplay input. Root UI wiring is
-separate; preserve authored controls and use measured unoccupied space.
+pointer/key gestures before native movie or gameplay input. `host_sharing_ui`
+updates before `frontend::input`, which uses the existing input-ownership
+transition to balance releases outside the movie stage. The card occupies the
+measured right-hand space beside Pause and auto-collapses when the pointer
+leaves. Display-only adapter labels are capped at24 characters; copied endpoint
+and receipt identity stay exact. See
+[Pause/Options bookkeeping](research/pause-options-visibility.md) for measured
+callback evidence and the distinction from authored internal animations.
+
+The passive tracker owner is the movie-worker generation, not the host
+generation. Scene/scope transitions keep cached root paths, while replacement
+workers clear them. Options opening immediately invalidates proof; its
+`OnCancel` clears the wanted lifecycle and hides the exact cached root. Late
+Options `OnReady` and Pause load callbacks cannot override a newer selection.
+The sampler allows one outstanding request and at most one per presented movie
+frame. All Copy/Refresh/paging/toggle actions carry the rendered receipt
+generation, and hidden/collapsed controls cannot act.
 
 `copy(intent, &RawHandleWrapper)` must execute on the game window's owning UI
-thread. The wrapper retains Bevy's owned window, and Win32 checks reject stale,
+thread (`NonSendMarker` enforces the UI system's thread). The wrapper retains
+Bevy's owned window, and Win32 checks reject stale,
 foreign or wrong-thread HWNDs. Only an explicit Copy action opens and replaces
 the clipboard. Success is returned only after native `SetClipboardData`
 succeeds. `copy_with` is an injectable sink for honest in-memory proof fixtures;
@@ -47,20 +70,34 @@ a 1MiB memory cap, 64 adapter nodes and 512 unicast nodes. Pointer traversal,
 string reads and C structure reads stay inside the owned initialized buffer;
 cycles, invalid lengths and limit excesses fail with bounded errors. Native
 storage is released between scans. Returned interface records are capped at256,
-names at128 characters, and copied endpoint text at256 UTF-16 units. Global
+stored names at128 characters, and copied endpoint text at256 UTF-16 units. Global
 IPv6 and loopback literals omit unnecessary local scope/flow metadata and must
 round-trip through the existing browser address normalizer unchanged.
 
 Tests use generated interface metadata, owned ephemeral UDP hosts and fake
-clipboard sinks. They never overwrite the system clipboard. The first isolated
-leaf check passed23 tests (13 sharing/native-buffer cases and10 existing browser
-backend cases), using the actual compiled Bevy window/raw-handle/Windows
-bindings. A private harness re-exports Bevy's real `RawHandleWrapper` to check
-the leaf before the full client build completes. Ten netcode host cases also
-passed, including exact wildcard/ephemeral-port Preparing/Running identity and
-unchanged owner admission. This is not a complete client/workspace build or a
-native clipboard proof. Full integrated local and exact-head CI results remain
-mandatory before merge; rendered sharing UI remains integration work.
+clipboard sinks. They never overwrite the system clipboard. The actual-client
+focused leaf check passed23 tests (13 sharing/native-buffer cases and10 existing
+browser backend cases). Ten netcode host cases passed, including exact
+wildcard/ephemeral-port Preparing/Running identity and unchanged owner admission.
+Seven tracker regressions and the generated five-case actual AVM1/EI sampler
+integration regression passed, alongside ten Scaleform library cases.
+
+The combined UI checkpoint `8c2f73d24981b467c17253fa39bd4428fd27b076`
+passed509 workspace tests (5 ignored), the focused collapsed-Invite checks and
+the play build. That checkpoint includes a separately reviewed capabilities
+slice whose PR is still being integrated; final results must be bound to the
+combined published source before merge.
+
+The first private Deathmatch128 two-client fixture rendered Invite, enumerated
+an actual local interface, and delivered its exact bound-port endpoint through
+the real Copy button to a fake clipboard sink and browser parser. The guest
+completed its lifecycle with0 failures, but the host then timed out with1
+failure because its Audio helper sent the unsupported
+`GameInterface.ExecuteCommand`. This is partial Copy evidence, **not** a
+successful Options/Back or complete host lifecycle proof. The corrected
+current-source rendered run, mandatory release Dust II probe/sim/audio and
+exact-head CI remain merge gates. There is no OS clipboard, remote reachability
+or LAN-discovery completion claim.
 
 Primary references read for this implementation:
 
