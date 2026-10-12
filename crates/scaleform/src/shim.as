@@ -60,6 +60,18 @@ _global.csrBindApi = function(alias, name) {
 _global.csrBindings = new Object();
 _global.csrBindings.bindApi = _global.csrBindApi;
 
+// The authored options callbacks can lose their row index after mouse updates.
+// Resolve the validated row to the same clip used by the native ShowPanel path.
+_global.csrBindings.focusWidget = function(path, index) {
+    var root = _global.csrResolve(path);
+    var panel = root.TopPanel.Panel;
+    var widget = panel.arraySlots[index].Widget;
+    if (widget != undefined && typeof _global.navManager.SetHighlightedObject == "function") {
+        panel.dialog.m_nCurrentWidget = index;
+        _global.navManager.SetHighlightedObject(widget);
+    }
+};
+
 // Resolves "_global.MainMenuMovie.Panel" or "_level31.Panel" to an object.
 _global.csrResolve = function(path) {
     var parts = path.split(".");
@@ -231,6 +243,15 @@ csrEI.addCallback("csrKey", null, function(name, vkey, down) {
         return _global.KeyDownEvent(code, vkey, 0, undefined);
     }
     return _global.KeyUpEvent(code, vkey, 0, undefined);
+});
+
+// Authored numeric fields are dynamic TextFields. Their editor receives
+// character strings through the installed movie's CharTyped event.
+csrEI.addCallback("csrChar", null, function(typed) {
+    if (typeof _global.CharTyped != "function") {
+        return false;
+    }
+    return _global.CharTyped(typed, 0);
 });
 
 // Component names come from the host (the list it knows how to serve).
