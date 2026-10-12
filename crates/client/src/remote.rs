@@ -12,6 +12,7 @@ use std::{collections::BTreeMap, net::SocketAddr};
 pub struct RemoteClient {
     session: RemoteSession,
     status: Status,
+    host_running: bool,
     last_published: Option<u64>,
     snapshot_age: f64,
     frame: RenderFrame,
@@ -38,6 +39,7 @@ impl RemoteClient {
     pub fn from_session(session: RemoteSession) -> Self {
         Self {
             status: session.status().clone(),
+            host_running: true,
             session,
             last_published: None,
             snapshot_age: 0.,
@@ -47,6 +49,27 @@ impl RemoteClient {
     }
     pub fn status(&self) -> &Status {
         &self.status
+    }
+    pub(crate) fn hosted(
+        admission: netcode::host::LocalAdmission,
+        name: String,
+        team: sim::Team,
+    ) -> Result<Self, Error> {
+        let mut client = Self::from_session(RemoteSession::local(admission, name, team)?);
+        client.host_running = false;
+        Ok(client)
+    }
+    pub(crate) fn begin_host(
+        &self,
+        handle: &mut netcode::host::HostHandle,
+    ) -> Result<(), netcode::host::HostError> {
+        handle.begin(&self.session)
+    }
+    pub(crate) fn mark_host_running(&mut self) {
+        self.host_running = true;
+    }
+    pub(crate) fn gameplay_ready(&self) -> bool {
+        self.status == Status::Ready && self.host_running
     }
     pub fn server_info(&self) -> Option<&ServerInfo> {
         self.session.server_info()
@@ -189,7 +212,7 @@ pub fn drive(
         .min(tick as f64 + extrapolation);
     let view_tick = (render_tick.floor() as u64).min(tick);
     let tracked = tracking.as_deref().copied().unwrap_or_default();
-    let paused = front.open();
+    let paused = front.open() || !client.host_running;
     if paused {
         local.latched = 0;
         local.pending_slot = 0;
@@ -382,6 +405,86 @@ mod tests {
             .clear();
         (app, server, peer)
     }
+    #[test]
+    fn hosted_constructor_retains_passive_map_admission_until_render_preparation() {
+        let mut host = netcode::host::HostHandle::spawn(
+            map(),
+            manifest(),
+            netcode::host::HostConfig {
+                bind: "127.0.0.1:0".parse().unwrap(),
+                max_clients: 2,
+            },
+        )
+        .unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        let admission = loop {
+            if let Some(admission) = host.take_local_admission() {
+                break admission;
+            }
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(1));
+        };
+        let mut client =
+            RemoteClient::hosted(admission, "Host".into(), sim::Team::CounterTerrorist).unwrap();
+        client.session.update(1000.).unwrap();
+        assert!(matches!(client.status(), Status::AwaitingMap(_)));
+        assert!(!client.gameplay_ready());
+        assert!(crate::remote_join::loading(Some(&client)));
+        assert!(client.session.player().is_none());
+        client.cancel();
+        host.cancel();
+        while !host.reap_if_finished() {
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+
+    #[test]
+    fn local_host_ready_transport_is_neutral_until_running_then_accepts_controls() {
+        let (mut app, mut server, _) = setup();
+        app.world_mut().resource_mut::<RemoteClient>().host_running = false;
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::KeyW);
+        app.world_mut()
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .press(MouseButton::Left);
+        app.world_mut()
+            .resource_mut::<crate::player::LocalPlayer>()
+            .latched = movement::buttons::JUMP;
+        let dt = Duration::from_secs_f64(1. / 128.);
+        for _ in 0..12 {
+            app.update();
+            server.update(dt).unwrap();
+        }
+        let client = app.world().resource::<RemoteClient>();
+        assert_eq!(client.status(), &Status::Ready);
+        assert!(crate::remote_join::loading(Some(client)));
+        let id = client.session.player().unwrap();
+        let input = &server.session().world().player(id).unwrap().last_input;
+        assert_eq!(input.buttons, 0);
+        assert_eq!(input.forward_move, 0.);
+        assert_eq!(input.side_move, 0.);
+        assert_eq!(
+            app.world().resource::<crate::player::LocalPlayer>().latched,
+            0
+        );
+
+        app.world_mut()
+            .resource_mut::<RemoteClient>()
+            .mark_host_running();
+        assert!(!crate::remote_join::loading(Some(
+            app.world().resource::<RemoteClient>()
+        )));
+        for _ in 0..12 {
+            app.update();
+            server.update(dt).unwrap();
+        }
+        let input = &server.session().world().player(id).unwrap().last_input;
+        assert!(input.forward_move > 0.);
+        assert_ne!(input.buttons & movement::buttons::ATTACK, 0);
+    }
+
     #[test]
     fn prediction_and_render_samples_never_change_authoritative_hud_or_run_offline_ai() {
         let (mut app, mut server, peer) = setup();

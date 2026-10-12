@@ -60,6 +60,105 @@ _global.csrBindApi = function(alias, name) {
 _global.csrBindings = new Object();
 _global.csrBindings.bindApi = _global.csrBindApi;
 
+// Our epoch labels identify stale owned-menu callbacks. Keep only the live
+// alias, without placing each reopen generation in the ordinary API cache.
+_global.csrBindings.bindOwnedApi = function(alias, name) {
+    var prefix;
+    if (alias == "LobbyAPI") {
+        prefix = "OwnedLobby";
+    } else if (alias == "SinglePlayerAPI") {
+        prefix = "OwnedPicker";
+    } else {
+        return false;
+    }
+    if (typeof name != "string" || name.indexOf(prefix) != 0) {
+        return false;
+    }
+    var digits = name.substr(prefix.length);
+    if (digits.length == 0 || digits.length > 20 ||
+        (digits.length > 1 && digits.charAt(0) == "0")) {
+        return false;
+    }
+    var max = "18446744073709551615";
+    var comparison = 0;
+    var i = 0;
+    while (i < digits.length) {
+        var code = digits.charCodeAt(i);
+        if (code < 48 || code > 57) {
+            return false;
+        }
+        if (digits.length == 20 && comparison == 0) {
+            var maxCode = max.charCodeAt(i);
+            if (code > maxCode) {
+                comparison = 1;
+            } else if (code < maxCode) {
+                comparison = -1;
+            }
+        }
+        i = i + 1;
+    }
+    if (comparison > 0) {
+        return false;
+    }
+    _global[alias] = _global.csrMakeProxy(name);
+    return true;
+};
+
+// Our cached-root ownership adapter tags only unload. Other loader callbacks
+// retain their original API receiver. A retained wrapper keeps its own epoch;
+// an authored action that reads the newly rebound property uses the new epoch.
+_global.csrBindings.bindOwnedLifecycle = function(path, name) {
+    var alias;
+    var element;
+    if (path == "_level16") {
+        alias = "LobbyAPI";
+        element = "LobbyScreen";
+    } else if (path == "_level17") {
+        alias = "LobbyAPI";
+        element = "LobbyBrowser";
+    } else if (path == "_level15") {
+        alias = "SinglePlayerAPI";
+        element = "SinglePlayer";
+    } else {
+        return false;
+    }
+    var root = _global.csrResolve(path);
+    if (root == undefined || root.elementName != element ||
+        typeof root.gameAPI != "object" ||
+        !_global.csrBindings.bindOwnedApi(alias, name)) {
+        return false;
+    }
+    if (root.csrOwnedLifecycleBase == undefined) {
+        root.csrOwnedLifecycleBase = root.gameAPI;
+    }
+    var base = root.csrOwnedLifecycleBase;
+    var owned = _global[alias];
+    var wrapper = new Object();
+    wrapper.__resolve = function(method) {
+        if (method == "OnUnload") {
+            return owned[method];
+        }
+        return base[method];
+    };
+    root.gameAPI = wrapper;
+    return true;
+};
+
+// Return a cached element to its ordinary loader API before another flow
+// reuses it. Retained old wrappers still carry their old epoch.
+_global.csrBindings.releaseOwnedLifecycle = function(path) {
+    if (path != "_level15" && path != "_level16" && path != "_level17") {
+        return false;
+    }
+    var root = _global.csrResolve(path);
+    if (root == undefined || typeof root.csrOwnedLifecycleBase != "object") {
+        return false;
+    }
+    root.gameAPI = root.csrOwnedLifecycleBase;
+    delete root.csrOwnedLifecycleBase;
+    return true;
+};
+
 // The authored options callbacks can lose their row index after mouse updates.
 // Resolve the validated row to the same clip used by the native ShowPanel path.
 _global.csrBindings.focusWidget = function(path, index) {
