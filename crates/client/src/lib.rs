@@ -7,6 +7,7 @@
 pub mod audio;
 pub mod session;
 pub mod frontend;
+mod frontend_display;
 mod frontend_inventory;
 mod frontend_game;
 mod frontend_lobby;

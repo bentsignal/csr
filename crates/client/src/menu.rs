@@ -1598,6 +1598,7 @@ pub(crate) fn apply(
     mut sounds: ResMut<crate::audio::SoundLibrary>,
     mut materials: ResMut<Assets<crate::material::WorldMaterial>>,
     mut window: Single<&mut Window, With<PrimaryWindow>>,
+    mut display: Local<crate::frontend_display::DisplayState>,
     mut cameras: Query<&mut Msaa, With<crate::player::PlayerCamera>>,
     mut sinks: Query<(&crate::audio::SoundGain, &mut bevy::audio::AudioSink)>,
     mut spatial: Query<(&crate::audio::SoundGain, &mut bevy::audio::SpatialAudioSink)>,
@@ -1617,18 +1618,7 @@ pub(crate) fn apply(
     if opts.0.screenshot.is_some() {
         return;
     }
-    window.present_mode = if settings.vsync {
-        bevy::window::PresentMode::AutoVsync
-    } else {
-        bevy::window::PresentMode::AutoNoVsync
-    };
-    window.mode = if settings.fullscreen {
-        bevy::window::WindowMode::BorderlessFullscreen(bevy::window::MonitorSelection::Current)
-    } else {
-        bevy::window::WindowMode::Windowed
-    };
-    let (w, h) = RESOLUTIONS[settings.resolution];
-    window.resolution.set(w as f32, h as f32);
+    display.apply(&mut window, &settings);
     for mut aa in &mut cameras {
         *aa = if settings.msaa {
             Msaa::Sample4
