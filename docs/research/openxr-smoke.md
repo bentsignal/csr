@@ -130,7 +130,9 @@ The feature and exact published dependencies are wired. The combined example
 passes `cargo check` and builds with `--locked -j4 -p client --features xr-smoke
 --example xr_smoke`; all seven example tests pass, including the Bevy world
 predicate and loss handling. Normal-feature workspace and installed-data CI
-checks pass at the same source head. Remaining release/audio checks are pending.
+checks pass at the same source head. Release Dust II probe and ten-round sim
+each report zero failures; soundcheck decodes all 1425 sounds with no skipped
+formats or would-be crashes.
 An owned runtime execution with a process-only `XR_RUNTIME_JSON` override to an
 absent file reports unavailable initialization, creates no stereo session and
 exits with the expected code 2. The active runtime configuration is unchanged;
