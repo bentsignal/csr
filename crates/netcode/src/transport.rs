@@ -31,6 +31,8 @@ pub struct Server {
     snapshot_every: u64,
     pending_hellos: std::collections::HashMap<u64, Duration>,
     elapsed: Duration,
+    #[cfg(test)]
+    held_admissions: Option<Vec<(u64, ServerControl)>>,
 }
 
 impl Server {
@@ -63,6 +65,8 @@ impl Server {
             snapshot_every: (rate / 32).max(1) as u64,
             pending_hellos: Default::default(),
             elapsed: Duration::ZERO,
+            #[cfg(test)]
+            held_admissions: None,
         })
     }
     pub fn address(&self) -> SocketAddr {
@@ -131,6 +135,11 @@ impl Server {
                     Ok(hello) => {
                         let reply = self.session.join(client, hello);
                         if matches!(reply, ServerControl::Welcome { .. }) {
+                            #[cfg(test)]
+                            if let Some(held) = &mut self.held_admissions {
+                                held.push((client, reply));
+                                continue;
+                            }
                             self.pending_hellos.remove(&client);
                             // Reliable control ordering carries current policy before
                             // admission, including changes during local map loading.
@@ -432,6 +441,13 @@ impl Client {
             let Some(bytes) = self.connection.receive_message(SNAPSHOT) else {
                 break;
             };
+            // This channel can overtake reliable admission after packet loss.
+            // Discard raw bytes until admitted; a later full snapshot recovers.
+            if !matches!(self.welcome, Some(ServerControl::Welcome { .. }))
+                || self.server_info.is_none()
+            {
+                continue;
+            }
             if bytes.len() > MAX_MESSAGE {
                 return Err("snapshot exceeds limit".into());
             }
@@ -483,6 +499,21 @@ impl Drop for Client {
 
 #[cfg(test)]
 impl Server {
+    pub(crate) fn hold_admission(&mut self) {
+        self.held_admissions = Some(Vec::new());
+    }
+    pub(crate) fn release_admission(&mut self) {
+        for (client, welcome) in self.held_admissions.take().unwrap_or_default() {
+            self.pending_hellos.remove(&client);
+            self.connection.send_message(
+                client,
+                CONTROL,
+                encode(&ServerControl::Info(self.info())).unwrap(),
+            );
+            self.connection
+                .send_message(client, CONTROL, encode(&welcome).unwrap());
+        }
+    }
     pub(crate) fn inject_events(&mut self, batch: &EventBatch) {
         let bytes = encode(batch).unwrap();
         for client in self.connection.clients_id() {

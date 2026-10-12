@@ -347,6 +347,80 @@ mod tests {
     }
 
     #[test]
+    fn snapshots_overtaking_admission_recover_without_exposing_or_replaying_effects() {
+        let mut server = server(128, 8);
+        let mut remote =
+            RemoteSession::discover(server.address(), "Local".into(), Team::CounterTerrorist)
+                .unwrap();
+        discover(&mut server, &mut remote);
+        server.hold_admission();
+        remote.provide_map(map(), manifest()).unwrap();
+        let dt = Duration::from_secs_f64(1. / 128.);
+        for _ in 0..16 {
+            remote.update(1. / 128.).unwrap();
+            server.update(dt).unwrap();
+        }
+        assert_eq!(server.session().world().players.len(), 1);
+        let id = server.session().world().players[0].id;
+        server.inject_events(&EventBatch {
+            tick: server.session().world().tick,
+            events: vec![sim::GameEvent::Jump { player: id }],
+        });
+        for _ in 0..8 {
+            server.update(dt).unwrap();
+            remote.update(1. / 128.).unwrap();
+        }
+        assert_eq!(remote.status(), &Status::Synchronizing);
+        assert!(remote.authoritative_state().is_none());
+        assert!(remote.predicted_world().is_none());
+        assert!(remote.take_events().is_none());
+        assert!(
+            remote
+                .events
+                .iter()
+                .flat_map(|b| &b.events)
+                .any(|e| matches!(e, sim::GameEvent::Jump { player } if *player == id))
+        );
+        server.release_admission();
+        for _ in 0..16 {
+            server.update(dt).unwrap();
+            remote.update(1. / 128.).unwrap();
+            if remote.status() == &Status::Ready {
+                break;
+            }
+        }
+        assert_eq!(remote.status(), &Status::Ready);
+        let tick = remote.authoritative_state().unwrap().tick;
+        remote
+            .advance_inputs(1. / 128., tick, |_| TickInput::default())
+            .unwrap();
+        for _ in 0..16 {
+            server.update(dt).unwrap();
+            remote.update(1. / 128.).unwrap();
+            if remote.acknowledged_input() == Some(1) {
+                break;
+            }
+        }
+        assert_eq!(remote.acknowledged_input(), Some(1));
+        assert_eq!(remote.pending_inputs(), Some(0));
+        assert_eq!(
+            remote.predicted_world().unwrap().state(),
+            *remote.authoritative_state().unwrap()
+        );
+        assert!(remote.predicted_world().unwrap().events.is_empty());
+        let mut jumps = 0;
+        while let Some(batch) = remote.take_events() {
+            jumps += batch
+                .events
+                .iter()
+                .filter(|e| matches!(e, sim::GameEvent::Jump { player } if *player == id))
+                .count();
+        }
+        assert_eq!(jumps, 1);
+        assert!(remote.take_events().is_none());
+    }
+
+    #[test]
     fn event_queue_overflow_is_typed_and_discards_old_session_state() {
         let mut server = server(128, 8);
         let mut remote =

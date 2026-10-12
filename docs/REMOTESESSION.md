@@ -23,6 +23,10 @@ version, rate, content and all timing/history policy fields must still agree
 with discovery. A change drops the prepared world and reprobes, so the
 frontend must observe another `AwaitingMap` and reassess its selection.
 Protocol version 3 distinguishes this discovery/admission contract.
+Unreliable snapshots can overtake reliable admission after packet loss. The
+client discards those raw bytes until validated Info/Welcome arrive; later
+full snapshots recover. Valid reliable events stay bounded and hidden until
+Ready, then drain once through the authoritative queue.
 
 `Ready` requires the first valid authoritative snapshot. `server_info`,
 `player`, `acknowledged_input` and `pending_inputs` expose read-only status.
