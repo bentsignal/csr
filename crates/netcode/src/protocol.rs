@@ -2,14 +2,15 @@
 use serde::{Deserialize, Serialize};
 use sim::{GameEvent, PlayerId, Snapshot, Team, TickInput};
 
-pub const VERSION: u32 = 3;
-pub const PROTOCOL_ID: u64 = 0x4353_5257_0000_0003;
+pub const VERSION: u32 = 4;
+pub const PROTOCOL_ID: u64 = 0x4353_5257_0000_0004;
 pub const CONTROL: u8 = 0;
 pub const INPUT: u8 = 1;
 pub const SNAPSHOT: u8 = 2;
 pub const EVENTS: u8 = 3;
 pub const MAX_INPUT_BATCH: usize = 8;
 pub const MAX_MESSAGE: usize = 256 * 1024;
+pub(crate) const CONTROL_MEMORY: usize = 16 * 1024;
 /// Exact f64 tick representation, with room for bounded local replay.
 pub const MAX_LOCAL_TICK: u64 = (1_u64 << 53) - 1;
 pub const MAX_PROTOCOL_COUNTER: u64 = MAX_LOCAL_TICK - crate::prediction::MAX_PENDING_INPUTS as u64;
@@ -139,6 +140,13 @@ pub enum ClientControl {
         content: ContentManifest,
     },
     Leave,
+    /// Receipt of a fully reconstructed and validated transport frame, not an
+    /// input acknowledgement or a request to change authoritative sim state.
+    SnapshotReceipt {
+        frame: u64,
+        hash: u64,
+    },
+    SnapshotRecovery,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -237,7 +245,7 @@ pub fn channels() -> renet::ConnectionConfig {
     let server_channels = vec![
         ChannelConfig {
             channel_id: CONTROL,
-            max_memory_usage_bytes: 16 * 1024,
+            max_memory_usage_bytes: CONTROL_MEMORY,
             send_type: SendType::ReliableOrdered {
                 resend_time: std::time::Duration::from_millis(100),
             },

@@ -3,6 +3,7 @@
 use crate::{
     protocol::*,
     session::{Session, TickClock},
+    snapshot_codec::{self, Cache, Decoded, Sender},
 };
 use renet::{RenetClient, RenetServer, ServerEvent};
 use renet_netcode::{
@@ -32,9 +33,14 @@ pub struct Server {
     pending_hellos: std::collections::HashMap<u64, Duration>,
     elapsed: Duration,
     preparing_snapshot_elapsed: Duration,
+    snapshots: Sender,
     #[cfg(test)]
     held_admissions: Option<Vec<(u64, ServerControl)>>,
 }
+
+#[cfg(test)]
+#[path = "transport_snapshot_tests.rs"]
+mod snapshot_tests;
 
 impl Server {
     pub fn bind(address: SocketAddr, session: Session, max_clients: usize) -> Result<Self, String> {
@@ -67,6 +73,7 @@ impl Server {
             pending_hellos: Default::default(),
             elapsed: Duration::ZERO,
             preparing_snapshot_elapsed: Duration::ZERO,
+            snapshots: Sender::default(),
             #[cfg(test)]
             held_admissions: None,
         })
@@ -130,6 +137,7 @@ impl Server {
                 }
                 ServerEvent::ClientDisconnected { client_id, .. } => {
                     self.session.leave(client_id);
+                    self.snapshots.remove(client_id);
                     self.pending_hellos.remove(&client_id);
                 }
             }
@@ -145,6 +153,7 @@ impl Server {
                 match decode::<ClientControl>(&bytes) {
                     Ok(ClientControl::Leave) => {
                         self.session.leave(client);
+                        self.snapshots.remove(client);
                         self.connection.disconnect(client);
                         break;
                     }
@@ -158,6 +167,22 @@ impl Server {
                         };
                         self.connection
                             .send_message(client, CONTROL, encode(&reply)?);
+                    }
+                    Ok(ClientControl::SnapshotReceipt { frame, hash }) => {
+                        if self.session.player_for(client).is_none()
+                            || self.snapshots.receipt(client, frame, hash).is_err()
+                        {
+                            self.connection.disconnect(client);
+                            break;
+                        }
+                    }
+                    Ok(ClientControl::SnapshotRecovery) => {
+                        if self.session.player_for(client).is_none()
+                            || self.snapshots.recover(client).is_err()
+                        {
+                            self.connection.disconnect(client);
+                            break;
+                        }
                     }
                     Ok(hello) => {
                         if preparing.is_some_and(|owner| owner != client) {
@@ -263,14 +288,31 @@ impl Server {
         if prepared_snapshot
             || (ticks > 0 && self.session.world().tick % self.snapshot_every < ticks as u64)
         {
-            for client in self.connection.clients_id() {
-                if let Some(state) = self.session.snapshot_for(client) {
-                    let bytes = encode(&state)?;
+            let peers: Vec<_> = self
+                .connection
+                .clients_id()
+                .into_iter()
+                .filter_map(|client| {
+                    self.session
+                        .acknowledged_input_for(client)
+                        .map(|ack| (client, ack))
+                })
+                .collect();
+            // One exact body/cache for all peers; only the applied-input ACK
+            // differs. Never clone a replicated world once per connected peer.
+            if !peers.is_empty() {
+                self.snapshots.capture(
+                    self.session.world().tick,
+                    sim::state::encode(&self.session.world().state()),
+                )?;
+                for (client, ack) in peers {
+                    let bytes = self.snapshots.message(client, ack)?;
                     if self
                         .connection
                         .can_send_message(client, SNAPSHOT, bytes.len())
                     {
                         self.connection.send_message(client, SNAPSHOT, bytes);
+                        self.snapshots.sent(client);
                     }
                 }
             }
@@ -305,6 +347,10 @@ pub struct Client {
     latest: Option<StateUpdate>,
     events: VecDeque<EventBatch>,
     failure: Option<String>,
+    snapshots: Cache,
+    // One pending latest receipt/recovery, plus at most 512 total control
+    // payload bytes already queued in Renet (including Hello/Leave).
+    snapshot_feedback: Option<ClientControl>,
 }
 
 impl Client {
@@ -410,6 +456,8 @@ impl Client {
             latest: None,
             events: VecDeque::new(),
             failure: None,
+            snapshots: Cache::default(),
+            snapshot_feedback: None,
         })
     }
     pub fn welcome(&self) -> Option<&ServerControl> {
@@ -556,29 +604,56 @@ impl Client {
             {
                 continue;
             }
-            if bytes.len() > MAX_MESSAGE {
-                return Err("snapshot exceeds limit".into());
-            }
-            let state: StateUpdate =
-                sim::state::decode(&self.catalog, &bytes).map_err(|e| e.to_string())?;
-            if self
-                .latest_tick
-                .is_some_and(|tick| state.snapshot.state.tick <= tick)
-            {
-                continue;
-            }
+            let (frame, ack) = match snapshot_codec::decode(&bytes, &self.snapshots)? {
+                Decoded::Stale => continue,
+                Decoded::Missing => {
+                    self.snapshot_feedback = Some(ClientControl::SnapshotRecovery);
+                    continue;
+                }
+                Decoded::Frame(frame, ack) => (frame, ack),
+            };
+            let state = StateUpdate {
+                acknowledged_input: ack,
+                snapshot: sim::Snapshot {
+                    state: sim::state::decode(&self.catalog, &frame.bytes)
+                        .map_err(|e| e.to_string())?,
+                    events: Vec::new(),
+                },
+            };
             validate_state(
                 &state,
                 self.welcome.as_ref(),
                 self.sequence,
                 self.latest_ack,
             )?;
+            // Catalog-aware decode accepts unused suffixes. Only the exact
+            // canonical body may become an acknowledged transport baseline.
+            if state.snapshot.state.tick != frame.tick
+                || sim::state::encode(&state.snapshot.state).as_slice() != &*frame.bytes
+            {
+                return Err("snapshot body is not the advertised canonical state".into());
+            }
+            self.snapshot_feedback = Some(ClientControl::SnapshotReceipt {
+                frame: frame.id,
+                hash: frame.hash,
+            });
+            self.snapshots.insert(frame);
+            // Preparing may change rosters while its world tick is frozen.
+            // Receipt identity follows frame IDs; existing prediction still
+            // reconciles only newer world ticks.
+            if self
+                .latest_tick
+                .is_some_and(|tick| state.snapshot.state.tick <= tick)
+            {
+                continue;
+            }
             self.latest_tick = Some(state.snapshot.state.tick);
             self.latest_ack = state.acknowledged_input;
             self.pending
                 .retain(|command| command.sequence > state.acknowledged_input);
             self.latest = Some(state);
         }
+        self.flush_snapshot_feedback()?;
         for _ in 0..64 {
             let Some(bytes) = self.connection.receive_message(EVENTS) else {
                 break;
@@ -594,7 +669,21 @@ impl Client {
             .send_packets(&mut self.connection)
             .map_err(|e| e.to_string())
     }
+    fn flush_snapshot_feedback(&mut self) -> Result<(), String> {
+        let Some(feedback) = self.snapshot_feedback.as_ref() else {
+            return Ok(());
+        };
+        let bytes = encode(feedback)?;
+        let queued = CONTROL_MEMORY - self.connection.channel_available_memory(CONTROL);
+        if queued + bytes.len() <= 512 {
+            self.connection.send_message(CONTROL, bytes);
+            self.snapshot_feedback = None;
+        }
+        Ok(())
+    }
     pub fn disconnect(&mut self) {
+        self.snapshots = Cache::default();
+        self.snapshot_feedback = None;
         self.transport.disconnect();
     }
 }
@@ -616,6 +705,7 @@ impl Server {
         self.clock = TickClock::new(rate).unwrap();
         self.snapshot_every = (rate / 32).max(1) as u64;
         self.session = session;
+        self.snapshots = Sender::default();
     }
     pub(crate) fn inject_info(&mut self, info: ServerInfo) {
         for client in self.connection.clients_id() {
@@ -689,6 +779,7 @@ mod tests {
         assert_eq!(info.snapshot_interval_ticks, 4);
         assert_eq!(info.interpolation_allowance_ticks, 8);
         assert!(server.session().world().players.is_empty());
+        assert!(server.snapshots.cache.latest().is_none());
         assert!(probe.player().is_none());
         assert!(probe.take_state().is_none());
         assert!(probe.take_events().is_none());

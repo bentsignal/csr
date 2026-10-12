@@ -1,10 +1,9 @@
 # Multiplayer foundation
 
-Track A2 has a Bevy-free UDP session and a dedicated server. The rendered
-client still plays offline: joining from the classic menu, rendered-client
-integration, rendered interpolation, complete lag compensation, snapshot
-deltas, listen hosting and discovery
-remain open. This is an integration foundation, not a multiplayer release.
+Track A2 has a Bevy-free UDP session, dedicated server, rendered joining,
+prediction/interpolation and an owned local-host backend. Full model hitboxes,
+wider discovery and internet identity/admission remain open. See
+[REMOTE_JOIN.md](REMOTE_JOIN.md) for rendered lifecycle verification.
 
 ## Ownership and messages
 
@@ -32,17 +31,18 @@ validated, including rejection of host paths. The front end must resolve
 the id against its supported registry and perform a cancellable load before
 reconnecting. Receiving the manifest does not mount or download anything.
 
-The wire format is postcard. Channels are:
+Control, inputs and events use postcard. Wire v4 state frames carry exact
+postcard WorldState bytes inside a bounded lossless full/patch envelope. Channels are:
 
 | Channel | Delivery | Contents |
 |---|---|---|
-| Control | Reliable, ordered | Hello, welcome, rejection, leave |
+| Control | Reliable, ordered | Hello, welcome, rejection, leave, snapshot receipt/recovery |
 | Input | Unreliable | Up to eight recent sequenced `TickInput`s |
-| State | Unreliable, fragmented | Full authoritative state with last applied input sequence |
+| State | Unreliable, fragmented | Full or lossless baseline delta with last applied input sequence |
 | Events | Reliable, ordered | Tick-stamped `GameEvent` batches |
 
-Protocol version 2 includes replicated spawn epochs and server-derived
-hitscan rewind ticks. See [LAGCOMP.md](LAGCOMP.md) for server timing/lifecycle
+Protocol version 4 rejects older peers and retains replicated spawn epochs and
+server-derived hitscan rewind ticks. See [LAGCOMP.md](LAGCOMP.md) for server timing/lifecycle
 bounds and the remaining hitbox fidelity scope.
 
 Inputs include the existing optional tracked head/hand poses and separate
@@ -64,10 +64,74 @@ wall ticks. It never jumps simulation time or steps once per render frame.
 State messages omit events so a client cannot replay a shot when the next
 snapshot arrives. Clients discard stale state ticks and expose reliable
 events separately. Snapshot and channel queues have explicit memory limits;
-the full-state foundation is intentionally bandwidth-heavy until deltas land.
+snapshot compression preserves the exact canonical state bytes without quantization.
 Channels are directional: a client may send only control and input messages.
 Before exposing state, the client checks the assigned player, unique player
 ids, finite movement, entity limits, server tick rate and input acknowledgements.
+
+## Lossless snapshot baselines
+
+The server encodes one shared WorldState body per snapshot cadence. Each
+peer's envelope adds its applied-input ACK. A transport frame ID is independent
+of the world tick: hosted Preparing can change its roster at a frozen tick.
+Only fully reconstructed, catalog/ownership/finite-state validated canonical
+bodies enter the client cache or produce receipt feedback. Existing prediction
+and authoritative gameplay still consume StateUpdate with newer world ticks.
+Reliable events never enter the body and retain their separate delivery.
+
+Both caches hold at most 32 frames and 8 MiB; each body is at most 256 KiB
+minus 64 envelope bytes. Peers retain only bounded sent/confirmed IDs, not
+world clones. At most eight distinct baseline patches are built per capture,
+shared across peers selecting those baselines; other peers receive full bytes.
+Each patch has at most 8192 ordered literal spans, parsed without allocating a
+peer-controlled span vector. Reconstruction and scanning are linear and bounded.
+FNV fingerprints identify exact baseline bytes; they are not authentication.
+
+A sender references only a peer's confirmed receipt. Lost receipts leave full
+snapshots available. Missing/evicted baselines request independent full recovery,
+without advancing state or trimming pending inputs. Full frames also replace
+patches that are larger than full, and every 32nd frame is independently full.
+Feedback is coalesced into one pending value and capped at 512 queued reliable
+control payload bytes, including other client control messages. Cancellation,
+reconnect and policy reprobe discard client history. No input redundancy,
+physics, VR pose precision or content identities change.
+
+### Measured payloads and limits
+
+A private 2026-10-12 sizing observer exercised this actual codec with the
+installed Dust II catalog: 2/10/16/32/64 synthetic human actors, moving inputs,
+flat or changing tracked poses, default deathmatch inventory or competitive
+purchases/armor/kit, explicit synthetic eight smoke fields/four projectiles,
+and public drop commands. Both 64 and 128 tick were checked at mature ten-minute
+counters, with every reconstructed body compared byte-for-byte. The table gives
+rounded 128-tick average payload bytes across 32 captured frames. Compressed
+averages include the initial full frame and the periodic 32nd full keyframe;
+receipts immediately confirm each received frame in this sizing observer.
+
+| Actors / synthetic profile | Always full v4 | Compressed v4 including fulls |
+|---|---:|---:|
+| 10 flat / default | 3302 | 544 |
+| 10 tracked / default | 5462 | 1663 |
+| 10 flat / rich | 6108 | 871 |
+| 10 tracked / rich | 8268 | 2010 |
+| 16 flat / default | 5129 | 826 |
+| 32 tracked / default | 16914 | 5224 |
+| 64 tracked / default | 33571 | 10444 |
+| 64 tracked / rich | 49495 | 12437 |
+
+These are encoded payload sizes, not NIC throughput, measured internet latency
+or an actual populated match. Older baselines after inventory/layout changes can
+approach full size; full fallback remains essential. No bot thinking, input
+redundancy, float precision or gameplay policy changed to obtain these numbers.
+Independent actual UDP relay tests at both rates reverse physical encrypted
+datagrams, drop a fragment, delay an old frame, lose cached baselines, and verify
+recovery, frozen Preparing roster identity, event ownership and disconnect.
+
+Private provenance SHA256 values (no logs, assets or identifiers are published):
+
+- Observer: `7720c1952a517a86a911feafe1e210db8b4fa8937103e44c71d8239ef8b18430`
+- Aggregate measurement log: `1e8acd87e35fbc882eeb5850ba3b17106c5668f09da3b5deb8e84b917c751583`
+- Measured codec source: `5435655962b072189c0af47294011470a40d38bc9bb9dd398447eb3eecfc300d`
 
 ## Transport choice
 
