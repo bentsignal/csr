@@ -298,8 +298,11 @@ and the game's VR player are still separate work.
 
 - [x] Verify published Bevy 0.19 support and select exact OpenXR dependency
       versions for an optional, asset-free smoke example.
-- [ ] Compile, run and verify that smoke's stereo rendering, focus and
-      main/render cleanup on the owner's PC runtime/headset before game use.
+- [x] Compile the optional smoke and observe fresh focused two-eye tracking
+      plus orderly main/render cleanup on the owner's SteamVR/Quest runtime.
+- [ ] Verify compositor submission, headset appearance, focus recovery and
+      session-loss cleanup before game use; revised camera configuration still
+      needs a connected-headset run.
       Implementation and verification are tracked in
       [PR #40](https://github.com/bentsignal/global-offensive/pull/40).
 - [x] Pure calibrated input adapter: meters to Source units, recentering,
