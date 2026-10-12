@@ -69,8 +69,24 @@ impl Menu {
         self.capture = None;
     }
 }
+/// A catalog selection retains its immutable archive identity through loading.
+#[derive(Clone)]
+pub struct MapRequest {
+    pub options: crate::ClientOptions,
+    pub pack: Option<(packs::Installed, packs::CatalogEntry, content::ContentId)>,
+}
+impl From<crate::ClientOptions> for MapRequest {
+    fn from(options: crate::ClientOptions) -> Self { Self { options, pack: None } }
+}
+impl MapRequest {
+    pub(crate) fn label(&self) -> String {
+        self.pack.as_ref().and_then(|(_, entry, id)| entry.manifest().maps.iter().find(|map| map.id == id.to_string()))
+            .map(|map| crate::pack_flow::caption(&map.name))
+            .unwrap_or_else(|| self.options.map.clone())
+    }
+}
 #[derive(Resource, Clone, Default)]
-pub struct LoadRequest(pub Arc<Mutex<Option<crate::ClientOptions>>>);
+pub struct LoadRequest(pub Arc<Mutex<Option<MapRequest>>>);
 #[derive(Component, Clone, Copy)]
 pub enum Action {
     Page(Page),
@@ -289,7 +305,7 @@ pub(crate) fn input(
                         next.direct = true;
                         next.screenshot = None;
                         next.camera = None;
-                        *load_request.0.lock().unwrap() = Some(next);
+                        *load_request.0.lock().unwrap() = Some(next.into());
                     }
                 },
                 Action::Adjust(id, delta) => match id {

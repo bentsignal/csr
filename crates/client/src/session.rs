@@ -1,6 +1,8 @@
 //! Front-end/match lifetime. Loading is bounded to one worker; cancelling
 //! discards its result, so a late map cannot replace a newer selection.
-use crate::{ClientOptions, GameData, LoadedLevel, Options, PendingLevel};
+#[cfg(test)]
+use crate::ClientOptions;
+use crate::{GameData, LoadedLevel, Options, PendingLevel};
 use bevy::prelude::*;
 use std::sync::{
     Mutex,
@@ -41,9 +43,11 @@ struct Job {
 #[derive(Resource, Default)]
 pub(crate) struct Loader {
     serial: u64,
-    wanted: Option<(u64, ClientOptions)>,
+    wanted: Option<(u64, crate::menu::MapRequest)>,
+    selection: Option<crate::menu::MapRequest>,
     job: Option<Job>,
     pub status: String,
+    title: String,
 }
 
 impl Loader {
@@ -55,14 +59,21 @@ impl Loader {
             return;
         };
         let serial = *serial;
-        let map = options.map.clone();
+        let map = options.options.map.clone();
+        let pack = options.pack.clone();
         let game_dir = game_dir.to_path_buf();
         let (tx, rx) = mpsc::channel();
-        self.status = format!("Loading {map}…");
+        self.status = format!("Loading {}…", options.label());
         match std::thread::Builder::new()
             .name("map-loader".into())
             .spawn(move || {
-                let result = level::Level::load(&map, Some(&game_dir)).map_err(|e| e.to_string());
+                let result = match pack {
+                    Some((store, entry, id)) => {
+                        level::Level::load_catalog_map(&store, &entry, &id, Some(&game_dir))
+                    }
+                    None => level::Level::load(&map, Some(&game_dir)),
+                }
+                .map_err(|e| e.to_string());
                 let _ = tx.send(result);
             }) {
             Ok(_) => {
@@ -78,8 +89,13 @@ impl Loader {
 
 pub(crate) fn begin_load(mut loader: ResMut<Loader>, opts: Res<Options>, data: Res<GameData>) {
     loader.serial = loader.serial.wrapping_add(1);
-    loader.wanted = Some((loader.serial, opts.0.clone()));
-    loader.status = format!("Loading {}…", opts.0.map);
+    let selection = loader
+        .selection
+        .take()
+        .unwrap_or_else(|| opts.0.clone().into());
+    loader.title = selection.label();
+    loader.wanted = Some((loader.serial, selection));
+    loader.status = format!("Loading {}…", loader.title);
     loader.start(&data.game_dir);
 }
 
@@ -89,6 +105,7 @@ pub(crate) fn cancel_load(mut loader: ResMut<Loader>) {
 
 pub(crate) fn request_load(
     request: Res<crate::menu::LoadRequest>,
+    mut loader: ResMut<Loader>,
     mut options: ResMut<Options>,
     state: Res<State<AppState>>,
     mut next: ResMut<NextState<AppState>>,
@@ -101,7 +118,8 @@ pub(crate) fn request_load(
         return;
     }
     if let Some(request) = request.0.lock().unwrap().take() {
-        options.0 = request;
+        options.0 = request.options.clone();
+        loader.selection = Some(request);
         next.set(AppState::Loading);
     }
 }
@@ -140,7 +158,7 @@ pub(crate) fn poll_load(
                 Ok(level) => {
                     info!("loaded {}: {:?}", level.name, level.timings);
                     *pending.0.lock().unwrap() = Some(level);
-                    options.0 = wanted;
+                    options.0 = wanted.options;
                     next.set(AppState::Match);
                 }
                 Err(error) => {
@@ -158,6 +176,7 @@ pub(crate) fn poll_load(
 pub(crate) fn match_ready(
     mut menu: ResMut<crate::menu::Menu>,
     opts: Res<Options>,
+    loader: Res<Loader>,
     mut clock: ResMut<Time<Virtual>>,
     mut title: ResMut<crate::LevelInfo>,
     mut window: Single<&mut Window, With<bevy::window::PrimaryWindow>>,
@@ -169,8 +188,12 @@ pub(crate) fn match_ready(
     if !menu.open() {
         clock.unpause();
     }
-    title.name = opts.0.map.clone();
-    window.title = format!("CSGO Rewrite — {}", opts.0.map);
+    title.name = if loader.title.is_empty() {
+        opts.0.map.clone()
+    } else {
+        loader.title.clone()
+    };
+    window.title = format!("CSGO Rewrite — {}", title.name);
 }
 
 pub(crate) fn clear_match(world: &mut World) {
@@ -279,7 +302,8 @@ mod tests {
                 ClientOptions {
                     map: "de_new_selection".into(),
                     ..default()
-                },
+                }
+                .into(),
             ));
             loader.start(std::path::Path::new("unused"));
             assert_eq!(loader.job.as_ref().unwrap().serial, 1);
