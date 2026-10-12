@@ -252,7 +252,7 @@ checksum = "d3fb67a6e08acf24fdeccbac2cb6ac4305825bd1f117462e0e6f2f193345ad56"
 [[package]]
 name = "asc"
 version = "0.7.1"
-source = "git+https://github.com/bentsignal/ruffle?rev=bf1f4c8300d705eb6bffcb78bf08ed486d8c90cd#bf1f4c8300d705eb6bffcb78bf08ed486d8c90cd"
+source = "git+https://github.com/bentsignal/ruffle?rev=5b20c6507c51657dabdad25e172cc81c8587d898#5b20c6507c51657dabdad25e172cc81c8587d898"
 dependencies = [
  "anyhow",
 ]
@@ -1686,7 +1686,7 @@ dependencies = [
 [[package]]
 name = "build_playerglobal"
 version = "0.7.1"
-source = "git+https://github.com/bentsignal/ruffle?rev=bf1f4c8300d705eb6bffcb78bf08ed486d8c90cd#bf1f4c8300d705eb6bffcb78bf08ed486d8c90cd"
+source = "git+https://github.com/bentsignal/ruffle?rev=5b20c6507c51657dabdad25e172cc81c8587d898#5b20c6507c51657dabdad25e172cc81c8587d898"
 dependencies = [
  "asc",
  "clap",
@@ -1695,7 +1695,7 @@ dependencies = [
  "quote",
  "rascal",
  "regex",
- "swf 0.3.0 (git+https://github.com/bentsignal/ruffle?rev=bf1f4c8300d705eb6bffcb78bf08ed486d8c90cd)",
+ "swf 0.3.0 (git+https://github.com/bentsignal/ruffle?rev=5b20c6507c51657dabdad25e172cc81c8587d898)",
  "walkdir",
 ]
 
@@ -2783,7 +2783,7 @@ dependencies = [
 [[package]]
 name = "flv-rs"
 version = "0.7.1"
-source = "git+https://github.com/bentsignal/ruffle?rev=bf1f4c8300d705eb6bffcb78bf08ed486d8c90cd#bf1f4c8300d705eb6bffcb78bf08ed486d8c90cd"
+source = "git+https://github.com/bentsignal/ruffle?rev=5b20c6507c51657dabdad25e172cc81c8587d898#5b20c6507c51657dabdad25e172cc81c8587d898"
 dependencies = [
  "bitflags 2.13.2",
  "thiserror 2.0.18",
@@ -4082,7 +4082,7 @@ dependencies = [
 [[package]]
 name = "naga-agal"
 version = "0.7.1"
-source = "git+https://github.com/bentsignal/ruffle?rev=bf1f4c8300d705eb6bffcb78bf08ed486d8c90cd#bf1f4c8300d705eb6bffcb78bf08ed486d8c90cd"
+source = "git+https://github.com/bentsignal/ruffle?rev=5b20c6507c51657dabdad25e172cc81c8587d898#5b20c6507c51657dabdad25e172cc81c8587d898"
 dependencies = [
  "bitflags 2.13.2",
  "naga 30.0.1",
@@ -4093,7 +4093,7 @@ dependencies = [
 [[package]]
 name = "naga-pixelbender"
 version = "0.7.1"
-source = "git+https://github.com/bentsignal/ruffle?rev=bf1f4c8300d705eb6bffcb78bf08ed486d8c90cd#bf1f4c8300d705eb6bffcb78bf08ed486d8c90cd"
+source = "git+https://github.com/bentsignal/ruffle?rev=5b20c6507c51657dabdad25e172cc81c8587d898#5b20c6507c51657dabdad25e172cc81c8587d898"
 dependencies = [
  "anyhow",
  "naga 30.0.1",
@@ -4865,7 +4865,7 @@ dependencies = [
 [[package]]
 name = "pixel_bender"
 version = "0.7.1"
-source = "git+https://github.com/bentsignal/ruffle?rev=bf1f4c8300d705eb6bffcb78bf08ed486d8c90cd#bf1f4c8300d705eb6bffcb78bf08ed486d8c90cd"
+source = "git+https://github.com/bentsignal/ruffle?rev=5b20c6507c51657dabdad25e172cc81c8587d898#5b20c6507c51657dabdad25e172cc81c8587d898"
 dependencies = [
  "byteorder",
  "num-derive",
@@ -5319,7 +5319,7 @@ dependencies = [
 [[package]]
 name = "ruffle_common"
 version = "0.7.1"
-source = "git+https://github.com/bentsignal/ruffle?rev=bf1f4c8300d705eb6bffcb78bf08ed486d8c90cd#bf1f4c8300d705eb6bffcb78bf08ed486d8c90cd"
+source = "git+https://github.com/bentsignal/ruffle?rev=5b20c6507c51657dabdad25e172cc81c8587d898#5b20c6507c51657dabdad25e172cc81c8587d898"
 dependencies = [
  "fnv",
  "gc-arena",
@@ -5328,7 +5328,7 @@ dependencies = [
  "regress",
  "ruffle_macros",
  "ruffle_wstr",
- "swf 0.3.0 (git+https://github.com/bentsignal/ruffle?rev=bf1f4c8300d705eb6bffcb78bf08ed486d8c90cd)",
+ "swf 0.3.0 (git+https://github.com/bentsignal/ruffle?rev=5b20c6507c51657dabdad25e172cc81c8587d898)",
  "thiserror 2.0.18",
  "tracing",
  "url",
@@ -5337,7 +5337,7 @@ dependencies = [
 [[package]]
 name = "ruffle_core"
 version = "0.7.1"
-source = "git+https://github.com/bentsignal/ruffle?rev=bf1f4c8300d705eb6bffcb78bf08ed486d8c90cd#bf1f4c8300d705eb6bffcb78bf08ed486d8c90cd"
+source = "git+https://github.com/bentsignal/ruffle?rev=5b20c6507c51657dabdad25e172cc81c8587d898#5b20c6507c51657dabdad25e172cc81c8587d898"
 dependencies = [
  "async-channel",
  "bitflags 2.13.2",
@@ -5382,7 +5382,7 @@ dependencies = [
  "serde_json",
  "slotmap",
  "smallvec",
- "swf 0.3.0 (git+https://github.com/bentsignal/ruffle?rev=bf1f4c8300d705eb6bffcb78bf08ed486d8c90cd)",
+ "swf 0.3.0 (git+https://github.com/bentsignal/ruffle?rev=5b20c6507c51657dabdad25e172cc81c8587d898)",
  "thiserror 2.0.18",
  "tracing",
  "ttf-parser",
@@ -5395,7 +5395,7 @@ dependencies = [
 [[package]]
 name = "ruffle_macros"
 version = "0.7.1"
-source = "git+https://github.com/bentsignal/ruffle?rev=bf1f4c8300d705eb6bffcb78bf08ed486d8c90cd#bf1f4c8300d705eb6bffcb78bf08ed486d8c90cd"
+source = "git+https://github.com/bentsignal/ruffle?rev=5b20c6507c51657dabdad25e172cc81c8587d898#5b20c6507c51657dabdad25e172cc81c8587d898"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -5405,7 +5405,7 @@ dependencies = [
 [[package]]
 name = "ruffle_render"
 version = "0.7.1"
-source = "git+https://github.com/bentsignal/ruffle?rev=bf1f4c8300d705eb6bffcb78bf08ed486d8c90cd#bf1f4c8300d705eb6bffcb78bf08ed486d8c90cd"
+source = "git+https://github.com/bentsignal/ruffle?rev=5b20c6507c51657dabdad25e172cc81c8587d898#5b20c6507c51657dabdad25e172cc81c8587d898"
 dependencies = [
  "byteorder",
  "enum-map",
@@ -5425,7 +5425,7 @@ dependencies = [
  "png",
  "ruffle_wstr",
  "smallvec",
- "swf 0.3.0 (git+https://github.com/bentsignal/ruffle?rev=bf1f4c8300d705eb6bffcb78bf08ed486d8c90cd)",
+ "swf 0.3.0 (git+https://github.com/bentsignal/ruffle?rev=5b20c6507c51657dabdad25e172cc81c8587d898)",
  "thiserror 2.0.18",
  "tracing",
  "wgpu 30.0.1",
@@ -5434,7 +5434,7 @@ dependencies = [
 [[package]]
 name = "ruffle_render_wgpu"
 version = "0.7.1"
-source = "git+https://github.com/bentsignal/ruffle?rev=bf1f4c8300d705eb6bffcb78bf08ed486d8c90cd#bf1f4c8300d705eb6bffcb78bf08ed486d8c90cd"
+source = "git+https://github.com/bentsignal/ruffle?rev=5b20c6507c51657dabdad25e172cc81c8587d898#5b20c6507c51657dabdad25e172cc81c8587d898"
 dependencies = [
  "bytemuck",
  "enum-map",
@@ -5448,7 +5448,7 @@ dependencies = [
  "naga-pixelbender",
  "ruffle_render",
  "smallvec",
- "swf 0.3.0 (git+https://github.com/bentsignal/ruffle?rev=bf1f4c8300d705eb6bffcb78bf08ed486d8c90cd)",
+ "swf 0.3.0 (git+https://github.com/bentsignal/ruffle?rev=5b20c6507c51657dabdad25e172cc81c8587d898)",
  "tracing",
  "web-sys",
  "wgpu 30.0.1",
@@ -5458,18 +5458,18 @@ dependencies = [
 [[package]]
 name = "ruffle_video"
 version = "0.7.1"
-source = "git+https://github.com/bentsignal/ruffle?rev=bf1f4c8300d705eb6bffcb78bf08ed486d8c90cd#bf1f4c8300d705eb6bffcb78bf08ed486d8c90cd"
+source = "git+https://github.com/bentsignal/ruffle?rev=5b20c6507c51657dabdad25e172cc81c8587d898#5b20c6507c51657dabdad25e172cc81c8587d898"
 dependencies = [
  "ruffle_render",
  "slotmap",
- "swf 0.3.0 (git+https://github.com/bentsignal/ruffle?rev=bf1f4c8300d705eb6bffcb78bf08ed486d8c90cd)",
+ "swf 0.3.0 (git+https://github.com/bentsignal/ruffle?rev=5b20c6507c51657dabdad25e172cc81c8587d898)",
  "thiserror 2.0.18",
 ]
 
 [[package]]
 name = "ruffle_wstr"
 version = "0.7.1"
-source = "git+https://github.com/bentsignal/ruffle?rev=bf1f4c8300d705eb6bffcb78bf08ed486d8c90cd#bf1f4c8300d705eb6bffcb78bf08ed486d8c90cd"
+source = "git+https://github.com/bentsignal/ruffle?rev=5b20c6507c51657dabdad25e172cc81c8587d898#5b20c6507c51657dabdad25e172cc81c8587d898"
 
 [[package]]
 name = "rustc-hash"
@@ -5944,7 +5944,7 @@ dependencies = [
 [[package]]
 name = "swf"
 version = "0.3.0"
-source = "git+https://github.com/bentsignal/ruffle?rev=bf1f4c8300d705eb6bffcb78bf08ed486d8c90cd#bf1f4c8300d705eb6bffcb78bf08ed486d8c90cd"
+source = "git+https://github.com/bentsignal/ruffle?rev=5b20c6507c51657dabdad25e172cc81c8587d898#5b20c6507c51657dabdad25e172cc81c8587d898"
 dependencies = [
  "bitflags 2.13.2",
  "bitstream-io",

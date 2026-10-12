@@ -10,10 +10,11 @@ authors.workspace = true
 kv.workspace = true
 vfs.workspace = true
 # Ruffle is not on crates.io. Our fork's `csgo-scaleform` branch: upstream
-# ba92d5af (2026-10-11) plus three ImportAssets/duplicateMovieClip fixes the
-# CS:GO movies need (docs/research/scaleform-spike.md).
-ruffle_core = { git = "https://github.com/bentsignal/ruffle", rev = "bf1f4c8300d705eb6bffcb78bf08ed486d8c90cd", features = ["default_font"] }
-ruffle_render_wgpu = { git = "https://github.com/bentsignal/ruffle", rev = "bf1f4c8300d705eb6bffcb78bf08ed486d8c90cd" }
+# ba92d5af (2026-10-11) plus ImportAssets/duplicateMovieClip fixes and opt-in
+# diagnostics. Keep both packages on the same immutable reviewed revision
+# (docs/research/ruffle-import-aliases.md).
+ruffle_core = { git = "https://github.com/bentsignal/ruffle", rev = "5b20c6507c51657dabdad25e172cc81c8587d898", features = ["default_font"] }
+ruffle_render_wgpu = { git = "https://github.com/bentsignal/ruffle", rev = "5b20c6507c51657dabdad25e172cc81c8587d898" }
 # AS2 compiler (Ruffle uses it for its own AVM1 globals); compiles our bridge shim.
 rascal = "0.3.5"
 futures = "0.3"
