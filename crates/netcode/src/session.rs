@@ -63,6 +63,9 @@ impl Session {
     pub fn player_for(&self, client: u64) -> Option<PlayerId> {
         self.peers.get(&client).map(|p| p.player)
     }
+    pub(crate) fn acknowledged_input_for(&self, client: u64) -> Option<u64> {
+        self.peers.get(&client).map(|p| p.acknowledged)
+    }
 
     /// Trusted local Begin boundary. The cutoff is read from the exact owned
     /// sender, never supplied by a gameplay packet. Ack/discard old sequences
@@ -489,7 +492,7 @@ mod tests {
         let mut s = session();
         let mut old = hello();
         if let ClientControl::Hello { version, .. } = &mut old {
-            *version = 1;
+            *version = VERSION - 1;
         }
         assert!(matches!(s.join(10, old), ServerControl::Rejected { .. }));
         assert!(s.world.players.is_empty());

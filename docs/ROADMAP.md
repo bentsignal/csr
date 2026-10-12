@@ -112,7 +112,9 @@ and [REMOTE_JOIN.md](REMOTE_JOIN.md).
 - [x] Protocol: `TickInput` up, including optional tracked head/hand poses
       and a separate aim ray; fragmented full snapshots and authoritative
       events down, using serde/postcard and bounded compatibility admission.
-- [ ] Snapshot deltas and bandwidth optimization.
+- [x] Lossless snapshot deltas with bounded confirmed baselines, full recovery,
+      actual UDP loss/reorder tests and measured payload sizes. Further packing
+      and network admission budgets remain open; see [NETCODE.md](NETCODE.md).
 - [x] Renet UDP with reliable control/events and redundant inputs; the sim
       remains transport-agnostic.
 - [x] Prediction/reconciliation through shared `World::step`, remote pose
