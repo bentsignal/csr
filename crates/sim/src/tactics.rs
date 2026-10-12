@@ -50,6 +50,15 @@ pub struct Coordinator {
     pub utility_after: BTreeMap<Team, f32>,
 }
 impl Coordinator {
+    pub(crate) fn forget_player(&mut self, id: PlayerId) {
+        self.roles.remove(&id);
+        self.reserve.remove(&id);
+        self.contacts.retain(|contact| contact.enemy != id);
+        if self.defuser == Some(id) {
+            self.defuser = None;
+        }
+    }
+
     pub fn update(&mut self, world: &World, mesh: Option<&nav::NavMesh>) {
         let now = world.time();
         if self.plans.is_empty() || self.round != world.round.round {
