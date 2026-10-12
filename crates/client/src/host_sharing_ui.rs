@@ -368,7 +368,7 @@ pub(crate) fn update(
         font.font_size = bevy::text::FontSize::Px(17. * scale);
     }
     let title = if ui.expanded {
-        "Hosting addresses ? Close"
+        "Hosting addresses - Close"
     } else {
         "Invite friends"
     };
@@ -397,12 +397,8 @@ pub(crate) fn update(
             };
         }
         if let Some(candidate) = candidate {
-            let label = candidate.interface.as_deref().map_or_else(
-                || candidate.scope.label().to_string(),
-                |interface| format!("{} · {interface}", candidate.scope.label()),
-            );
             if let Ok(mut value) = texts.get_mut(row.text) {
-                value.0 = format!("{label}\n{}", candidate.endpoint);
+                value.0 = candidate_label(candidate);
             }
             commands.entity(row.button).insert(Action::Copy(CopyIntent {
                 generation: receipt.generation,
@@ -486,9 +482,23 @@ fn display_text(value: &str, limit: usize) -> String {
     let mut chars = value.chars();
     let mut out: String = chars.by_ref().take(limit).collect();
     if chars.next().is_some() {
-        out.push('?');
+        out.push_str("...");
     }
     out
+}
+
+fn candidate_label(candidate: &crate::host_sharing::Candidate) -> String {
+    let label = candidate.interface.as_deref().map_or_else(
+        || candidate.scope.label().to_string(),
+        |interface| {
+            format!(
+                "{} - {}",
+                candidate.scope.label(),
+                display_text(interface, 24)
+            )
+        },
+    );
+    format!("{label}\n{}", candidate.endpoint)
 }
 
 pub(crate) fn gate_exit(world: &mut World) {
@@ -582,11 +592,27 @@ mod tests {
 
     #[test]
     fn long_unicode_labels_are_bounded_without_changing_receipt_or_endpoint() {
-        let label = "?".repeat(128);
-        assert_eq!(display_text(&label, 24).chars().count(), 25);
         let endpoint = "[2001:db8:abcd:1234:ffff:eeee:dddd:cccc]:65535";
-        assert_eq!(display_text(endpoint, 96), endpoint);
-        assert_eq!(label.chars().count(), 128);
+        let mut manager = Sharing::default();
+        manager.set_host(9, endpoint.parse().unwrap());
+        let receipt = manager.receipt();
+        let mut candidate = receipt.candidates[0].clone();
+        let interface = "\u{754c}".repeat(128);
+        candidate.interface = Some(interface.clone());
+        let rendered = candidate_label(&candidate);
+        assert!(rendered.contains(&format!("{}...", "\u{754c}".repeat(24))));
+        assert!(rendered.ends_with(endpoint));
+        assert_eq!(candidate.interface.as_deref(), Some(interface.as_str()));
+        assert_eq!(
+            manager.copy_with(
+                CopyIntent {
+                    generation: receipt.generation,
+                    key: candidate.key
+                },
+                |_| Ok(())
+            ),
+            CopyResult::Copied(endpoint.into())
+        );
     }
 
     #[test]
@@ -616,6 +642,11 @@ pub(crate) struct ProofSink {
     copied: Option<String>,
     pointer: Option<Entity>,
     stage: u8,
+    settings_step: u8,
+    settings_since: Option<Instant>,
+    settings_serial: u64,
+    settings_saved: u8,
+    settings_requested: u8,
 }
 pub(crate) fn proof_enabled() -> bool {
     std::env::var_os("CSR_TEST_HOST_SHARING").is_some()
@@ -742,6 +773,128 @@ pub(crate) fn prove_copy(world: &mut World) -> Result<bool, String> {
             world.resource_mut::<ProofSink>().stage = 3;
         }
         _ => return Err("Invalid address proof phase".into()),
+    }
+    Ok(false)
+}
+
+fn settings_capture(world: &mut World, name: &str, bit: u8) {
+    use bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured, save_to_disk};
+    if world.resource::<ProofSink>().settings_requested & bit != 0 {
+        return;
+    }
+    world.resource_mut::<ProofSink>().settings_requested |= bit;
+    let path = world
+        .resource::<crate::Options>()
+        .0
+        .screenshot
+        .as_ref()
+        .ok_or("Settings proof needs a screenshot destination")
+        .unwrap()
+        .with_file_name(name);
+    world
+        .spawn(Screenshot::primary_window())
+        .observe(save_to_disk(path))
+        .observe(
+            move |_: On<ScreenshotCaptured>, mut sink: ResMut<ProofSink>| {
+                sink.settings_saved |= bit
+            },
+        );
+}
+
+/// Opens Audio through its observed controller command and presses the actual
+/// installed Back button through owned Bevy window input. No OS input claim.
+pub(crate) fn prove_settings(world: &mut World) -> Result<bool, String> {
+    use bevy::input::{ButtonState, mouse::MouseButtonInput};
+    let step = world.resource::<ProofSink>().settings_step;
+    let serial = world
+        .resource::<crate::frontend::Frontend>()
+        .presented_serial();
+    let wanted = world
+        .resource::<crate::frontend::Frontend>()
+        .options_requested();
+    let visible = world.resource::<Ui>().visible;
+    let window = world
+        .query_filtered::<Entity, With<PrimaryWindow>>()
+        .single(world)
+        .map_err(|_| "Settings proof has no owned window")?;
+    let settled = world
+        .resource::<ProofSink>()
+        .settings_since
+        .is_some_and(|since| since.elapsed() >= Duration::from_millis(500))
+        && serial.saturating_sub(world.resource::<ProofSink>().settings_serial) >= 2;
+    match step {
+        0 => {
+            // Move away from the address card before native navigation.
+            world
+                .get_mut::<Window>(window)
+                .unwrap()
+                .set_physical_cursor_position(Some(glam::DVec2::new(700., 664.)));
+            world
+                .resource::<crate::frontend::Frontend>()
+                .send(scaleform::Input::Call {
+                    path: "_global.GameInterface".into(),
+                    function: "ExecuteCommand".into(),
+                    args: vec!["OpenAudioSettingsDialog".into()],
+                });
+            let mut sink = world.resource_mut::<ProofSink>();
+            sink.settings_step = 1;
+            sink.settings_since = Some(Instant::now());
+            sink.settings_serial = serial;
+        }
+        1 if wanted
+            && !visible
+            && settled
+            && world
+                .resource::<crate::frontend::Frontend>()
+                .movie_ready("OptionsMenu") =>
+        {
+            settings_capture(world, "host-sharing-audio.png", 1);
+            if world.resource::<ProofSink>().settings_saved & 1 == 0 {
+                return Ok(false);
+            }
+            world
+                .get_mut::<Window>(window)
+                .unwrap()
+                .set_physical_cursor_position(Some(glam::DVec2::new(380., 972.)));
+            let mut sink = world.resource_mut::<ProofSink>();
+            sink.settings_step = 2;
+            sink.settings_since = Some(Instant::now());
+            sink.settings_serial = serial;
+        }
+        2 if settled => {
+            world.write_message(MouseButtonInput {
+                window,
+                button: MouseButton::Left,
+                state: ButtonState::Pressed,
+            });
+            world.resource_mut::<ProofSink>().settings_step = 3;
+        }
+        3 => {
+            world.write_message(MouseButtonInput {
+                window,
+                button: MouseButton::Left,
+                state: ButtonState::Released,
+            });
+            let mut sink = world.resource_mut::<ProofSink>();
+            sink.settings_step = 4;
+            sink.settings_since = Some(Instant::now());
+            sink.settings_serial = serial;
+        }
+        4 if !wanted && visible && settled => {
+            if world.resource::<Ui>().expanded {
+                return Err("Native Back restored an expanded invite card".into());
+            }
+            settings_capture(world, "host-sharing-restored-pause.png", 2);
+            if world.resource::<ProofSink>().settings_saved & 2 == 0 {
+                return Ok(false);
+            }
+            info!(
+                "host sharing proof: observed Audio controller open hid Invite, installed Back pointer emitted Cancel, fresh Pause restored collapsed Invite; no OS input/parity claim"
+            );
+            world.resource_mut::<ProofSink>().settings_step = 5;
+        }
+        5 => return Ok(true),
+        _ => (),
     }
     Ok(false)
 }

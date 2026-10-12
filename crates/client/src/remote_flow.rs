@@ -467,6 +467,13 @@ pub(crate) fn update(world: &mut World, mut proof: Local<Proof>) {
             .is_some_and(|captures| captures.0 >= 2)
             && proof.entered.elapsed() > Duration::from_millis(250) =>
         {
+            if crate::host_sharing_ui::proof_enabled() {
+                match crate::host_sharing_ui::prove_settings(world) {
+                    Ok(true) => (),
+                    Ok(false) => return,
+                    Err(error) => { failed(world, &error); return; }
+                }
+            }
             let mut menu = world.resource_mut::<crate::menu::Menu>();
             menu.in_match = false;
             menu.page = Some(crate::menu::Page::Main);
