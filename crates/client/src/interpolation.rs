@@ -10,29 +10,69 @@ pub struct Pose {
     pub eye: glam::Vec3,
     pub angles: glam::Vec3,
     pub punch: glam::Vec2,
+    /// Feet-relative offsets in Source world axes; already-sampled remote
+    /// tracking is copied directly, never read back from raw authority.
+    pub tracked: Option<sim::TrackedPose>,
+    /// Independent admitted weapon ray; never inferred from the head/camera.
+    pub aim: Option<sim::AimRay>,
     alive: bool,
+    life: Option<u64>,
 }
 impl Pose {
     pub fn player(p: &sim::Player) -> Self {
-        Self { velocity: p.movement.velocity, on_ground: p.movement.on_ground, origin: p.movement.origin, eye: p.eye(), angles: p.view_angles, punch: p.view_punch().into(), alive: p.alive }
+        Self { velocity: p.movement.velocity, on_ground: p.movement.on_ground, origin: p.movement.origin, eye: p.eye(), angles: p.view_angles, punch: p.view_punch().into(), alive: p.alive, life:Some(p.life_epoch),tracked:p.tracked,aim:p.aim }
     }
     pub fn remote(p: &netcode::remote_pose::RenderPose) -> Self {
         Self { origin: p.origin, velocity: p.velocity, on_ground: p.on_ground,
-            eye: p.eye, angles: p.view_angles, punch: p.punch, alive: p.alive }
+            eye: p.eye, angles: p.view_angles, punch: p.punch, alive: p.alive,
+            tracked:p.tracked,aim:p.aim,life:None }
     }
     fn lerp(self, next: Self, alpha: f32) -> Self {
+        let same_life=self.life==next.life && self.alive==next.alive;
         Self {
             velocity: self.velocity.lerp(next.velocity, alpha), on_ground: next.on_ground,
             origin: self.origin.lerp(next.origin, alpha), eye: self.eye.lerp(next.eye, alpha),
             angles: glam::Vec3::new(angle_lerp(self.angles.x, next.angles.x, alpha), angle_lerp(self.angles.y, next.angles.y, alpha), 0.0),
             punch: self.punch.lerp(next.punch, alpha), alive: next.alive,
+            tracked:blend_tracked(self.tracked,next.tracked,alpha,same_life),
+            aim:blend_aim(self.aim,next.aim,alpha,same_life),life:next.life,
         }
     }
 }
 fn angle_lerp(a: f32, b: f32, alpha: f32) -> f32 { a + ((b - a + 180.0).rem_euclid(360.0) - 180.0) * alpha }
 
+fn valid_tracking(mut tracked:sim::TrackedPose)->Option<sim::TrackedPose> {
+    for pose in [&mut tracked.head,&mut tracked.left_hand,&mut tracked.right_hand] {
+        let norm=pose.rotation.length_squared();
+        if !pose.position.is_finite() || !pose.position.length_squared().is_finite()
+            || !pose.rotation.is_finite() || !norm.is_finite() || norm<0.0001 {return None;}
+        pose.rotation=pose.rotation.normalize();
+    }
+    Some(tracked)
+}
+fn blend_tracked(a:Option<sim::TrackedPose>,b:Option<sim::TrackedPose>,t:f32,same_life:bool)->Option<sim::TrackedPose> {
+    let b=valid_tracking(b?)?;
+    let Some(a)=a.and_then(valid_tracking).filter(|_|same_life) else {return Some(b)};
+    let blend=|a:sim::Pose,b:sim::Pose|sim::Pose {position:a.position.lerp(b.position,t),rotation:a.rotation.slerp(b.rotation,t).normalize()};
+    Some(sim::TrackedPose {head:blend(a.head,b.head),left_hand:blend(a.left_hand,b.left_hand),right_hand:blend(a.right_hand,b.right_hand)})
+}
+fn valid_aim(mut aim:sim::AimRay)->Option<sim::AimRay> {
+    if !aim.origin.is_finite() || !aim.origin.length_squared().is_finite() || !aim.direction.is_finite(){return None;}
+    aim.direction=aim.direction.try_normalize()?; Some(aim)
+}
+fn blend_aim(a:Option<sim::AimRay>,b:Option<sim::AimRay>,t:f32,same_life:bool)->Option<sim::AimRay> {
+    let b=valid_aim(b?)?;
+    let Some(a)=a.and_then(valid_aim).filter(|_|same_life) else {return Some(b)};
+    let arc=glam::Quat::from_rotation_arc(a.direction,b.direction);
+    Some(sim::AimRay {origin:a.origin.lerp(b.origin,t),direction:(glam::Quat::IDENTITY.slerp(arc,t)*a.direction).normalize()})
+}
+
+#[cfg(test)]
+#[path="interpolation_tracked_tests.rs"]
+mod tracked_tests;
+
 #[derive(Resource, Default)]
-pub struct RenderPoses(HashMap<sim::PlayerId, (Pose, Pose)>, HashMap<sim::PlayerId, f32>, HashMap<sim::PlayerId, Pose>, Option<PredictedLocal>);
+pub struct RenderPoses(HashMap<sim::PlayerId, (Pose, Pose)>, HashMap<sim::PlayerId, f32>, HashMap<sim::PlayerId, Pose>, Option<PredictedLocal>, bool);
 
 struct PredictedLocal {
     id: sim::PlayerId,
@@ -54,8 +94,14 @@ impl RenderPoses {
     pub fn set_overrides(&mut self, poses: impl IntoIterator<Item = (sim::PlayerId, Pose)>) {
         self.2.clear();
         self.2.extend(poses);
+        self.4=true;
     }
-    pub fn clear_overrides(&mut self) { self.2.clear(); self.3 = None; }
+    pub fn clear_overrides(&mut self) {
+        self.2.clear(); self.3=None; self.4=false;
+        // Old offline tracking must not cross a remote/session cancellation.
+        // Preserve the established flat eye/body interpolation and stair data.
+        for (a,b) in self.0.values_mut() {a.tracked=None;a.aim=None;b.tracked=None;b.aim=None;}
+    }
     /// Preserve the existing stair-eye easing for local prediction without
     /// capturing or changing any authoritative/remote actor state.
     pub fn capture_prediction(&mut self, player: &sim::Player, tick: u64, dt: f32) -> Pose {
@@ -91,7 +137,11 @@ impl RenderPoses {
     }
     pub fn sample(&self, player: &sim::Player, alpha: f32) -> Pose {
         if let Some(pose) = self.2.get(&player.id) { return *pose; }
-        self.0.get(&player.id).map_or_else(|| Pose::player(player), |&(a, b)| a.lerp(b, alpha.clamp(0.0, 1.0)))
+        let mut pose=self.0.get(&player.id).map_or_else(|| Pose::player(player), |&(a, b)| a.lerp(b, alpha.clamp(0.0, 1.0)));
+        // Newly joined actors may not exist on the delayed remote timeline
+        // yet. Do not substitute unsampled authoritative tracking in that gap.
+        if self.4 {pose.tracked=None;pose.aim=None;}
+        pose
     }
 }
 #[cfg(test)]
@@ -154,7 +204,7 @@ mod tests {
     }
     #[test]
     fn frames_between_ticks_have_continuous_position_and_rotation() {
-        let a = Pose { velocity: glam::Vec3::ZERO, on_ground: true, origin: glam::Vec3::ZERO, eye: glam::Vec3::Z * 64.0, angles: glam::Vec3::ZERO, punch: glam::Vec2::ZERO, alive: true };
+        let a = Pose { velocity: glam::Vec3::ZERO, on_ground: true, origin: glam::Vec3::ZERO, eye: glam::Vec3::Z * 64.0, angles: glam::Vec3::ZERO, punch: glam::Vec2::ZERO, alive: true,life:Some(1),tracked:None,aim:None };
         let b = Pose { origin: glam::Vec3::X * 4.0, eye: a.eye + glam::Vec3::X * 4.0, angles: glam::Vec3::Y * 8.0, ..a };
         for i in 0..=4 {
             let p = a.lerp(b, i as f32 / 4.0);
