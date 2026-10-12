@@ -10,6 +10,12 @@ use bevy::{
 };
 use std::collections::HashMap;
 
+// The fullscreen movie image occupies global layer100. Bevy globally sorts
+// detached UI subtrees, so the browser and its overlays need distinct layers.
+const BROWSER_LAYER: i32 = 110;
+const ADD_LAYER: i32 = 120;
+const CONTEXT_LAYER: i32 = 130;
+
 #[derive(Clone, Default)]
 pub struct Fonts(pub HashMap<String, FontSource>);
 impl Fonts {
@@ -204,7 +210,7 @@ pub fn spawn(
                 ..default()
             },
             UiTargetCamera(camera),
-            GlobalZIndex(100),
+            GlobalZIndex(BROWSER_LAYER),
         ))
         .id();
     let frame_entity = commands
@@ -511,7 +517,7 @@ fn render_rows(
                 let popup = commands
                     .spawn((
                         node(r),
-                        GlobalZIndex(120),
+                        GlobalZIndex(CONTEXT_LAYER),
                         BackgroundColor(color(def, "Button.BgColor")),
                     ))
                     .id();
@@ -559,7 +565,7 @@ fn render_add(
         .spawn((
             node(frame.rect),
             BackgroundColor(color(def, "Frame.BgColor")),
-            GlobalZIndex(110),
+            GlobalZIndex(ADD_LAYER),
         ))
         .id();
     commands.entity(parent).add_children(&[entity]);
@@ -1213,6 +1219,155 @@ mod tests {
         queue.apply(&mut world);
         assert!(world.get::<Button>(entity).is_some());
         assert_eq!(world.get::<FocusPolicy>(entity), Some(&FocusPolicy::Block));
+    }
+
+    #[test]
+    fn browser_and_detached_overlays_own_a_layer_above_movie_on_the_same_camera() {
+        use bevy::{
+            app::{HierarchyPropagatePlugin, PropagateSet},
+            ecs::world::CommandQueue,
+            ui::{ComputedUiRenderTargetInfo, ComputedUiTargetCamera, UiScale},
+        };
+        let make = |name: &str| Control {
+            name: name.into(),
+            field_name: name.into(),
+            kind: "Panel".into(),
+            rect: Rect {
+                width: 600.0,
+                height: 300.0,
+                ..default()
+            },
+            text: String::new(),
+            command: None,
+            font: "Default".into(),
+            visible: true,
+            enabled: true,
+            default_button: false,
+        };
+        let mut scheme = data::Scheme::default();
+        for role in ["default", "uibold"] {
+            scheme.fonts.insert(
+                role.into(),
+                data::FontInfo {
+                    family: "synthetic".into(),
+                    size: 16.0,
+                    weight: 500,
+                },
+            );
+        }
+        let def = Definition {
+            browser: data::Layout {
+                controls: vec![make("CServerBrowserDialog"), make("GameTabs")],
+            },
+            page: data::Layout {
+                controls: vec![
+                    make("InternetGames"),
+                    Control {
+                        kind: "ListPanel".into(),
+                        ..make("gamelist")
+                    },
+                ],
+            },
+            add: data::Layout {
+                controls: vec![make("DialogAddServer")],
+            },
+            info: default(),
+            scheme,
+            tokens: default(),
+        };
+        let mut fonts = Fonts::default();
+        fonts.insert("Default", Handle::<Font>::default());
+        fonts.insert("UiBold", Handle::<Font>::default());
+        for (modal, context, expected_layers) in [
+            (false, false, vec![110]),
+            (true, false, vec![110, 120]),
+            (false, true, vec![110, 130]),
+        ] {
+            let mut app = App::new();
+            app.init_resource::<UiScale>()
+                .add_plugins(HierarchyPropagatePlugin::<ComputedUiTargetCamera>::new(
+                    PostUpdate,
+                ))
+                .add_plugins(HierarchyPropagatePlugin::<ComputedUiRenderTargetInfo>::new(
+                    PostUpdate,
+                ))
+                .configure_sets(
+                    PostUpdate,
+                    PropagateSet::<ComputedUiTargetCamera>::default(),
+                )
+                .configure_sets(
+                    PostUpdate,
+                    PropagateSet::<ComputedUiRenderTargetInfo>::default(),
+                )
+                .add_systems(Update, bevy::ui::update::propagate_ui_target_cameras);
+            let camera = app.world_mut().spawn(Camera2d).id();
+            let snapshot = Snapshot {
+                generation: 3,
+                rows: vec![data::ServerRow {
+                    key: ServerKey(7),
+                    endpoint: "localhost:27015".into(),
+                    map: None,
+                    name: None,
+                    players: None,
+                    ping_ms: None,
+                    favorite: true,
+                    connectable: true,
+                }],
+                ..default()
+            };
+            let model = Model {
+                tab: Tab::Favorites,
+                add_open: modal,
+                context_row: context.then_some(ServerKey(7)),
+                ..default()
+            };
+            let mut queue = CommandQueue::default();
+            let mut commands = Commands::new(&mut queue, app.world());
+            let view = spawn(
+                &mut commands,
+                camera,
+                Vec2::new(1920.0, 1080.0),
+                &def,
+                &fonts,
+                &model,
+                &snapshot,
+            )
+            .unwrap();
+            queue.apply(app.world_mut());
+            // Spawn the opaque fullscreen movie *after* the browser: global
+            // ordering must override entity/tree allocation order.
+            let movie = app
+                .world_mut()
+                .spawn((
+                    Node::default(),
+                    ImageNode::default(),
+                    UiTargetCamera(camera),
+                    GlobalZIndex(100),
+                ))
+                .id();
+            app.update();
+            let world = app.world_mut();
+            let mut layers = Vec::new();
+            for (entity, layer) in world.query::<(Entity, &GlobalZIndex)>().iter(world) {
+                if entity != movie {
+                    assert!(layer.0 > world.get::<GlobalZIndex>(movie).unwrap().0);
+                    assert_eq!(
+                        world.get::<ComputedUiTargetCamera>(entity).unwrap().camera,
+                        camera
+                    );
+                    layers.push(layer.0);
+                }
+            }
+            layers.sort_unstable();
+            assert_eq!(layers, expected_layers);
+            assert!(world.get::<Node>(view.root).is_some());
+            for (entity, _) in world.query::<(Entity, &UiAction)>().iter(world) {
+                assert_eq!(
+                    world.get::<ComputedUiTargetCamera>(entity).unwrap().camera,
+                    camera
+                );
+            }
+        }
     }
 
     #[test]

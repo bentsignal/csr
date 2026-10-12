@@ -443,6 +443,7 @@ pub struct Frontend {
     data: Arc<Mutex<Data>>,
     actions: Arc<Mutex<Vec<Action>>>,
     image: Handle<Image>,
+    presented_serial: u64,
     root: Entity,
     camera: Entity,
     visible: bool,
@@ -460,6 +461,8 @@ pub struct Frontend {
 impl Frontend {
     pub(crate) fn camera(&self) -> Entity { self.camera }
     pub(crate) fn loaded(&self, name: &str) -> bool { self.loaded.contains(name) }
+    /// Counts completed frame assignments to the Bevy image, not render loops.
+    pub(crate) fn presented_serial(&self) -> u64 { self.presented_serial }
     pub(crate) fn send(&self, input: Input) {
         if let Some(movie) = &self.movie {
             movie.lock().unwrap().send(input);
@@ -605,6 +608,7 @@ pub(crate) fn setup(
         data: shared,
         actions,
         image,
+        presented_serial: 0,
         root,
         camera,
         visible: false,
@@ -923,6 +927,7 @@ pub(crate) fn update(
                 depth_or_array_layers: 1,
             };
             image.data = Some(frame.rgba);
+            front.presented_serial = front.presented_serial.saturating_add(1);
         }
     }
     let actions = std::mem::take(&mut *front.actions.lock().unwrap());
