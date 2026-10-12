@@ -96,6 +96,43 @@ control payload bytes, including other client control messages. Cancellation,
 reconnect and policy reprobe discard client history. No input redundancy,
 physics, VR pose precision or content identities change.
 
+### Measured payloads and limits
+
+A private 2026-10-12 sizing observer exercised this actual codec with the
+installed Dust II catalog: 2/10/16/32/64 synthetic human actors, moving inputs,
+flat or changing tracked poses, default deathmatch inventory or competitive
+purchases/armor/kit, explicit synthetic eight smoke fields/four projectiles,
+and public drop commands. Both 64 and 128 tick were checked at mature ten-minute
+counters, with every reconstructed body compared byte-for-byte. The table gives
+rounded 128-tick average payload bytes across 32 captured frames. Compressed
+averages include the initial full frame and the periodic 32nd full keyframe;
+receipts immediately confirm each received frame in this sizing observer.
+
+| Actors / synthetic profile | Always full v4 | Compressed v4 including fulls |
+|---|---:|---:|
+| 10 flat / default | 3302 | 544 |
+| 10 tracked / default | 5462 | 1663 |
+| 10 flat / rich | 6108 | 871 |
+| 10 tracked / rich | 8268 | 2010 |
+| 16 flat / default | 5129 | 826 |
+| 32 tracked / default | 16914 | 5224 |
+| 64 tracked / default | 33571 | 10444 |
+| 64 tracked / rich | 49495 | 12437 |
+
+These are encoded payload sizes, not NIC throughput, measured internet latency
+or an actual populated match. Older baselines after inventory/layout changes can
+approach full size; full fallback remains essential. No bot thinking, input
+redundancy, float precision or gameplay policy changed to obtain these numbers.
+Independent actual UDP relay tests at both rates reverse physical encrypted
+datagrams, drop a fragment, delay an old frame, lose cached baselines, and verify
+recovery, frozen Preparing roster identity, event ownership and disconnect.
+
+Private provenance SHA256 values (no logs, assets or identifiers are published):
+
+- Observer: `7720c1952a517a86a911feafe1e210db8b4fa8937103e44c71d8239ef8b18430`
+- Aggregate measurement log: `1e8acd87e35fbc882eeb5850ba3b17106c5668f09da3b5deb8e84b917c751583`
+- Measured codec source: `5435655962b072189c0af47294011470a40d38bc9bb9dd398447eb3eecfc300d`
+
 ## Transport choice
 
 We use Renet 2.0.0 and renet_netcode 2.0.0 pinned to the owner fork revision

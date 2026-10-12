@@ -144,7 +144,12 @@ impl Sender {
             }
         }
         let patch = base.and_then(|base| self.patches.get(&base.id).and_then(Option::as_deref));
-        let mut result = Vec::with_capacity(HEADER + target.bytes.len());
+        // Renet accounts queued payload lengths. Do not retain a full-body
+        // allocation in a much smaller queued delta's Vec/Bytes backing store.
+        let size = patch.map_or(HEADER + target.bytes.len(), |patch| {
+            DELTA_HEADER + patch.len()
+        });
+        let mut result = Vec::with_capacity(size);
         result.push(if patch.is_some() { DELTA } else { FULL });
         for field in [target.id, target.tick, target.hash, acknowledged_input] {
             result.extend(field.to_le_bytes());
@@ -266,6 +271,7 @@ fn spans(
     Ok(())
 }
 
+#[derive(Debug)]
 pub(crate) enum Decoded {
     Frame(Frame, u64),
     Missing,
@@ -475,5 +481,58 @@ mod tests {
         let mut bad = packet;
         bad[37..45].copy_from_slice(&2_u64.to_le_bytes());
         assert!(decode(&bad, &Cache::default()).is_err());
+    }
+    #[test]
+    fn expired_confirmed_baseline_and_current_frame_are_independently_full() {
+        let mut sender = Sender::default();
+        sender.capture(0, vec![3; 4096]).unwrap();
+        let _ = sender.message(7, 0).unwrap();
+        sender.sent(7);
+        let first = sender.cache.latest().unwrap().clone();
+        sender.receipt(7, first.id, first.hash).unwrap();
+        // Reusing a captured frame must never emit a self-reference.
+        assert_eq!(sender.message(7, 0).unwrap()[0], FULL);
+        for tick in 1..=40 {
+            sender.capture(tick, vec![3; 4096]).unwrap();
+            let _ = sender.message(7, 0).unwrap();
+            sender.sent(7);
+        }
+        assert!(sender.cache.get(first.id).is_none());
+        let full = sender.message(7, 0).unwrap();
+        assert_eq!(full[0], FULL);
+        assert!(matches!(
+            decode(&full, &Cache::default()).unwrap(),
+            Decoded::Frame(..)
+        ));
+        sender.receipt(7, first.id, first.hash).unwrap(); // Late old ACK cannot resurrect it.
+        assert_eq!(sender.message(7, 0).unwrap()[0], FULL);
+    }
+    #[test]
+    fn span_count_message_length_and_fingerprint_bounds_are_enforced() {
+        let mut sender = Sender::default();
+        sender.capture(1, vec![3; 256]).unwrap();
+        let full = sender.message(7, 0).unwrap();
+        sender.sent(7);
+        let first = sender.cache.latest().unwrap().clone();
+        sender.receipt(7, first.id, first.hash).unwrap();
+        sender.capture(2, vec![3; 256]).unwrap();
+        let delta = sender.message(7, 0).unwrap();
+        let mut bad = delta[..DELTA_HEADER].to_vec();
+        bad[33..37].copy_from_slice(&(MAX_BODY as u32).to_le_bytes());
+        for _ in 0..=MAX_SPANS {
+            bad.extend([0, 1, 9]);
+        }
+        assert!(
+            decode(&bad, &Cache::default())
+                .unwrap_err()
+                .contains("too many")
+        );
+        let mut bad = full.clone();
+        *bad.last_mut().unwrap() ^= 1;
+        assert!(decode(&bad, &Cache::default()).is_err());
+        let mut bad = full;
+        bad.push(0);
+        assert!(decode(&bad, &Cache::default()).is_err());
+        assert!(Frame::new(1, 0, vec![0; MAX_BODY + 1]).is_err());
     }
 }

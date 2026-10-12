@@ -288,14 +288,24 @@ impl Server {
         if prepared_snapshot
             || (ticks > 0 && self.session.world().tick % self.snapshot_every < ticks as u64)
         {
+            let peers: Vec<_> = self
+                .connection
+                .clients_id()
+                .into_iter()
+                .filter_map(|client| {
+                    self.session
+                        .acknowledged_input_for(client)
+                        .map(|ack| (client, ack))
+                })
+                .collect();
             // One exact body/cache for all peers; only the applied-input ACK
             // differs. Never clone a replicated world once per connected peer.
-            self.snapshots.capture(
-                self.session.world().tick,
-                sim::state::encode(&self.session.world().state()),
-            )?;
-            for client in self.connection.clients_id() {
-                if let Some(ack) = self.session.acknowledged_input_for(client) {
+            if !peers.is_empty() {
+                self.snapshots.capture(
+                    self.session.world().tick,
+                    sim::state::encode(&self.session.world().state()),
+                )?;
+                for (client, ack) in peers {
                     let bytes = self.snapshots.message(client, ack)?;
                     if self
                         .connection
@@ -769,6 +779,7 @@ mod tests {
         assert_eq!(info.snapshot_interval_ticks, 4);
         assert_eq!(info.interpolation_allowance_ticks, 8);
         assert!(server.session().world().players.is_empty());
+        assert!(server.snapshots.cache.latest().is_none());
         assert!(probe.player().is_none());
         assert!(probe.take_state().is_none());
         assert!(probe.take_events().is_none());
