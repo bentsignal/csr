@@ -14,7 +14,6 @@ path = "src/main.rs"
 netcode.workspace = true
 sim.workspace = true
 level.workspace = true
-sha1.workspace = true
 glam.workspace = true
 weapons.workspace = true
 movement.workspace = true

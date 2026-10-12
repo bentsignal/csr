@@ -3709,6 +3709,7 @@ dependencies = [
  "mdl",
  "nav",
  "packs",
+ "sha1",
  "vfs",
  "weapons",
  "workshop",
@@ -5610,7 +5611,6 @@ dependencies = [
  "level",
  "movement",
  "netcode",
- "sha1",
  "sim",
  "weapons",
 ]
