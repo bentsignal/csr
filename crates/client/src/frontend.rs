@@ -633,6 +633,7 @@ impl Frontend {
         self.data.lock().unwrap().movie_ready.contains(name)
     }
     pub(crate) fn lobby_staged(&self) -> bool { self.lobby.lock().unwrap().staged() }
+    pub(crate) fn lobby_staged_map(&self) -> Option<String> { self.lobby.lock().unwrap().staged_map() }
     /// Counts completed frame assignments to the Bevy image, not render loops.
     pub(crate) fn presented_serial(&self) -> u64 { self.presented_serial }
     pub(crate) fn send(&self, input: Input) {
