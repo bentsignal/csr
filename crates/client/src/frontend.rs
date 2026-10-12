@@ -1149,7 +1149,7 @@ pub(crate) fn capture_menu(
     mut commands: Commands,
     mut exit: MessageWriter<AppExit>,
 ) {
-    if crate::pack_ui::proof_enabled() || crate::frontend_flow::enabled() {
+    if crate::browser_flow::enabled() || crate::pack_ui::proof_enabled() || crate::frontend_flow::enabled() {
         return;
     }
     let started = started_at.get_or_insert_with(std::time::Instant::now);
