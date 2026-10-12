@@ -63,6 +63,9 @@ impl Session {
     pub fn player_for(&self, client: u64) -> Option<PlayerId> {
         self.peers.get(&client).map(|p| p.player)
     }
+    pub(crate) fn acknowledged_input_for(&self, client: u64) -> Option<u64> {
+        self.peers.get(&client).map(|p| p.acknowledged)
+    }
 
     /// Trusted local Begin boundary. The cutoff is read from the exact owned
     /// sender, never supplied by a gameplay packet. Ack/discard old sequences
