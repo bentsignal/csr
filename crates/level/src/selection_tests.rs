@@ -89,6 +89,11 @@ fn canonical_installed_id_uses_discovered_game_source_and_not_pack_shadow() {
     assert_eq!(level.id, id);
     assert_eq!(level.name, "de_fixture");
     assert_eq!(level.bsp.map_revision, 1);
+    assert_eq!(*level.bsp_sha1(), <[u8; 20]>::from(Sha1::digest(bsp(1))));
+    assert_ne!(
+        *level.bsp_sha1(),
+        <[u8; 20]>::from(Sha1::digest(level.vfs.read("maps/de_fixture.bsp").unwrap()))
+    );
     assert!(level.pack_archive_hash().is_none());
     let mut fs = fixture.fs();
     fs.push_front(
@@ -274,4 +279,157 @@ fn catalog_selected_level_retains_hash_and_refuses_changed_pack_bytes() {
     .unwrap();
     assert_eq!(fresh.bsp.map_revision, 5);
     assert_eq!(fresh.pack_archive_hash(), Some(update.archive_hash()));
+}
+
+fn bsp_with_pak(revision: i32, entries: &[(&str, &[u8])]) -> Vec<u8> {
+    use std::io::{Cursor, Write};
+    let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    for (path, bytes) in entries {
+        writer
+            .start_file(*path, zip::write::SimpleFileOptions::default())
+            .unwrap();
+        writer.write_all(bytes).unwrap();
+    }
+    let pak = writer.finish().unwrap().into_inner();
+    let mut bytes = bsp(revision);
+    let offset = bytes.len() as i32;
+    let lump = 8 + bsp::lumps::PAKFILE * 16;
+    bytes[lump..lump + 4].copy_from_slice(&offset.to_le_bytes());
+    bytes[lump + 4..lump + 8].copy_from_slice(&(pak.len() as i32).to_le_bytes());
+    bytes.extend_from_slice(&pak);
+    bytes
+}
+
+fn catalog(damage: u32) -> Vec<u8> {
+    format!(r#"items_game {{ items {{ 7 {{ name weapon_fixture baseitem 1 item_class weapon_fixture attributes {{ damage {damage} }} }} }} }}"#).into_bytes()
+}
+
+#[test]
+fn recipe_and_asset_digests_follow_parsed_bsp_and_its_embedded_catalog() {
+    for source in [packs::MapSource::Legacy, packs::MapSource::Pack] {
+        let fixture = Fixture::new();
+        let chosen_catalog = catalog(41);
+        let old_catalog = catalog(7);
+        let shadow_bsp = bsp(99);
+        let selected = bsp_with_pak(
+            12,
+            &[
+                ("maps/de_fixture.bsp", &shadow_bsp),
+                ("scripts/items/items_game.txt", &chosen_catalog),
+            ],
+        );
+        std::fs::write(fixture.game.join("maps/de_fixture.bsp"), &selected).unwrap();
+        std::fs::create_dir_all(fixture.game.join("scripts/items")).unwrap();
+        std::fs::write(
+            fixture.game.join("scripts/items/items_game.txt"),
+            &old_catalog,
+        )
+        .unwrap();
+        let id: ContentId = "mod_map_arena".parse().unwrap();
+        let map = packs::MapDef {
+            id: id.to_string(),
+            bsp: "de_fixture".into(),
+            name: "Arena".into(),
+            source,
+        };
+        let manifest = packs::Manifest {
+            format_version: 1,
+            id: "digest_fixture".into(),
+            name: "Digest fixture".into(),
+            version: "1.0.0".into(),
+            origin: "mod".into(),
+            kind: if source == packs::MapSource::Pack {
+                packs::PackKind::Assets
+            } else {
+                packs::PackKind::Recipe
+            },
+            provides: vec![id.to_string()],
+            content_hash: String::new(),
+            min_game_version: "0.0.0".into(),
+            description: String::new(),
+            maps: vec![map.clone()],
+            resources: Vec::new(),
+        };
+        let payload = if source == packs::MapSource::Pack {
+            vec![("maps/de_fixture.bsp", selected.as_slice())]
+        } else {
+            vec![]
+        };
+        let pack = packs::Pack::from_bytes(packs::build(&manifest, &payload).unwrap()).unwrap();
+        fixture.packs.install_validated(&pack).unwrap();
+        let entry = fixture.packs.catalog().entries.remove(0);
+        let mut level = Level::load_catalog_map_from_vfs(
+            &fixture.packs,
+            &entry,
+            &id,
+            fixture.game.clone(),
+            fixture.fs(),
+        )
+        .unwrap();
+        assert_eq!(level.bsp.map_revision, 12);
+        assert_eq!(*level.bsp_sha1(), <[u8; 20]>::from(Sha1::digest(&selected)));
+        // Mounting this parsed BSP's pak makes the old server reread differ.
+        assert_eq!(level.vfs.read("maps/de_fixture.bsp").unwrap(), shadow_bsp);
+        assert_ne!(
+            *level.bsp_sha1(),
+            <[u8; 20]>::from(Sha1::digest(&shadow_bsp))
+        );
+        assert_eq!(level.catalog.get("weapon_fixture").unwrap().damage, 41.0);
+        assert_eq!(
+            level.catalog_sha1(),
+            Some(&<[u8; 20]>::from(Sha1::digest(&chosen_catalog)))
+        );
+        assert_ne!(
+            level.catalog_sha1(),
+            Some(&<[u8; 20]>::from(Sha1::digest(&old_catalog)))
+        );
+        // Later public VFS mutation does not alter the running parsed identity.
+        level.vfs.push_front(
+            "later",
+            memory(&[("scripts/items/items_game.txt", old_catalog)]),
+        );
+        assert_eq!(level.catalog.get("weapon_fixture").unwrap().damage, 41.0);
+        assert_eq!(
+            level.catalog_sha1(),
+            Some(&<[u8; 20]>::from(Sha1::digest(&chosen_catalog)))
+        );
+    }
+}
+
+#[test]
+fn catalog_digest_preserves_raw_encoding_and_excludes_parse_failures() {
+    let text = String::from_utf8(catalog(23)).unwrap();
+    let utf16 = [0xff, 0xfe]
+        .into_iter()
+        .chain(text.encode_utf16().flat_map(u16::to_le_bytes))
+        .collect::<Vec<_>>();
+    for bytes in [None, Some(b"items_game {".to_vec()), Some(utf16.clone())] {
+        let mut fs = vfs::Vfs::new();
+        let mut entries = vec![("maps/de_fixture.bsp", bsp(1))];
+        if let Some(bytes) = &bytes {
+            entries.push(("scripts/items/items_game.txt", bytes.clone()));
+        }
+        fs.push_back("fixture", memory(&entries));
+        let level = Level::load_from_vfs(
+            "mod_map_fixture".parse().unwrap(),
+            "de_fixture",
+            PathBuf::new(),
+            fs,
+        )
+        .unwrap();
+        if bytes == Some(utf16.clone()) {
+            assert_eq!(level.catalog.get("weapon_fixture").unwrap().damage, 23.0);
+            assert_eq!(
+                level.catalog_sha1(),
+                Some(&<[u8; 20]>::from(Sha1::digest(&utf16)))
+            );
+            assert_ne!(
+                level.catalog_sha1(),
+                Some(&<[u8; 20]>::from(Sha1::digest(text.as_bytes())))
+            );
+        } else {
+            assert!(level.catalog.weapons.is_empty());
+            assert!(level.catalog_sha1().is_none());
+        }
+    }
 }
