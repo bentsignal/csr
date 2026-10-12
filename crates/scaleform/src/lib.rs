@@ -254,6 +254,74 @@ impl Menu {
     }
 }
 
+const INPUT_TURN_BUDGET: usize = 256;
+const WORKER_TRACE_LIMIT: usize = 65_536;
+
+/// A progress opportunity follows every finite input batch, including batches
+/// whose producer keeps the channel nonempty. Input order is never changed.
+enum InputTurn<T> {
+    Input(T),
+    Progress {
+        count: usize,
+        budget_exhausted: bool,
+    },
+}
+fn service_input_turn<T, E>(
+    input: &Receiver<T>,
+    budget: usize,
+    mut service: impl FnMut(InputTurn<T>) -> Result<(), E>,
+) -> Result<bool, E> {
+    assert!(budget > 0);
+    let mut count = 0;
+    while count < budget {
+        match input.try_recv() {
+            Ok(message) => {
+                service(InputTurn::Input(message))?;
+                count += 1;
+            }
+            Err(TryRecvError::Empty) => break,
+            Err(TryRecvError::Disconnected) => return Ok(false),
+        }
+    }
+    service(InputTurn::Progress {
+        count,
+        budget_exhausted: count == budget,
+    })?;
+    Ok(true)
+}
+
+struct WorkerTrace {
+    remaining: usize,
+}
+impl WorkerTrace {
+    fn from_env() -> Self {
+        Self {
+            remaining: if std::env::var("CSR_UI_WORKER_TRACE").as_deref() == Ok("1") {
+                WORKER_TRACE_LIMIT
+            } else {
+                0
+            },
+        }
+    }
+    fn event(
+        &mut self,
+        phase: &'static str,
+        active: bool,
+        serial: u64,
+        count: usize,
+        exhausted: bool,
+    ) {
+        if self.remaining == 0 {
+            return;
+        }
+        self.remaining -= 1;
+        tracing::info!(target: "scaleform::worker", phase, active, serial, input_count = count, budget_exhausted = exhausted, "UI worker");
+        if self.remaining == 0 {
+            tracing::info!(target: "scaleform::worker", "UI worker trace limit reached; tracing stopped");
+        }
+    }
+}
+
 fn run(
     config: Config,
     engine: Box<dyn Engine>,
@@ -261,52 +329,207 @@ fn run(
     events: Sender<Event>,
     frame: Arc<Mutex<Option<Frame>>>,
 ) -> Result<(), String> {
+    let mut trace = WorkerTrace::from_env();
+    trace.event("host_begin", true, 0, 0, false);
     let mut host = host::Host::new(&config, engine, events).map_err(|e| e.to_string())?;
+    trace.event("host_end", true, 0, 0, false);
     let mut active = true;
     let mut serial = 0u64;
     let mut requested = false;
     let mut last = Instant::now();
     loop {
-        loop {
-            match input.try_recv() {
-                Ok(Input::SetActive(a)) => active = a,
-                Ok(Input::Resize { width, height }) => host.resize(width, height),
-                Ok(Input::Inspect(path)) => host.inspect(&path),
-                Ok(Input::Call { path, function, args }) => {
-                    host.run_command(Command::Call { path, function, args });
+        trace.event("input_begin", active, serial, 0, false);
+        let connected =
+            service_input_turn(&input, INPUT_TURN_BUDGET, |turn| -> Result<(), String> {
+                match turn {
+                    InputTurn::Input(message) => match message {
+                        Input::SetActive(value) => {
+                            active = value;
+                            trace.event("set_active", active, serial, 0, false);
+                        }
+                        Input::Resize { width, height } => host.resize(width, height),
+                        Input::Inspect(path) => host.inspect(&path),
+                        Input::Call {
+                            path,
+                            function,
+                            args,
+                        } => {
+                            host.run_command(Command::Call {
+                                path,
+                                function,
+                                args,
+                            });
+                        }
+                        Input::Set {
+                            path,
+                            property,
+                            value,
+                        } => {
+                            host.run_command(Command::Set {
+                                path,
+                                property,
+                                value,
+                            });
+                        }
+                        Input::RequestElement(element) => {
+                            trace.event("request_begin", active, serial, 0, false);
+                            host.run_command(Command::RequestElement(element));
+                            trace.event("request_end", active, serial, 0, false);
+                        }
+                        other => host.input(other),
+                    },
+                    InputTurn::Progress {
+                        count,
+                        budget_exhausted,
+                    } => {
+                        trace.event("input_end", active, serial, count, budget_exhausted);
+                        if !requested && host.root_ready() {
+                            requested = true;
+                            host.define_components();
+                            for element in &config.elements {
+                                trace.event(
+                                    "request_begin",
+                                    active,
+                                    serial,
+                                    count,
+                                    budget_exhausted,
+                                );
+                                host.run_command(Command::RequestElement(element.clone()));
+                                trace.event("request_end", active, serial, count, budget_exhausted);
+                            }
+                        }
+                        let now = Instant::now();
+                        let dt = now - last;
+                        last = now;
+                        if active {
+                            // Host::step pumps the executor, advances the player and drains
+                            // engine commands. Separate render spans identify GPU readback waits.
+                            trace.event("step_begin", active, serial, count, budget_exhausted);
+                            host.step(dt);
+                            trace.event("step_end", active, serial, count, budget_exhausted);
+                            if host.needs_render() {
+                                trace.event(
+                                    "render_begin",
+                                    active,
+                                    serial,
+                                    count,
+                                    budget_exhausted,
+                                );
+                                let (width, height, rgba) =
+                                    host.render().map_err(|e| e.to_string())?;
+                                serial += 1;
+                                trace.event("render_end", active, serial, count, budget_exhausted);
+                                if let Ok(mut slot) = frame.lock() {
+                                    *slot = Some(Frame {
+                                        width,
+                                        height,
+                                        rgba,
+                                        serial,
+                                    });
+                                }
+                            }
+                        } else {
+                            trace.event("executor_begin", active, serial, count, budget_exhausted);
+                            host.pump_loads();
+                            trace.event("executor_end", active, serial, count, budget_exhausted);
+                        }
+                    }
                 }
-                Ok(Input::Set { path, property, value }) => {
-                    host.run_command(Command::Set { path, property, value });
-                }
-                Ok(Input::RequestElement(e)) => host.run_command(Command::RequestElement(e)),
-                Ok(other) => host.input(other),
-                Err(TryRecvError::Empty) => break,
-                Err(TryRecvError::Disconnected) => return Ok(()),
-            }
-        }
-        if !requested && host.root_ready() {
-            requested = true;
-            host.define_components();
-            for element in &config.elements {
-                host.run_command(Command::RequestElement(element.clone()));
-            }
-        }
-        let now = Instant::now();
-        let dt = now - last;
-        last = now;
-        if active {
-            host.step(dt);
-            if host.needs_render() {
-                let (width, height, rgba) = host.render().map_err(|e| e.to_string())?;
-                serial += 1;
-                if let Ok(mut slot) = frame.lock() {
-                    *slot = Some(Frame { width, height, rgba, serial });
-                }
-            }
-        } else {
-            host.pump_loads();
+                Ok(())
+            })?;
+        if !connected {
+            trace.event("disconnected", active, serial, 0, false);
+            return Ok(());
         }
         // Movies run at 30 fps; 4 ms keeps input latency low without spinning.
         std::thread::sleep(Duration::from_millis(4));
+    }
+}
+
+#[cfg(test)]
+mod worker_tests {
+    use super::{INPUT_TURN_BUDGET, InputTurn, service_input_turn};
+    use std::sync::mpsc::channel;
+
+    #[test]
+    fn excess_input_stays_fifo_and_progress_runs_after_budget() {
+        let (sender, receiver) = channel();
+        for n in 0..INPUT_TURN_BUDGET + 3 {
+            sender.send(n).unwrap();
+        }
+        let mut delivered = Vec::new();
+        let mut ticks = 0;
+        let connected = service_input_turn(&receiver, INPUT_TURN_BUDGET, |turn| {
+            match turn {
+                InputTurn::Input(n) => delivered.push(n),
+                InputTurn::Progress {
+                    count,
+                    budget_exhausted,
+                } => {
+                    assert_eq!(count, INPUT_TURN_BUDGET);
+                    assert!(budget_exhausted);
+                    assert_eq!(delivered.len(), INPUT_TURN_BUDGET);
+                    ticks += 1;
+                }
+            }
+            Ok::<_, ()>(())
+        })
+        .unwrap();
+        assert!(connected);
+        assert_eq!(ticks, 1);
+        assert_eq!(delivered, (0..INPUT_TURN_BUDGET).collect::<Vec<_>>());
+        assert_eq!(
+            receiver.try_iter().collect::<Vec<_>>(),
+            (INPUT_TURN_BUDGET..INPUT_TURN_BUDGET + 3).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn refilling_producer_cannot_prevent_a_progress_opportunity() {
+        let (sender, receiver) = channel();
+        sender.send(0).unwrap();
+        let mut delivered = Vec::new();
+        let mut ticks = 0;
+        service_input_turn(&receiver, INPUT_TURN_BUDGET, |turn| {
+            match turn {
+                InputTurn::Input(n) => {
+                    delivered.push(n);
+                    sender.send(n + 1).unwrap();
+                }
+                InputTurn::Progress {
+                    count,
+                    budget_exhausted,
+                } => {
+                    assert_eq!(count, INPUT_TURN_BUDGET);
+                    assert!(budget_exhausted);
+                    ticks += 1;
+                }
+            }
+            Ok::<_, ()>(())
+        })
+        .unwrap();
+        assert_eq!(ticks, 1);
+        assert_eq!(delivered, (0..INPUT_TURN_BUDGET).collect::<Vec<_>>());
+        assert_eq!(receiver.try_recv().unwrap(), INPUT_TURN_BUDGET);
+    }
+
+    #[test]
+    fn disconnect_after_queued_inputs_does_not_add_a_tick_or_drop_messages() {
+        let (sender, receiver) = channel();
+        for n in 0..3 {
+            sender.send(n).unwrap();
+        }
+        drop(sender);
+        let mut delivered = Vec::new();
+        let connected = service_input_turn(&receiver, INPUT_TURN_BUDGET, |turn| {
+            match turn {
+                InputTurn::Input(n) => delivered.push(n),
+                InputTurn::Progress { .. } => panic!("disconnected worker must return"),
+            }
+            Ok::<_, ()>(())
+        })
+        .unwrap();
+        assert!(!connected);
+        assert_eq!(delivered, vec![0, 1, 2]);
     }
 }
