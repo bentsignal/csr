@@ -1026,11 +1026,14 @@ pub(crate) fn input(
         return;
     };
     let movie = movie.lock().unwrap();
-    let mut send = |input: Input| { ownership.record(&input); movie.send(input); };
-    if let Some(position) = window.cursor_position() {
+    let position = window.cursor_position().map(|position| {
         let scale = window.scale_factor() as f64;
-        let (x, y) = (position.x as f64 * scale, position.y as f64 * scale);
-        send(Input::MouseMove { x, y });
+        (position.x as f64 * scale, position.y as f64 * scale)
+    });
+    let movement = position.and_then(|(x, y)| ownership.mouse_move(x, y));
+    let mut send = |input: Input| { ownership.record(&input); movie.send(input); };
+    if let Some((x, y)) = position {
+        if let Some(movement) = movement { send(movement); }
         for (button, mapped) in [
             (MouseButton::Left, scaleform::MouseButton::Left),
             (MouseButton::Right, scaleform::MouseButton::Right),
