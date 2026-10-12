@@ -528,6 +528,7 @@ pub struct Advance {
 }
 
 pub struct RemoteSession {
+    pub(crate) local_owner: Option<crate::host::LocalOwner>,
     address: SocketAddr,
     name: String,
     team: Team,
@@ -543,6 +544,40 @@ pub struct RemoteSession {
     joining_elapsed: Duration,
 }
 impl RemoteSession {
+    /// A passive local-host reservation. No socket, Hello or join deadline
+    /// exists until the renderer acknowledges preparation and calls provide_map.
+    /// The opaque ticket is consumed once; map loading itself stays external.
+    pub fn local(
+        admission: crate::host::LocalAdmission,
+        name: String,
+        team: Team,
+    ) -> Result<Self, Error> {
+        let name = name.trim().to_owned();
+        if name.is_empty() || name.len() > 64 || name.chars().any(char::is_control) {
+            return Err(Error::InvalidName);
+        }
+        admission.info.validate().map_err(Error::InvalidState)?;
+        if admission.owner.cancelled() {
+            return Err(Error::Cancelled);
+        }
+        Ok(Self {
+            address: admission.address,
+            name,
+            team,
+            status: Status::AwaitingMap(admission.info.clone()),
+            info: Some(admission.info),
+            local_owner: Some(admission.owner),
+            client: None,
+            prepared_world: None,
+            predictor: None,
+            poses: None,
+            clock: None,
+            events: VecDeque::new(),
+            queued_events: 0,
+            joining_elapsed: Duration::ZERO,
+        })
+    }
+
     pub fn discover(address: SocketAddr, name: String, team: Team) -> Result<Self, Error> {
         let name = name.trim().to_owned();
         if name.is_empty() || name.len() > 64 || name.chars().any(char::is_control) {
@@ -550,6 +585,7 @@ impl RemoteSession {
         }
         let client = Client::probe(address).map_err(Error::Transport)?;
         Ok(Self {
+            local_owner: None,
             address,
             name,
             team,
@@ -611,13 +647,27 @@ impl RemoteSession {
         if world.collision.dynamic.is_some() {
             return Err(Error::UnsupportedWorld);
         }
-        let client = Client::connect(
-            self.address,
-            self.name.clone(),
-            self.team,
-            manifest,
-            world.catalog.clone(),
-        )
+        let client = if let Some(owner) = &self.local_owner {
+            if owner.cancelled() {
+                return Err(Error::Cancelled);
+            }
+            Client::connect_local(
+                self.address,
+                self.name.clone(),
+                self.team,
+                manifest,
+                world.catalog.clone(),
+                owner.client_id,
+            )
+        } else {
+            Client::connect(
+                self.address,
+                self.name.clone(),
+                self.team,
+                manifest,
+                world.catalog.clone(),
+            )
+        }
         .map_err(Error::Transport)?;
         self.client = Some(client);
         self.prepared_world = Some(world);
@@ -643,6 +693,11 @@ impl RemoteSession {
         self.status = Status::Closed(reason);
     }
     fn reprobe(&mut self) -> Result<(), Error> {
+        // A local reservation is tied to this exact host generation/policy.
+        // Never turn a stale local ticket into an ordinary remote admission.
+        if self.local_owner.is_some() {
+            return Err(Error::ContentMismatch);
+        }
         self.close(Error::Cancelled);
         self.client = Some(Client::probe(self.address).map_err(Error::Transport)?);
         self.status = Status::Discovering;
@@ -661,6 +716,14 @@ impl RemoteSession {
         let elapsed = Self::elapsed(elapsed_seconds)?;
         if let Status::Closed(reason) = &self.status {
             return Err(reason.clone());
+        }
+        if self
+            .local_owner
+            .as_ref()
+            .is_some_and(|owner| owner.cancelled())
+        {
+            self.close(Error::Cancelled);
+            return Err(Error::Cancelled);
         }
         if matches!(self.status, Status::AwaitingMap(_)) {
             return Ok(());
