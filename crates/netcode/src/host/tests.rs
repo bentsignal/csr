@@ -331,6 +331,55 @@ fn wait(handle: &mut HostHandle, predicate: impl Fn(&HostStatus) -> bool) -> Hos
     }
 }
 
+fn wait_closed_and_reaped(handle: &mut HostHandle) -> HostStatus {
+    let closed = wait(handle, |s| matches!(s, HostStatus::Closed(_)));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    // Closed is published after socket teardown, but the thread can still
+    // be completing its epilogue when the status is observed.
+    while !handle.reap_if_finished() {
+        assert_eq!(handle.status(), closed);
+        assert!(Instant::now() < deadline, "closed worker did not finish");
+        thread::sleep(Duration::from_millis(1));
+    }
+    assert_eq!(handle.status(), closed);
+    closed
+}
+
+#[test]
+fn closed_publication_can_precede_thread_completion_without_changing_terminal_status() {
+    let shared = Arc::new(Shared {
+        stopped: AtomicBool::new(false),
+        status: Mutex::new(HostStatus::Binding),
+    });
+    let (commands, _receiver) = mpsc::sync_channel(COMMAND_CAPACITY);
+    let (published, publication) = mpsc::sync_channel(1);
+    let (release, continuation) = mpsc::sync_channel(1);
+    let worker_shared = shared.clone();
+    let worker = thread::spawn(move || {
+        worker_shared.publish(HostStatus::Closed(HostError::Cancelled));
+        published.send(()).unwrap();
+        continuation.recv_timeout(Duration::from_secs(5)).unwrap();
+    });
+    let mut handle = HostHandle {
+        shared,
+        owner_id: 1,
+        admission_taken: false,
+        begin_requested: false,
+        commands,
+        worker: Some(worker),
+    };
+    publication.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert_eq!(handle.status(), HostStatus::Closed(HostError::Cancelled));
+    assert!(!handle.reap_if_finished()); // worker is held by the channel
+    release.send(()).unwrap();
+    assert_eq!(
+        wait_closed_and_reaped(&mut handle),
+        HostStatus::Closed(HostError::Cancelled)
+    );
+    assert!(handle.worker.is_none());
+    assert!(handle.reap_if_finished());
+}
+
 #[test]
 fn owned_worker_wildcard_endpoint_cancel_socket_release_and_stale_ticket() {
     let mut handle = HostHandle::spawn(
@@ -359,7 +408,7 @@ fn owned_worker_wildcard_endpoint_cancel_socket_release_and_stale_ticket() {
     handle.cancel();
     handle.cancel();
     assert_eq!(
-        wait(&mut handle, |s| matches!(s, HostStatus::Closed(_))),
+        wait_closed_and_reaped(&mut handle),
         HostStatus::Closed(HostError::Cancelled)
     );
     assert!(handle.reap_if_finished());
@@ -389,7 +438,7 @@ fn worker_bind_error_and_invalid_authority_are_typed() {
     )
     .unwrap();
     assert!(matches!(
-        wait(&mut handle, |s| matches!(s, HostStatus::Closed(_))),
+        wait_closed_and_reaped(&mut handle),
         HostStatus::Closed(HostError::Bind(_))
     ));
     assert!(handle.reap_if_finished());
@@ -525,6 +574,6 @@ fn actual_worker_begin_is_idempotent_and_cancel_invalidates_ready_client() {
     assert_eq!(local.pending_inputs(), None);
     assert_eq!(local.update(0.), Err(Error::Cancelled));
     assert_eq!(handle.begin(&local), Err(HostError::Cancelled));
-    wait(&mut handle, |s| matches!(s, HostStatus::Closed(_)));
+    wait_closed_and_reaped(&mut handle);
     assert!(handle.reap_if_finished());
 }
