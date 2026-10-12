@@ -16,6 +16,10 @@ impl Pose {
     pub fn player(p: &sim::Player) -> Self {
         Self { velocity: p.movement.velocity, on_ground: p.movement.on_ground, origin: p.movement.origin, eye: p.eye(), angles: p.view_angles, punch: p.view_punch().into(), alive: p.alive }
     }
+    pub fn remote(p: &netcode::remote_pose::RenderPose) -> Self {
+        Self { origin: p.origin, velocity: p.velocity, on_ground: p.on_ground,
+            eye: p.eye, angles: p.view_angles, punch: p.punch, alive: p.alive }
+    }
     fn lerp(self, next: Self, alpha: f32) -> Self {
         Self {
             velocity: self.velocity.lerp(next.velocity, alpha), on_ground: next.on_ground,
@@ -28,7 +32,15 @@ impl Pose {
 fn angle_lerp(a: f32, b: f32, alpha: f32) -> f32 { a + ((b - a + 180.0).rem_euclid(360.0) - 180.0) * alpha }
 
 #[derive(Resource, Default)]
-pub struct RenderPoses(HashMap<sim::PlayerId, (Pose, Pose)>, HashMap<sim::PlayerId, f32>);
+pub struct RenderPoses(HashMap<sim::PlayerId, (Pose, Pose)>, HashMap<sim::PlayerId, f32>, HashMap<sim::PlayerId, Pose>, Option<PredictedLocal>);
+
+struct PredictedLocal {
+    id: sim::PlayerId,
+    tick: u64,
+    life: u64,
+    raw: Pose,
+    stair: f32,
+}
 
 /// Eases a stair step out of the camera at 140 units/s (`dt`: seconds per tick).
 fn stair_offset(offset: f32, rise: f32, grounded: bool, reset: bool, dt: f32) -> f32 {
@@ -38,6 +50,31 @@ fn stair_offset(offset: f32, rise: f32, grounded: bool, reset: bool, dt: f32) ->
     offset - offset.signum() * offset.abs().min(140.0 * dt)
 }
 impl RenderPoses {
+    /// Already-sampled render poses; never write these into gameplay state.
+    pub fn set_overrides(&mut self, poses: impl IntoIterator<Item = (sim::PlayerId, Pose)>) {
+        self.2.clear();
+        self.2.extend(poses);
+    }
+    pub fn clear_overrides(&mut self) { self.2.clear(); self.3 = None; }
+    /// Preserve the existing stair-eye easing for local prediction without
+    /// capturing or changing any authoritative/remote actor state.
+    pub fn capture_prediction(&mut self, player: &sim::Player, tick: u64, dt: f32) -> Pose {
+        let raw = Pose::player(player);
+        let mut stair = 0.;
+        if let Some(previous) = &self.3 {
+            let reset = previous.id != player.id || previous.life != player.life_epoch
+                || previous.raw.alive != raw.alive || tick < previous.tick
+                || previous.raw.origin.distance(raw.origin) > 128.
+                || (tick == previous.tick && previous.raw.origin != raw.origin);
+            stair = stair_offset(previous.stair, raw.origin.z - previous.raw.origin.z,
+                raw.on_ground && previous.raw.on_ground, reset,
+                tick.saturating_sub(previous.tick) as f32 * dt);
+        }
+        self.3 = Some(PredictedLocal { id: player.id, tick, life: player.life_epoch, raw, stair });
+        let mut render = raw;
+        render.eye.z += stair;
+        render
+    }
     pub fn capture(&mut self, world: &sim::World) {
         let round_start = world.events.iter().any(|e| matches!(e, sim::GameEvent::RoundStart { .. }));
         self.0.retain(|id, _| world.player(*id).is_some());
@@ -53,12 +90,49 @@ impl RenderPoses {
         }
     }
     pub fn sample(&self, player: &sim::Player, alpha: f32) -> Pose {
+        if let Some(pose) = self.2.get(&player.id) { return *pose; }
         self.0.get(&player.id).map_or_else(|| Pose::player(player), |&(a, b)| a.lerp(b, alpha.clamp(0.0, 1.0)))
     }
 }
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn predicted_stairs_match_offline_easing_and_snap_new_lives_and_corrections() {
+        for rate in [64, 128] {
+            let mut world = sim::World::new(std::sync::Arc::new(collision::CollisionWorld::new()));
+            world.set_tick_rate(rate);
+            let id = world.add_player("Local", sim::Team::CounterTerrorist);
+            world.events.clear();
+            world.player_mut(id).unwrap().movement.on_ground = true;
+            let mut offline = RenderPoses::default();
+            let mut predicted = RenderPoses::default();
+            offline.capture(&world);
+            predicted.capture_prediction(world.player(id).unwrap(), world.tick, world.dt());
+            world.player_mut(id).unwrap().movement.origin.z += 18.;
+            for tick in 1..=32 {
+                world.tick = tick;
+                let before = world.state();
+                offline.capture(&world);
+                let pose = predicted.capture_prediction(world.player(id).unwrap(), tick, world.dt());
+                assert_eq!(pose.eye, offline.sample(world.player(id).unwrap(), 1.).eye);
+                assert_eq!(world.state(), before);
+                if tick == 1 { assert!(pose.eye.z < world.player(id).unwrap().eye().z - 15.); }
+            }
+            world.respawn(id);
+            let pose = predicted.capture_prediction(world.player(id).unwrap(), 33, world.dt());
+            assert_eq!(pose.eye, world.player(id).unwrap().eye());
+            world.player_mut(id).unwrap().movement.origin.z += 4.;
+            let corrected = predicted.capture_prediction(world.player(id).unwrap(), 33, world.dt());
+            assert_eq!(corrected.eye, world.player(id).unwrap().eye());
+            world.player_mut(id).unwrap().movement.origin.x += 200.;
+            let teleport = predicted.capture_prediction(world.player(id).unwrap(), 34, world.dt());
+            assert_eq!(teleport.eye, world.player(id).unwrap().eye());
+            predicted.clear_overrides();
+            world.player_mut(id).unwrap().movement.origin.z += 4.;
+            assert_eq!(predicted.capture_prediction(world.player(id).unwrap(), 35, world.dt()).eye, world.player(id).unwrap().eye());
+        }
+    }
     #[test]
     fn stairs_ease_out_but_jumps_and_teleports_do_not_create_offsets() {
         for rate in [64, 128] {

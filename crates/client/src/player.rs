@@ -42,6 +42,7 @@ pub struct LocalPlayer {
     /// The teammate being watched while dead.
     pub spectating: Option<PlayerId>,
     was_alive: bool,
+    remote_life: u64,
 }
 
 impl LocalPlayer {
@@ -63,12 +64,51 @@ impl LocalPlayer {
             pending_drop: false,
             spectating: None,
             was_alive: true,
+            remote_life: 0,
         }
     }
 
     /// Whose eyes the camera is in (the local player unless spectating).
     pub fn view_target(&self) -> PlayerId {
         self.spectating.unwrap_or(self.id)
+    }
+
+    /// Discard camera life and unsent controls when an owned session stops
+    /// being ready; actor ids and life epochs may repeat after reconnection.
+    pub(crate) fn clear_remote_lifecycle(&mut self) {
+        self.remote_life = 0;
+        self.was_alive = false;
+        self.spectating = None;
+        self.latched = 0;
+        self.pending_slot = 0;
+        self.pending_drop = false;
+        self.pending_buys.clear();
+    }
+
+    /// Camera lifecycle comes from authority, including lost death snapshots.
+    pub fn sync_remote(&mut self, world: &sim::World, id: PlayerId) {
+        if self.id != id { self.id = id; self.remote_life = 0; }
+        self.noclip = false;
+        let Some(me) = world.player(id) else { return; };
+        if me.alive {
+            if self.remote_life != me.life_epoch || !self.was_alive {
+                self.pitch = me.view_angles.x;
+                self.yaw = me.view_angles.y;
+                self.prev_eye = me.eye();
+            } else { self.prev_eye = self.curr_eye; }
+            self.curr_eye = me.eye();
+            self.spectating = None;
+        } else {
+            if !self.spectating.and_then(|s| world.player(s)).is_some_and(|p| p.alive) {
+                self.spectating = spectate_candidates(world, me).first().copied();
+            }
+            if let Some(target) = self.spectating.and_then(|s| world.player(s)) {
+                self.prev_eye = self.curr_eye;
+                self.curr_eye = target.eye();
+            }
+        }
+        self.remote_life = me.life_epoch;
+        self.was_alive = me.alive;
     }
 }
 
@@ -134,8 +174,10 @@ pub fn look(
     settings: Res<crate::settings::Settings>,
     mut block: ResMut<InputBlockFrames>,
     mut inspect: ResMut<crate::tracers::InspectRequest>,
+    remote: Option<Res<crate::remote::RemoteClient>>,
 ) {
     if front.open() {return;}
+    if remote.as_ref().is_some_and(|r| r.status() != &netcode::remote_session::Status::Ready) { return; }
     if block.0 > 0 { if !mouse.pressed(MouseButton::Left) && !mouse.pressed(MouseButton::Right) {block.0=0;} return; }
     if !enabled.0 {
         return;
@@ -150,7 +192,8 @@ pub fn look(
         local.pitch = (local.pitch + d.y * (if settings.invert_y {-1.0} else {1.0}) * local.sensitivity * M_YAW * zoom).clamp(-89.0, 89.0);
         local.yaw = local.yaw.rem_euclid(360.0);
     }
-    if !menu.open && keys.just_pressed(KeyCode::KeyV) {
+    if remote.is_some() { local.noclip = false; }
+    if remote.is_none() && !menu.open && keys.just_pressed(KeyCode::KeyV) {
         local.noclip = !local.noclip;
         local.noclip_pos = local.curr_eye;
     }
@@ -242,6 +285,42 @@ fn move_axes(keys: &ButtonInput<KeyCode>, settings: &crate::settings::Settings) 
     (forward, side)
 }
 
+pub struct Controls<'a> {
+    pub keys: &'a ButtonInput<KeyCode>,
+    pub mouse: &'a ButtonInput<MouseButton>,
+    pub settings: &'a crate::settings::Settings,
+    pub enabled: bool,
+    pub blocked: bool,
+    pub captured: bool,
+    pub buy_menu: bool,
+}
+
+/// Complete device input; one-shot requests are consumed only for a sim tick.
+pub fn sample_tick_input(local: &mut LocalPlayer, controls: &Controls<'_>) -> TickInput {
+    let empty = ButtonInput::<KeyCode>::default();
+    let keys = if controls.enabled && !controls.blocked && !controls.buy_menu {
+        controls.keys
+    } else { &empty };
+    let (forward_move, side_move) = move_axes(keys, controls.settings);
+    let mut held = 0;
+    for (binding, button) in [(4, buttons::JUMP), (5, buttons::DUCK), (6, buttons::WALK), (7, buttons::USE)] {
+        if keys.pressed(controls.settings.binds[binding]) { held |= button; }
+    }
+    if controls.enabled && !controls.blocked && controls.captured && !controls.buy_menu {
+        if controls.mouse.pressed(MouseButton::Left) { held |= buttons::ATTACK; }
+        if controls.mouse.pressed(MouseButton::Right) { held |= buttons::ATTACK2; }
+    }
+    TickInput {
+        view_angles: glam::Vec3::new(local.pitch, local.yaw, 0.),
+        forward_move, side_move,
+        buttons: held | std::mem::take(&mut local.latched),
+        weapon_slot: std::mem::take(&mut local.pending_slot),
+        buy: if local.pending_buys.is_empty() { Purchase::None } else { local.pending_buys.remove(0) },
+        drop: std::mem::take(&mut local.pending_drop),
+        ..Default::default()
+    }
+}
+
 /// Runs in `FixedUpdate` at the sim tick rate.
 #[allow(clippy::too_many_arguments)]
 pub fn tick(
@@ -258,48 +337,28 @@ pub fn tick(
     block: Res<InputBlockFrames>,
     mut poses: ResMut<crate::interpolation::RenderPoses>,
     probe: Res<crate::sound_probe::SoundProbe>,
+    remote: Option<Res<crate::remote::RemoteClient>>,
 ) {
-    if front.open() {return;}
+    if remote.is_some() || front.open() {return;}
     let no_keys = ButtonInput::<KeyCode>::default();
     let keys: &ButtonInput<KeyCode> = if enabled.0 && !menu.open && block.0==0 { &real_keys } else { &no_keys };
-    let (forward, side) = move_axes(keys, &settings);
-    let mut held = 0;
-    if keys.pressed(settings.binds[4]) {
-        held |= buttons::JUMP;
-    }
-    if keys.pressed(settings.binds[5]) {
-        held |= buttons::DUCK;
-    }
-    if keys.pressed(settings.binds[6]) {
-        held |= buttons::WALK;
-    }
-    if keys.pressed(settings.binds[7]) {
-        held |= buttons::USE;
-    }
-    if enabled.0 && block.0==0 && captured(&cursor) && !menu.open && mouse.pressed(MouseButton::Left) {
-        held |= buttons::ATTACK;
-    }
-    if enabled.0 && block.0==0 && captured(&cursor) && !menu.open && mouse.pressed(MouseButton::Right) {
-        held |= buttons::ATTACK2;
-    }
+    let mut input = sample_tick_input(&mut local, &Controls {
+        keys: &real_keys, mouse: &mouse, settings: &settings, enabled: enabled.0,
+        blocked: block.0 != 0, captured: captured(&cursor), buy_menu: menu.open,
+    });
     // Smoke tests can hold the trigger to exercise the fire path.
     if !enabled.0 && std::env::var_os("CSR_AUTOFIRE").is_some() {
-        held |= buttons::ATTACK;
+        input.buttons |= buttons::ATTACK;
     }
-    if !enabled.0 && std::env::var_os("CSR_ATTACK2").is_some() { held |= buttons::ATTACK2; }
-    let mut pressed = held | local.latched;
-    local.latched = 0;
-    let mut slot = std::mem::take(&mut local.pending_slot);
+    if !enabled.0 && std::env::var_os("CSR_ATTACK2").is_some() { input.buttons |= buttons::ATTACK2; }
     if !enabled.0 && std::env::var_os("CSR_TEST_SWITCH").is_some() {
         match world.0.tick {
-            64 => pressed |= buttons::ATTACK,
-            80 => slot = 3,
-            144 => slot = 1,
+            64 => input.buttons |= buttons::ATTACK,
+            80 => input.weapon_slot = 3,
+            144 => input.weapon_slot = 1,
             _ => {}
         }
     }
-    let buy = if local.pending_buys.is_empty() { Purchase::None } else { local.pending_buys.remove(0) };
-    let drop = std::mem::take(&mut local.pending_drop);
 
     let mut inputs = Vec::new();
 
@@ -307,21 +366,12 @@ pub fn tick(
         let dt = world.0.dt();
         let (f, r, _) = movement::angle_vectors(glam::Vec3::new(local.pitch, local.yaw, 0.0));
         let speed = if keys.pressed(settings.binds[6]) { 1600.0 } else { 600.0 };
-        let wish = f * (forward / 450.0) + r * (side / 450.0);
+        let wish = f * (input.forward_move / 450.0) + r * (input.side_move / 450.0);
         local.prev_eye = local.noclip_pos;
         local.noclip_pos += wish * speed * dt;
         local.curr_eye = local.noclip_pos;
     } else {
-        let input = probe.input(world.0.time()).unwrap_or(TickInput {
-            view_angles: glam::Vec3::new(local.pitch, local.yaw, 0.0),
-            forward_move: forward,
-            side_move: side,
-            buttons: pressed,
-            weapon_slot: slot,
-            buy,
-            drop,
-            ..Default::default()
-        });
+        let input = probe.input(world.0.time()).unwrap_or(input);
         if probe.active() {
             local.pitch = input.view_angles.x;
             local.yaw = input.view_angles.y;
@@ -386,7 +436,9 @@ pub fn update_camera(
     time: Res<Time<Fixed>>,
     poses: Res<crate::interpolation::RenderPoses>,
     mut cams: Query<(&mut Transform, &mut Projection, Option<&ViewModelCamera>), With<PlayerCamera>>,
+    remote: Option<Res<crate::remote::RemoteClient>>,
 ) {
+    if remote.as_ref().is_some_and(|r| r.status() != &netcode::remote_session::Status::Ready) { return; }
     let alpha = time.overstep_fraction();
     let target = world.0.player(local.view_target()).map(|p| poses.sample(p, alpha));
     let eye = if local.noclip { local.prev_eye.lerp(local.curr_eye, alpha) } else { target.map_or(local.curr_eye, |p| p.eye) };
@@ -409,5 +461,46 @@ pub fn update_camera(
         }
         cam.translation = to_bevy(eye);
         cam.look_to(fwd, Vec3::Y);
+    }
+}
+
+#[cfg(test)]
+mod remote_input_tests {
+    use super::*;
+    #[test]
+    fn sampler_keeps_held_controls_and_consumes_complete_one_shot_requests_once() {
+        let settings = crate::settings::Settings::default();
+        let mut keys = ButtonInput::<KeyCode>::default();
+        keys.press(KeyCode::KeyW);
+        keys.press(KeyCode::KeyD);
+        keys.press(KeyCode::KeyE);
+        let mut mouse = ButtonInput::<MouseButton>::default();
+        mouse.press(MouseButton::Left);
+        let mut local = LocalPlayer::new(7, glam::Vec3::ZERO, 45.);
+        local.pitch = 12.;
+        local.latched = buttons::RELOAD;
+        local.pending_slot = 3;
+        local.pending_buys = vec![Purchase::Kevlar, Purchase::DefuseKit];
+        local.pending_drop = true;
+        let controls = Controls { keys: &keys, mouse: &mouse, settings: &settings,
+            enabled: true, blocked: false, captured: true, buy_menu: false };
+        let first = sample_tick_input(&mut local, &controls);
+        assert_eq!(first.view_angles, glam::Vec3::new(12., 45., 0.));
+        assert_eq!((first.forward_move, first.side_move), (450., 450.));
+        assert_eq!(first.buttons, buttons::RELOAD | buttons::USE | buttons::ATTACK);
+        assert_eq!(first.weapon_slot, 3);
+        assert_eq!(first.buy, Purchase::Kevlar);
+        assert!(first.drop);
+        let second = sample_tick_input(&mut local, &controls);
+        assert_eq!(second.buttons, buttons::USE | buttons::ATTACK);
+        assert_eq!(second.weapon_slot, 0);
+        assert_eq!(second.buy, Purchase::DefuseKit);
+        assert!(!second.drop);
+        assert!(local.pending_buys.is_empty());
+        local.pending_buys.push(Purchase::KevlarHelmet);
+        let during_buy = sample_tick_input(&mut local, &Controls { buy_menu: true, ..controls });
+        assert_eq!(during_buy.forward_move, 0.);
+        assert_eq!(during_buy.buttons, 0);
+        assert_eq!(during_buy.buy, Purchase::KevlarHelmet);
     }
 }

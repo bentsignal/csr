@@ -499,6 +499,27 @@ impl Drop for Client {
 
 #[cfg(test)]
 impl Server {
+    /// Keep the fixture's UDP port reserved while metadata changes between
+    /// discovery and Hello. Closing/rebinding lets parallel ephemeral sockets
+    /// take that port and makes an otherwise unrelated policy test flaky.
+    pub(crate) fn replace_unjoined_session(&mut self, session: Session) {
+        assert!(self.session.world().players.is_empty());
+        let rate = session.world().tick_rate;
+        self.clock = TickClock::new(rate).unwrap();
+        self.snapshot_every = (rate / 32).max(1) as u64;
+        self.session = session;
+    }
+    pub(crate) fn inject_info(&mut self, info: ServerInfo) {
+        for client in self.connection.clients_id() {
+            if self.session.player_for(client).is_some() {
+                self.connection.send_message(
+                    client,
+                    CONTROL,
+                    encode(&ServerControl::Info(info.clone())).unwrap(),
+                );
+            }
+        }
+    }
     pub(crate) fn hold_admission(&mut self) {
         self.held_admissions = Some(Vec::new());
     }
