@@ -366,6 +366,9 @@ impl Client {
         self.transport
             .update_with_packet_limit(elapsed, &mut self.connection, 256)
             .map_err(|e| e.to_string())?;
+        if self.connection.is_disconnected() {
+            return Err("remote transport disconnected".into());
+        }
         if self.connection.is_connected() && !self.sent_hello {
             self.connection.send_message(CONTROL, encode(&self.hello)?);
             self.sent_hello = true;
@@ -466,6 +469,18 @@ impl Client {
 impl Drop for Client {
     fn drop(&mut self) {
         self.disconnect();
+    }
+}
+
+#[cfg(test)]
+impl Server {
+    pub(crate) fn inject_events(&mut self, batch: &EventBatch) {
+        let bytes = encode(batch).unwrap();
+        for client in self.connection.clients_id() {
+            if self.session.player_for(client).is_some() {
+                self.connection.send_message(client, EVENTS, bytes.clone());
+            }
+        }
     }
 }
 
