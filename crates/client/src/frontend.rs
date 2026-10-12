@@ -35,6 +35,7 @@ struct Data {
     player_name: String,
     movie_ready: HashSet<String>,
     pause_surface: crate::frontend_pause_surface::Tracker,
+    deferred_pause: crate::frontend_pause_surface::DeferredPause,
 }
 enum Action {
     Sound(String),
@@ -317,6 +318,7 @@ impl Engine for Bridge {
             let mut data = self.data.lock().unwrap();
             if data.pause_surface.options_requested() {
                 data.pause_surface.options_cancelled();
+                data.deferred_pause.cancel_pending();
                 if let Some(path) = self.roots.get("OptionsMenu") { calls.set(path, "_visible", false.into()); }
                 let base = if data.state == AppState::Match && data.menu_open { "PauseMenu" } else { "MainMenu" };
                 if let Some(path) = self.roots.get(base) {
@@ -351,21 +353,22 @@ impl Engine for Bridge {
                         calls.set(path, "_visible", false.into());
                     }
                 } else if object == "PauseMenu" {
+                    // Loaded precedes authored Ready. The deferred owner shows
+                    // this exact cached root only after both movies are ready.
+                    calls.set(path, "_visible", false.into());
+                    calls.call(path, "SetPlayerName", vec!["You".into()]);
                     let data = self.data.lock().unwrap();
-                    if data.state == AppState::Match && data.menu_open && !data.pause_surface.options_requested() {
-                        for element in ["MainMenu", "StartSinglePlayer", "OptionsMenu", "LobbyBrowser", "LobbyScreen"] {
-                            if let Some(root) = self.roots.get(element) {
-                                calls.set(root, "_visible", false.into());
-                            }
-                        }
-                        calls.set(path, "_visible", true.into());
-                        calls.call(path, "SetPlayerName", vec!["You".into()]);
-                        calls.call(path, "showPanel", vec![]);
-                    } else {
-                        calls.set(path, "_visible", false.into());
+                    if data.state != AppState::Match || !data.menu_open || data.pause_surface.options_requested() {
                         calls.call(path, "hidePanel", vec![]);
                     }
                 }
+            }
+            return None;
+        }
+        if method == "OnReady" && object == "PauseMenu" {
+            let data = self.data.lock().unwrap();
+            if data.state != AppState::Match || !data.menu_open || data.pause_surface.options_requested() {
+                if let Some(path) = self.roots.get(object) { calls.set(path, "_visible", false.into()); }
             }
             return None;
         }
@@ -486,6 +489,7 @@ impl Engine for Bridge {
                     self.lobby.lock().unwrap().cancel();
                     let mut data = self.data.lock().unwrap();
                     data.pause_surface.options_opened();
+                    data.deferred_pause.cancel_pending();
                     if let Some(path) = self.roots.get("PauseMenu") { calls.set(path, "_visible", false.into()); }
                     self.options = crate::frontend_options::Scene::load(
                         &data.fs,
@@ -663,10 +667,12 @@ pub struct Frontend {
     actions: Arc<Mutex<Vec<Action>>>,
     image: Handle<Image>,
     presented_serial: u64,
+    performance_ack: Option<(u64, std::time::Instant)>,
     worker_generation: u64,
     root: Entity,
     camera: Entity,
     visible: bool,
+    active: bool,
     pub ready: bool,
     pub(crate) failed: Option<String>,
     viewport: (u32, u32),
@@ -680,6 +686,7 @@ pub struct Frontend {
 }
 
 impl Frontend {
+    pub(crate) fn take_performance_ack(&mut self) -> Option<(u64, std::time::Instant)> { self.performance_ack.take() }
     pub(crate) fn camera(&self) -> Entity { self.camera }
     pub(crate) fn pause_surface_visible(&self) -> bool { self.data.lock().unwrap().pause_surface.visible() }
     pub(crate) fn options_requested(&self) -> bool { self.data.lock().unwrap().pause_surface.options_requested() }
@@ -740,6 +747,7 @@ pub(crate) fn setup(
         player_name: "You".into(),
         movie_ready: HashSet::new(),
         pause_surface: Default::default(),
+        deferred_pause: Default::default(),
     }));
     let lobby = Arc::new(Mutex::new(crate::frontend_lobby::Scene::new(
         crate::frontend_lobby::Catalog::installed(&options.0, &menu.maps),
@@ -846,10 +854,12 @@ pub(crate) fn setup(
         actions,
         image,
         presented_serial: 0,
+        performance_ack: None,
         worker_generation: 0,
         root,
         camera,
         visible: false,
+        active: false,
         ready: false,
         failed: None,
         viewport: (options.0.width, options.0.height),
@@ -903,6 +913,8 @@ pub(crate) fn update(
         let mut snapshot = front.data.lock().unwrap();
         snapshot.state = scene;
         snapshot.menu_open = menu.open();
+        let options_opening = snapshot.pause_surface.options_requested();
+        snapshot.deferred_pause.observe(scene == AppState::Match && menu.open(), options_opening);
         snapshot.loading = loader.status.clone();
         snapshot.pause_surface.activate(front.worker_generation,
             scene == AppState::Match && matches!(menu.page, Some(crate::menu::Page::Main | crate::menu::Page::Pause)));
@@ -990,7 +1002,9 @@ pub(crate) fn update(
             Msaa::Off
         };
     }
-    if visible && front.movie.is_none() && front.failed.is_none() {
+    let background_start = options.0.screenshot.is_none()
+        && matches!(scene, AppState::Loading | AppState::Match);
+    if (visible || background_start) && front.movie.is_none() && front.failed.is_none() {
         let Some(generation) = front.worker_generation.checked_add(1) else {
             front.failed = Some("The menu session limit was reached. Restart the game.".into());
             return;
@@ -999,7 +1013,7 @@ pub(crate) fn update(
         front.data.lock().unwrap().pause_surface.activate(generation,
             scene == AppState::Match && matches!(menu.page, Some(crate::menu::Page::Main | crate::menu::Page::Pause)));
         let mut elements = vec!["MainMenu".into()];
-        if scene == AppState::Match {
+        if matches!(scene, AppState::Loading | AppState::Match) {
             elements.push("PauseMenu".into());
         }
         front.requested.extend(elements.iter().cloned());
@@ -1023,8 +1037,18 @@ pub(crate) fn update(
             }),
         )));
     }
+    // Load the first Pause while the map loads, rather than making Escape pay
+    // for its movies/fonts. A closed late load stays hidden in the bridge.
+    if matches!(scene, AppState::Loading | AppState::Match) {
+        front.request("PauseMenu");
+    }
+    let active = visible || (front.movie.is_some() && matches!(scene, AppState::Loading | AppState::Match)
+        && front.failed.is_none() && (!front.movie_ready("MainMenu") || !front.movie_ready("PauseMenu")));
+    if front.active != active {
+        front.send(Input::SetActive(active));
+        front.active = active;
+    }
     if front.visible != visible {
-        front.send(Input::SetActive(visible));
         front.visible = visible;
         if visible && scene == AppState::Menu && front.ready {
             front.send(Input::Call {
@@ -1041,12 +1065,6 @@ pub(crate) fn update(
             };
             if let Some(path) = options_root { front.send(Input::Set { path, property: "_visible".into(), value: false.into() }); }
             front.request("PauseMenu");
-            front.send(Input::Set { path: "_level100".into(), property: "_visible".into(), value: true.into() });
-            front.send(Input::Call {
-                path: "_level100".into(),
-                function: "showPanel".into(),
-                args: vec![],
-            });
         } else if scene == AppState::Match && front.ready {
             front.send(Input::Call {
                 path: "_level100".into(),
@@ -1054,6 +1072,27 @@ pub(crate) fn update(
                 args: vec![],
             });
         }
+    }
+    let (pause_show, options_to_hide) = {
+        let mut data = front.data.lock().unwrap();
+        let main_ready = data.movie_ready.contains("MainMenu");
+        let pause_ready = data.movie_ready.contains("PauseMenu");
+        let path = data.pause_surface.pause_root().map(str::to_owned);
+        let options_path = data.pause_surface.options_root().map(str::to_owned);
+        let show = if data.deferred_pause.take_ready(main_ready, pause_ready, path.is_some()) { path } else { None };
+        (show, options_path)
+    };
+    if let Some(path) = pause_show {
+        // The previous show consumed this open cycle. Existing native OnCancel
+        // restores Pause itself; it never rearms this deferred request.
+        for root in ["_global.MainMenuMovie", "_global.SinglePlayerMovie", "_global.LobbyMovie", "_level17"] {
+            front.send(Input::Set { path: root.into(), property: "_visible".into(), value: false.into() });
+        }
+        if let Some(path) = options_to_hide {
+            front.send(Input::Set { path, property: "_visible".into(), value: false.into() });
+        }
+        front.send(Input::Set { path: path.clone(), property: "_visible".into(), value: true.into() });
+        front.send(Input::Call { path, function: "showPanel".into(), args: vec![] });
     }
     let sample = front.data.lock().unwrap().pause_surface.request(front.presented_serial);
     if let Some(sample) = sample {
@@ -1190,6 +1229,9 @@ pub(crate) fn update(
                 front.failed = Some(error);
             }
             Some(scaleform::Event::Inspected { path, properties }) => {
+                if let Some(id) = path.strip_prefix("_global.csrPerformanceProbe.").and_then(|id| id.parse().ok()) {
+                    front.performance_ack = Some((id, std::time::Instant::now()));
+                }
                 debug!("UI API {path}: {properties:?}")
             }
             None => break,
@@ -1570,6 +1612,7 @@ mod tests {
             inventory: InventoryView::new(&fs), fs, settings: Settings::default(),
             localization: Default::default(), game_modes: modes.clone(),
             state: AppState::Menu, menu_open: true, loading: String::new(), player_name: "You".into(), movie_ready: HashSet::new(), pause_surface: Default::default(),
+        deferred_pause: Default::default(),
         }));
         let mut scene = Scene::new(Catalog::installed(&crate::ClientOptions::default(), &["de_dust2".into()]));
         assert!(scene.begin(&modes)); assert!(scene.open_lobby());
@@ -1666,6 +1709,7 @@ mod tests {
             player_name: "You".into(),
         movie_ready: HashSet::new(),
         pause_surface: Default::default(),
+        deferred_pause: Default::default(),
         }));
         let actions = Arc::new(Mutex::new(Vec::new()));
         let mut bridge = Bridge {

@@ -62,7 +62,9 @@ pub mod remote_join;
 pub mod hosting;
 mod host_sharing;
 mod host_sharing_ui;
+mod menu_performance;
 mod remote_flow;
+mod bot_performance;
 pub mod xr_input;
 pub mod props;
 pub mod scoreboard;
@@ -297,6 +299,7 @@ pub fn run(opts: ClientOptions) -> i32 {
     .add_plugins(CsgoPlugin)
     .insert_state(if browser_flow::enabled() || remote_flow::enabled() || pack_ui::proof_enabled() || frontend_flow::enabled() || std::env::var("CSR_TEST_MENU").as_deref() == Ok("main") { AppState::Menu }
         else if opts.direct || opts.screenshot.is_some() { AppState::Loading } else { AppState::Menu });
+    bot_performance::install(&mut app);
     if opts.screenshot.is_some() {
         // Automated runs never have focus; don't let the unfocused 60 Hz
         // throttle skew frame-rate readings.
@@ -313,6 +316,11 @@ pub fn run(opts: ClientOptions) -> i32 {
             !browser_flow::enabled() && !remote_flow::enabled() && (*state.get() == AppState::Menu || (*state.get() == AppState::Match
                 && std::env::var("CSR_TEST_MENU").as_deref() == Ok("pause")))
         }));
+    }
+    if menu_performance::enabled() {
+        app.init_resource::<menu_performance::Proof>()
+            .add_systems(First, menu_performance::motion)
+            .add_systems(Update, menu_performance::measure.after(frontend::input));
     }
     let result = app.run();
     match result { AppExit::Success=>0,AppExit::Error(code)=>code.get() as i32 }

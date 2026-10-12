@@ -23,6 +23,7 @@ pub fn library_symbols(data: &[u8]) -> Result<std::collections::HashSet<String>,
     rewrite::symbol_names(data).map_err(|error| error.to_string())
 }
 
+use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, Sender, TryRecvError, channel};
 use std::sync::{Arc, Mutex};
@@ -204,7 +205,7 @@ pub struct Config {
 
 /// Handle to the menu thread.
 pub struct Menu {
-    input: Sender<Input>,
+    input: InputSender,
     events: Receiver<Event>,
     frame: Arc<Mutex<Option<Frame>>>,
 }
@@ -213,7 +214,7 @@ impl Menu {
     /// Starts the player on its own thread. Loading the main menu takes a few
     /// seconds; frames arrive once something is drawn.
     pub fn spawn(config: Config, engine: Box<dyn Engine>) -> Self {
-        let (input_tx, input_rx) = channel();
+        let (input_tx, input_rx) = input_queue();
         let (event_tx, event_rx) = channel();
         let frame = Arc::new(Mutex::new(None));
         let shared = frame.clone();
@@ -241,7 +242,7 @@ impl Menu {
     }
 
     pub fn send(&self, input: Input) {
-        let _ = self.input.send(input);
+        self.input.send(input);
     }
 
     /// The newest frame, if one arrived since the last call.
@@ -254,11 +255,86 @@ impl Menu {
     }
 }
 
+// A moving cursor must not retain obsolete positions while the worker renders.
+// Only the immediately adjacent motion run is replaceable. Every other input
+// forms a FIFO barrier, including release, focus and engine lifecycle commands.
+struct InputQueue {
+    pending: VecDeque<Input>,
+    sender_alive: bool,
+    receiver_alive: bool,
+}
+struct InputSender(Arc<Mutex<InputQueue>>);
+struct InputReceiver(Arc<Mutex<InputQueue>>);
+impl InputReceiver {
+    fn has_pending(&self) -> bool {
+        !self.0.lock().unwrap().pending.is_empty()
+    }
+}
+fn input_queue() -> (InputSender, InputReceiver) {
+    let shared = Arc::new(Mutex::new(InputQueue {
+        pending: VecDeque::new(),
+        sender_alive: true,
+        receiver_alive: true,
+    }));
+    (InputSender(shared.clone()), InputReceiver(shared))
+}
+impl InputSender {
+    fn send(&self, input: Input) {
+        let mut queue = self.0.lock().unwrap();
+        if !queue.receiver_alive {
+            return;
+        }
+        if matches!(input, Input::MouseMove { .. })
+            && matches!(queue.pending.back(), Some(Input::MouseMove { .. }))
+        {
+            *queue.pending.back_mut().unwrap() = input;
+        } else {
+            queue.pending.push_back(input);
+        }
+    }
+}
+impl Drop for InputSender {
+    fn drop(&mut self) {
+        self.0.lock().unwrap().sender_alive = false;
+    }
+}
+impl Drop for InputReceiver {
+    fn drop(&mut self) {
+        let mut queue = self.0.lock().unwrap();
+        queue.receiver_alive = false;
+        queue.pending.clear();
+    }
+}
+trait InputSource<T> {
+    fn try_input(&self) -> Result<T, TryRecvError>;
+}
+impl InputSource<Input> for InputReceiver {
+    fn try_input(&self) -> Result<Input, TryRecvError> {
+        let mut queue = self.0.lock().unwrap();
+        if let Some(input) = queue.pending.pop_front() {
+            return Ok(input);
+        }
+        Err(if queue.sender_alive {
+            TryRecvError::Empty
+        } else {
+            TryRecvError::Disconnected
+        })
+    }
+}
+impl<T> InputSource<T> for Receiver<T> {
+    fn try_input(&self) -> Result<T, TryRecvError> {
+        self.try_recv()
+    }
+}
+
 const INPUT_TURN_BUDGET: usize = 256;
+const INPUT_TURN_TIME: Duration = Duration::from_millis(8);
 const WORKER_TRACE_LIMIT: usize = 65_536;
 
 /// A progress opportunity follows every finite input batch, including batches
-/// whose producer keeps the channel nonempty. Input order is never changed.
+/// whose producer keeps the queue nonempty. Barriers are never reordered.
+/// The elapsed budget is checked between calls: it cannot preempt one slow
+/// movie action or the synchronous GPU readback.
 enum InputTurn<T> {
     Input(T),
     Progress {
@@ -267,14 +343,29 @@ enum InputTurn<T> {
     },
 }
 fn service_input_turn<T, E>(
-    input: &Receiver<T>,
+    input: &impl InputSource<T>,
     budget: usize,
+    service: impl FnMut(InputTurn<T>) -> Result<(), E>,
+) -> Result<bool, E> {
+    let started = Instant::now();
+    service_input_turn_until(
+        input,
+        budget,
+        || started.elapsed() >= INPUT_TURN_TIME,
+        service,
+    )
+}
+fn service_input_turn_until<T, E>(
+    input: &impl InputSource<T>,
+    budget: usize,
+    mut expired: impl FnMut() -> bool,
     mut service: impl FnMut(InputTurn<T>) -> Result<(), E>,
 ) -> Result<bool, E> {
     assert!(budget > 0);
     let mut count = 0;
+    let mut time_exhausted = false;
     while count < budget {
-        match input.try_recv() {
+        match input.try_input() {
             Ok(message) => {
                 service(InputTurn::Input(message))?;
                 count += 1;
@@ -282,10 +373,14 @@ fn service_input_turn<T, E>(
             Err(TryRecvError::Empty) => break,
             Err(TryRecvError::Disconnected) => return Ok(false),
         }
+        if expired() {
+            time_exhausted = true;
+            break;
+        }
     }
     service(InputTurn::Progress {
         count,
-        budget_exhausted: count == budget,
+        budget_exhausted: count == budget || time_exhausted,
     })?;
     Ok(true)
 }
@@ -325,7 +420,7 @@ impl WorkerTrace {
 fn run(
     config: Config,
     engine: Box<dyn Engine>,
-    input: Receiver<Input>,
+    input: InputReceiver,
     events: Sender<Event>,
     frame: Arc<Mutex<Option<Frame>>>,
 ) -> Result<(), String> {
@@ -441,14 +536,18 @@ fn run(
             trace.event("disconnected", active, serial, 0, false);
             return Ok(());
         }
-        // Movies run at 30 fps; 4 ms keeps input latency low without spinning.
-        std::thread::sleep(Duration::from_millis(4));
+        // Do not add an idle wait behind inputs that arrived during a movie
+        // action/readback. Every turn still gives movies a progress opportunity;
+        // an empty queue retains the throttle rather than spinning.
+        if !input.has_pending() {
+            std::thread::sleep(Duration::from_millis(4));
+        }
     }
 }
 
 #[cfg(test)]
 mod worker_tests {
-    use super::{INPUT_TURN_BUDGET, InputTurn, service_input_turn};
+    use super::{INPUT_TURN_BUDGET, Input, InputSource, InputTurn, MouseButton, Value, input_queue, service_input_turn_until};
     use std::sync::mpsc::channel;
 
     #[test]
@@ -459,7 +558,7 @@ mod worker_tests {
         }
         let mut delivered = Vec::new();
         let mut ticks = 0;
-        let connected = service_input_turn(&receiver, INPUT_TURN_BUDGET, |turn| {
+        let connected = service_input_turn_until(&receiver, INPUT_TURN_BUDGET, || false, |turn| {
             match turn {
                 InputTurn::Input(n) => delivered.push(n),
                 InputTurn::Progress {
@@ -490,7 +589,7 @@ mod worker_tests {
         sender.send(0).unwrap();
         let mut delivered = Vec::new();
         let mut ticks = 0;
-        service_input_turn(&receiver, INPUT_TURN_BUDGET, |turn| {
+        service_input_turn_until(&receiver, INPUT_TURN_BUDGET, || false, |turn| {
             match turn {
                 InputTurn::Input(n) => {
                     delivered.push(n);
@@ -521,7 +620,7 @@ mod worker_tests {
         }
         drop(sender);
         let mut delivered = Vec::new();
-        let connected = service_input_turn(&receiver, INPUT_TURN_BUDGET, |turn| {
+        let connected = service_input_turn_until(&receiver, INPUT_TURN_BUDGET, || false, |turn| {
             match turn {
                 InputTurn::Input(n) => delivered.push(n),
                 InputTurn::Progress { .. } => panic!("disconnected worker must return"),
@@ -531,5 +630,244 @@ mod worker_tests {
         .unwrap();
         assert!(!connected);
         assert_eq!(delivered, vec![0, 1, 2]);
+    }
+
+    fn motion(n: usize) -> Input {
+        Input::MouseMove {
+            x: n as f64,
+            y: -(n as f64),
+        }
+    }
+
+    #[test]
+    fn high_rate_motion_preserves_every_barrier_and_its_latest_position() {
+        let barriers = vec![
+            Input::MouseDown {
+                x: 31.,
+                y: -31.,
+                button: MouseButton::Left,
+            },
+            Input::MouseUp {
+                x: 31.,
+                y: -31.,
+                button: MouseButton::Left,
+            },
+            Input::MouseDown {
+                x: 31.,
+                y: -31.,
+                button: MouseButton::Right,
+            },
+            Input::MouseUp {
+                x: 31.,
+                y: -31.,
+                button: MouseButton::Middle,
+            },
+            Input::MouseWheel { lines: -2. },
+            Input::MouseLeave,
+            Input::Key {
+                name: "KEY_A".into(),
+                vkey: 65,
+                down: true,
+            },
+            Input::Key {
+                name: "KEY_A".into(),
+                vkey: 65,
+                down: false,
+            },
+            Input::Edit {
+                name: "KEY_LEFT".into(),
+                control: true,
+                shift: false,
+            },
+            Input::Focus(false),
+            Input::Focus(true),
+            Input::Char('猫'),
+            Input::Resize {
+                width: 1280,
+                height: 720,
+            },
+            Input::Call {
+                path: "root".into(),
+                function: "close".into(),
+                args: vec![Value::Bool(true)],
+            },
+            Input::Set {
+                path: "root".into(),
+                property: "_visible".into(),
+                value: Value::Bool(false),
+            },
+            Input::RequestElement("OptionsMenu".into()),
+            Input::Inspect("root".into()),
+            Input::SetActive(false),
+            Input::SetActive(true),
+        ];
+        let (sender, receiver) = input_queue();
+        let mut expected = Vec::new();
+        for repetition in 0..100 {
+            for barrier in &barriers {
+                for n in 0..32 {
+                    sender.send(motion(repetition * 32 + n));
+                }
+                expected.push(format!("{:?}", motion(repetition * 32 + 31)));
+                sender.send(barrier.clone());
+                expected.push(format!("{barrier:?}"));
+            }
+        }
+        assert_eq!(receiver.0.lock().unwrap().pending.len(), expected.len());
+        let mut actual = Vec::new();
+        while let Ok(input) = receiver.try_input() {
+            actual.push(format!("{input:?}"));
+        }
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn concurrent_producer_keeps_final_motion_before_each_click_barrier() {
+        let (sender, receiver) = input_queue();
+        let producer = std::thread::spawn(move || {
+            for index in 0..1000 {
+                for n in 0..50 { sender.send(motion(index * 50 + n)); }
+                let coordinate = (index * 50 + 49) as f64;
+                sender.send(Input::MouseDown { x: coordinate, y: -coordinate, button: MouseButton::Left });
+                sender.send(Input::MouseUp { x: coordinate, y: -coordinate, button: MouseButton::Left });
+            }
+        });
+        let mut last_motion = None;
+        let mut clicks = 0;
+        let mut held = false;
+        loop {
+            match receiver.try_input() {
+                Ok(Input::MouseMove { x, .. }) => last_motion = Some(x),
+                Ok(Input::MouseDown { x, .. }) => {
+                    assert!(!held); held = true;
+                    assert_eq!(x, (clicks * 50 + 49) as f64);
+                    assert_eq!(last_motion, Some(x));
+                }
+                Ok(Input::MouseUp { x, .. }) => {
+                    assert!(held); held = false;
+                    assert_eq!(x, (clicks * 50 + 49) as f64); clicks += 1;
+                }
+                Ok(other) => panic!("unexpected generated input: {other:?}"),
+                Err(std::sync::mpsc::TryRecvError::Empty) => std::thread::yield_now(),
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => break,
+            }
+        }
+        producer.join().unwrap();
+        assert_eq!(clicks, 1000); assert!(!held);
+    }
+
+    #[test]
+    fn latest_motion_flushes_before_disconnect_and_closed_receiver_rejects_more_work() {
+        let (sender, receiver) = input_queue();
+        for n in 0..10_000 {
+            sender.send(motion(n));
+        }
+        assert_eq!(receiver.0.lock().unwrap().pending.len(), 1);
+        drop(sender);
+        assert!(matches!(
+            receiver.try_input(),
+            Ok(Input::MouseMove {
+                x: 9999.,
+                y: -9999.
+            })
+        ));
+        assert!(matches!(
+            receiver.try_input(),
+            Err(std::sync::mpsc::TryRecvError::Disconnected)
+        ));
+        let (sender, receiver) = input_queue();
+        sender.send(motion(0));
+        drop(receiver);
+        sender.send(Input::Focus(false));
+        assert!(sender.0.lock().unwrap().pending.is_empty());
+    }
+
+    #[test]
+    fn empty_live_queue_does_not_disconnect_and_consumed_motion_is_not_replayed() {
+        let (sender, receiver) = input_queue();
+        assert!(matches!(
+            receiver.try_input(),
+            Err(std::sync::mpsc::TryRecvError::Empty)
+        ));
+        sender.send(motion(1));
+        assert!(matches!(
+            receiver.try_input(),
+            Ok(Input::MouseMove { x: 1., .. })
+        ));
+        sender.send(motion(2));
+        sender.send(motion(3));
+        assert!(matches!(
+            receiver.try_input(),
+            Ok(Input::MouseMove { x: 3., .. })
+        ));
+        assert!(matches!(
+            receiver.try_input(),
+            Err(std::sync::mpsc::TryRecvError::Empty)
+        ));
+    }
+
+    #[test]
+    fn elapsed_budget_yields_progress_with_pending_fifo_work_and_live_producer() {
+        let (sender, receiver) = channel();
+        sender.send(0).unwrap();
+        let mut checks = 0;
+        let mut delivered = Vec::new();
+        let connected = service_input_turn_until(
+            &receiver,
+            INPUT_TURN_BUDGET,
+            || {
+                checks += 1;
+                checks == 3
+            },
+            |turn| {
+                match turn {
+                    InputTurn::Input(n) => {
+                        delivered.push(n);
+                        sender.send(n + 1).unwrap();
+                    }
+                    InputTurn::Progress {
+                        count,
+                        budget_exhausted,
+                    } => {
+                        assert_eq!(count, 3);
+                        assert!(budget_exhausted);
+                    }
+                }
+                Ok::<_, ()>(())
+            },
+        )
+        .unwrap();
+        assert!(connected);
+        assert_eq!(delivered, vec![0, 1, 2]);
+        assert_eq!(receiver.try_recv().unwrap(), 3);
+    }
+
+    #[test]
+    fn zero_elapsed_budget_still_services_one_input_before_progress() {
+        let (sender, receiver) = input_queue();
+        sender.send(motion(1));
+        sender.send(Input::Focus(false));
+        let mut count = 0;
+        service_input_turn_until(
+            &receiver,
+            INPUT_TURN_BUDGET,
+            || true,
+            |turn| {
+                match turn {
+                    InputTurn::Input(_) => count += 1,
+                    InputTurn::Progress {
+                        count,
+                        budget_exhausted,
+                    } => {
+                        assert_eq!(count, 1);
+                        assert!(budget_exhausted);
+                    }
+                }
+                Ok::<_, ()>(())
+            },
+        )
+        .unwrap();
+        assert_eq!(count, 1);
+        assert!(matches!(receiver.try_input(), Ok(Input::Focus(false))));
     }
 }
