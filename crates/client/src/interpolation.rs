@@ -72,7 +72,17 @@ fn blend_aim(a:Option<sim::AimRay>,b:Option<sim::AimRay>,t:f32,same_life:bool)->
 mod tracked_tests;
 
 #[derive(Resource, Default)]
-pub struct RenderPoses(HashMap<sim::PlayerId, (Pose, Pose)>, HashMap<sim::PlayerId, f32>, HashMap<sim::PlayerId, Pose>, Option<PredictedLocal>, bool);
+pub struct RenderPoses(HashMap<sim::PlayerId, (Pose, Pose)>, HashMap<sim::PlayerId, f32>, HashMap<sim::PlayerId, Pose>, Option<PredictedLocal>, TrackingSource);
+
+#[derive(Default, Debug, PartialEq, Eq)]
+enum TrackingSource {
+    #[default]
+    Offline,
+    Sampled,
+    // A cancelled remote scene may still retain authoritative actors. Only
+    // fresh offline capture or an explicit sampled override may restore data.
+    Cleared,
+}
 
 struct PredictedLocal {
     id: sim::PlayerId,
@@ -94,10 +104,10 @@ impl RenderPoses {
     pub fn set_overrides(&mut self, poses: impl IntoIterator<Item = (sim::PlayerId, Pose)>) {
         self.2.clear();
         self.2.extend(poses);
-        self.4=true;
+        self.4=TrackingSource::Sampled;
     }
     pub fn clear_overrides(&mut self) {
-        self.2.clear(); self.3=None; self.4=false;
+        self.2.clear(); self.3=None; self.4=TrackingSource::Cleared;
         // Old offline tracking must not cross a remote/session cancellation.
         // Preserve the established flat eye/body interpolation and stair data.
         for (a,b) in self.0.values_mut() {a.tracked=None;a.aim=None;b.tracked=None;b.aim=None;}
@@ -122,6 +132,7 @@ impl RenderPoses {
         render
     }
     pub fn capture(&mut self, world: &sim::World) {
+        if self.4==TrackingSource::Cleared {self.4=TrackingSource::Offline;}
         let round_start = world.events.iter().any(|e| matches!(e, sim::GameEvent::RoundStart { .. }));
         self.0.retain(|id, _| world.player(*id).is_some());
         self.1.retain(|id, _| world.player(*id).is_some());
@@ -138,9 +149,10 @@ impl RenderPoses {
     pub fn sample(&self, player: &sim::Player, alpha: f32) -> Pose {
         if let Some(pose) = self.2.get(&player.id) { return *pose; }
         let mut pose=self.0.get(&player.id).map_or_else(|| Pose::player(player), |&(a, b)| a.lerp(b, alpha.clamp(0.0, 1.0)));
-        // Newly joined actors may not exist on the delayed remote timeline
-        // yet. Do not substitute unsampled authoritative tracking in that gap.
-        if self.4 {pose.tracked=None;pose.aim=None;}
+        // Newly joined actors may be absent from the sampled timeline, and
+        // cancellation may leave authority alive until scene teardown. Neither
+        // gap permits raw tracking; only fresh capture restores that fallback.
+        if self.4!=TrackingSource::Offline {pose.tracked=None;pose.aim=None;}
         pose
     }
 }

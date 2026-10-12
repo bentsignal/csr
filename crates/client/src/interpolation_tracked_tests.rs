@@ -66,7 +66,7 @@ fn remote_sample_retains_interpolated_tracking_without_raw_or_double_interpolati
         assert_eq!(world.state(), before);
         poses.clear_overrides();
         assert!(poses.2.is_empty());
-        assert!(!poses.4);
+        assert_eq!(poses.4, TrackingSource::Cleared);
     }
 }
 
@@ -185,6 +185,40 @@ fn missing_remote_actor_never_uses_raw_tracking_and_cancellation_discards_old_pa
             .x,
         7.
     );
+}
+
+#[test]
+fn cancellation_without_cached_pair_requires_fresh_capture_or_explicit_override() {
+    let (mut world, id) = fixture(128);
+    let actor = world.player_mut(id).unwrap();
+    actor.tracked = Some(tracking(7., Quat::IDENTITY));
+    actor.aim = Some(sim::AimRay {
+        origin: Vec3::X,
+        direction: Vec3::X,
+    });
+    let before = world.state();
+    let actor = world.player(id).unwrap();
+    let raw = Pose::player(actor);
+    let mut poses = RenderPoses::default();
+    poses.set_overrides([(id, raw)]);
+    assert!(poses.0.is_empty()); // Remote scenes do not run offline capture.
+    poses.clear_overrides();
+    let cancelled = poses.sample(actor, 0.5);
+    assert!(cancelled.tracked.is_none());
+    assert!(cancelled.aim.is_none());
+    assert_eq!(cancelled.origin, raw.origin);
+    assert_eq!(cancelled.eye, raw.eye);
+    assert_eq!(cancelled.angles, raw.angles);
+    let predicted = poses.capture_prediction(actor, world.tick, world.dt());
+    poses.set_overrides([(id, predicted)]);
+    assert_eq!(poses.sample(actor, 0.5).tracked, raw.tracked);
+    assert_eq!(poses.sample(actor, 0.5).aim, raw.aim);
+    poses.clear_overrides();
+    assert!(poses.sample(actor, 0.5).tracked.is_none());
+    poses.capture(&world);
+    assert_eq!(poses.sample(actor, 0.5).tracked, raw.tracked);
+    assert_eq!(poses.sample(actor, 0.5).aim, raw.aim);
+    assert_eq!(world.state(), before);
 }
 
 #[test]

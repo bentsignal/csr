@@ -6,7 +6,9 @@ sample, not raw authoritative tracking at snapshot frequency. An actor absent
 from the delayed timeline has no tracking/aim override until a valid sample
 exists. Local prediction retains its tracked data separately from stair-eye
 easing. Tracking availability and new-life transitions snap instead of blending;
-cancellation discards cached tracking while preserving flat body/camera behavior.
+cancellation discards cached tracking and suppresses raw tracking from retained
+authority until fresh offline capture or an explicit render override, while
+preserving flat body/camera behavior.
 
 This prepares data for rendering; it does not implement head/arm IK, tracked
 hitboxes, a VR gun, headset cameras or compositor submission. The ordinary
