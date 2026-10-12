@@ -1,0 +1,235 @@
+//! Opt-in, single-process rendered lifecycle proof. Opens pause through the
+//! engine state; Resume, Exit and both match launches use authored pointer controls.
+use crate::{
+    LoadedLevel, Options,
+    frontend::Frontend,
+    menu::{Menu, Page},
+    player::{InputEnabled, SimWorld},
+    session::{AppState, MatchEntity},
+};
+use bevy::prelude::*;
+use std::time::Instant;
+
+pub(crate) fn enabled() -> bool {
+    std::env::var("CSR_TEST_FLOW").as_deref() == Ok("1")
+}
+
+pub(crate) struct Flow {
+    start: Instant,
+    entered: Instant,
+    phase: u8,
+    step: usize,
+    tick: u64,
+}
+impl Default for Flow {
+    fn default() -> Self {
+        Self {
+            start: Instant::now(),
+            entered: Instant::now(),
+            phase: 0,
+            step: 0,
+            tick: 0,
+        }
+    }
+}
+impl Flow {
+    fn next(&mut self) {
+        self.phase += 1;
+        info!("frontend flow: entered phase {}", self.phase);
+        self.step = 0;
+        self.entered = Instant::now();
+    }
+    fn seconds(&self) -> f64 {
+        self.entered.elapsed().as_secs_f64()
+    }
+}
+fn click(front: &Frontend, window: &Window, x: f64, y: f64) {
+    let x = x * window.physical_width() as f64 / 1920.;
+    let y = y * window.physical_height() as f64 / 1080.;
+    front.send(scaleform::Input::MouseMove { x, y });
+    front.send(scaleform::Input::MouseDown {
+        x,
+        y,
+        button: scaleform::MouseButton::Left,
+    });
+    front.send(scaleform::Input::MouseUp {
+        x,
+        y,
+        button: scaleform::MouseButton::Left,
+    });
+}
+fn capture(commands: &mut Commands, options: &Options, name: &str) {
+    let path = options.0.screenshot.as_ref().unwrap().with_file_name(name);
+    commands
+        .spawn(bevy::render::view::screenshot::Screenshot::primary_window())
+        .observe(bevy::render::view::screenshot::save_to_disk(path));
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn update(
+    mut flow: Local<Flow>,
+    front: Res<Frontend>,
+    options: Res<Options>,
+    state: Res<State<AppState>>,
+    level: Option<Res<LoadedLevel>>,
+    world: Option<Res<SimWorld>>,
+    mut menu: ResMut<Menu>,
+    mut clock: ResMut<Time<Virtual>>,
+    mut input: ResMut<InputEnabled>,
+    window: Single<&Window>,
+    entities: Query<(), With<MatchEntity>>,
+    mut commands: Commands,
+    mut exit: MessageWriter<AppExit>,
+) {
+    if options.0.screenshot.is_none()
+        || front.failed.is_some()
+        || flow.start.elapsed().as_secs() > 180
+    {
+        error!(
+            "frontend flow failed at phase {}: missing capture, movie failure or timeout",
+            flow.phase
+        );
+        exit.write(AppExit::error());
+        return;
+    }
+    match flow.phase {
+        0 | 6 => {
+            if *state.get() != AppState::Menu || !front.ready {
+                return;
+            }
+            let second = flow.phase == 6;
+            let points = [
+                (486., 26.),
+                (503., 264.),
+                (1450., 206.),
+                (810., if second { 500. } else { 680. }),
+                (1450., 1017.),
+                (1197., 580.),
+                (1163., 754.),
+            ];
+            if flow.step < points.len() && flow.seconds() >= 5. + flow.step as f64 * 3. {
+                let (x, y) = points[flow.step];
+                click(&front, &window, x, y);
+                flow.step += 1;
+            }
+            if flow.step == points.len() {
+                flow.next();
+            }
+        }
+        1 | 7 => {
+            if *state.get() != AppState::Match {
+                return;
+            }
+            let expected = if flow.phase == 1 {
+                "de_dust2"
+            } else {
+                "de_inferno"
+            };
+            if level.as_ref().is_none_or(|level| level.0.name != expected) {
+                error!("frontend flow loaded an unexpected map");
+                exit.write(AppExit::error());
+                return;
+            }
+            if flow.step == 0 {
+                flow.step = 1;
+                flow.entered = Instant::now();
+                return;
+            }
+            if flow.seconds() < 3. || world.as_ref().is_none_or(|world| world.0.tick == 0) {
+                return;
+            }
+            if flow.step == 1 {
+                capture(
+                    &mut commands,
+                    &options,
+                    if flow.phase == 1 {
+                        "flow-dust2.png"
+                    } else {
+                        "flow-inferno.png"
+                    },
+                );
+                info!(
+                    "frontend flow: matched {expected}, tick {}",
+                    world.as_ref().unwrap().0.tick
+                );
+                flow.step = 2;
+                flow.entered = Instant::now();
+                return;
+            }
+            if flow.seconds() < 3. {
+                return;
+            }
+            if flow.phase == 1 {
+                menu.page = Some(Page::Pause);
+                clock.pause();
+                input.0 = true;
+            }
+            flow.next();
+        }
+        2 => {
+            if !menu.open() || flow.seconds() < 3. {
+                return;
+            }
+            capture(&mut commands, &options, "flow-pause.png");
+            flow.tick = world.as_ref().unwrap().0.tick;
+            click(&front, &window, 650., 530.);
+            flow.next();
+        }
+        3 => {
+            if menu.open() || clock.is_paused() || world.as_ref().unwrap().0.tick <= flow.tick {
+                return;
+            }
+            input.0 = false;
+            if flow.step == 0 {
+                info!("frontend flow: native Resume restored the simulation clock");
+                capture(&mut commands, &options, "flow-resumed.png");
+                flow.step = 1;
+                flow.entered = Instant::now();
+                return;
+            }
+            if flow.seconds() < 3. {
+                return;
+            }
+            menu.page = Some(Page::Pause);
+            clock.pause();
+            input.0 = true;
+            flow.next();
+        }
+        4 => {
+            if flow.seconds() < 5. {
+                return;
+            }
+            if flow.step == 0 {
+                capture(&mut commands, &options, "flow-pause-exit.png");
+                flow.step = 1;
+                flow.entered = Instant::now();
+                return;
+            }
+            click(&front, &window, 680., 710.);
+            flow.next();
+        }
+        5 => {
+            if *state.get() != AppState::Menu || flow.seconds() < 3. {
+                return;
+            }
+            if !entities.is_empty() || world.is_some() || level.is_some() {
+                error!("frontend flow retained match entities/resources after Exit");
+                exit.write(AppExit::error());
+                return;
+            }
+            input.0 = false;
+            capture(&mut commands, &options, "flow-returned-home.png");
+            info!("frontend flow: native Exit removed the match and retained the menu");
+            flow.next();
+        }
+        8 => {
+            if flow.seconds() < 3. {
+                return;
+            }
+            info!("frontend flow: Dust II -> Pause -> Resume -> Menu -> Inferno; failures: 0");
+            exit.write(AppExit::Success);
+            flow.next();
+        }
+        _ => {}
+    }
+}

@@ -33,7 +33,11 @@ They do not decode game function bodies.
   Closing pause through a movie callback resumes the simulation clock, captures
   the cursor and blocks the closing click from firing a weapon. A regression
   test covers that external transition. A physical Exit click returns to the
-  home screen in the same process; the combined Resume/second-map proof remains.
+  home screen in the same process. The rendered lifecycle proof launches Dust II,
+  opens pause, resumes its clock, returns home and launches Inferno. Pause is
+  opened through engine state in that probe; both launches, Resume and Exit use
+  the authored pointer controls. Cached movie roots retain their original scale
+  when reopened and hide their launch-dialog descendants during a match.
 - The offline map picker defaults to Competitive. Unsupported Casual, Wingman
   and War Games buttons are disabled using their authored controls. Mapgroups
   are filtered against installed maps and the original shared-library thumbnail
@@ -57,7 +61,7 @@ They do not decode game function bodies.
 
 ## Remaining integration
 
-The full menu-to-match-to-menu-to-second-map flow still needs a rendered proof. Slider focus,
+Slider focus,
 keyboard navigation, numeric entry and restore-defaults
 behavior need further checks against the original movie's runtime contract.
 
@@ -84,6 +88,12 @@ the frames contain the player's game art. `scaleform`'s `menu_probe` example
 provides offscreen inspection and ordered callback/pointer probes, and its
 `diff` module provides the reference comparison metrics.
 
+`CSR_TEST_FLOW=1` with a normal 1920x1080 screenshot run exercises both match
+launches and pause transitions in one process. It captures each stage beside
+the requested screenshot, checks resumed ticks and match teardown, then exits
+with success only after Inferno loads. Live window input is isolated from its
+injected pointer sequence. This switch is for development verification.
+
 On the development machine, inspected evidence is in the private
 `C:\Users\shawn\csr-fidelity\menu-client` folder. `inventory-3.png` shows
 the original weapon thumbnails after native image resolution; `match-2.png`
@@ -98,6 +108,9 @@ this integration has not reached the earlier offscreen spike's fidelity.
 `offline-launch-1.png` shows Dust II after the original GO sequence;
 `pause-exit-1.png` shows the return to home, and `match-hud-1.png` verifies the
 match camera with radar, crosshair, round timer, health and ammo visible.
+`flow-dust2.png`, `flow-pause.png`, `flow-resumed.png`,
+`flow-pause-exit.png`, `flow-returned-home.png` and `flow-inferno.png` are the
+inspected single-process proof; its log reports zero lifecycle failures.
 
 The combined integration checkpoint passes 288 workspace tests (four installed-data/helper
 tests ignored), three menu-probe tests, release Dust II probe and ten-round sim
