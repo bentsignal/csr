@@ -86,6 +86,15 @@ update samples over 5.151 seconds measured mean/p95/max intervals
 7.587/11.693/36.519 ms, first Pause response 98.9 ms, and four actual screenshot
 acknowledgments. These are owned engine-update and image-assignment results;
 they do not measure physical keyboard/mouse delivery, compositor/GPU-present
-latency or establish complete classic UI fidelity. The six-stage drawable/
-viewport/raster proof and the final mandatory aggregate/CI checks are tracked
-with the publication PR, separately from these responsiveness measurements.
+latency or establish complete classic UI fidelity.
+
+The integrated six-stage display proof passed with six acknowledged captures.
+Owned HWND client bounds, ECS drawable dimensions, frontend viewport and the
+worker's assigned image dimensions agreed at windowed 1600x900, 1920x1080
+and 2560x1440, fullscreen monitor dimensions, an unrelated volume change, and
+return to the saved windowed dimensions. The actual monitor scale was 1;
+high-DPI scaling is covered by the causal display tests, not a live high-DPI
+monitor measurement. This verifies raster ownership and resizing. Home news
+still shows installed placeholder content and clips text at its left edge;
+these captures do not establish complete content/layout parity. Final mandatory
+aggregate/CI evidence is tracked with the publication PR separately.
