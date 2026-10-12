@@ -492,7 +492,7 @@ mod tests {
         let mut s = session();
         let mut old = hello();
         if let ClientControl::Hello { version, .. } = &mut old {
-            *version = 1;
+            *version = VERSION - 1;
         }
         assert!(matches!(s.join(10, old), ServerControl::Rejected { .. }));
         assert!(s.world.players.is_empty());

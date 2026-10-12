@@ -38,6 +38,10 @@ pub struct Server {
     held_admissions: Option<Vec<(u64, ServerControl)>>,
 }
 
+#[cfg(test)]
+#[path = "transport_snapshot_tests.rs"]
+mod snapshot_tests;
+
 impl Server {
     pub fn bind(address: SocketAddr, session: Session, max_clients: usize) -> Result<Self, String> {
         if max_clients == 0 || max_clients > 64 {

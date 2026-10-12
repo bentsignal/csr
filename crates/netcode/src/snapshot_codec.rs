@@ -134,7 +134,9 @@ impl Sender {
         } else {
             p.confirmed
         };
-        let base = base_id.and_then(|id| self.cache.get(id));
+        let base = base_id
+            .and_then(|id| self.cache.get(id))
+            .filter(|base| base.id < target.id);
         if let Some(base) = base {
             if !self.patches.contains_key(&base.id) && self.patches.len() < MAX_PATCHES_PER_FRAME {
                 self.patches
@@ -167,6 +169,10 @@ impl Sender {
         while p.sent.len() > CACHE_FRAMES {
             p.sent.pop_front();
         }
+    }
+    #[cfg(test)]
+    pub fn confirmed(&self, peer: u64) -> Option<u64> {
+        self.peers.get(&peer).and_then(|p| p.confirmed)
     }
 }
 
