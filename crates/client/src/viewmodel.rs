@@ -66,6 +66,15 @@ pub struct ViewModels {
 }
 
 impl ViewModels {
+    /// Model assets retained before instances exist, including arms and cosmetics.
+    pub fn assets(&self) -> impl Iterator<Item = &SkinnedAsset> {
+        self.weapons.values().map(|view| &view.asset)
+            .chain(self.decorations.values())
+            .chain(self.gloves.values())
+            .chain(self.arms_t.iter())
+            .chain(self.arms_ct.iter())
+    }
+
     /// Animation-event sounds of a weapon's first sequence for an activity
     /// (`ACT_VM_DRAW`, `ACT_VM_RELOAD`, ...) and that sequence's duration.
     pub fn activity_sounds(&self, weapon: &str, activity: &str) -> Option<(f32, Arc<Vec<(f32, String)>>)> {
@@ -75,6 +84,35 @@ impl ViewModels {
 
     pub fn preview(&self,name:&str)->Option<&SkinnedAsset>{self.weapons.get(name).map(|w|&w.asset)}
     pub fn decoration(&self,path:&str)->Option<&SkinnedAsset>{self.decorations.get(path)}
+}
+
+#[cfg(test)]
+mod asset_ownership_tests {
+    use super::*;
+
+    fn asset(name: &str) -> SkinnedAsset {
+        SkinnedAsset {
+            model: Arc::new(mdl::Model { name: name.into(), ..Default::default() }),
+            parts: Vec::new(),
+            inverse_bindposes: Default::default(),
+        }
+    }
+
+    #[test]
+    fn preparation_owners_include_weapon_cosmetics_gloves_and_both_arms() {
+        let models = ViewModels {
+            weapons: HashMap::from([("fixture".into(), WeaponView {
+                scope_center: None, scope_rear: None, asset: asset("weapon"), clips: HashMap::new(),
+            })]),
+            decorations: HashMap::from([("fixture".into(), asset("decoration"))]),
+            gloves: HashMap::from([("fixture".into(), asset("glove"))]),
+            arms_t: Some(asset("arms_t")),
+            arms_ct: Some(asset("arms_ct")),
+        };
+        let mut names = models.assets().map(|asset| asset.model.name.as_str()).collect::<Vec<_>>();
+        names.sort();
+        assert_eq!(names, ["arms_ct", "arms_t", "decoration", "glove", "weapon"]);
+    }
 }
 #[derive(Resource, Default)]
 pub struct ViewModelState {
