@@ -265,6 +265,11 @@ struct InputQueue {
 }
 struct InputSender(Arc<Mutex<InputQueue>>);
 struct InputReceiver(Arc<Mutex<InputQueue>>);
+impl InputReceiver {
+    fn has_pending(&self) -> bool {
+        !self.0.lock().unwrap().pending.is_empty()
+    }
+}
 fn input_queue() -> (InputSender, InputReceiver) {
     let shared = Arc::new(Mutex::new(InputQueue {
         pending: VecDeque::new(),
@@ -531,8 +536,12 @@ fn run(
             trace.event("disconnected", active, serial, 0, false);
             return Ok(());
         }
-        // Movies run at 30 fps; 4 ms keeps input latency low without spinning.
-        std::thread::sleep(Duration::from_millis(4));
+        // Do not add an idle wait behind inputs that arrived during a movie
+        // action/readback. Every turn still gives movies a progress opportunity;
+        // an empty queue retains the throttle rather than spinning.
+        if !input.has_pending() {
+            std::thread::sleep(Duration::from_millis(4));
+        }
     }
 }
 
