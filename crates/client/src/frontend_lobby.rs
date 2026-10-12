@@ -106,7 +106,9 @@ impl Scene {
         self.phase == Phase::Lobby && self.staged.is_some()
     }
     pub fn staged_map(&self) -> Option<String> {
-        (self.phase == Phase::Lobby).then(|| self.staged.as_ref().map(|map| map.options.map.clone())).flatten()
+        (self.phase == Phase::Lobby)
+            .then(|| self.staged.as_ref().map(|map| map.options.map.clone()))
+            .flatten()
     }
     pub fn phase(&self) -> Phase {
         self.phase
@@ -258,7 +260,10 @@ impl Scene {
         if no_bots {
             map.options.bots = 0;
         } else if map.options.bots == 0 {
-            return Err("Medium Bots are unavailable with the current bot configuration. Choose No Bots.".into());
+            return Err(
+                "Medium Bots are unavailable with the current bot configuration. Choose No Bots."
+                    .into(),
+            );
         }
         self.checked = Some(Checked {
             text: text.into(),
@@ -348,6 +353,11 @@ impl Scene {
         }
     }
     pub fn show_browser(&self, path: &str, name: &str, calls: &mut Calls) {
+        calls.call(
+            "_global.csrBindings",
+            "bindOwnedLifecycle",
+            vec![path.into(), self.proxy(Api::Lobby).into()],
+        );
         calls.set(path, "_visible", true.into());
         calls.call(&format!("{path}.FriendsPanel"), "Init", vec![]);
         calls.call(
@@ -373,6 +383,11 @@ impl Scene {
         }
     }
     pub fn show(&self, path: &str, name: &str, calls: &mut Calls) {
+        calls.call(
+            "_global.csrBindings",
+            "bindOwnedLifecycle",
+            vec![path.into(), self.proxy(Api::Lobby).into()],
+        );
         calls.call(
             "_global.csrBindings",
             "bindOwnedApi",
@@ -449,6 +464,11 @@ impl Scene {
         }
     }
     pub fn show_picker(&self, path: &str, calls: &mut Calls) {
+        calls.call(
+            "_global.csrBindings",
+            "bindOwnedLifecycle",
+            vec![path.into(), self.proxy(Api::Picker).into()],
+        );
         calls.call(
             "_global.csrBindings",
             "bindOwnedApi",
@@ -635,13 +655,30 @@ mod tests {
     fn medium_requires_a_trusted_bot_count_and_staged_map_is_read_only() {
         let mut scene = scene();
         let epoch = picker(&mut scene);
-        scene.catalog.requests.get_mut("de_dust2").unwrap().options.bots = 0;
+        scene
+            .catalog
+            .requests
+            .get_mut("de_dust2")
+            .unwrap()
+            .options
+            .bots = 0;
         scene.difficulty(epoch, &[3.0.into()]);
-        assert!(scene.check(epoch, &modes(), Some(QUERY)).unwrap_err().contains("Choose No Bots"));
+        assert!(
+            scene
+                .check(epoch, &modes(), Some(QUERY))
+                .unwrap_err()
+                .contains("Choose No Bots")
+        );
         assert!(scene.staged_map().is_none());
         scene.query(epoch, Some(QUERY));
         assert!(!scene.updated(epoch, &values("mg_de_dust2")));
-        scene.catalog.requests.get_mut("de_dust2").unwrap().options.bots = 2;
+        scene
+            .catalog
+            .requests
+            .get_mut("de_dust2")
+            .unwrap()
+            .options
+            .bots = 2;
         scene.difficulty(epoch, &[3.0.into()]);
         scene.check(epoch, &modes(), Some(QUERY)).unwrap();
         scene.query(epoch, Some(QUERY));

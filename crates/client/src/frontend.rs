@@ -56,6 +56,7 @@ struct Bridge {
 }
 
 fn show_single_player(path: &str, calls: &mut Calls) {
+    calls.call("_global.csrBindings", "releaseOwnedLifecycle", vec![Value::String(path.to_string())]);
     calls.set(path, "_visible", true.into());
     calls.call(
         "_global.csrBindings",
@@ -122,6 +123,7 @@ impl Bridge {
         self.lobby.lock().unwrap().cancel();
         for element in ["LobbyBrowser", "LobbyScreen", "StartSinglePlayer"] {
             if let Some(path) = self.roots.get(element) {
+                calls.call("_global.csrBindings", "releaseOwnedLifecycle", vec![Value::String(path.to_string())]);
                 calls.set(path, "_visible", false.into());
             }
         }
@@ -170,6 +172,27 @@ impl Engine for Bridge {
             let Some((api, epoch)) = lobby.receiver(object) else { return None; };
             if data.state != AppState::Menu { lobby.cancel(); return None; }
             match (api, method) {
+                (api, "OnUnload") => {
+                    let path = match args { [Value::String(handle)] => handle.strip_prefix("mc:"), _ => None };
+                    let element = match (api, path) {
+                        (Api::Picker, Some(path)) if self.roots.get("StartSinglePlayer").is_some_and(|root| root == path) => Some("StartSinglePlayer"),
+                        (Api::Lobby, Some(path)) => ["LobbyBrowser", "LobbyScreen"].into_iter().find(|element| self.roots.get(*element).is_some_and(|root| root == path)),
+                        _ => None,
+                    };
+                    if let (Some(element), Some(path)) = (element, path) {
+                        calls.set(path, "_visible", false.into());
+                        if api == Api::Picker {
+                            lobby.chooser_unloaded();
+                            if lobby.phase() == crate::frontend_lobby::Phase::Lobby {
+                                if let Some(path) = self.roots.get("LobbyScreen") { lobby.show(path, &data.player_name, calls); }
+                            }
+                        } else if element == "LobbyScreen" || lobby.phase() == crate::frontend_lobby::Phase::Browser {
+                            drop(lobby); drop(data); self.close_lobby(calls);
+                        }
+                        // Browser unload after observed ShowLobbyUI is the
+                        // expected handoff; it must retain the current lobby.
+                    }
+                }
                 (Api::Lobby, "ChooseGameSettings") if args.is_empty() => {
                     if lobby.choose(epoch) {
                         if let Some(path) = self.roots.get("LobbyScreen") {
@@ -207,12 +230,11 @@ impl Engine for Bridge {
             }
             return None;
         }
-        if object == "LobbyScreen" && method == "ConfirmExit" && args.is_empty()
-            && self.lobby.lock().unwrap().active() {
-            self.close_lobby(calls);
-            return None;
-        }
+        // Host cancellation must use a self-issued epoch receiver. A raw
+        // no-argument callback cannot establish which cached opening owns it.
+        if object == "LobbyScreen" && method == "ConfirmExit" { return None; }
         if matches!(object, "LobbyBrowser" | "LobbyScreen" | "StartSinglePlayer") && method == "OnUnload" {
+            if self.lobby.lock().unwrap().active() { return None; }
             if let Some(path) = arg(0).strip_prefix("mc:") { calls.set(path, "_visible", false.into()); }
             let player_name = self.data.lock().unwrap().player_name.clone();
             let mut lobby = self.lobby.lock().unwrap();
@@ -392,8 +414,11 @@ impl Engine for Bridge {
             }
             if !matches!(command.as_str(), "ShowJoinPartyUI:competitive" | "ShowLobbyUI") {
                 self.lobby.lock().unwrap().cancel();
-                for element in ["LobbyBrowser", "LobbyScreen"] {
-                    if let Some(path) = self.roots.get(element) { calls.set(path, "_visible", false.into()); }
+                for element in ["LobbyBrowser", "LobbyScreen", "StartSinglePlayer"] {
+                    if let Some(path) = self.roots.get(element) {
+                        calls.call("_global.csrBindings", "releaseOwnedLifecycle", vec![Value::String(path.to_string())]);
+                        calls.set(path, "_visible", false.into());
+                    }
                 }
             }
             match command.as_str() {
@@ -634,6 +659,7 @@ impl Frontend {
     }
     pub(crate) fn lobby_staged(&self) -> bool { self.lobby.lock().unwrap().staged() }
     pub(crate) fn lobby_staged_map(&self) -> Option<String> { self.lobby.lock().unwrap().staged_map() }
+    pub(crate) fn lobby_phase(&self) -> crate::frontend_lobby::Phase { self.lobby.lock().unwrap().phase() }
     /// Counts completed frame assignments to the Bevy image, not render loops.
     pub(crate) fn presented_serial(&self) -> u64 { self.presented_serial }
     pub(crate) fn send(&self, input: Input) {
@@ -1046,7 +1072,12 @@ pub(crate) fn update(
         front.scene = Some(scene);
     }
     let loading = scene == AppState::Loading;
+    let owned_lobby_notice = scene == AppState::Menu && front.lobby.lock().unwrap().active();
     if let Ok(mut node) = nodes.get_mut(front.notice) {
+        // The installed lobby/picker owns its footer controls. The clear margin
+        // between the 55px navigation bar and 155px panels holds our notice.
+        node.top = if owned_lobby_notice { percent(7) } else { Val::Auto };
+        node.bottom = if owned_lobby_notice { Val::Auto } else { px(24.0) };
         node.display = if loading || (visible && !menu.status.is_empty()) {
             Display::Flex
         } else {
@@ -1490,7 +1521,12 @@ mod tests {
         let old_picker = bridge.lobby.lock().unwrap().proxy(Api::Picker);
         bridge.lobby.lock().unwrap().cancel();
         { let mut scene = bridge.lobby.lock().unwrap(); assert!(scene.begin(&modes)); assert!(scene.open_lobby()); }
+        bridge.roots.insert("LobbyBrowser".into(), "_level17".into());
         let current_lobby = bridge.lobby.lock().unwrap().proxy(Api::Lobby);
+        bridge.call(&old_lobby, "OnUnload", &["mc:_level17".into()], &mut calls);
+        bridge.call("LobbyBrowser", "OnUnload", &["mc:_level17".into()], &mut calls);
+        bridge.call(&current_lobby, "OnUnload", &["mc:_level17".into()], &mut calls);
+        assert_eq!(bridge.lobby.lock().unwrap().phase(), crate::frontend_lobby::Phase::Lobby);
         bridge.call(&current_lobby, "ChooseGameSettings", &[], &mut calls);
         let picker = bridge.lobby.lock().unwrap().proxy(Api::Picker);
         assert!(!bridge.data.lock().unwrap().movie_ready.contains("LobbyScreen"));
@@ -1498,23 +1534,60 @@ mod tests {
         assert!(bridge.data.lock().unwrap().movie_ready.contains("LobbyScreen"));
         bridge.call("LobbyScreen", "OnLoadFinished", &["mc:_level16".into()], &mut calls);
         assert!(!bridge.data.lock().unwrap().movie_ready.contains("LobbyScreen"));
+        bridge.call("StartSinglePlayer", "OnLoadFinished", &["mc:_level15".into()], &mut calls);
         let query = "System { network offline } Game { type classic mode competitive mapgroupname mg_de_dust2 skirmishmode undefined } Options { action create anytypemode 0 }";
         assert_eq!(bridge.call(&old_picker, "CheckGameSettingsRequirements", &[query.into()], &mut calls), None);
         bridge.call(&picker, "SetCustomBotDifficulty", &[0.0.into()], &mut calls);
         assert_eq!(bridge.call(&picker, "CheckGameSettingsRequirements", &[query.into()], &mut calls), Some(true.into()));
         bridge.call(&picker, "SetMatchmakingQuery", &[query.into()], &mut calls);
         let selection = ["0".into(), "1".into(), Value::Number(f64::NAN), "mg_de_dust2".into(), 0.0.into()];
+        // Identical cached root handles do not give raw or retained-old
+        // lifecycle callbacks permission to cancel the reopened picker.
+        for object in [&old_picker, "StartSinglePlayer"] {
+            bridge.call(object, "OnUnload", &["mc:_level15".into()], &mut calls);
+        }
+        bridge.call("LobbyScreen", "ConfirmExit", &[], &mut calls);
+        bridge.call("LobbyScreen", "OnUnload", &["mc:_level16".into()], &mut calls);
+        bridge.call(&old_lobby, "OnUnload", &["mc:_level16".into()], &mut calls);
+        bridge.call(&picker, "OnUnload", &["mc:_level16".into()], &mut calls);
+        assert!(bridge.lobby.lock().unwrap().picker());
         bridge.call(&old_picker, "UpdatedSelections", &selection, &mut calls);
         bridge.call(&old_lobby, "LaunchGame", &[], &mut calls);
         assert!(actions.lock().unwrap().is_empty());
         bridge.call(&picker, "UpdatedSelections", &selection, &mut calls);
         bridge.call("StartSinglePlayer", "OnUnload", &["mc:_level15".into()], &mut calls);
+        bridge.call(&old_picker, "OnUnload", &["mc:_level15".into()], &mut calls);
+        assert!(bridge.lobby.lock().unwrap().staged());
+        bridge.call(&picker, "OnUnload", &["mc:_level15".into()], &mut calls);
+        assert!(bridge.lobby.lock().unwrap().staged());
         let lobby = bridge.lobby.lock().unwrap().proxy(Api::Lobby);
         bridge.call(&lobby, "LaunchGame", &[], &mut calls);
         bridge.call(&lobby, "LaunchGame", &[], &mut calls);
         let actions = actions.lock().unwrap();
         assert_eq!(actions.len(), 1);
         assert!(matches!(&actions[0], Action::Host(start, name) if start.map.options.map == "de_dust2" && start.map.options.bots == 0 && name == "You"));
+        drop(actions);
+        bridge.call(&old_lobby, "ConfirmExit", &[], &mut calls);
+        assert!(bridge.lobby.lock().unwrap().active());
+        bridge.call(&lobby, "ConfirmExit", &[], &mut calls);
+        assert!(!bridge.lobby.lock().unwrap().active());
+        assert!(matches!(bridge.actions.lock().unwrap().last(), Some(Action::LobbyHome)));
+        { let mut scene = bridge.lobby.lock().unwrap(); assert!(scene.begin(&modes)); assert!(scene.open_lobby()); }
+        let reopened = bridge.lobby.lock().unwrap().proxy(Api::Lobby);
+        bridge.call(&reopened, "ChooseGameSettings", &[], &mut calls);
+        let current_picker = bridge.lobby.lock().unwrap().proxy(Api::Picker);
+        bridge.call(&current_picker, "OnUnload", &["mc:_level15".into()], &mut calls);
+        assert_eq!(bridge.lobby.lock().unwrap().phase(), crate::frontend_lobby::Phase::Lobby);
+        assert!(!bridge.lobby.lock().unwrap().staged());
+        assert!(bridge.lobby.lock().unwrap().receiver(&current_picker).is_none());
+        let prior = bridge.lobby.lock().unwrap().proxy(Api::Lobby);
+        { let mut scene = bridge.lobby.lock().unwrap(); scene.cancel(); assert!(scene.begin(&modes)); }
+        bridge.call(&prior, "OnUnload", &["mc:_level17".into()], &mut calls);
+        bridge.call("LobbyBrowser", "OnUnload", &["mc:_level17".into()], &mut calls);
+        assert_eq!(bridge.lobby.lock().unwrap().phase(), crate::frontend_lobby::Phase::Browser);
+        let browser = bridge.lobby.lock().unwrap().proxy(Api::Lobby);
+        bridge.call(&browser, "OnUnload", &["mc:_level17".into()], &mut calls);
+        assert!(!bridge.lobby.lock().unwrap().active());
     }
 
     #[test]
