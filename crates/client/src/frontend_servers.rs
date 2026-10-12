@@ -518,7 +518,7 @@ fn render_rows(
                     .spawn((
                         node(r),
                         GlobalZIndex(CONTEXT_LAYER),
-                        BackgroundColor(color(def, "Button.BgColor")),
+                        BackgroundColor(color(def, "Menu.BgColor")),
                     ))
                     .id();
                 commands.entity(list).add_children(&[popup]);
@@ -539,7 +539,7 @@ fn render_rows(
                         ..default()
                     },
                     "Default",
-                    "Button.TextColor",
+                    "Menu.TextColor",
                     def,
                     fonts,
                 )?;
@@ -1219,6 +1219,107 @@ mod tests {
         queue.apply(&mut world);
         assert!(world.get::<Button>(entity).is_some());
         assert_eq!(world.get::<FocusPolicy>(entity), Some(&FocusPolicy::Block));
+    }
+
+    #[test]
+    fn context_uses_opaque_menu_roles_instead_of_transparent_button_roles() {
+        use bevy::ecs::world::CommandQueue;
+        use std::{collections::BTreeMap, sync::Arc};
+        // Synthetic runtime scheme: deliberately different Menu/Button roles
+        // ensure the production popup reads the declared menu appearance.
+        let scheme = br#"Scheme {
+            Colors { MenuBackground "12 34 56 255" MenuForeground "70 80 90 255" Blank "0 0 0 0" }
+            BaseSettings { Menu.BgColor MenuBackground Menu.TextColor MenuForeground Button.BgColor Blank Button.TextColor "1 2 3 255" }
+            Fonts { Default { "1" { name Synthetic tall "16" weight "500" } } }
+        }"#;
+        let mut game = vfs::Vfs::new();
+        game.push_back(
+            "synthetic scheme",
+            vfs::Mount::Memory(BTreeMap::from([(
+                "resource/sourcescheme.res".into(),
+                Arc::<[u8]>::from(&scheme[..]),
+            )])),
+        );
+        let mut files = BTreeMap::new();
+        files.insert(
+            "servers/serverbrowser_english.txt".into(),
+            Arc::<[u8]>::from(&b"lang { Tokens {} }"[..]),
+        );
+        for name in [
+            "dialogserverbrowser",
+            "customgamespage",
+            "dialogaddserver",
+            "dialoggameinfo",
+        ] {
+            files.insert(
+                format!("servers/{name}.res"),
+                Arc::<[u8]>::from(&b"root {}"[..]),
+            );
+        }
+        let mut platform = vfs::Vfs::new();
+        platform.push_back("synthetic layouts", vfs::Mount::Memory(files));
+        let def = Definition::load(&game, &platform).unwrap();
+        let mut fonts = Fonts::default();
+        fonts.insert("Default", Handle::<Font>::default());
+        let key = ServerKey(7);
+        let model = Model {
+            tab: Tab::Favorites,
+            selected: Some(key),
+            context_row: Some(key),
+            ..default()
+        };
+        let snapshot = Snapshot {
+            generation: 3,
+            rows: vec![data::ServerRow {
+                key,
+                endpoint: "localhost:27015".into(),
+                map: Some("synthetic_map".into()),
+                name: None,
+                players: None,
+                ping_ms: None,
+                favorite: true,
+                connectable: true,
+            }],
+            ..default()
+        };
+        let mut world = World::new();
+        let parent = world.spawn(Node::default()).id();
+        let mut queue = CommandQueue::default();
+        let mut commands = Commands::new(&mut queue, &world);
+        render_rows(
+            &mut commands,
+            parent,
+            Rect {
+                width: 600.0,
+                height: 300.0,
+                ..default()
+            },
+            &def,
+            &fonts,
+            &model,
+            &snapshot,
+        )
+        .unwrap();
+        queue.apply(&mut world);
+        let popup = world
+            .query::<(Entity, &UiAction)>()
+            .iter(&world)
+            .find_map(|(entity, action)| {
+                matches!(action, UiAction::RemoveFavorite(found, 3) if *found == key)
+                    .then_some(entity)
+            })
+            .unwrap();
+        assert_eq!(
+            world.get::<BackgroundColor>(popup).unwrap().0,
+            Color::srgba_u8(12, 34, 56, 255)
+        );
+        let wrapper = world.get::<Children>(popup).unwrap()[0];
+        let text = world.get::<Children>(wrapper).unwrap()[0];
+        assert_eq!(
+            world.get::<TextColor>(text).unwrap().0,
+            Color::srgba_u8(70, 80, 90, 255)
+        );
+        assert_eq!(world.get::<FocusPolicy>(popup), Some(&FocusPolicy::Block));
     }
 
     #[test]
