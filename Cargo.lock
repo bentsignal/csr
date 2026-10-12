@@ -1859,6 +1859,7 @@ dependencies = [
  "level",
  "mdl",
  "movement",
+ "netcode",
  "rodio",
  "scaleform",
  "sim",

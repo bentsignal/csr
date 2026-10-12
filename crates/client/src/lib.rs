@@ -43,6 +43,7 @@ pub mod hud_art;
 pub mod localize;
 pub mod material;
 pub mod player;
+pub mod remote;
 pub mod props;
 pub mod scoreboard;
 pub mod scope;
