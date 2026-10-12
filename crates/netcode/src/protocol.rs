@@ -2,14 +2,24 @@
 use serde::{Deserialize, Serialize};
 use sim::{GameEvent, PlayerId, Snapshot, Team, TickInput};
 
-pub const VERSION: u32 = 1;
-pub const PROTOCOL_ID: u64 = 0x4353_5257_0000_0001;
+pub const VERSION: u32 = 2;
+pub const PROTOCOL_ID: u64 = 0x4353_5257_0000_0002;
 pub const CONTROL: u8 = 0;
 pub const INPUT: u8 = 1;
 pub const SNAPSHOT: u8 = 2;
 pub const EVENTS: u8 = 3;
 pub const MAX_INPUT_BATCH: usize = 8;
 pub const MAX_MESSAGE: usize = 256 * 1024;
+/// Exact f64 tick representation, with room for bounded local replay.
+pub const MAX_LOCAL_TICK: u64 = (1_u64 << 53) - 1;
+pub const MAX_PROTOCOL_COUNTER: u64 = MAX_LOCAL_TICK - crate::prediction::MAX_PENDING_INPUTS as u64;
+
+pub(crate) fn validate_events(batch: &EventBatch) -> Result<(), String> {
+    if batch.tick > MAX_PROTOCOL_COUNTER || batch.events.len() > 4096 {
+        return Err("invalid event batch bounds".into());
+    }
+    Ok(())
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ContentManifest {
@@ -171,13 +181,19 @@ pub(crate) fn validate_state(
     last_ack: u64,
 ) -> Result<(), String> {
     let Some(ServerControl::Welcome {
-        player, tick_rate, ..
+        player,
+        tick_rate,
+        server_tick,
+        ..
     }) = welcome
     else {
         return Err("state before admission".into());
     };
     let world = &state.snapshot.state;
     if world.tick_rate != *tick_rate
+        || *server_tick > MAX_PROTOCOL_COUNTER
+        || world.tick > MAX_PROTOCOL_COUNTER
+        || state.acknowledged_input > MAX_PROTOCOL_COUNTER
         || state.acknowledged_input > sent
         || state.acknowledged_input < last_ack
     {
@@ -231,6 +247,11 @@ pub(crate) fn validate_state(
     for actor in &world.players {
         if actor.id == 0
             || !ids.insert(actor.id)
+            || (actor.alive && actor.life_epoch == 0)
+            || actor
+                .last_input
+                .rewind_tick
+                .is_some_and(|tick| tick > world.tick)
             || !actor.movement.origin.is_finite()
             || !actor.movement.velocity.is_finite()
             || !actor.view_angles.is_finite()
@@ -372,5 +393,53 @@ mod tests {
         manifest.map_name = "de_dust2".into();
         manifest.map_id = "csgo_weapon_ak47".into();
         assert!(manifest.validate().is_err());
+    }
+
+    #[test]
+    fn snapshot_life_and_rewind_metadata_are_validated_before_exposure() {
+        let mut world = sim::World::new(std::sync::Arc::new(collision::CollisionWorld::new()));
+        let id = world.add_player("player", sim::Team::CounterTerrorist);
+        let welcome = ServerControl::Welcome {
+            version: VERSION,
+            player: id,
+            tick_rate: 128,
+            server_tick: 0,
+            content: ContentManifest {
+                map_id: "csgo_map_de_dust2".into(),
+                map_name: "de_dust2".into(),
+                map_hash: "0".repeat(40),
+                catalog_hash: "1".repeat(40),
+            },
+        };
+        let state = StateUpdate {
+            acknowledged_input: 0,
+            snapshot: world.snapshot(),
+        };
+        assert!(validate_state(&state, Some(&welcome), 0, 0).is_ok());
+        let mut invalid = state.clone();
+        invalid.snapshot.state.players[0].life_epoch = 0;
+        assert!(validate_state(&invalid, Some(&welcome), 0, 0).is_err());
+        invalid = state;
+        invalid.snapshot.state.players[0].last_input.rewind_tick = Some(1);
+        assert!(validate_state(&invalid, Some(&welcome), 0, 0).is_err());
+        invalid.snapshot.state.players[0].last_input.rewind_tick = None;
+        invalid.snapshot.state.tick = u64::MAX;
+        assert!(validate_state(&invalid, Some(&welcome), 0, 0).is_err());
+        invalid.snapshot.state.tick = 0;
+        invalid.acknowledged_input = u64::MAX;
+        assert!(validate_state(&invalid, Some(&welcome), u64::MAX, 0).is_err());
+        let mut invalid_welcome = welcome;
+        if let ServerControl::Welcome { server_tick, .. } = &mut invalid_welcome {
+            *server_tick = u64::MAX;
+        }
+        invalid.acknowledged_input = 0;
+        assert!(validate_state(&invalid, Some(&invalid_welcome), 0, 0).is_err());
+        assert!(
+            validate_events(&EventBatch {
+                tick: u64::MAX,
+                events: vec![]
+            })
+            .is_err()
+        );
     }
 }
