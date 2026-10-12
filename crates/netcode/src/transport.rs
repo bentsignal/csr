@@ -560,7 +560,9 @@ impl Client {
         let result = self.poll(elapsed);
         if let Err(reason) = &result {
             self.failure = Some(reason.clone());
-            self.disconnect();
+            self.events.clear();
+            self.queued_events = 0;
+            self.transport.disconnect();
         }
         result
     }
