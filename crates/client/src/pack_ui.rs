@@ -169,11 +169,15 @@ pub(crate) fn update(
                     backend.picker = Some(PackPicker::start())
                 }
                 Action::Cancel => {
+                    let picker_only = backend.picker.is_some() && !backend.flow.busy();
                     if let Some(picker) = &mut backend.picker {
                         picker.cancel();
                     }
                     backend.picker = None;
                     backend.flow.cancel();
+                    if picker_only {
+                        backend.flow.notice = "File selection cancelled.".into();
+                    }
                 }
                 Action::Refresh => backend.flow.request_refresh(),
                 Action::Previous => ui.page = ui.page.saturating_sub(1),
@@ -317,7 +321,8 @@ pub(crate) fn draw(
             Node {
                 position_type: PositionType::Absolute,
                 right: px(24),
-                bottom: px(20),
+                top: if feedback { px(80) } else { Val::Auto },
+                bottom: if feedback { Val::Auto } else { px(20) },
                 flex_direction: FlexDirection::Column,
                 row_gap: px(10),
                 width: if ui.open || feedback {
@@ -660,9 +665,17 @@ pub(crate) fn proof(
         5 if *state.get() == AppState::Match && sim.as_ref().is_some_and(|sim| sim.0.tick > 300) => {
             let level = level.unwrap();
             if level.0.id.to_string() != proof.id || level.0.pack_archive_hash() != Some(proof.hash.as_str()) { error!("pack flow mounted a different selection"); exit.write(AppExit::error()); return; }
-            capture(&mut commands, "pack-match.png"); proof.next();
+            capture(&mut commands, "pack-match.png");
+            let source = std::path::PathBuf::from(std::env::var_os("CSR_TEST_PACK_FLOW").unwrap());
+            drops.write(FileDragAndDrop::DroppedFile { window: window_id, path_buf: source }); proof.next();
         },
-        6 if proof.entered.elapsed().as_secs_f64() > 1. => { menu.in_match = false; menu.page = Some(crate::menu::Page::Main); proof.next(); },
+        6 if proof.entered.elapsed().as_secs_f64() > 1. => {
+            let backend = ui.backend.get_mut().unwrap();
+            if backend.flow.busy() { return; }
+            if !backend.flow.notice.ends_with("was installed.") || level.as_ref().is_none_or(|level| level.0.id.to_string() != proof.id || level.0.pack_archive_hash() != Some(proof.hash.as_str())) { error!("pack flow changed the running selection or failed background installation"); exit.write(AppExit::error()); return; }
+            capture(&mut commands, "pack-background-install.png");
+            menu.in_match = false; menu.page = Some(crate::menu::Page::Main); proof.next();
+        },
         7 if *state.get() == AppState::Menu && level.is_none() && sim.is_none() && entities.is_empty() && proof.entered.elapsed().as_secs() >= 3 => {
             capture(&mut commands, "pack-returned-home.png");
             let mut broken = std::path::PathBuf::from(std::env::var_os("CSR_TEST_PACK_FLOW").unwrap()); broken.set_file_name("Broken content.csrpack");
@@ -675,7 +688,7 @@ pub(crate) fn proof(
                 capture(&mut commands, "pack-rejected.png"); proof.next();
             }
         },
-        9 if proof.entered.elapsed().as_secs() >= 1 => { info!("pack flow: install -> catalog -> pointer Play -> bound match -> Home -> malformed rollback; failures: 0"); exit.write(AppExit::Success); proof.next(); },
+        9 if proof.entered.elapsed().as_secs() >= 1 => { info!("pack flow: install -> catalog -> pointer Play -> bound match -> background install -> Home -> malformed rollback; failures: 0"); exit.write(AppExit::Success); proof.next(); },
         _ => {},
     }
 }
