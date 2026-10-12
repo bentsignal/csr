@@ -15,6 +15,7 @@ use std::{path::PathBuf, time::Instant};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Stage {
     Loading,
+    Warming,
     Initial,
     Grab,
     Release,
@@ -106,6 +107,7 @@ struct Proof {
     tick: u64,
     serial: u64,
     pause_latency: f64,
+    pause_seen: Option<Instant>,
     cadence: Cadence,
 }
 impl Proof {
@@ -144,6 +146,7 @@ pub(crate) fn install(app: &mut App) {
         tick: 0,
         serial: 0,
         pause_latency: 0.0,
+        pause_seen: None,
         cadence: Cadence::default(),
     })
     .add_systems(First, emit)
@@ -317,6 +320,12 @@ fn step(world: &mut World, p: &mut Proof, frame: f64) -> Result<(), String> {
                 w.physical_height(),
                 w.scale_factor()
             );
+            p.enter(Stage::Warming);
+        }
+        Stage::Warming if p.elapsed() >= 1.0 && front.movie_ready("PauseMenu") => {
+            p.position = position;
+            p.shots = shots;
+            p.clip = clip;
             capture(world, p, 1, "01-ready");
             p.enter(Stage::Initial);
         }
@@ -385,10 +394,17 @@ fn step(world: &mut World, p: &mut Proof, frame: f64) -> Result<(), String> {
             }
             if page == Some(crate::menu::Page::Pause) && paused && surface && serial >= p.serial + 2
             {
-                p.pause_latency = p.elapsed();
-                p.tick = tick;
-                capture(world, p, 4, "03-pause");
-                p.enter(Stage::Paused);
+                if p.pause_seen.is_none() {
+                    p.pause_latency = p.elapsed();
+                    p.tick = tick;
+                    p.pause_seen = Some(Instant::now());
+                    info!("BOT_PERF first Pause response_ms={:.1}", p.pause_latency * 1000.0);
+                    if p.pause_latency > 0.25 { return Err("cached Pause response exceeded250ms".into()); }
+                }
+                if p.pause_seen.unwrap().elapsed().as_secs_f64() >= 1.0 {
+                    capture(world, p, 4, "03-pause");
+                    p.enter(Stage::Paused);
+                }
             } else if p.elapsed() > 3.0 {
                 return Err(format!(
                     "Pause not presented promptly page={page:?} paused={paused} surface={surface} serial={serial}"

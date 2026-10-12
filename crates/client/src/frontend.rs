@@ -668,6 +668,7 @@ pub struct Frontend {
     root: Entity,
     camera: Entity,
     visible: bool,
+    active: bool,
     pub ready: bool,
     pub(crate) failed: Option<String>,
     viewport: (u32, u32),
@@ -853,6 +854,7 @@ pub(crate) fn setup(
         root,
         camera,
         visible: false,
+        active: false,
         ready: false,
         failed: None,
         viewport: (options.0.width, options.0.height),
@@ -1002,7 +1004,7 @@ pub(crate) fn update(
         front.data.lock().unwrap().pause_surface.activate(generation,
             scene == AppState::Match && matches!(menu.page, Some(crate::menu::Page::Main | crate::menu::Page::Pause)));
         let mut elements = vec!["MainMenu".into()];
-        if scene == AppState::Match {
+        if matches!(scene, AppState::Loading | AppState::Match) {
             elements.push("PauseMenu".into());
         }
         front.requested.extend(elements.iter().cloned());
@@ -1026,8 +1028,18 @@ pub(crate) fn update(
             }),
         )));
     }
+    // Load the first Pause while the map loads, rather than making Escape pay
+    // for its movies/fonts. A closed late load stays hidden in the bridge.
+    if matches!(scene, AppState::Loading | AppState::Match) {
+        front.request("PauseMenu");
+    }
+    let active = visible || (matches!(scene, AppState::Loading | AppState::Match)
+        && front.failed.is_none() && !front.movie_ready("PauseMenu"));
+    if front.active != active {
+        front.send(Input::SetActive(active));
+        front.active = active;
+    }
     if front.visible != visible {
-        front.send(Input::SetActive(visible));
         front.visible = visible;
         if visible && scene == AppState::Menu && front.ready {
             front.send(Input::Call {
