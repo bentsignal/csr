@@ -33,6 +33,107 @@ pub fn layer() -> RenderLayers {
     RenderLayers::layer(VIEWMODEL_LAYER)
 }
 
+#[cfg(test)]
+mod life_tests {
+    use super::*;
+
+    fn bones() -> Vec<mdl::skeleton::Bone> {
+        ["weapon", "hand"].into_iter().map(|name| mdl::skeleton::Bone {
+            name: name.into(), parent: -1, pos: glam::Vec3::new(1., 2., 3.),
+            quat: glam::Quat::IDENTITY, rot: glam::Vec3::ZERO,
+            pos_scale: glam::Vec3::ONE, rot_scale: glam::Vec3::ONE,
+            pose_to_bone: glam::Mat4::IDENTITY, flags: 0,
+        }).collect()
+    }
+
+    #[test]
+    fn a_new_life_clears_a_reload_pose_that_draw_does_not_animate() {
+        let bones = bones();
+        let mut state = ViewModelState::default();
+        assert!(state.begin_life(1, &bones, 1., 4, 5, glam::Vec2::ZERO));
+        let rest = state.pose.clone();
+        let reload = Clip { name: "reload".into(), fps: 30., looping: false, delta: false,
+            frames: vec![vec![(glam::Vec3::splat(90.), glam::Quat::from_rotation_x(1.)); 2]],
+            animated: vec![true, true] };
+        reload.sample_layered(0., &mut state.pose, |_| 1.);
+        state.activity = "ACT_VM_RELOAD".into();
+        state.reloading = true;
+        state.shell_seen = Some(2);
+        state.planting = true;
+        state.clip_index = 2;
+        // Render frames within this life retain the layered animation.
+        assert!(!state.begin_life(1, &bones, 2., 8, 9, glam::Vec2::ONE));
+        assert_ne!(state.pose, rest);
+        assert!(state.begin_life(2, &bones, 3., 10, 11, glam::Vec2::ONE));
+        let draw = Clip { name: "draw".into(), animated: vec![true, false], ..reload };
+        draw.sample_layered(0., &mut state.pose, |_| 1.);
+        assert_eq!(state.pose[1], rest[1], "unanimated hand cannot inherit the old reload");
+        assert_eq!(state.activity, "ACT_VM_DRAW");
+        assert_eq!((state.started, state.last_attack_seen, state.inspect_seen), (3., 10, 11));
+        assert!(!state.reloading && !state.planting);
+        assert_eq!((state.clip_index, state.shell_seen), (0, None));
+    }
+
+    #[test]
+    #[ignore = "requires the player's installed CS:GO Legacy; no GPU required"]
+    fn installed_respawn_restarts_draw_through_the_production_system() {
+        let level = level::Level::load("de_dust2", None).expect("installed Legacy Dust II");
+        let mut world = sim::World::with_catalog(level.collision.clone(), level.catalog.clone());
+        world.load_spawns(&level.bsp);
+        let id = world.add_player("viewmodel regression", sim::Team::CounterTerrorist);
+        let player = world.player(id).unwrap();
+        let weapon = player.active_weapon().unwrap().def.class_name.clone();
+        assert_eq!(weapon, "weapon_m4a1_silencer");
+        let local = LocalPlayer::new(id, player.eye(), 0.);
+        let mut meshes = Assets::<Mesh>::default();
+        let mut materials = Assets::<WorldMaterial>::default();
+        let mut images = Assets::<Image>::default();
+        let mut textures = TextureCache::default();
+        let mut bindposes = Assets::<SkinnedMeshInverseBindposes>::default();
+        let models = load(&level, &Default::default(), &mut meshes, &mut materials,
+            &mut images, &mut textures, &SharedHandles { lightmap: Default::default() },
+            &mut bindposes, 1.);
+        let mut app = App::new();
+        app.insert_resource(SimWorld(world)).insert_resource(local).insert_resource(models)
+            .insert_resource(materials).insert_resource(LoadedLevel(level))
+            .insert_resource(ViewModelState::default())
+            .insert_resource(crate::tracers::InspectRequest::default())
+            .insert_resource(crate::tracers::Muzzles::default())
+            .insert_resource(crate::cosmetics::Inventory::default())
+            .insert_resource(crate::effects::Effects::default())
+            .insert_resource(crate::characters::CharacterModels {
+                terrorist: None, counter_terrorist: None, weapons: HashMap::new(), sun: None,
+            })
+            .insert_resource(Time::<()>::default()).insert_resource(Time::<Fixed>::from_hz(128.))
+            .add_systems(Update, update);
+        app.world_mut().spawn((Window::default(), bevy::window::PrimaryWindow));
+        app.update(); // create the cached instances
+        app.update(); // sample the actual authored Draw clip
+        let initial_pose = app.world().resource::<ViewModelState>().pose.clone();
+        let initial_joints = app.world().resource::<ViewModelState>().weapon.as_ref().unwrap().1.joints.clone();
+        let reload = app.world().resource::<ViewModels>().weapons[&weapon].clips["ACT_VM_RELOAD"][0].clone();
+        {
+            let mut state = app.world_mut().resource_mut::<ViewModelState>();
+            reload.clip.sample_layered(reload.clip.duration() * 0.5, &mut state.pose,
+                |b| reload.weights.get(b).copied().unwrap_or(1.));
+            assert_ne!(state.pose, initial_pose);
+            state.activity = "ACT_VM_RELOAD".into();
+            state.reloading = true;
+        }
+        app.world_mut().resource_mut::<SimWorld>().0.damage_environment(id, 1000, "fixture");
+        app.update(); // death keeps the cached meshes but hides them
+        app.world_mut().resource_mut::<SimWorld>().0.respawn(id);
+        app.world_mut().resource_mut::<Time>().advance_by(std::time::Duration::from_secs(2));
+        app.update(); // same weapon/owner/team, new actual replicated life epoch
+        let state = app.world().resource::<ViewModelState>();
+        assert_eq!(state.activity, "ACT_VM_DRAW");
+        assert_eq!(state.pose, initial_pose, "actual Draw pose must equal the fresh-life baseline");
+        assert_eq!(state.weapon.as_ref().unwrap().1.joints, initial_joints,
+            "respawn resets playback without allocating replacement model instances");
+        assert_eq!(state.life, Some(app.world().resource::<SimWorld>().0.player(id).unwrap().life_epoch));
+    }
+}
+
 /// Vertical FOV (radians) for a horizontal 4:3 FOV in degrees, as Source scales it.
 pub fn vertical_fov(horizontal_4x3_deg: f32) -> f32 {
     2.0 * ((horizontal_4x3_deg.to_radians() * 0.5).tan() * 0.75).atan()
@@ -120,6 +221,8 @@ pub struct ViewModelState {
     glove:String,
     team: Option<sim::Team>,
     owner: Option<sim::PlayerId>,
+    /// A cached weapon instance can survive death, but its playback cannot.
+    life: Option<u64>,
     activity: String,
     clip_index: usize,
     started: f32,
@@ -135,6 +238,29 @@ pub struct ViewModelState {
     /// Persistent bone-local pose: sequences only overwrite the bones they
     /// animate (weighted), as the game layers masked viewmodel sequences.
     pose: Vec<(glam::Vec3, glam::Quat)>,
+}
+
+impl ViewModelState {
+    fn begin_life(&mut self, life: u64, bones: &[mdl::skeleton::Bone], now: f32,
+        attack_serial: u64, inspect_serial: u64, angles: glam::Vec2) -> bool {
+        if self.life == Some(life) { return false; }
+        self.life = Some(life);
+        self.activity = "ACT_VM_DRAW".into();
+        self.clip_index = 0;
+        self.started = now;
+        self.last_attack_seen = attack_serial;
+        self.inspect_seen = inspect_serial;
+        self.reloading = false;
+        self.shell_seen = None;
+        self.planting = false;
+        self.light_timer = 0.0;
+        self.sway = glam::Vec2::ZERO;
+        self.last_angles = angles;
+        // Masked clips deliberately preserve untouched bones within one life.
+        // They must never inherit the reload/inspect pose of a previous life.
+        self.pose = mdl::skeleton::rest_pose(bones);
+        true
+    }
 }
 
 fn load_model(fs: &vfs::Vfs, path: &str) -> Option<mdl::Model> {
@@ -348,20 +474,19 @@ pub fn update(
             state.weapon = Some((active.clone(), gun, arms, Vec::new()));
             state.team = Some(p.team);
             state.owner = Some(p.id);
-            state.sway = glam::Vec2::ZERO;
-            state.last_angles = local.render_angles.truncate();
-            state.inspect_seen = request.0;
-            state.reloading = false;
-            state.planting = false;
-            state.last_attack_seen = effects.attack_serial;
-            state.activity = "ACT_VM_DRAW".into();
-            state.clip_index = 0;
-            state.started = now;
-            state.light_timer = 0.0;
-            state.pose = mdl::skeleton::rest_pose(&view.asset.model.bones);
+            state.life = None;
+            state.begin_life(p.life_epoch, &view.asset.model.bones, now,
+                effects.attack_serial, request.0, local.render_angles.truncate());
             if std::env::var_os("CSR_WEAPON_TRACE").is_some() { info!("weapon activity: {} ACT_VM_DRAW", active); }
         }
         return;
+    }
+    if let Some(view) = models.weapons.get(&active) {
+        if state.begin_life(p.life_epoch, &view.asset.model.bones, now,
+            effects.attack_serial, request.0, local.render_angles.truncate())
+            && std::env::var_os("CSR_WEAPON_TRACE").is_some() {
+            info!("weapon activity: {} ACT_VM_DRAW life {}", active, p.life_epoch);
+        }
     }
     let Some((name, gun, arms, mats)) = &mut state.weapon else { return };
     if mats.is_empty() {
