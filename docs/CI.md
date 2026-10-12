@@ -9,7 +9,7 @@ run the real-data checks.
 
 | Workflow | Where | Steps |
 |---|---|---|
-| `ci.yml` on every PR and push to `master` | `[self-hosted, csr]` | `cargo test`, `play` build, `csr probe de_dust2`, `csr sim de_dust2`, two-client UDP Dust II netcheck |
+| `ci.yml` on every PR and push to `master` | `[self-hosted, csr]` | `cargo test`, `play` build, `csr probe de_dust2`, `csr sim de_dust2`, two-client UDP Dust II netcheck and owned-session checks at 128/64 tick |
 | `ci.yml` asset guard | GitHub (`ubuntu-latest`, seconds) | `tools/check-no-assets.sh` |
 | `release.yml` on a `v*` tag | `[self-hosted, csr]` | tests, `tools/package-release.ps1 -DeltaFromGitHub` (zip, Velopack installer, full and delta update packages), publish all of it to the GitHub Release (`gh release create`, then `vpk upload github --merge`) |
 

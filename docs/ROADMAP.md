@@ -96,6 +96,11 @@ A server-only bounded hull history now supports authoritative hitscan rewind
 without moving live actors. The server derives valid view ticks from its own
 RTT/caps and requires matching spawn epochs, teams and rounds. Coarse existing
 hit groups remain; MDL/VR hitboxes and rendered multiplayer proof are open.
+A renderer-free owned remote session now combines bounded metadata discovery,
+verified installed-content admission, prediction, remote poses, authoritative
+events and idempotent cancellation. Its two-client Dust II lifecycle proof
+runs at 64 and 128 tick; frontend loading/join integration remains open.
+See [REMOTESESSION.md](REMOTESESSION.md).
 
 - [ ] Protocol: `TickInput` up (with **optional tracked head/hand poses and a
       separate aim ray**, reserved now for VR), full-state snapshots then
