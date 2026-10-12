@@ -4,6 +4,28 @@
 //! reply can restore it. Register every OnLoadFinished, including cached paths.
 use scaleform::Value;
 
+/// One deferred show per open cycle. Readiness callbacks can arrive in either
+/// order; Options cancellation already owns its native return-to-Pause show.
+#[derive(Default)]
+pub(crate) struct DeferredPause {
+    open: bool,
+    pending: bool,
+}
+impl DeferredPause {
+    pub(crate) fn observe(&mut self, open: bool, options: bool) {
+        if !open { self.pending = false; }
+        else if !self.open { self.pending = true; }
+        self.open = open;
+        if options { self.pending = false; }
+    }
+    pub(crate) fn cancel_pending(&mut self) { self.pending = false; }
+    pub(crate) fn take_ready(&mut self, main_ready: bool, pause_ready: bool, has_root: bool) -> bool {
+        if !self.pending || !self.open || !main_ready || !pause_ready || !has_root { return false; }
+        self.pending = false;
+        true
+    }
+}
+
 pub(crate) const SAMPLER_PATH: &str = "_global.csrBindings";
 pub(crate) const SAMPLER_METHOD: &str = "samplePauseSurface";
 pub(crate) const RECEIVER: &str = "OwnedPauseSurface";
@@ -398,5 +420,61 @@ mod tests {
         t.serial = u64::MAX;
         assert!(t.request(1).is_none());
         assert!(!t.visible());
+    }
+
+
+    #[test]
+    fn pause_ready_before_main_and_escape_defers_exactly_one_cached_show() {
+        let mut deferred = DeferredPause::default();
+        deferred.observe(false, false); // hidden prewarm: Pause finishes first
+        assert!(!deferred.take_ready(false, true, true));
+        deferred.observe(true, false); // Escape opens while Main is still loading
+        assert!(!deferred.take_ready(false, true, true));
+        assert!(deferred.take_ready(true, true, true)); // Main OnReady, no second visible edge
+        for _ in 0..100 {
+            deferred.observe(true, false);
+            assert!(!deferred.take_ready(true, true, true));
+        }
+    }
+
+    #[test]
+    fn main_ready_first_still_waits_for_pause_ready_and_registered_root() {
+        let mut deferred = DeferredPause::default();
+        deferred.observe(true, false); // Escape, then Main OnReady
+        assert!(!deferred.take_ready(true, false, false));
+        assert!(!deferred.take_ready(true, false, true)); // Pause Loaded is earlier than Ready
+        assert!(!deferred.take_ready(true, true, false)); // never show an unregistered root
+        assert!(deferred.take_ready(true, true, true));
+        assert!(!deferred.take_ready(true, true, true));
+    }
+
+    #[test]
+    fn close_before_ready_discards_late_completion_and_cached_reopen_is_fresh() {
+        let mut deferred = DeferredPause::default();
+        deferred.observe(true, false);
+        assert!(!deferred.take_ready(false, true, true));
+        deferred.observe(false, false); // Escape closes before Main finishes
+        assert!(!deferred.take_ready(true, true, true));
+        deferred.observe(true, false); // a later Escape reopens cached roots
+        assert!(deferred.take_ready(true, true, true));
+        assert!(!deferred.take_ready(true, true, true));
+        deferred.observe(false, false); // Home/scene teardown clears ownership
+        assert!(!deferred.take_ready(true, true, true));
+    }
+
+    #[test]
+    fn options_cancel_owns_its_restore_without_rearming_deferred_pause() {
+        let mut deferred = DeferredPause::default();
+        deferred.observe(true, false);
+        assert!(!deferred.take_ready(true, false, true));
+        deferred.cancel_pending(); // native OpenAudioSettingsDialog before next frontend update
+        deferred.observe(true, true);
+        assert!(!deferred.take_ready(true, true, true)); // late Pause Ready under Options
+        deferred.cancel_pending(); // native OnCancel queues the authored Pause show itself
+        deferred.observe(true, false);
+        assert!(!deferred.take_ready(true, true, true)); // no duplicate show from our update
+        deferred.observe(false, false);
+        deferred.observe(true, false);
+        assert!(deferred.take_ready(true, true, true)); // new Escape cycle remains supported
     }
 }
