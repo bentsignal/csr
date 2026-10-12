@@ -32,12 +32,18 @@ byte. Partial-alpha pixels retain the existing float formula, including
 saturation; zero-alpha RGB remains unchanged. The local capture helper also
 checks padded-row dimensions before constructing a complete image. Asset-free
 tests cover all 65,536 alpha/channel combinations, padded row order and
-malformed layouts. These tests and a same-resolution rendered comparison
-still need the coordinated build/proof slot before a passing claim.
+malformed layouts. The coordinated integrated check passed all 24 Scaleform
+tests, including these conversion and FIFO scheduling regressions.
 
 No movie clock, FIFO barrier, resolution, sampling mode, quality setting or
-responsiveness threshold has changed. A nonblocking readback would be a
-separate correction if measured GPU wait remains dominant.
+responsiveness threshold has changed. The opaque-only profiler passed at
+2560x1440: steady mean/p95 GPU wait was 0.843/1.010 ms, row copy
+1.625/1.911 ms, alpha conversion 1.170/1.719 ms, and total capture
+3.641/4.382 ms. Its 457 assignments over 20 seconds and receipt p95
+85.310 ms passed. The earlier diagnostic baseline's total capture mean was
+9.778 ms across 605 frames. These separately recorded intervals identify a
+significant CPU conversion cost; asynchronous GPU readback was unnecessary
+for this correction.
 
 ## Completing a queued FIFO boundary
 
@@ -64,4 +70,22 @@ still a soft limit: one boundary completion may add up to two indivisible
 calls, and those calls cannot be preempted. Synthetic causal tests cover
 arrivals during a slow motion, protected producer coalescing, the count cap,
 pure-motion progress and shutdown after a queued inactive transition. Final
-responsiveness still requires the original unrelaxed full-resolution gate.
+responsiveness was verified with the original unrelaxed full-resolution gate.
+
+## Integrated normal-startup evidence
+
+The integrated production source `cff4b7a760b8803cd66b6807d05891bd7aa68e9a`
+passed the normal fullscreen 2560x1440 fixture with optional worker/render
+traces disabled and compilation idle. It assigned 489 fresh images over 20
+seconds; mean/p95/max intervals were 40.851/64.667/91.606 ms. Forty FIFO
+receipts measured p95 41.450 ms and max 47.896 ms, with no pending marker and
+zero failures. Resolution and all gate limits remained unchanged.
+
+The same integrated source's fullscreen bot fixture also passed: 679 gameplay
+update samples over 5.151 seconds measured mean/p95/max intervals
+7.587/11.693/36.519 ms, first Pause response 98.9 ms, and four actual screenshot
+acknowledgments. These are owned engine-update and image-assignment results;
+they do not measure physical keyboard/mouse delivery, compositor/GPU-present
+latency or establish complete classic UI fidelity. The six-stage drawable/
+viewport/raster proof and the final mandatory aggregate/CI checks are tracked
+with the publication PR, separately from these responsiveness measurements.
