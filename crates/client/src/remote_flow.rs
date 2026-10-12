@@ -111,7 +111,7 @@ pub(crate) fn update(world: &mut World, mut proof: Local<Proof>) {
             proof.tick = world.resource::<crate::player::SimWorld>().0.tick;
             proof.next();
         }
-        2 if ready && proof.entered.elapsed() > Duration::from_millis(750) => {
+        2 if ready && proof.entered.elapsed() > Duration::from_secs(2) => {
             let world_state = &world.resource::<crate::player::SimWorld>().0;
             if world_state.tick <= proof.tick || world_state.players.len() < 2 {
                 failed(world, "authority or remote actor did not advance");
@@ -126,7 +126,12 @@ pub(crate) fn update(world: &mut World, mut proof: Local<Proof>) {
             capture(world, "remote-ready.png");
             proof.next();
         }
-        3 if ready && proof.entered.elapsed() > Duration::from_millis(250) => {
+        3 if ready
+            && world
+                .get_resource::<Captures>()
+                .is_some_and(|captures| captures.0 >= 1)
+            && proof.entered.elapsed() > Duration::from_millis(250) =>
+        {
             proof.tick = world.resource::<crate::player::SimWorld>().0.tick;
             // Screenshot runs disable controls by default. Enable the normal
             // menu-input path so this phase actually exercises pause ownership.
@@ -135,7 +140,12 @@ pub(crate) fn update(world: &mut World, mut proof: Local<Proof>) {
             world.resource_mut::<crate::player::LocalPlayer>().latched = movement::buttons::JUMP;
             proof.next();
         }
-        4 if ready && proof.entered.elapsed() > Duration::from_secs(1) => {
+        4 if ready
+            && world
+                .resource::<crate::frontend::Frontend>()
+                .loaded("PauseMenu")
+            && proof.entered.elapsed() > Duration::from_secs(5) =>
+        {
             if world.resource::<crate::player::SimWorld>().0.tick <= proof.tick
                 || world.resource::<Time<Virtual>>().is_paused()
                 || world.resource::<crate::player::LocalPlayer>().latched != 0
@@ -153,7 +163,11 @@ pub(crate) fn update(world: &mut World, mut proof: Local<Proof>) {
             capture(world, "remote-paused.png");
             proof.next();
         }
-        5 if proof.entered.elapsed() > Duration::from_millis(250) => {
+        5 if world
+            .get_resource::<Captures>()
+            .is_some_and(|captures| captures.0 >= 2)
+            && proof.entered.elapsed() > Duration::from_millis(250) =>
+        {
             let mut menu = world.resource_mut::<crate::menu::Menu>();
             menu.in_match = false;
             menu.page = Some(crate::menu::Page::Main);
@@ -171,7 +185,11 @@ pub(crate) fn update(world: &mut World, mut proof: Local<Proof>) {
             capture(world, "remote-returned-home.png");
             proof.next();
         }
-        7 if proof.entered.elapsed() > Duration::from_millis(250) => {
+        7 if world
+            .get_resource::<Captures>()
+            .is_some_and(|captures| captures.0 >= 3)
+            && proof.entered.elapsed() > Duration::from_millis(250) =>
+        {
             let options = crate::ClientOptions {
                 map: "de_dust2".into(),
                 bots: 0,
@@ -183,12 +201,16 @@ pub(crate) fn update(world: &mut World, mut proof: Local<Proof>) {
                 .0
                 .lock()
                 .unwrap() = Some(options.into());
+            proof.ready_at = None;
             proof.next();
         }
         8 if state == AppState::Match
             && !world.contains_resource::<RemoteClient>()
             && proof.entered.elapsed() > Duration::from_secs(2) =>
         {
+            if proof.ready_at.get_or_insert_with(Instant::now).elapsed() < Duration::from_secs(2) {
+                return;
+            }
             if world.resource::<crate::player::SimWorld>().0.players.len() != 1 {
                 failed(world, "offline reload retained remote actors");
                 return;

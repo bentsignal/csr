@@ -315,6 +315,28 @@ mod tests {
     }
 
     #[test]
+    fn unavailable_native_browser_returns_home_with_its_error() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, bevy::state::app::StatesPlugin))
+            .insert_state(AppState::Browser)
+            .init_resource::<Browser>()
+            .init_resource::<crate::menu::Menu>()
+            .add_systems(Update, update);
+        app.world_mut().resource_mut::<Browser>().error =
+            Some("Missing installed browser layout".into());
+        app.update();
+        assert!(matches!(
+            app.world().resource::<NextState<AppState>>(),
+            NextState::Pending(AppState::Menu)
+        ));
+        assert_eq!(
+            app.world().resource::<crate::menu::Menu>().status,
+            "Missing installed browser layout"
+        );
+        assert!(app.world().resource::<Browser>().view.is_none());
+    }
+
+    #[test]
     fn downstream_exit_retention_does_not_reopen_either_owner() {
         fn hold(mut exits: ResMut<Messages<AppExit>>) {
             exits.drain().for_each(drop);

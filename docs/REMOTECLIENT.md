@@ -16,8 +16,8 @@ The root plugin must schedule `remote::drive` once per `Update`, before
 before a match exists: discovery/synchronization continue while optional
 `SimWorld` and `LocalPlayer` are absent. Once those resources exist, the
 adapter adopts the server-assigned player id and publishes authority.
-The actual frontend/module scheduling and map ownership remain root wiring
-work; declaring this module alone does not enable rendered networking.
+The root plugin now owns this schedule and the corresponding loader/render
+admission lifetime; see [REMOTE_JOIN.md](REMOTE_JOIN.md).
 
 `drive` uses `Time<Real>` so a paused offline virtual clock does not stall
 network IO or input acknowledgement. An open front-end/pause menu sends

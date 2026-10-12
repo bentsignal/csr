@@ -6,6 +6,7 @@ use super::frontend_servers_data::{
 use bevy::{
     input::{ButtonState, keyboard::KeyboardInput},
     prelude::*,
+    ui::FocusPolicy,
 };
 use std::collections::HashMap;
 
@@ -141,7 +142,9 @@ fn control(
     commands.entity(parent).add_children(&[entity]);
     if enabled {
         if let Some(action) = action {
-            commands.entity(entity).insert((Button, action));
+            commands
+                .entity(entity)
+                .insert((Button, FocusPolicy::Block, action));
         }
     }
     let text_color = if !enabled {
@@ -260,7 +263,7 @@ pub fn spawn(
             if !snapshot.busy && !model.add_open {
                 commands
                     .entity(button)
-                    .insert((Button, UiAction::Tab(*tab)));
+                    .insert((Button, FocusPolicy::Block, UiAction::Tab(*tab)));
             }
             label(
                 commands,
@@ -442,6 +445,7 @@ fn render_rows(
         let entity = commands
             .spawn((
                 Button,
+                FocusPolicy::Block,
                 UiAction::Select(row.key, snapshot.generation),
                 node(Rect {
                     y,
@@ -513,9 +517,11 @@ fn render_rows(
                     .id();
                 commands.entity(list).add_children(&[popup]);
                 if !snapshot.busy && !model.add_open {
-                    commands
-                        .entity(popup)
-                        .insert((Button, UiAction::RemoveFavorite(key, snapshot.generation)));
+                    commands.entity(popup).insert((
+                        Button,
+                        FocusPolicy::Block,
+                        UiAction::RemoveFavorite(key, snapshot.generation),
+                    ));
                 }
                 label(
                     commands,
@@ -1162,6 +1168,53 @@ mod tests {
             None
         );
     }
+    #[test]
+    fn enabled_control_blocks_underlying_rows_after_node_allocation() {
+        use bevy::ecs::world::CommandQueue;
+        let mut world = World::new();
+        let parent = world.spawn_empty().id();
+        let control_data = Control {
+            name: "owned-action".into(),
+            field_name: "owned-action".into(),
+            kind: "Button".into(),
+            rect: Rect {
+                width: 100.0,
+                height: 20.0,
+                ..default()
+            },
+            text: String::new(),
+            command: Some("connect".into()),
+            font: "Default".into(),
+            visible: true,
+            enabled: true,
+            default_button: false,
+        };
+        let definition = Definition {
+            browser: default(),
+            page: default(),
+            add: default(),
+            info: default(),
+            scheme: default(),
+            tokens: default(),
+        };
+        let mut queue = CommandQueue::default();
+        let mut commands = Commands::new(&mut queue, &world);
+        let entity = control(
+            &mut commands,
+            parent,
+            &control_data,
+            control_data.rect,
+            Some(UiAction::Command("connect".into(), 1)),
+            true,
+            &definition,
+            &Fonts::default(),
+        )
+        .unwrap();
+        queue.apply(&mut world);
+        assert!(world.get::<Button>(entity).is_some());
+        assert_eq!(world.get::<FocusPolicy>(entity), Some(&FocusPolicy::Block));
+    }
+
     #[test]
     fn failed_font_load_removes_every_queued_tree_entity() {
         use bevy::ecs::world::CommandQueue;

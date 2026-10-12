@@ -450,6 +450,7 @@ pub struct Frontend {
     pub(crate) failed: Option<String>,
     viewport: (u32, u32),
     requested: HashSet<String>,
+    loaded: HashSet<String>,
     scene: Option<AppState>,
     notice: Entity,
     notice_text: Entity,
@@ -458,6 +459,7 @@ pub struct Frontend {
 
 impl Frontend {
     pub(crate) fn camera(&self) -> Entity { self.camera }
+    pub(crate) fn loaded(&self, name: &str) -> bool { self.loaded.contains(name) }
     pub(crate) fn send(&self, input: Input) {
         if let Some(movie) = &self.movie {
             movie.lock().unwrap().send(input);
@@ -610,6 +612,7 @@ pub(crate) fn setup(
         failed: None,
         viewport: (options.0.width, options.0.height),
         requested: HashSet::new(),
+        loaded: HashSet::new(),
         scene: None,
         notice,
         notice_text,
@@ -897,6 +900,7 @@ pub(crate) fn update(
         match event {
             Some(scaleform::Event::Loaded(name)) => {
                 front.ready |= name == "MainMenu";
+                front.loaded.insert(name.clone());
                 info!("Classic UI loaded {name}");
             }
             Some(scaleform::Event::Failed(error)) => {
