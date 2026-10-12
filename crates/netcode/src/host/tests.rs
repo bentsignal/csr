@@ -169,8 +169,8 @@ fn frozen_zero_freeze_admission_then_continuous_authority_at_64_and_128() {
         assert!(authority.server.session().world().player(id).unwrap().alive);
         assert_eq!(local.authoritative_state().unwrap().tick, 0);
         assert!(local.take_events().is_none());
-        authority.begin(id).unwrap();
-        authority.begin(id).unwrap(); // idempotent, no round restart
+        authority.begin(id, 0).unwrap();
+        authority.begin(id, 0).unwrap(); // idempotent, no round restart
         let dt = 1. / rate as f64;
         for _ in 0..32 {
             let view = local.authoritative_state().unwrap().tick;
@@ -210,11 +210,72 @@ fn frozen_zero_freeze_admission_then_continuous_authority_at_64_and_128() {
 }
 
 #[test]
+fn preparing_inputs_cannot_return_as_retransmissions_or_in_flight_after_begin() {
+    for drained in [true, false] {
+        let (mut authority, _handle, ticket) = fixture(128);
+        let mut local = local_ready(&mut authority, ticket, 128);
+        let player = local.player().unwrap();
+        let before = authority
+            .server
+            .session()
+            .world()
+            .player(player)
+            .unwrap()
+            .movement
+            .origin;
+        local
+            .advance_inputs(1. / 128., 0, |_| sim::TickInput {
+                forward_move: 450.,
+                buttons: movement::buttons::ATTACK,
+                ..Default::default()
+            })
+            .unwrap();
+        if drained {
+            // The packet is received/discarded, but Client still retains it.
+            authority
+                .update(Duration::from_secs_f64(1. / 128.))
+                .unwrap();
+        }
+        authority
+            .begin(player, local.submitted_sequence().unwrap())
+            .unwrap();
+        // This batch also retransmits the old unacknowledged attack.
+        local
+            .advance_inputs(1. / 128., 0, |_| sim::TickInput::default())
+            .unwrap();
+        for _ in 0..12 {
+            authority
+                .update(Duration::from_secs_f64(1. / 128.))
+                .unwrap();
+            let actor = authority.server.session().world().player(player).unwrap();
+            assert_eq!(
+                actor.last_input.buttons & movement::buttons::ATTACK,
+                0,
+                "preparing attack crossed Begin; drained={drained}"
+            );
+            assert_eq!(
+                actor.last_input.forward_move, 0.,
+                "preparing movement crossed Begin; drained={drained}"
+            );
+            assert_eq!(actor.movement.origin.truncate(), before.truncate());
+            local.update(1. / 128.).unwrap();
+        }
+        assert_eq!(local.acknowledged_input(), Some(2));
+        assert_eq!(local.pending_inputs(), Some(0));
+        assert!(local.predicted_world().unwrap().events.is_empty());
+        assert_eq!(
+            local.predicted_world().unwrap().state(),
+            local.authoritative_state().unwrap().clone()
+        );
+    }
+}
+
+#[test]
 fn begin_requires_exact_reserved_owner_and_validated_ready_session() {
     let (mut authority, mut handle, ticket) = fixture(128);
     let mut local = local_ready(&mut authority, ticket, 128);
     assert_eq!(
-        authority.begin(local.player().unwrap() + 1),
+        authority.begin(local.player().unwrap() + 1, 0),
         Err(HostError::WrongOwner)
     );
     let (_other_authority, mut other, _ticket) = fixture(128);
@@ -242,7 +303,7 @@ fn local_connection_starts_bounded_admission_timeout_and_disconnect_closes_owner
     // A separate fixture tests running departure; no blind UDP rebind/retry.
     let (mut authority, _handle, ticket) = fixture(128);
     let mut local = local_ready(&mut authority, ticket, 128);
-    authority.begin(local.player().unwrap()).unwrap();
+    authority.begin(local.player().unwrap(), 0).unwrap();
     local.cancel();
     for _ in 0..128 {
         if authority.update(Duration::from_secs_f64(1. / 128.)) == Err(HostError::OwnerDisconnected)
@@ -360,6 +421,15 @@ fn actual_worker_begin_is_idempotent_and_cancel_invalidates_ready_client() {
         assert!(Instant::now() < deadline);
         thread::sleep(Duration::from_millis(1));
     }
+    // Capture the real sender's sequence, not a caller-provided guess.
+    local
+        .advance_inputs(1. / 128., 0, |_| sim::TickInput {
+            forward_move: 450.,
+            buttons: movement::buttons::ATTACK,
+            ..Default::default()
+        })
+        .unwrap();
+    assert_eq!(local.submitted_sequence(), Some(1));
     handle.begin(&local).unwrap();
     handle.begin(&local).unwrap();
     wait(&mut handle, |s| matches!(s, HostStatus::Running { .. }));
@@ -370,7 +440,28 @@ fn actual_worker_begin_is_idempotent_and_cancel_invalidates_ready_client() {
         assert!(Instant::now() < deadline);
         thread::sleep(Duration::from_millis(1));
     }
+    assert_eq!(local.acknowledged_input(), Some(1));
+    assert_eq!(local.pending_inputs(), Some(0));
+    let owner = local
+        .authoritative_state()
+        .unwrap()
+        .players
+        .iter()
+        .find(|p| p.id == local.player().unwrap())
+        .unwrap();
+    assert_eq!(owner.last_input.forward_move, 0.);
+    assert_eq!(owner.last_input.buttons & movement::buttons::ATTACK, 0);
+    assert_eq!(owner.shots, 0);
     handle.cancel();
+    // No intervening update: cached Ready cannot let cancelled controllers
+    // sample, accumulate time, predict or submit a fresh sequence.
+    assert_eq!(
+        local.advance_inputs(1000., 0, |_| panic!("cancelled input was sampled")),
+        Err(Error::Cancelled)
+    );
+    assert_eq!(local.status(), &Status::Closed(Error::Cancelled));
+    assert_eq!(local.submitted_sequence(), None);
+    assert_eq!(local.pending_inputs(), None);
     assert_eq!(local.update(0.), Err(Error::Cancelled));
     assert_eq!(handle.begin(&local), Err(HostError::Cancelled));
     wait(&mut handle, |s| matches!(s, HostStatus::Closed(_)));

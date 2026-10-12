@@ -64,6 +64,26 @@ impl Session {
         self.peers.get(&client).map(|p| p.player)
     }
 
+    /// Trusted local Begin boundary. The cutoff is read from the exact owned
+    /// sender, never supplied by a gameplay packet. Ack/discard old sequences
+    /// so retries and packets still in flight cannot preload controls.
+    pub(crate) fn discard_owner_inputs(&mut self, client: u64, through: u64) -> Result<(), String> {
+        let peer = self.peers.get_mut(&client).ok_or("owner has not joined")?;
+        if through > MAX_PROTOCOL_COUNTER || through < peer.acknowledged {
+            return Err("invalid local owner input cutoff".into());
+        }
+        peer.pending.clear();
+        peer.acknowledged = through;
+        peer.last_input_tick = self.world.tick;
+        if let Some(player) = self.world.player_mut(peer.player) {
+            player.last_input = TickInput {
+                view_angles: player.view_angles,
+                ..Default::default()
+            };
+        }
+        Ok(())
+    }
+
     /// Transport-observed latency only, never a client-supplied ping value.
     pub fn observe_rtt(&mut self, client: u64, seconds: f64) {
         if let Some(peer) = self.peers.get_mut(&client) {

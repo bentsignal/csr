@@ -121,7 +121,7 @@ impl LocalAdmission {
 }
 
 enum Command {
-    Begin(PlayerId),
+    Begin { player: PlayerId, through: u64 },
 }
 
 /// Keep ownership outside match entities until shutdown completes. `cancel`
@@ -226,6 +226,9 @@ impl HostHandle {
     /// A private process command, never a client-control message. Both exact
     /// host ownership and actual validated predictor readiness are required.
     /// The worker independently verifies this player belongs to the reservation.
+    /// It acknowledges/discards every command already submitted by this sender,
+    /// including retries and packets in flight. The frontend gates new controls
+    /// until Running; the request is idempotent and never restarts the match.
     pub fn begin(&mut self, local: &RemoteSession) -> Result<(), HostError> {
         if self.shared.stopped.load(Ordering::Acquire) {
             return Err(HostError::Cancelled);
@@ -240,11 +243,12 @@ impl HostHandle {
             return Err(HostError::NotReady);
         }
         let player = local.player().ok_or(HostError::NotReady)?;
+        let through = local.submitted_sequence().ok_or(HostError::NotReady)?;
         if self.begin_requested {
             return Ok(());
         }
         self.commands
-            .try_send(Command::Begin(player))
+            .try_send(Command::Begin { player, through })
             .map_err(|e| match e {
                 TrySendError::Full(_) => HostError::CommandFull,
                 TrySendError::Disconnected(_) => HostError::Cancelled,
@@ -316,13 +320,13 @@ struct Authority {
     admission_elapsed: Option<Duration>,
 }
 impl Authority {
-    fn begin(&mut self, player: PlayerId) -> Result<(), HostError> {
+    fn begin(&mut self, player: PlayerId, through: u64) -> Result<(), HostError> {
         if self.server.session().player_for(self.owner_id) != Some(player) {
             return Err(HostError::WrongOwner);
         }
         if !self.running {
             self.server
-                .begin(self.owner_id)
+                .begin(self.owner_id, through)
                 .map_err(|e| HostError::Transport(bounded(e)))?;
             self.running = true;
         }
@@ -390,8 +394,8 @@ fn run(
                 return Ok(());
             }
             match commands.try_recv() {
-                Ok(Command::Begin(player)) => {
-                    authority.begin(player)?;
+                Ok(Command::Begin { player, through }) => {
+                    authority.begin(player, through)?;
                     previous = Instant::now();
                     shared.publish(HostStatus::Running {
                         local_address: address,

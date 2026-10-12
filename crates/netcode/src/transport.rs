@@ -106,10 +106,11 @@ impl Server {
         self.update_inner(elapsed, Some(owner)).map(|_| ())
     }
 
-    pub(crate) fn begin(&mut self, owner: u64) -> Result<(), String> {
+    pub(crate) fn begin(&mut self, owner: u64, through: u64) -> Result<(), String> {
         if self.session.player_for(owner).is_none() {
             return Err("local owner has not been admitted".into());
         }
+        self.session.discard_owner_inputs(owner, through)?;
         // Loading/admission wall time must never become simulation catch-up.
         self.clock = TickClock::new(self.session.world().tick_rate)?;
         self.preparing_snapshot_elapsed = Duration::ZERO;
@@ -118,13 +119,9 @@ impl Server {
 
     fn update_inner(&mut self, elapsed: Duration, preparing: Option<u64>) -> Result<usize, String> {
         self.elapsed = self.elapsed.saturating_add(elapsed);
-        self.connection.update(elapsed.min(Duration::from_secs(1)));
+        self.connection.update(elapsed);
         self.transport
-            .update_with_packet_limit(
-                elapsed.min(Duration::from_secs(1)),
-                &mut self.connection,
-                1024,
-            )
+            .update_with_packet_limit(elapsed, &mut self.connection, 1024)
             .map_err(|e| e.to_string())?;
         while let Some(event) = self.connection.get_event() {
             match event {
@@ -202,7 +199,8 @@ impl Server {
                 let Some(bytes) = self.connection.receive_message(client, INPUT) else {
                     break;
                 };
-                // No preloaded attacks/movement can cross the Begin boundary.
+                // Do not queue controls while frozen. Begin's trusted sender
+                // cutoff also rejects these commands if later retransmitted.
                 if preparing.is_some() {
                     continue;
                 }
@@ -416,6 +414,9 @@ impl Client {
     }
     pub fn welcome(&self) -> Option<&ServerControl> {
         self.welcome.as_ref()
+    }
+    pub(crate) fn submitted_sequence(&self) -> u64 {
+        self.sequence
     }
     pub fn server_info(&self) -> Option<&ServerInfo> {
         self.server_info.as_ref()

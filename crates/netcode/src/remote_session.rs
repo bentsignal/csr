@@ -619,6 +619,9 @@ impl RemoteSession {
     pub fn player(&self) -> Option<PlayerId> {
         self.predictor.as_ref().map(Predictor::player_id)
     }
+    pub(crate) fn submitted_sequence(&self) -> Option<u64> {
+        self.client.as_ref().map(Client::submitted_sequence)
+    }
     pub fn pending_inputs(&self) -> Option<usize> {
         self.predictor.as_ref().map(Predictor::pending_inputs)
     }
@@ -837,6 +840,14 @@ impl RemoteSession {
         mut input: impl FnMut(InputContext) -> TickInput,
     ) -> Result<Advance, Error> {
         let elapsed = Self::elapsed(elapsed_seconds)?;
+        if self
+            .local_owner
+            .as_ref()
+            .is_some_and(|owner| owner.cancelled())
+        {
+            self.close(Error::Cancelled);
+            return Err(Error::Cancelled);
+        }
         if self.status != Status::Ready {
             return Err(Error::NotReady);
         }
