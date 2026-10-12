@@ -138,10 +138,11 @@ fn capture(mut commands: Commands, mut proof: ResMut<Proof>, mut exit: MessageWr
     proof.frame += 1;
     assert!(proof.frame < 600, "offscreen screenshot did not complete");
     if proof.frame == 90 {
-        let name = if proof.stage == 0 {
-            "favorites.png"
-        } else {
-            "address.png"
+        let name = match proof.stage {
+            0 => "favorites.png",
+            1 => "address.png",
+            2 => "scrolled.png",
+            _ => "context.png",
         };
         commands
             .spawn(Screenshot::image(proof.image.clone()))
@@ -151,24 +152,73 @@ fn capture(mut commands: Commands, mut proof: ResMut<Proof>, mut exit: MessageWr
     if !proof.captured {
         return;
     }
-    if proof.stage == 1 {
+    if proof.stage == 3 {
         exit.write(AppExit::Success);
         return;
     }
     proof.captured = false;
     proof.frame = 0;
-    proof.stage = 1;
-    let snapshot = proof.snapshot.clone();
-    proof.model.command("AddServerByName", &snapshot);
-    let event = KeyboardInput {
-        key_code: KeyCode::KeyA,
-        logical_key: Key::Character("localhost:27015".into()),
-        state: ButtonState::Pressed,
-        text: Some("localhost:27015".into()),
-        repeat: false,
-        window: Entity::PLACEHOLDER,
-    };
-    frontend_servers::keyboard(&event, false, true, &mut proof.model, &snapshot);
+    if proof.stage == 0 {
+        proof.stage = 1;
+        let snapshot = proof.snapshot.clone();
+        proof.model.command("AddServerByName", &snapshot);
+        let event = KeyboardInput {
+            key_code: KeyCode::KeyA,
+            logical_key: Key::Character("localhost:27015".into()),
+            state: ButtonState::Pressed,
+            text: Some("localhost:27015".into()),
+            repeat: false,
+            window: Entity::PLACEHOLDER,
+        };
+        frontend_servers::keyboard(&event, false, true, &mut proof.model, &snapshot);
+    } else if proof.stage == 1 {
+        proof.stage = 2;
+        let snapshot = proof.snapshot.clone();
+        proof.model.command("Close", &snapshot);
+        proof.snapshot.rows = (0..64)
+            .map(|n| ServerRow {
+                key: ServerKey(n),
+                endpoint: format!("localhost:{}", 27015 + n),
+                name: None,
+                map: None,
+                players: None,
+                ping_ms: None,
+                favorite: true,
+                connectable: true,
+            })
+            .collect();
+        proof.model.selected = None;
+        let event = KeyboardInput {
+            key_code: KeyCode::ArrowDown,
+            logical_key: Key::ArrowDown,
+            state: ButtonState::Pressed,
+            text: None,
+            repeat: false,
+            window: Entity::PLACEHOLDER,
+        };
+        let snapshot = proof.snapshot.clone();
+        let definition = proof.definition.clone();
+        for _ in 0..70 {
+            frontend_servers::keyboard_with_layout(
+                &event,
+                false,
+                true,
+                &mut proof.model,
+                &snapshot,
+                &definition,
+            );
+        }
+        assert_eq!(proof.model.selected, Some(ServerKey(63)));
+    } else {
+        proof.stage = 3;
+        let snapshot = proof.snapshot.clone();
+        assert!(frontend_servers::context(
+            &frontend_servers::UiAction::Select(ServerKey(63), snapshot.generation),
+            true,
+            &mut proof.model,
+            &snapshot
+        ));
+    }
     if let Some(view) = proof.view.take() {
         view.despawn(&mut commands);
     }

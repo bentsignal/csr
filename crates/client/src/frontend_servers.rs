@@ -22,6 +22,7 @@ pub enum UiAction {
     Address,
     Select(ServerKey, u64),
     Connect(ServerKey, u64),
+    RemoveFavorite(ServerKey, u64),
     Tab(Tab),
 }
 pub struct View {
@@ -68,6 +69,13 @@ fn label(
         .or_else(|| fonts.0.get("default"))
         .ok_or_else(|| format!("No supplied font for {role}"))?;
     let entity = commands
+        .spawn(Node {
+            overflow: Overflow::clip(),
+            ..node(rect)
+        })
+        .id();
+    commands.entity(parent).add_children(&[entity]);
+    let text_entity = commands
         .spawn((
             Text::new(data::bounded(text)),
             TextLayout::no_wrap(),
@@ -79,12 +87,13 @@ fn label(
             },
             TextColor(color(def, color_role)),
             Node {
-                overflow: Overflow::clip(),
-                ..node(rect)
+                width: percent(100.0),
+                height: percent(100.0),
+                ..default()
             },
         ))
         .id();
-    commands.entity(parent).add_children(&[entity]);
+    commands.entity(entity).add_children(&[text_entity]);
     Ok(entity)
 }
 fn control(
@@ -481,6 +490,51 @@ fn render_rows(
             )?;
         }
     }
+    if let Some(key) = model.context_row {
+        let rows = model.rows(snapshot);
+        let offset = model
+            .row_offset
+            .min(rows.len().saturating_sub(row_capacity(def)));
+        if let Some(index) = rows.iter().position(|r| r.key == key && r.favorite) {
+            if index >= offset && index < offset + row_capacity(def) {
+                // Localized functional context action; native context-menu bounds are unmeasured.
+                let r = Rect {
+                    x: rect.width / 2.0,
+                    y: (index - offset + 1) as f32 * row_height,
+                    width: rect.width / 2.0,
+                    height: row_height,
+                };
+                let popup = commands
+                    .spawn((
+                        node(r),
+                        GlobalZIndex(120),
+                        BackgroundColor(color(def, "Button.BgColor")),
+                    ))
+                    .id();
+                commands.entity(list).add_children(&[popup]);
+                if !snapshot.busy && !model.add_open {
+                    commands
+                        .entity(popup)
+                        .insert((Button, UiAction::RemoveFavorite(key, snapshot.generation)));
+                }
+                label(
+                    commands,
+                    popup,
+                    def.text("ServerBrowser_RemoveServerFromFavorites"),
+                    Rect {
+                        width: r.width,
+                        height: r.height,
+                        ..default()
+                    },
+                    "Default",
+                    "Button.TextColor",
+                    def,
+                    fonts,
+                )?;
+            }
+        }
+    }
+
     Ok(())
 }
 fn render_add(
@@ -661,6 +715,33 @@ fn render_address(
 }
 
 /// Processes a root-owned interaction edge, never retaining held mouse state.
+/// Opens the localized favorite action from an owned, currently rendered row.
+/// The caller supplies its explicit context gesture; native activation is unmeasured.
+pub fn context(
+    action: &UiAction,
+    owns_focus: bool,
+    model: &mut Model,
+    snapshot: &Snapshot,
+) -> bool {
+    let UiAction::Select(key, generation) = action else {
+        return false;
+    };
+    if !owns_focus
+        || snapshot.busy
+        || model.add_open
+        || *generation != snapshot.generation
+        || !model
+            .rows(snapshot)
+            .iter()
+            .any(|row| row.key == *key && row.favorite)
+    {
+        return false;
+    }
+    let changed = model.context_row != Some(*key) || model.selected != Some(*key);
+    model.selected = Some(*key);
+    model.context_row = Some(*key);
+    changed
+}
 pub fn interact(
     action: &UiAction,
     owns_focus: bool,
@@ -680,6 +761,7 @@ pub fn interact(
             if !model.add_open && *generation == snapshot.generation =>
         {
             model.address_focused = false;
+            model.context_row = None;
             model.select(*key, snapshot);
             None
         }
@@ -687,6 +769,7 @@ pub fn interact(
             model.address_focused = false;
             model.tab = *tab;
             model.row_offset = 0;
+            model.context_row = None;
             model.reconcile(snapshot);
             Some(Intent::Refresh(*tab))
         }
@@ -694,6 +777,13 @@ pub fn interact(
             if *generation == snapshot.generation && model.selected == Some(*key) =>
         {
             model.connect(snapshot)
+        }
+        UiAction::RemoveFavorite(key, generation) if *generation == snapshot.generation => {
+            let result = model.remove_favorite(*key, snapshot);
+            if result.is_some() {
+                model.context_row = None;
+            }
+            result
         }
         UiAction::Command(command, generation) if *generation == snapshot.generation => {
             model.command(command, snapshot)
@@ -724,6 +814,7 @@ pub fn scroll(
     if !owns_focus || model.add_open || snapshot.busy || delta == 0 {
         return false;
     }
+    let closed_context = model.context_row.take().is_some();
     let maximum = model.rows(snapshot).len().saturating_sub(row_capacity(def));
     let next = model
         .row_offset
@@ -731,7 +822,7 @@ pub fn scroll(
         .min(maximum);
     let changed = next != model.row_offset;
     model.row_offset = next;
-    changed
+    changed || closed_context
 }
 /// Adds bounded list navigation to the same address-input path. Selection uses
 /// stable keys and is revealed using the installed list/font dimensions.
@@ -762,6 +853,7 @@ pub fn keyboard_with_layout(
             (None, KeyCode::ArrowUp) => rows.len() - 1,
             (None, _) => 0,
         };
+        let closed_context = model.context_row.take().is_some();
         model.selected = Some(rows[next].key);
         let capacity = row_capacity(def);
         let previous = model.row_offset;
@@ -771,7 +863,10 @@ pub fn keyboard_with_layout(
         } else if next >= model.row_offset + capacity {
             model.row_offset = next + 1 - capacity;
         }
-        return (old != model.selected || previous != model.row_offset, None);
+        return (
+            closed_context || old != model.selected || previous != model.row_offset,
+            None,
+        );
     }
     keyboard(event, control, owns_focus, model, snapshot)
 }
@@ -803,6 +898,9 @@ fn keyboard_with_clipboard(
     }
     match event.key_code {
         KeyCode::Escape if !event.repeat => {
+            if model.context_row.take().is_some() {
+                return (true, None);
+            }
             let intent = model.command("Close", snapshot);
             return (true, intent);
         }
@@ -1211,6 +1309,98 @@ mod tests {
             )
             .0
         );
+    }
+    #[test]
+    fn favorite_context_removal_requires_owned_fresh_matching_row() {
+        let mut snapshot = Snapshot {
+            generation: 7,
+            rows: vec![data::ServerRow {
+                key: ServerKey(5),
+                endpoint: "localhost:27015".into(),
+                name: None,
+                map: None,
+                players: None,
+                ping_ms: None,
+                favorite: true,
+                connectable: false,
+            }],
+            ..default()
+        };
+        let mut model = Model::default();
+        assert!(!context(
+            &UiAction::Select(ServerKey(5), 6),
+            true,
+            &mut model,
+            &snapshot
+        ));
+        assert!(!context(
+            &UiAction::Select(ServerKey(5), 7),
+            false,
+            &mut model,
+            &snapshot
+        ));
+        assert!(context(
+            &UiAction::Select(ServerKey(5), 7),
+            true,
+            &mut model,
+            &snapshot
+        ));
+        assert_eq!(
+            interact(
+                &UiAction::RemoveFavorite(ServerKey(5), 6),
+                true,
+                &mut model,
+                &snapshot
+            ),
+            None
+        );
+        snapshot.busy = true;
+        assert_eq!(
+            interact(
+                &UiAction::RemoveFavorite(ServerKey(5), 7),
+                true,
+                &mut model,
+                &snapshot
+            ),
+            None
+        );
+        snapshot.busy = false;
+        assert_eq!(
+            interact(
+                &UiAction::RemoveFavorite(ServerKey(5), 7),
+                true,
+                &mut model,
+                &snapshot
+            ),
+            Some(Intent::RemoveFavorite {
+                key: ServerKey(5),
+                generation: 7
+            })
+        );
+        assert_eq!(model.context_row, None);
+        assert!(context(
+            &UiAction::Select(ServerKey(5), 7),
+            true,
+            &mut model,
+            &snapshot
+        ));
+        assert_eq!(
+            keyboard(
+                &event(KeyCode::Escape, None),
+                false,
+                true,
+                &mut model,
+                &snapshot
+            ),
+            (true, None)
+        );
+        snapshot.rows[0].favorite = false;
+        assert!(!context(
+            &UiAction::Select(ServerKey(5), 7),
+            true,
+            &mut model,
+            &snapshot
+        ));
     }
 }
 
