@@ -200,6 +200,21 @@ including ticks processed together in one rendered frame. Initial weapon
 deployment is audible too. Channel limits discard finished entities instead
 of assuming a fixed lifetime.
 
+Remote footsteps consume elapsed authoritative ticks, rather than one tick
+per received snapshot. Duplicate ticks do not advance cadence; death,
+removal, changed life epochs and clock discontinuities discard old animation
+queues and cadence. New motion starts its measured timer when observed.
+Offline per-tick onset, thresholds and periods remain unchanged. Jump and
+landing cues continue to come from reliable authoritative events.
+
+For steady movement sampled every four or eight ticks at 64/128 Hz, tests
+verify the same alternating steps as per-tick playback, delayed until the
+next observed snapshot (at most interval minus one ticks). Intermediate
+speed, grounding and surface changes cannot be recovered from sparse
+snapshots. Large gaps emit at most one current step and discard whole-period
+overruns, without bursts of missing steps. This is a bounded fallback, not a
+claim of exact fidelity across unknown movement or long gaps.
+
 Matched Dust II probes from Legacy 1.38.8.1 and the client are reproducible
 with `sounds` / `sounds-ours`. Private evidence is outside the repository
 under `%USERPROFILE%\csr-fidelity\sound-final`; an earlier comparison is in
