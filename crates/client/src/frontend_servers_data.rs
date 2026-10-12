@@ -422,6 +422,7 @@ impl AddressEdit {
 pub struct Model {
     pub tab: Tab,
     pub selected: Option<ServerKey>,
+    pub row_offset: usize,
     pub add_open: bool,
     pub address_focused: bool,
     pub address: AddressEdit,
@@ -440,6 +441,9 @@ impl Model {
             .collect()
     }
     pub fn reconcile(&mut self, snapshot: &Snapshot) {
+        self.row_offset = self
+            .row_offset
+            .min(self.rows(snapshot).len().saturating_sub(1));
         if !self
             .rows(snapshot)
             .iter()

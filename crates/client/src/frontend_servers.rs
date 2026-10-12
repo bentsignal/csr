@@ -421,7 +421,12 @@ fn render_rows(
     for (index, row) in model
         .rows(snapshot)
         .into_iter()
-        .take(((rect.height / row_height) as usize).saturating_sub(1))
+        .skip(
+            model
+                .row_offset
+                .min(model.rows(snapshot).len().saturating_sub(row_capacity(def))),
+        )
+        .take(row_capacity(def))
         .enumerate()
     {
         let y = (index + 1) as f32 * row_height;
@@ -538,6 +543,20 @@ fn render_add(
                 && (c.kind != "Button" || action.is_some())
                 && (!snapshot.busy || c.command.as_deref() == Some("Close"));
             control(commands, entity, c, c.rect, action, enabled, def, fonts)?;
+        }
+    }
+    if let Some(area) = def.add.control("GameTabs") {
+        if let Some(status) = snapshot.error.as_deref().or(snapshot.status.as_deref()) {
+            label(
+                commands,
+                entity,
+                status,
+                area.rect,
+                "Default",
+                "Label.TextColor",
+                def,
+                fonts,
+            )?;
         }
     }
     Ok(())
@@ -667,6 +686,7 @@ pub fn interact(
         UiAction::Tab(tab) if !model.add_open && !snapshot.busy && model.tab != *tab => {
             model.address_focused = false;
             model.tab = *tab;
+            model.row_offset = 0;
             model.reconcile(snapshot);
             Some(Intent::Refresh(*tab))
         }
@@ -680,6 +700,80 @@ pub fn interact(
         }
         _ => None,
     }
+}
+fn row_capacity(def: &Definition) -> usize {
+    let Some(list) = def.page.control("gamelist") else {
+        return 1;
+    };
+    let Some(font) = def.scheme.font("Default") else {
+        return 1;
+    };
+    ((list.rect.height / font.size) as usize)
+        .saturating_sub(1)
+        .clamp(1, data::MAX_ROWS)
+}
+/// Positive delta scrolls toward later rows. The caller gates wheel input by its
+/// owned window/browser; this adapter also rejects modal or busy transitions.
+pub fn scroll(
+    delta: i32,
+    owns_focus: bool,
+    model: &mut Model,
+    snapshot: &Snapshot,
+    def: &Definition,
+) -> bool {
+    if !owns_focus || model.add_open || snapshot.busy || delta == 0 {
+        return false;
+    }
+    let maximum = model.rows(snapshot).len().saturating_sub(row_capacity(def));
+    let next = model
+        .row_offset
+        .saturating_add_signed(delta as isize)
+        .min(maximum);
+    let changed = next != model.row_offset;
+    model.row_offset = next;
+    changed
+}
+/// Adds bounded list navigation to the same address-input path. Selection uses
+/// stable keys and is revealed using the installed list/font dimensions.
+pub fn keyboard_with_layout(
+    event: &KeyboardInput,
+    control: bool,
+    owns_focus: bool,
+    model: &mut Model,
+    snapshot: &Snapshot,
+    def: &Definition,
+) -> (bool, Option<Intent>) {
+    if owns_focus
+        && !control
+        && !model.add_open
+        && !snapshot.busy
+        && event.state == ButtonState::Pressed
+        && matches!(event.key_code, KeyCode::ArrowUp | KeyCode::ArrowDown)
+    {
+        let rows = model.rows(snapshot);
+        if rows.is_empty() {
+            return (false, None);
+        }
+        let old = model.selected;
+        let index = rows.iter().position(|row| Some(row.key) == old);
+        let next = match (index, event.key_code) {
+            (Some(i), KeyCode::ArrowUp) => i.saturating_sub(1),
+            (Some(i), _) => (i + 1).min(rows.len() - 1),
+            (None, KeyCode::ArrowUp) => rows.len() - 1,
+            (None, _) => 0,
+        };
+        model.selected = Some(rows[next].key);
+        let capacity = row_capacity(def);
+        let previous = model.row_offset;
+        model.row_offset = model.row_offset.min(rows.len().saturating_sub(capacity));
+        if next < model.row_offset {
+            model.row_offset = next;
+        } else if next >= model.row_offset + capacity {
+            model.row_offset = next + 1 - capacity;
+        }
+        return (old != model.selected || previous != model.row_offset, None);
+    }
+    keyboard(event, control, owns_focus, model, snapshot)
 }
 /// Called only for the window which owns the browser. Flash/native input routing
 /// and release of previously held gameplay keys remain the root's responsibility.
@@ -1019,6 +1113,104 @@ mod tests {
         let remaining: Vec<_> = world.query::<Entity>().iter(&world).collect();
         assert_eq!(remaining, before);
         assert_eq!(world.query::<&Node>().iter(&world).count(), 0);
+    }
+    #[test]
+    fn keyboard_and_wheel_reach_last_row_without_leaking_modal_or_busy_input() {
+        let control = Control {
+            name: "gamelist".into(),
+            field_name: "gamelist".into(),
+            kind: "ListPanel".into(),
+            rect: Rect {
+                height: 60.0,
+                width: 600.0,
+                ..default()
+            },
+            text: String::new(),
+            command: None,
+            font: "Default".into(),
+            visible: true,
+            enabled: true,
+            default_button: false,
+        };
+        let mut scheme = data::Scheme::default();
+        scheme.fonts.insert(
+            "default".into(),
+            data::FontInfo {
+                family: "own test".into(),
+                size: 10.0,
+                weight: 500,
+            },
+        );
+        let def = Definition {
+            browser: default(),
+            page: data::Layout {
+                controls: vec![control],
+            },
+            add: default(),
+            info: default(),
+            scheme,
+            tokens: default(),
+        };
+        let mut snapshot = Snapshot {
+            rows: (0..64)
+                .map(|n| data::ServerRow {
+                    key: ServerKey(n),
+                    endpoint: format!("localhost:{}", 27015 + n),
+                    name: None,
+                    map: None,
+                    players: None,
+                    ping_ms: None,
+                    favorite: true,
+                    connectable: true,
+                })
+                .collect(),
+            ..default()
+        };
+        let mut model = Model::default();
+        for _ in 0..70 {
+            keyboard_with_layout(
+                &event(KeyCode::ArrowDown, None),
+                false,
+                true,
+                &mut model,
+                &snapshot,
+                &def,
+            );
+        }
+        assert_eq!(model.selected, Some(ServerKey(63)));
+        assert_eq!(model.row_offset, 59);
+        assert!(scroll(i32::MIN, true, &mut model, &snapshot, &def));
+        assert_eq!(model.row_offset, 0);
+        assert!(!scroll(i32::MAX, false, &mut model, &snapshot, &def));
+        assert!(scroll(i32::MAX, true, &mut model, &snapshot, &def));
+        assert_eq!(model.row_offset, 59);
+        snapshot.busy = true;
+        assert!(!scroll(-1, true, &mut model, &snapshot, &def));
+        assert!(
+            !keyboard_with_layout(
+                &event(KeyCode::ArrowUp, None),
+                false,
+                true,
+                &mut model,
+                &snapshot,
+                &def
+            )
+            .0
+        );
+        snapshot.busy = false;
+        model.add_open = true;
+        assert!(!scroll(-1, true, &mut model, &snapshot, &def));
+        assert!(
+            !keyboard_with_layout(
+                &event(KeyCode::ArrowUp, None),
+                false,
+                true,
+                &mut model,
+                &snapshot,
+                &def
+            )
+            .0
+        );
     }
 }
 
