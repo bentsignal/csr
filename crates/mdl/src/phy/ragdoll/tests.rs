@@ -9,6 +9,7 @@ fn set_i32(bytes: &mut [u8], at: usize, value: i32) {
 fn solid() -> Vec<u8> {
     let mut bytes = vec![0; 28 + 192];
     bytes[..4].copy_from_slice(b"VPHY");
+    bytes[4..6].copy_from_slice(&256_u16.to_le_bytes());
     let surface = &mut bytes[28..];
     set_i32(surface, 32, 192);
     set_i32(surface, 48, 80);
@@ -139,6 +140,21 @@ fn encoded_ledge_extent_can_include_its_owned_point_array() {
     for (typed, flattened) in ragdoll.solids.iter().zip(&static_phy.hulls) {
         assert_eq!(typed.hulls[0].points, flattened.points);
         assert_eq!(typed.hulls[0].triangles, flattened.triangles);
+    }
+}
+
+#[test]
+fn unknown_version_cannot_borrow_the_observed_geometry_layout() {
+    let supported = file(&metadata(), 2);
+    assert!(Ragdoll::parse(&supported).is_ok());
+    for version in [0_u16, 255, 257, u16::MAX] {
+        let mut unknown = supported.clone();
+        // All geometry and metadata remain unchanged; only the first solid's
+        // version differs, so failure is caused by the format gate.
+        unknown[24..26].copy_from_slice(&version.to_le_bytes());
+        let error = Ragdoll::parse(&unknown).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert_eq!(error.to_string(), "unsupported ragdoll solid format");
     }
 }
 

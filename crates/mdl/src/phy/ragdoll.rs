@@ -1,8 +1,14 @@
 //! Authored articulated PHY data. No solver, impulses or animation policy.
 //!
-//! This additive reader follows the installed Legacy VPHY/type-0 layout and
+//! This additive reader follows the installed Legacy VPHY/version-256/type-0 layout and
 //! the existing clean-room geometry reader. Limits are defensive parser policy,
 //! not claims about the original engine. Static [`super::Phy`] stays unchanged.
+//!
+//! The installed player files each have one hull per solid. This reader keeps
+//! the existing sequential ledge scan; broader multi-hull/tree layouts have not
+//! been established. Hull coordinates match the static reader's conversion,
+//! but bone-name bindings do not establish solver joint/rest frames. Authored
+//! axis, mass and inertia values require separately verified solver units/bases.
 use super::{ConvexHull, physics_to_source};
 use crate::{R, invalid, skeleton::Bone};
 use std::{
@@ -393,7 +399,7 @@ struct Budget {
     triangles: usize,
 }
 fn read_geometry(bytes: &[u8], budget: &mut Budget) -> io::Result<Vec<ConvexHull>> {
-    if bytes.get(..4) != Some(b"VPHY") || R(bytes).i16(6)? != 0 {
+    if bytes.get(..4) != Some(b"VPHY") || R(bytes).u16(4)? != 256 || R(bytes).i16(6)? != 0 {
         return Err(invalid("unsupported ragdoll solid format"));
     }
     let surface = bytes
