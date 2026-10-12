@@ -701,6 +701,11 @@ impl Frontend {
     pub(crate) fn lobby_phase(&self) -> crate::frontend_lobby::Phase { self.lobby.lock().unwrap().phase() }
     /// Counts completed frame assignments to the Bevy image, not render loops.
     pub(crate) fn presented_serial(&self) -> u64 { self.presented_serial }
+    /// Requested worker viewport and the last assigned raster, for opt-in diagnostics.
+    pub(crate) fn raster_dimensions(&self, images: &Assets<Image>) -> Option<((u32, u32), (u32, u32))> {
+        let size = images.get(&self.image)?.texture_descriptor.size;
+        Some((self.viewport, (size.width, size.height)))
+    }
     pub(crate) fn send(&self, input: Input) {
         if let Some(movie) = &self.movie {
             movie.lock().unwrap().send(input);
