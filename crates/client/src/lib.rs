@@ -62,6 +62,7 @@ pub mod remote_join;
 pub mod hosting;
 mod host_sharing;
 mod host_sharing_ui;
+mod menu_performance;
 mod remote_flow;
 pub mod xr_input;
 pub mod props;
@@ -313,6 +314,11 @@ pub fn run(opts: ClientOptions) -> i32 {
             !browser_flow::enabled() && !remote_flow::enabled() && (*state.get() == AppState::Menu || (*state.get() == AppState::Match
                 && std::env::var("CSR_TEST_MENU").as_deref() == Ok("pause")))
         }));
+    }
+    if menu_performance::enabled() {
+        app.init_resource::<menu_performance::Proof>()
+            .add_systems(First, menu_performance::motion)
+            .add_systems(Update, menu_performance::measure.after(frontend::input));
     }
     let result = app.run();
     match result { AppExit::Success=>0,AppExit::Error(code)=>code.get() as i32 }

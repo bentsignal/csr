@@ -663,6 +663,7 @@ pub struct Frontend {
     actions: Arc<Mutex<Vec<Action>>>,
     image: Handle<Image>,
     presented_serial: u64,
+    performance_ack: Option<(u64, std::time::Instant)>,
     worker_generation: u64,
     root: Entity,
     camera: Entity,
@@ -680,6 +681,7 @@ pub struct Frontend {
 }
 
 impl Frontend {
+    pub(crate) fn take_performance_ack(&mut self) -> Option<(u64, std::time::Instant)> { self.performance_ack.take() }
     pub(crate) fn camera(&self) -> Entity { self.camera }
     pub(crate) fn pause_surface_visible(&self) -> bool { self.data.lock().unwrap().pause_surface.visible() }
     pub(crate) fn options_requested(&self) -> bool { self.data.lock().unwrap().pause_surface.options_requested() }
@@ -846,6 +848,7 @@ pub(crate) fn setup(
         actions,
         image,
         presented_serial: 0,
+        performance_ack: None,
         worker_generation: 0,
         root,
         camera,
@@ -1190,6 +1193,9 @@ pub(crate) fn update(
                 front.failed = Some(error);
             }
             Some(scaleform::Event::Inspected { path, properties }) => {
+                if let Some(id) = path.strip_prefix("_global.csrPerformanceProbe.").and_then(|id| id.parse().ok()) {
+                    front.performance_ack = Some((id, std::time::Instant::now()));
+                }
                 debug!("UI API {path}: {properties:?}")
             }
             None => break,
