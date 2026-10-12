@@ -1853,6 +1853,7 @@ dependencies = [
  "bevy",
  "bsp",
  "collision",
+ "content",
  "glam",
  "image",
  "kv",
@@ -1860,6 +1861,7 @@ dependencies = [
  "mdl",
  "movement",
  "netcode",
+ "packs",
  "rodio",
  "scaleform",
  "sim",
@@ -1867,6 +1869,7 @@ dependencies = [
  "vmt",
  "vtf",
  "weapons",
+ "workshop",
 ]
 
 [[package]]
