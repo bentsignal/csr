@@ -26,6 +26,7 @@ level.workspace = true
 client.workspace = true
 weapons.workspace = true
 workshop.workspace = true
+packs.workspace = true
 # Installer and self-update from GitHub Releases (keep in step with the
 # `vpk` packer version in tools/package-release.ps1).
 velopack = "=1.2.161"

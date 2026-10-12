@@ -1,8 +1,8 @@
 # Multiplayer foundation
 
 Track A2 has a Bevy-free UDP session and a dedicated server. The rendered
-client still plays offline: joining from the classic menu, prediction,
-interpolation, lag compensation, snapshot deltas, listen hosting and discovery
+client still plays offline: joining from the classic menu, rendered-client
+integration, rendered interpolation, lag compensation, snapshot deltas, listen hosting and discovery
 remain open. This is an integration foundation, not a multiplayer release.
 
 ## Ownership and messages
@@ -73,6 +73,75 @@ but its
 adds an identity provisioning dependency to the first direct-IP prototype.
 The simulation and session remain independent of either transport.
 
+## Prediction and reconciliation
+
+`netcode::prediction::Predictor` accepts a map-built `sim::World`, a validated
+server welcome, and the first authoritative `StateUpdate`. The caller must
+obtain that first state before sending player commands. Configure local fixed
+ticks from the welcome's `tick_rate`, rather than assuming every server is 128.
+For each fixed tick, check `can_predict()`, send a `TickInput` through the
+transport, and pass its returned sequence into `Predictor::predict` along with
+the same input and the last authoritative/render view tick.
+
+History holds at most 256 inputs. When it is full, wait for authority rather
+than dropping replay data or sending an input the predictor cannot retain.
+On a newer snapshot, `reconcile` validates acknowledgements and finite state,
+restores server truth, discards acknowledged inputs and replays the rest. Its
+result includes the final position error for future rendering correction.
+Stale state ticks are ignored; backwards acknowledgements, acknowledgements
+beyond sent input and incompatible server rates are rejected before mutation.
+
+`sim::World::step_prediction` shares the authoritative simulation path but
+omits server bot thinking. It preserves `is_bot`, tracked poses and the
+separate aim ray. Remote actors repeat their last authoritative controls
+during replay, so their extrapolated positions can differ from new server AI
+decisions. Render remote actors from the separate pose history described
+below; predicted remote movement is not authoritative targeting truth.
+
+Predicted `GameEvent`s are cleared and are not returned by this API. Consume
+the transport's reliable authoritative event batches for effects, and use
+`authoritative_state()` for HUD economy/round truth. The predicted world is
+available for movement/rendering. Explicit provisional local effects and
+their deduplication remain rendered-client integration work.
+
+Dynamic external worlds are rejected because their mutable target/block
+state is outside `WorldState`; replay could otherwise apply shared damage
+twice. The `DynamicWorld` seam remains available to Track E, which must add
+replicated/replay-safe mod state before prediction can support it. Static
+content-pack BSPs use the same prediction path as installed CS:GO maps.
+
+## Remote rendering poses
+
+`netcode::remote_pose::PoseHistory` captures render data from newer
+authoritative `WorldState`s without retaining inventories, rules, events,
+bot decisions or collision worlds. Configure it from the welcome's tick
+rate, a snapshot capacity (2 through 128), an extrapolation cap in ticks,
+and a teleport distance in Source units. Rendering delay and these limits
+are caller policy; their defaults still require CS:GO Legacy measurements.
+Each history is bounded to 64 actors per frame. Clear it when changing
+maps or sessions.
+
+`sample(player, render_tick)` accepts a fractional server timeline and
+returns a separate `RenderPose`, the used timeline and the sampling mode.
+It interpolates position, eye, velocity, shortest-path view angles, tracked
+head/hand quaternions and the independent aim ray. Quaternions are checked
+and normalized before slerp; equivalent antipodal rotations do not spin.
+Movement extrapolation stops at the configured cap, holds dead actors,
+and does not run collision or gameplay. It leaves tracked offsets and aim
+orientation at the latest sample during extrapolation.
+
+Round transitions clear history. Teleports, team changes, death and respawn
+epochs snap to the newer pose instead of blending distinct lives, including
+a respawn whose death snapshot was lost. Stale snapshots cannot rewind the
+history, and invalid new poses are rejected before mutation. Actor admission
+and removal follow snapshot boundaries; missing actors are not invented.
+
+Use this output only for remote rendering. Continue using authoritative
+state for HUD/round/economy and the local predictor for local movement.
+When reporting the viewed tick in a command, obey the protocol's
+last-authoritative-tick limit even if rendering extrapolated beyond it.
+This module has no Bevy integration yet, and performs no hit rewind.
+
 Direct connect currently uses netcode.io's
 [Unsecure admission mode](https://docs.rs/renet_netcode/2.0.0/renet_netcode/enum.ClientAuthentication.html).
 It is a prototype connection mode, not authenticated identity. Clients use
@@ -99,7 +168,14 @@ content storage. No installed game files are changed.
 `--netcheck` connects two real UDP clients on an ephemeral loopback port,
 sends 128 commands each, checks decoded snapshots against authoritative
 history at the same tick, resolves installed weapon `ContentId`s, verifies
-tracked poses, and confirms disconnect cleanup. It exits with `failures: 0`.
+tracked poses, and confirms disconnect cleanup. It delays transport polling
+for four ticks while local controls change, requires pending input replay,
+checks all 128 acknowledgements and exact final reconciliation, and verifies
+predicted effects remain absent. It exits with `failures: 0`.
+It also samples fractional remote poses from decoded snapshots, checks exact
+snapshot poses against authority, validates tracked rotations and bounds the
+pose history. These are headless checks; rendered multiplayer proof remains
+client integration work.
 The default test data also exercises input ownership, atomic validation,
 duplicate/reordered commands, neutral controls after timeout, fixed-tick
 accumulation, reliable delivery after packet loss, and fragmented snapshot

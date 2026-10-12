@@ -19,6 +19,9 @@ pub struct Level {
     pub catalog: Arc<weapons::Catalog>,
     /// Navigation mesh from `maps/<name>.nav`, if the map ships one.
     pub nav: Option<Arc<nav::NavMesh>>,
+    /// Private asset-map metadata never falls back to an installed map with
+    /// the same basename. Recipe and built-in maps retain their own source.
+    metadata_pack: Option<String>,
     pub timings: Vec<(&'static str, f32)>,
 }
 
@@ -76,6 +79,13 @@ fn fetch_old_map(map: &workshop::OldMap) -> Result<(), LoadError> {
 impl Level {
     /// Loads `maps/<name>.bsp` and builds its collision world.
     pub fn load(name: &str, game_dir: Option<&Path>) -> Result<Level, LoadError> {
+        if let Ok(id) = name.parse::<ContentId>() {
+            if id.kind != ContentKind::Map { return Err(LoadError::Io(format!("{id} is not a map"))); }
+            let (pack, map) = packs::Installed::current().resolve_map(&id).map_err(LoadError::Io)?;
+            let (game_dir, fs) = mount_game(game_dir)?;
+            return Self::load_pack(&pack, &map, game_dir, fs);
+        }
+        if !packs::valid_bsp_name(name) { return Err(LoadError::Io("invalid map name".into())); }
         let t = Instant::now();
         let (game_dir, fs) = mount_game(game_dir)?;
         let mount_time = t.elapsed().as_secs_f32();
@@ -90,14 +100,39 @@ impl Level {
         Ok(level)
     }
 
+    /// Loads a validated pack selection into a session-owned VFS. Asset maps
+    /// can use an empty VFS without a Legacy install; recipes need a mounted
+    /// Legacy VFS. No other installed pack is automatically mounted.
+    pub fn load_pack(pack: &packs::Pack, map: &packs::MapDef, game_dir: PathBuf, mut fs: vfs::Vfs) -> Result<Level, LoadError> {
+        if !pack.manifest().maps.contains(map) { return Err(LoadError::Io("map is not defined by selected pack".into())); }
+        let metadata_pack = if map.source == packs::MapSource::Pack {
+            let label = format!("pack:{}", pack.manifest().id);
+            fs.push_front(label.clone(), pack.mount());
+            Some(label)
+        } else {
+            // Recipe aliases may not read a runtime Workshop archive in
+            // place of a BSP from the player's actual Legacy install.
+            let archives = fs.labels().into_iter().filter(|l| l.starts_with("workshop:")).map(str::to_owned).collect::<Vec<_>>();
+            for label in archives { fs.unmount(&label); }
+            None
+        };
+        let id = map.id.parse().map_err(|e| LoadError::Io(format!("{e}")))?;
+        Self::load_from_vfs_scoped(id, &map.bsp, game_dir, fs, metadata_pack)
+    }
+
     /// Loads a map from an already mounted file system, including content
     /// pack mounts. Does not detect Steam or fetch Workshop data. `game_dir`
     /// records the source directory; the loader reads all data through VFS.
     /// `name` selects the BSP filename independently of the stable content ID.
-    pub fn load_from_vfs(id: ContentId, name: &str, game_dir: PathBuf, mut fs: vfs::Vfs) -> Result<Level, LoadError> {
+    pub fn load_from_vfs(id: ContentId, name: &str, game_dir: PathBuf, fs: vfs::Vfs) -> Result<Level, LoadError> {
+        Self::load_from_vfs_scoped(id, name, game_dir, fs, None)
+    }
+
+    fn load_from_vfs_scoped(id: ContentId, name: &str, game_dir: PathBuf, mut fs: vfs::Vfs, metadata_pack: Option<String>) -> Result<Level, LoadError> {
         if id.kind != ContentKind::Map {
             return Err(LoadError::Io(format!("{id} is not a map")));
         }
+        if !packs::valid_bsp_name(name) { return Err(LoadError::Io("invalid map filename".into())); }
         let mut timings = Vec::new();
         let t = Instant::now();
         let map_path = format!("maps/{name}.bsp");
@@ -124,7 +159,7 @@ impl Level {
             .unwrap_or_default();
         timings.push(("weapons", t.elapsed().as_secs_f32()));
 
-        let nav = map_resource(&fs, &id, name, "maps", "nav")
+        let nav = scoped_map_resource(&fs, &id, name, "maps", "nav", metadata_pack.as_deref())
             .and_then(|bytes| nav::NavMesh::parse(&bytes).ok())
             .map(Arc::new);
 
@@ -137,6 +172,7 @@ impl Level {
             collision: Arc::new(collision),
             catalog: Arc::new(catalog),
             nav,
+            metadata_pack,
             timings,
         })
     }
@@ -144,7 +180,7 @@ impl Level {
     /// The map's radar overview description (`resource/overviews/<map>.txt`),
     /// which names the bomb sites.
     pub fn overview(&self) -> Option<String> {
-        map_resource(&self.vfs, &self.id, &self.name, "resource/overviews", "txt")
+        scoped_map_resource(&self.vfs, &self.id, &self.name, "resource/overviews", "txt", self.metadata_pack.as_deref())
             .map(|bytes| kv::decode_text(&bytes))
     }
 
@@ -152,6 +188,16 @@ impl Level {
     /// `gamemode_competitive.cfg`.
     pub fn cfg(&self, name: &str) -> Option<String> {
         self.vfs.read_string(&format!("cfg/{name}"))
+    }
+}
+
+fn scoped_map_resource(fs: &vfs::Vfs, id: &ContentId, name: &str, folder: &str, extension: &str, pack: Option<&str>) -> Option<Vec<u8>> {
+    match pack {
+        Some(label) => {
+            let path = format!("{folder}/{name}.{extension}");
+            fs.read_from("map", &path).or_else(|| fs.read_from(label, &path))
+        }
+        None => map_resource(fs, id, name, folder, extension),
     }
 }
 
@@ -168,6 +214,26 @@ fn map_resource(fs: &vfs::Vfs, id: &ContentId, name: &str, folder: &str, extensi
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn asset_map_metadata_uses_selected_pack_and_never_installed_or_unrelated_data() {
+        use std::collections::BTreeMap;
+        let id = ContentId::new(GameOrigin::Mod, ContentKind::Map, "arena");
+        let mut fs = vfs::Vfs::new();
+        let files = |value: &'static [u8]| BTreeMap::from([
+            ("maps/arena.nav".into(), Arc::<[u8]>::from(value)),
+            ("resource/overviews/arena.txt".into(), Arc::<[u8]>::from(value)),
+        ]);
+        fs.push_back("install", vfs::Mount::Memory(files(b"installed")));
+        fs.push_front("pack:unrelated", vfs::Mount::Memory(files(b"unrelated")));
+        for (folder, extension) in [("maps", "nav"), ("resource/overviews", "txt")] {
+            assert!(scoped_map_resource(&fs, &id, "arena", folder, extension, Some("pack:selected")).is_none());
+        }
+        fs.push_front("pack:selected", vfs::Mount::Memory(files(b"selected")));
+        assert_eq!(scoped_map_resource(&fs, &id, "arena", "maps", "nav", Some("pack:selected")).unwrap(), b"selected");
+        fs.push_front("map", vfs::Mount::Memory(files(b"embedded")));
+        assert_eq!(scoped_map_resource(&fs, &id, "arena", "maps", "nav", Some("pack:selected")).unwrap(), b"embedded");
+    }
 
     #[test]
     fn archived_map_metadata_uses_its_own_original_name_without_install_fallback() {
@@ -192,21 +258,21 @@ mod tests {
 
     #[test]
     fn loads_a_pack_map_without_a_game_install_and_preserves_its_origin() {
-        use std::io::Write;
         let id = ContentId::new(GameOrigin::Mod, ContentKind::Map, "test_arena");
         let mut bsp = vec![0; 8 + 64 * 16 + 4];
         bsp[..4].copy_from_slice(b"VBSP");
         bsp[4..8].copy_from_slice(&21i32.to_le_bytes());
-        let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
-        zip.start_file("maps/test-arena.bsp", zip::write::SimpleFileOptions::default()).unwrap();
-        zip.write_all(&bsp).unwrap();
-        let bytes = zip.finish().unwrap().into_inner();
-        let mut fs = vfs::Vfs::new();
-        fs.push_back("pack", vfs::Mount::Zip(vfs::ZipArchive::from_bytes(bytes).unwrap()));
-        let level = Level::load_from_vfs(id.clone(), "test-arena", PathBuf::from("no-game-install"), fs).unwrap();
+        let map = packs::MapDef { id: id.to_string(), bsp: "test-arena".into(), name: "Test arena".into(), source: packs::MapSource::Pack };
+        let manifest = packs::Manifest {
+            format_version: 1, id: "test_pack".into(), name: "Test pack".into(), version: "1.0.0".into(),
+            origin: "mod".into(), kind: packs::PackKind::Assets, provides: vec![id.to_string()],
+            content_hash: String::new(), min_game_version: "0.0.0".into(), description: String::new(), maps: vec![map.clone()], resources: Vec::new(),
+        };
+        let pack = packs::Pack::from_bytes(packs::build(&manifest, &[("maps/test-arena.bsp", &bsp)]).unwrap()).unwrap();
+        let level = Level::load_pack(&pack, &map, PathBuf::from("no-game-install"), vfs::Vfs::new()).unwrap();
         assert_eq!(level.id, id);
         assert_eq!(level.name, "test-arena");
         assert_eq!(level.bsp.version, 21);
-        assert!(level.vfs.labels().contains(&"pack"));
+        assert!(level.vfs.labels().contains(&"pack:test_pack"));
     }
 }

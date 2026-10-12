@@ -82,7 +82,7 @@ volume slider, and `audio-drag-4.png` shows the pointer-driven 76% result with
 its matching number and saved config. The home capture's masked MAE is 19.77 against the reference;
 this integration has not reached the earlier offscreen spike's fidelity.
 
-The integration checkpoint passes 231 workspace tests (two installed-data
+The combined integration checkpoint passes 262 workspace tests (two installed-data
 tests ignored), three menu-probe tests, release Dust II probe and ten-round sim
 with zero failures, and the 1,425-file weapon/feedback/foley decode audit with
 zero unsupported or crashing sounds. These checks do not establish completion

@@ -23,6 +23,7 @@
 mod art;
 mod dialog;
 mod mapcmd;
+mod packcmd;
 mod probe;
 mod setup;
 mod simcheck;
@@ -34,7 +35,8 @@ use std::path::PathBuf;
 fn main() {
     // Installer hooks and pending updates; must run before anything else.
     update::startup();
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let mut args: Vec<String> = std::env::args().skip(1).collect();
+    packcmd::absolutize(&mut args, &std::env::current_dir().unwrap_or_default());
     if args.iter().any(|a| a == "--help" || a == "-h") {
         println!("CSGO Rewrite\n\n\
             csr play [map] [options]  Open the main menu (default: de_dust2)\n\
@@ -47,6 +49,10 @@ fn main() {
             csr maps                  List maps, including old versions (de_dust2_2017)\n\
             csr fetch-map NAME|all    Download old map versions now\n\
             csr remove-map NAME|all   Delete downloaded old maps\n\n\
+            csr install-pack FILE    Install a private .csrpack\n\
+            csr check-pack FILE      Validate without installing\n\
+            csr packs                List installed content packs\n\
+            csr remove-pack ID       Remove an installed pack\n\n\
             csr cases                 List local cases and their IDs\n\
             csr give-case NAME [N]    Add N local cases (names may contain spaces)\n\n\
             Play options:\n\
@@ -80,6 +86,7 @@ fn main() {
         return;
     }
     update::check_in_background();
+    if let Some(code) = packcmd::run(&args) { std::process::exit(code); }
     if let Some(code) = mapcmd::run(&args) {
         std::process::exit(code);
     }

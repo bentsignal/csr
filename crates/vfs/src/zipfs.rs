@@ -4,7 +4,12 @@
 //! LZMA (method 14) and occasionally deflate (method 8).
 
 use std::collections::HashMap;
-use std::io;
+use std::io::{self, Write};
+
+// A BSP can carry another ZIP inside a validated pack. Apply budgets here too
+// so a small outer archive cannot hide an unbounded inner decompression.
+const MAX_ENTRY_BYTES: u64 = 256 << 20;
+const MAX_EXPANDED_BYTES: u64 = 512 << 20;
 
 const EOCD_SIG: u32 = 0x0605_4B50;
 const CENTRAL_SIG: u32 = 0x0201_4B50;
@@ -74,6 +79,7 @@ impl ZipArchive {
         let cd_offset = u32_at(&data, eocd + 16)? as usize;
 
         let mut entries = HashMap::with_capacity(count);
+        let mut expanded = 0u64;
         let mut p = cd_offset;
         for _ in 0..count {
             if u32_at(&data, p)? != CENTRAL_SIG {
@@ -82,6 +88,10 @@ impl ZipArchive {
             let method = u16_at(&data, p + 10)?;
             let compressed_size = u32_at(&data, p + 20)?;
             let uncompressed_size = u32_at(&data, p + 24)?;
+            expanded = expanded.checked_add(uncompressed_size as u64).ok_or_else(|| invalid("zip expanded size overflow"))?;
+            if uncompressed_size as u64 > MAX_ENTRY_BYTES || expanded > MAX_EXPANDED_BYTES {
+                return Err(invalid("zip expanded size limit exceeded"));
+            }
             let name_len = u16_at(&data, p + 28)? as usize;
             let extra_len = u16_at(&data, p + 30)? as usize;
             let comment_len = u16_at(&data, p + 32)? as usize;
@@ -139,7 +149,7 @@ impl ZipArchive {
             .ok_or_else(|| invalid("zip entry runs past end"))?;
         let out = match e.method {
             0 => raw.to_vec(),
-            8 => miniz_oxide::inflate::decompress_to_vec(raw)
+            8 => miniz_oxide::inflate::decompress_to_vec_with_limit(raw, e.uncompressed_size as usize)
                 .map_err(|err| invalid(format!("deflate: {err:?}")))?,
             14 => {
                 // ZIP LZMA: u8 major, u8 minor, u16 props size, props, raw stream.
@@ -154,21 +164,32 @@ impl ZipArchive {
             }
             m => return Err(invalid(format!("unsupported zip method {m}"))),
         };
+        if out.len() != e.uncompressed_size as usize { return Err(invalid("zip expanded size mismatch")); }
         Ok(Some(out))
     }
 }
 
 /// Decodes `props(5) + stream` with a known output size.
 pub fn decode_lzma_raw(props_and_stream: &[u8], size: u64) -> io::Result<Vec<u8>> {
+    if size > MAX_ENTRY_BYTES { return Err(invalid("lzma expanded size limit exceeded")); }
     let mut input = io::BufReader::new(props_and_stream);
-    let mut out = Vec::with_capacity(size as usize);
+    struct Bounded { data: Vec<u8>, limit: usize }
+    impl Write for Bounded {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            if bytes.len() > self.limit.saturating_sub(self.data.len()) { return Err(invalid("lzma expanded size mismatch")); }
+            self.data.extend_from_slice(bytes); Ok(bytes.len())
+        }
+        fn flush(&mut self) -> io::Result<()> { Ok(()) }
+    }
+    let mut out = Bounded { data: Vec::new(), limit: size as usize };
     let opts = lzma_rs::decompress::Options {
         unpacked_size: lzma_rs::decompress::UnpackedSize::UseProvided(Some(size)),
         ..Default::default()
     };
     lzma_rs::lzma_decompress_with_options(&mut input, &mut out, &opts)
         .map_err(|e| invalid(format!("lzma: {e:?}")))?;
-    Ok(out)
+    if out.data.len() != size as usize { return Err(invalid("lzma expanded size mismatch")); }
+    Ok(out.data)
 }
 
 #[cfg(test)]
@@ -220,5 +241,24 @@ mod tests {
         assert_eq!(z.len(), 2);
         assert_eq!(z.read("MATERIALS/maps/de_test/A.vmt").unwrap().unwrap(), b"patch {}");
         assert!(z.read("nope").unwrap().is_none());
+    }
+
+    #[test]
+    fn nested_archives_reject_oversized_and_dishonest_expansion() {
+        let mut bytes = build_stored(&[("x", b"test")]);
+        let central = bytes.windows(4).position(|w| w == CENTRAL_SIG.to_le_bytes()).unwrap();
+        bytes[central + 24..central + 28].copy_from_slice(&((MAX_ENTRY_BYTES + 1) as u32).to_le_bytes());
+        assert!(ZipArchive::from_bytes(bytes).is_err());
+        let mut bytes = build_stored(&[("x", b"test")]);
+        let central = bytes.windows(4).position(|w| w == CENTRAL_SIG.to_le_bytes()).unwrap();
+        bytes[central + 24..central + 28].copy_from_slice(&1u32.to_le_bytes());
+        assert!(ZipArchive::from_bytes(bytes).unwrap().read("x").is_err());
+        let compressed = miniz_oxide::deflate::compress_to_vec(&[0; 4096], 6);
+        let mut bytes = build_stored(&[("x", &compressed)]);
+        let central = bytes.windows(4).position(|w| w == CENTRAL_SIG.to_le_bytes()).unwrap();
+        bytes[central + 10..central + 12].copy_from_slice(&8u16.to_le_bytes());
+        bytes[central + 24..central + 28].copy_from_slice(&16u32.to_le_bytes());
+        assert!(ZipArchive::from_bytes(bytes).unwrap().read("x").is_err());
+        assert!(decode_lzma_raw(&[], MAX_ENTRY_BYTES + 1).is_err());
     }
 }

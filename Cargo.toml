@@ -21,6 +21,7 @@ members = [
     "crates/client",
     "crates/launcher",
     "crates/workshop",
+    "crates/packs",
 ]
 
 [workspace.package]
@@ -84,6 +85,7 @@ weapons = { path = "crates/weapons" }
 scaleform = { path = "crates/scaleform" }
 client = { path = "crates/client" }
 workshop = { path = "crates/workshop" }
+packs = { path = "crates/packs" }
 
 [profile.dev]
 opt-level = 1
