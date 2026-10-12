@@ -5,7 +5,8 @@ control. Expanding it shows up to three address candidates per page, their
 `On this network` / `This PC` labels, explicit Copy buttons and Refresh.
 Leaving the card collapses it before returning input to the native movie.
 Native Options suspends the card; its observed Back/Cancel restores Pause only
-after fresh owned visibility proof. Rendered verification is still pending.
+after fresh owned visibility proof. Both Deathmatch and Competitive two-player
+fixtures verified this flow through Home and an offline reload.
 
 The backend preserves the server's actual socket bind and
 allocated port separately from the loopback address used for private owner
@@ -41,7 +42,7 @@ pointer/key gestures before native movie or gameplay input. `host_sharing_ui`
 updates before `frontend::input`, which uses the existing input-ownership
 transition to balance releases outside the movie stage. The card occupies the
 measured right-hand space beside Pause and auto-collapses when the pointer
-leaves. Display-only adapter labels are capped at24 characters; copied endpoint
+leaves. Display-only adapter labels are capped at 24 characters; copied endpoint
 and receipt identity stay exact. See
 [Pause/Options bookkeeping](research/pause-options-visibility.md) for measured
 callback evidence and the distinction from authored internal animations.
@@ -82,22 +83,55 @@ wildcard/ephemeral-port Preparing/Running identity and unchanged owner admission
 Seven tracker regressions and the generated five-case actual AVM1/EI sampler
 integration regression passed, alongside ten Scaleform library cases.
 
-The combined UI checkpoint `8c2f73d24981b467c17253fa39bd4428fd27b076`
-passed509 workspace tests (5 ignored), the focused collapsed-Invite checks and
-the play build. That checkpoint includes a separately reviewed capabilities
-slice whose PR is still being integrated; final results must be bound to the
-combined published source before merge.
+The corrected combined source `66709f2bc65dff49969c004d927e1bcc52b76236`
+passed 509 workspace tests (5 ignored) and the play build. After merging the
+capabilities slice from master, the published PR source matches that checkpoint
+in `crates`, `Cargo.toml` and `Cargo.lock`; only this evidence document differs.
+The preceding `8c2f73d24981b467c17253fa39bd4428fd27b076` release checks passed
+Dust II probe/sim with 0 failures and soundcheck with 1,425 decoded sounds,
+0 unsupported and 0 crashes. Corrected-source release checks and exact-head CI
+are tracked separately before merge.
 
-The first private Deathmatch128 two-client fixture rendered Invite, enumerated
-an actual local interface, and delivered its exact bound-port endpoint through
-the real Copy button to a fake clipboard sink and browser parser. The guest
-completed its lifecycle with0 failures, but the host then timed out with1
-failure because its Audio helper sent the unsupported
-`GameInterface.ExecuteCommand`. This is partial Copy evidence, **not** a
-successful Options/Back or complete host lifecycle proof. The corrected
-current-source rendered run, mandatory release Dust II probe/sim/audio and
-exact-head CI remain merge gates. There is no OS clipboard, remote reachability
-or LAN-discovery completion claim.
+Two private 128Hz two-client fixtures at the corrected source each produced 14
+PNG captures, host/guest exit 0 and both failure counters 0. All 28 images were
+independently inspected. Deathmatch asserted two active human actors;
+Competitive asserted two humans with one active and the late guest spectating.
+Both verified original picker cancellation/cached reopen, the selected mode and
+Dust II in Lobby, original GO, Ready, Pause, Home and offline reload.
+
+The real rendered Invite/Copy controls delivered the enumerated endpoint
+`10.0.0.250:27015` through a fake clipboard sink and the existing browser parser.
+The registered Pause root's inventoried public
+`Panel.MainMenuNav.OnOpenAudioSettingsDialog()` callback emitted the measured
+`PauseMenu.BasePanelRunCommand('OpenAudioSettingsDialog', 'bHideMenu')`.
+This was a public controller invocation, not a physical Audio-menu selection.
+The actual Back pointer at (380, 972) emitted `OptionsMenu.OnCancel()`;
+fresh sampler proof restored the collapsed Invite control, and Home cleared
+its receipt. The Audio view contained no Invite overlay.
+
+These establish functional visibility restoration, not settled native-animation
+or full Settings fidelity. The Deathmatch Audio/restored-Pause captures were
+unsettled: `#SFUI_Control_0` remained and Pause lacked the full logo/highlight.
+The same artifact's Competitive captures showed Master Volume, its slider and
+0.5 value, then the full Pause logo/highlight; the Deathmatch frame does not
+establish a persistent settings defect. The black lower Audio preview and
+clipped Home News placeholder remain separate known gaps. No OS input,
+system clipboard write, remote reachability or LAN-discovery completion was
+proved by these engine-input fixtures.
+
+Private provenance (never committed):
+
+- `C:/Users/shawn/csr-fidelity/rendered-host-sharing-deathmatch-128-2`
+- `C:/Users/shawn/csr-fidelity/rendered-host-sharing-competitive-128-1`
+- Copied EXE SHA256: `F1677C4B0A4838497596C2CA4EBCBBC273E1B19E04EDEE0317F4EB3825AC8158`.
+- Both source-diff patches were empty; SHA256:
+  `E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855`.
+- Both launch scripts SHA256:
+  `52AB59CBB5E4E51D466A854FB020AA760F3AC1C57A0BE8490B7EE5CA8CD24543`.
+
+The source, copied EXE, diff and invocation hashes were independently checked.
+Both fixtures' owned copied processes were absent after completion. Automated
+Copy evidence used only the fake sink; the native clipboard was untouched.
 
 Primary references read for this implementation:
 
