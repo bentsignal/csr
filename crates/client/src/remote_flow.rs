@@ -21,6 +21,7 @@ pub(crate) struct Proof {
     phase: u8,
     tick: u64,
     presented_serial: u64,
+    host_menu: AuthoredHost,
 }
 impl Default for Proof {
     fn default() -> Self {
@@ -31,7 +32,110 @@ impl Default for Proof {
             phase: 0,
             tick: 0,
             presented_serial: 0,
+            host_menu: AuthoredHost::default(),
         }
+    }
+}
+
+/// The installed movies receive pointer inputs, not calls to their controls.
+/// Production hosting keeps its normal port and 128-tick defaults.
+#[derive(Default)]
+struct AuthoredHost {
+    step: usize,
+    settled: Option<(Instant, u64)>,
+    picker_capture_requested: bool,
+}
+#[derive(Resource, Default)]
+struct AuthoredCaptures(u8);
+fn capture_authored(world: &mut World, name: &str) {
+    world.init_resource::<AuthoredCaptures>();
+    let path = world
+        .resource::<crate::Options>()
+        .0
+        .screenshot
+        .as_ref()
+        .unwrap()
+        .with_file_name(name);
+    world
+        .spawn(Screenshot::primary_window())
+        .observe(save_to_disk(path))
+        .observe(
+            |_: On<ScreenshotCaptured>, mut captures: ResMut<AuthoredCaptures>| captures.0 += 1,
+        );
+}
+impl AuthoredHost {
+    fn update(&mut self, world: &mut World) -> bool {
+        let front = world.resource::<crate::frontend::Frontend>();
+        let expected = match self.step {
+            0 | 1 => "MainMenu",
+            2 => "LobbyBrowser",
+            3 => "LobbyScreen",
+            4..=7 => "StartSinglePlayer",
+            _ => "LobbyScreen",
+        };
+        if !front.movie_ready(expected) || (self.step >= 8 && !front.lobby_staged()) {
+            self.settled = None;
+            return false;
+        }
+        let serial = front.presented_serial();
+        let (since, first_frame) = self.settled.get_or_insert((Instant::now(), serial));
+        if since.elapsed() < Duration::from_secs(2) || serial.saturating_sub(*first_frame) < 2 {
+            return false;
+        }
+        if self.step == 5 && !self.picker_capture_requested {
+            capture_authored(world, "host-authored-picker.png");
+            self.picker_capture_requested = true;
+            self.settled = None;
+            return false;
+        }
+        let captures = world
+            .get_resource::<AuthoredCaptures>()
+            .map_or(0, |captures| captures.0);
+        if (self.step == 5 && captures < 1) || (self.step == 9 && captures < 2) {
+            return false;
+        }
+        let points = [
+            (486., 26.),    // Play
+            (503., 138.),   // Play with friends
+            (1390., 970.),  // Create lobby
+            (758., 879.),   // Settings
+            (1450., 206.),  // Competitive
+            (810., 680.),   // Dust II in the installed/available filtered grid
+            (1450., 1017.), // Accept
+            (1164., 754.),  // No Bots modal: Go
+            (1430., 1004.), // Lobby: Go
+        ];
+        if self.step == 8 {
+            capture_authored(world, "host-authored-lobby.png");
+            self.step += 1;
+            self.settled = None;
+            return false;
+        }
+        let (x, y) = points[self.step.min(8)];
+        let window = world
+            .query_filtered::<&Window, With<bevy::window::PrimaryWindow>>()
+            .single(world)
+            .unwrap();
+        let (x, y) = (
+            x * window.physical_width() as f64 / 1920.,
+            y * window.physical_height() as f64 / 1080.,
+        );
+        let front = world.resource::<crate::frontend::Frontend>();
+        front.send(scaleform::Input::MouseMove { x, y });
+        front.send(scaleform::Input::MouseDown {
+            x,
+            y,
+            button: scaleform::MouseButton::Left,
+        });
+        front.send(scaleform::Input::MouseUp {
+            x,
+            y,
+            button: scaleform::MouseButton::Left,
+        });
+        info!("remote flow: authored host pointer step {}", self.step);
+        self.step += 1;
+        self.settled = None;
+        self.step == points.len() + 1
     }
 }
 impl Proof {
@@ -125,6 +229,27 @@ pub(crate) fn update(world: &mut World, mut proof: Local<Proof>) {
             }
             let name =
                 std::env::var("CSR_TEST_REMOTE_NAME").unwrap_or_else(|_| "Rendered client".into());
+            if hosted && std::env::var_os("CSR_TEST_HOST_MENU").is_some() {
+                if address.port() != 27015 {
+                    failed(world, "authored host proof uses the production port 27015");
+                    return;
+                }
+                if proof.host_menu.step >= 8
+                    && world.resource::<crate::frontend::Frontend>().lobby_staged()
+                    && world
+                        .resource::<crate::frontend::Frontend>()
+                        .lobby_staged_map()
+                        .as_deref()
+                        != Some("de_dust2")
+                {
+                    failed(world, "authored picker did not stage Dust II");
+                    return;
+                }
+                if proof.host_menu.update(world) {
+                    proof.next();
+                }
+                return;
+            }
             info!("remote flow: loopback engine-input fixture for {name}; no OS focus/input claim");
             if hosted {
                 let map = crate::ClientOptions {
@@ -176,7 +301,12 @@ pub(crate) fn update(world: &mut World, mut proof: Local<Proof>) {
                 return;
             }
             let world_state = &world.resource::<crate::player::SimWorld>().0;
-            if world_state.tick <= proof.tick || world_state.players.len() < 2 {
+            let minimum_actors = if std::env::var_os("CSR_TEST_HOST_MENU").is_some() {
+                1
+            } else {
+                2
+            };
+            if world_state.tick <= proof.tick || world_state.players.len() < minimum_actors {
                 failed(world, "authority or remote actor did not advance");
                 return;
             }
