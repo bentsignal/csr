@@ -995,7 +995,9 @@ pub(crate) fn update(
             Msaa::Off
         };
     }
-    if visible && front.movie.is_none() && front.failed.is_none() {
+    let background_start = options.0.screenshot.is_none()
+        && matches!(scene, AppState::Loading | AppState::Match);
+    if (visible || background_start) && front.movie.is_none() && front.failed.is_none() {
         let Some(generation) = front.worker_generation.checked_add(1) else {
             front.failed = Some("The menu session limit was reached. Restart the game.".into());
             return;
@@ -1033,7 +1035,7 @@ pub(crate) fn update(
     if matches!(scene, AppState::Loading | AppState::Match) {
         front.request("PauseMenu");
     }
-    let active = visible || (matches!(scene, AppState::Loading | AppState::Match)
+    let active = visible || (front.movie.is_some() && matches!(scene, AppState::Loading | AppState::Match)
         && front.failed.is_none() && !front.movie_ready("PauseMenu"));
     if front.active != active {
         front.send(Input::SetActive(active));
