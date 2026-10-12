@@ -40,7 +40,10 @@ impl Layout {
         if bytes.len() > MAX_FILE {
             return Err("Browser layout is too large".into());
         }
-        let doc = kv::parse_bytes(bytes).map_err(|e| e.to_string())?;
+        let doc = kv::parse(
+            kv::decode_text(bytes).trim_end_matches(|c: char| c == '\0' || c.is_whitespace()),
+        )
+        .map_err(|e| e.to_string())?;
         let root = doc
             .entries
             .first()
@@ -110,14 +113,15 @@ pub struct Scheme {
     colors: HashMap<String, String>,
     settings: HashMap<String, String>,
     pub fonts: HashMap<String, FontInfo>,
+    borders: HashMap<String, kv::Value>,
 }
 impl Scheme {
     pub fn color(&self, key: &str) -> Option<[u8; 4]> {
         let mut value = self
             .settings
             .get(&key.to_ascii_lowercase())
-            .or_else(|| self.colors.get(&key.to_ascii_lowercase()))?
-            .as_str();
+            .or_else(|| self.colors.get(&key.to_ascii_lowercase()))
+            .map_or(key, String::as_str);
         for _ in 0..16 {
             let numbers: Option<Vec<u8>> =
                 value.split_whitespace().map(|n| n.parse().ok()).collect();
@@ -126,18 +130,48 @@ impl Scheme {
                     return Some(color);
                 }
             }
-            value = self.colors.get(&value.to_ascii_lowercase())?.as_str();
+            value = self
+                .colors
+                .get(&value.to_ascii_lowercase())
+                .or_else(|| self.settings.get(&value.to_ascii_lowercase()))?
+                .as_str();
         }
         None
     }
     pub fn font(&self, name: &str) -> Option<&FontInfo> {
         self.fonts.get(&name.to_ascii_lowercase())
     }
+    /// First declared stroke on each side (top, right, bottom, left).
+    pub fn border_colors(&self, name: &str) -> [Option<[u8; 4]>; 4] {
+        let mut value = self.borders.get(&name.to_ascii_lowercase());
+        for _ in 0..16 {
+            match value {
+                Some(kv::Value::Str(alias)) => {
+                    value = self.borders.get(&alias.to_ascii_lowercase())
+                }
+                Some(kv::Value::Block(block)) => {
+                    return ["Top", "Right", "Bottom", "Left"].map(|side| {
+                        block
+                            .block(side)?
+                            .iter()
+                            .find_map(|(_, value)| value.as_block())?
+                            .str("color")
+                            .and_then(|name| self.color(name))
+                    });
+                }
+                _ => break,
+            }
+        }
+        [None; 4]
+    }
     fn parse(bytes: &[u8]) -> Result<Self, String> {
         if bytes.len() > MAX_FILE {
             return Err("Browser scheme is too large".into());
         }
-        let doc = kv::parse_bytes(bytes).map_err(|e| e.to_string())?;
+        let doc = kv::parse(
+            kv::decode_text(bytes).trim_end_matches(|c: char| c == '\0' || c.is_whitespace()),
+        )
+        .map_err(|e| e.to_string())?;
         let root = doc
             .entries
             .first()
@@ -184,6 +218,15 @@ impl Scheme {
             colors: strings("Colors"),
             settings: strings("BaseSettings"),
             fonts,
+            borders: root
+                .block("Borders")
+                .map(|b| {
+                    b.iter()
+                        .take(256)
+                        .map(|(name, value)| (name.to_ascii_lowercase(), value.clone()))
+                        .collect()
+                })
+                .unwrap_or_default(),
         })
     }
 }
@@ -206,7 +249,9 @@ impl Definition {
             return Err("Browser localization is too large".into());
         }
         let text = kv::decode_text(&bytes);
-        let doc = kv::parse_escaped(&text).map_err(|e| e.to_string())?;
+        let doc =
+            kv::parse_escaped(text.trim_end_matches(|c: char| c == '\0' || c.is_whitespace()))
+                .map_err(|e| e.to_string())?;
         let mut tokens = HashMap::new();
         if let Some(block) = doc.block("lang").and_then(|b| b.block("Tokens")) {
             for (key, value) in block.iter().take(4096) {
@@ -269,9 +314,11 @@ pub struct ServerRow {
 }
 #[derive(Clone, Debug, Default)]
 pub struct Snapshot {
+    pub generation: u64,
     pub rows: Vec<ServerRow>,
     pub busy: bool,
     pub error: Option<String>,
+    pub status: Option<String>,
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Tab {
@@ -284,8 +331,9 @@ pub enum Intent {
     Refresh(Tab),
     ProbeAddress(String),
     AddFavorite(String),
-    RemoveFavorite(ServerKey),
-    Connect(ServerKey),
+    RemoveFavorite { key: ServerKey, generation: u64 },
+    Connect { key: ServerKey, generation: u64 },
+    CancelAddress,
     Close,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -299,7 +347,7 @@ pub enum Edit {
     End,
     SelectAll,
 }
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct AddressEdit {
     text: String,
     cursor: usize,
@@ -309,7 +357,10 @@ impl AddressEdit {
     pub fn text(&self) -> &str {
         &self.text
     }
-    fn selection(&self) -> std::ops::Range<usize> {
+    pub fn cursor(&self) -> usize {
+        self.cursor
+    }
+    pub fn selection(&self) -> std::ops::Range<usize> {
         self.cursor.min(self.anchor)..self.cursor.max(self.anchor)
     }
     pub fn edit(&mut self, edit: Edit) -> bool {
@@ -367,7 +418,7 @@ impl AddressEdit {
         self.text != before.text || self.cursor != before.cursor || self.anchor != before.anchor
     }
 }
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Model {
     pub tab: Tab,
     pub selected: Option<ServerKey>,
@@ -406,19 +457,24 @@ impl Model {
         }
     }
     pub fn connect(&self, snapshot: &Snapshot) -> Option<Intent> {
-        if snapshot.busy {
+        if snapshot.busy || self.add_open {
             return None;
         }
         self.rows(snapshot)
             .into_iter()
             .find(|r| Some(r.key) == self.selected && r.connectable)
-            .map(|r| Intent::Connect(r.key))
+            .map(|r| Intent::Connect {
+                key: r.key,
+                generation: snapshot.generation,
+            })
     }
     pub fn command(&mut self, command: &str, snapshot: &Snapshot) -> Option<Intent> {
         match command {
             "connect" | "Connect" => self.connect(snapshot),
-            "GetNewList" | "refresh" => (!snapshot.busy).then_some(Intent::Refresh(self.tab)),
-            "AddServerByName" => {
+            "GetNewList" | "refresh" => {
+                (!snapshot.busy && !self.add_open).then_some(Intent::Refresh(self.tab))
+            }
+            "AddServerByName" if !snapshot.busy => {
                 self.add_open = true;
                 self.address_focused = true;
                 None
@@ -436,7 +492,7 @@ impl Model {
             "Close" if self.add_open => {
                 self.add_open = false;
                 self.address_focused = false;
-                None
+                Some(Intent::CancelAddress)
             }
             "Close" => Some(Intent::Close),
             _ => None,
@@ -474,7 +530,10 @@ mod tests {
         state.reconcile(&snapshot);
         assert_eq!(
             state.connect(&snapshot),
-            Some(Intent::Connect(ServerKey(2)))
+            Some(Intent::Connect {
+                key: ServerKey(2),
+                generation: 0
+            })
         );
         snapshot.rows[0].favorite = false;
         state.tab = Tab::Favorites;
@@ -555,5 +614,17 @@ mod tests {
         .unwrap();
         assert_eq!(scheme.color("invalid"), None);
         assert_eq!(scheme.color("valid"), Some([1, 2, 3, 4]));
+    }
+    #[test]
+    fn resource_keys_preserve_aliases_and_only_trailing_terminators_are_ignored() {
+        let layout = Layout::parse(
+            b"layout { first { fieldName alias } second { fieldName alias } }\0\r\n",
+            &HashMap::new(),
+        )
+        .unwrap();
+        assert_eq!(layout.controls.len(), 2);
+        assert_eq!(layout.control("first").unwrap().field_name, "alias");
+        assert_eq!(layout.control("second").unwrap().field_name, "alias");
+        assert!(Layout::parse(b"layout { broken\0 }", &HashMap::new()).is_err());
     }
 }
