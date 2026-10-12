@@ -11,8 +11,9 @@ use std::{
     net::{SocketAddr, ToSocketAddrs},
     path::{Path, PathBuf},
     sync::{
+        Arc,
         atomic::{AtomicBool, AtomicU64, Ordering},
-        mpsc, Arc,
+        mpsc,
     },
     thread::{self, JoinHandle},
     time::{Duration, Instant},
@@ -79,6 +80,10 @@ pub struct ConnectRequest {
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct Endpoint(String);
+/// Shared literal/hostname normalization for address input and copy round-trips.
+pub(crate) fn normalize_address(input: &str) -> Result<String, String> {
+    Endpoint::parse(input).map(|endpoint| endpoint.0)
+}
 impl Endpoint {
     fn parse(input: &str) -> Result<Self, String> {
         let input = input.trim();
@@ -1002,12 +1007,14 @@ mod tests {
             .unwrap();
         assert!(backend.snapshot().busy);
         let initial = backend.snapshot();
-        assert!(backend
-            .apply(Intent::Connect {
-                key: initial.rows[0].key,
-                generation: initial.generation
-            })
-            .is_err());
+        assert!(
+            backend
+                .apply(Intent::Connect {
+                    key: initial.rows[0].key,
+                    generation: initial.generation
+                })
+                .is_err()
+        );
         drain(&mut backend, Some(&mut server));
         let snapshot = backend.snapshot();
         assert_eq!(snapshot.rows.len(), 1);
@@ -1069,18 +1076,22 @@ mod tests {
         );
         let after = backend.snapshot();
         assert_eq!(after.rows[1].key, key);
-        assert!(backend
-            .apply(Intent::Connect {
-                key,
-                generation: before.generation
-            })
-            .is_err());
-        assert!(backend
-            .apply(Intent::RemoveFavorite {
-                key,
-                generation: before.generation
-            })
-            .is_err());
+        assert!(
+            backend
+                .apply(Intent::Connect {
+                    key,
+                    generation: before.generation
+                })
+                .is_err()
+        );
+        assert!(
+            backend
+                .apply(Intent::RemoveFavorite {
+                    key,
+                    generation: before.generation
+                })
+                .is_err()
+        );
         assert!(
             backend
                 .apply(Intent::Connect {
@@ -1099,12 +1110,14 @@ mod tests {
             .unwrap()
             .at = Instant::now() - FRESH_TIME - Duration::from_secs(1);
         assert!(!backend.snapshot().rows[1].connectable);
-        assert!(backend
-            .apply(Intent::Connect {
-                key,
-                generation: after.generation
-            })
-            .is_err());
+        assert!(
+            backend
+                .apply(Intent::Connect {
+                    key,
+                    generation: after.generation
+                })
+                .is_err()
+        );
     }
 
     #[test]
@@ -1145,10 +1158,12 @@ mod tests {
                 action: Action::Add(Endpoint::parse("localhost:27016").unwrap()),
                 manual: vec![],
             };
-            assert!(run(task, &AtomicBool::new(false), |_| panic!(
-                "corruption reached DNS"
-            ))
-            .is_err());
+            assert!(
+                run(task, &AtomicBool::new(false), |_| panic!(
+                    "corruption reached DNS"
+                ))
+                .is_err()
+            );
             assert_eq!(fs::read(fixture.favorites()).unwrap(), bytes);
         }
     }
@@ -1221,9 +1236,11 @@ mod tests {
         backend.apply(Intent::CancelAddress).unwrap();
         backend.poll();
         assert!(backend.busy());
-        assert!(backend
-            .apply(Intent::ProbeAddress("localhost:27016".into()))
-            .is_err());
+        assert!(
+            backend
+                .apply(Intent::ProbeAddress("localhost:27016".into()))
+                .is_err()
+        );
         release.send(()).unwrap();
         drain(&mut backend, None);
         assert!(
@@ -1282,10 +1299,12 @@ mod tests {
             action: Action::Refresh(Tab::Favorites),
             manual: vec![],
         };
-        assert!(run(task, &AtomicBool::new(false), |_| panic!(
-            "empty list reached DNS"
-        ))
-        .is_ok());
+        assert!(
+            run(task, &AtomicBool::new(false), |_| panic!(
+                "empty list reached DNS"
+            ))
+            .is_ok()
+        );
     }
 
     #[test]
@@ -1302,10 +1321,12 @@ mod tests {
             action: Action::Add(Endpoint::parse("localhost:60000").unwrap()),
             manual: vec![],
         };
-        assert!(run(task, &AtomicBool::new(false), |_| panic!(
-            "full list reached DNS"
-        ))
-        .is_err());
+        assert!(
+            run(task, &AtomicBool::new(false), |_| panic!(
+                "full list reached DNS"
+            ))
+            .is_err()
+        );
         assert_eq!(fs::read(fixture.favorites()).unwrap(), before);
         let mut backend = fixture.backend();
         for port in 1..=MAX_MANUAL {
@@ -1321,9 +1342,11 @@ mod tests {
                 },
             );
         }
-        assert!(backend
-            .apply(Intent::ProbeAddress("localhost:60000".into()))
-            .is_err());
+        assert!(
+            backend
+                .apply(Intent::ProbeAddress("localhost:60000".into()))
+                .is_err()
+        );
         assert!(!backend.busy());
     }
 }

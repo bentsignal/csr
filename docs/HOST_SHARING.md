@@ -10,6 +10,8 @@ at most 32 deterministic address candidates, labeled `On this network` or
 `This PC`. Specific binds produce their exact endpoint. Wildcard binds use one
 owned Windows adapter-enumeration worker, matching the socket's address family
 and actual port. It includes active preferred unicast interface addresses;
+IPv6 link-local addresses are excluded because their scope index belongs only
+to the host and cannot be copied as the friend's outgoing interface index.
 adapter enumeration does not establish remote or Internet reachability. No
 public-IP lookup, network probe, firewall modification or directory request is
 made. LAN discovery remains separate unchecked work.
@@ -45,12 +47,20 @@ a 1MiB memory cap, 64 adapter nodes and 512 unicast nodes. Pointer traversal,
 string reads and C structure reads stay inside the owned initialized buffer;
 cycles, invalid lengths and limit excesses fail with bounded errors. Native
 storage is released between scans. Returned interface records are capped at256,
-names at128 characters, and copied endpoint text at256 UTF-16 units.
+names at128 characters, and copied endpoint text at256 UTF-16 units. Global
+IPv6 and loopback literals omit unnecessary local scope/flow metadata and must
+round-trip through the existing browser address normalizer unchanged.
 
 Tests use generated interface metadata, owned ephemeral UDP hosts and fake
-clipboard sinks. They never overwrite the system clipboard. Full local and
-exact-head CI results will be recorded before this leaf is ready to merge;
-rendered sharing UI remains integration work.
+clipboard sinks. They never overwrite the system clipboard. The first isolated
+leaf check passed23 tests (13 sharing/native-buffer cases and10 existing browser
+backend cases), using the actual compiled Bevy window/raw-handle/Windows
+bindings. A private harness re-exports Bevy's real `RawHandleWrapper` to check
+the leaf before the full client build completes. Ten netcode host cases also
+passed, including exact wildcard/ephemeral-port Preparing/Running identity and
+unchanged owner admission. This is not a complete client/workspace build or a
+native clipboard proof. Full integrated local and exact-head CI results remain
+mandatory before merge; rendered sharing UI remains integration work.
 
 Primary references read for this implementation:
 

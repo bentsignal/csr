@@ -1914,6 +1914,7 @@ dependencies = [
  "netcode",
  "openxr",
  "packs",
+ "raw-window-handle",
  "rodio",
  "scaleform",
  "sim",
@@ -1921,6 +1922,7 @@ dependencies = [
  "vmt",
  "vtf",
  "weapons",
+ "windows-sys 0.61.2",
  "workshop",
 ]
 
