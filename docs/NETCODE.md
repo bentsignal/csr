@@ -23,6 +23,8 @@ level's identity. Missing or malformed catalog data retains the local default
 fallback but has no catalog file digest; the dedicated server rejects that
 fallback before advertising a manifest. These SHA-1 fields compare content and
 are not a pack authenticity or download-verification mechanism.
+The server also uses `Level::overview()` so private and archived map metadata
+follows the selected source instead of an unrelated same-basename VFS file.
 
 A content mismatch returns typed `ContentRequired` metadata through
 `Client::required_content()`. Content ids, map filenames and hashes are

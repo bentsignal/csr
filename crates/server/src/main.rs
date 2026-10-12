@@ -167,9 +167,7 @@ fn run(options: Options) -> Result<(), String> {
     };
     let mut world = World::with_catalog(level.collision.clone(), level.catalog.clone());
     world.set_tick_rate(options.tick_rate);
-    let overview = level
-        .vfs
-        .read_string(&format!("resource/overviews/{}.txt", level.name));
+    let overview = level.overview();
     world.load_map(&level.bsp, overview.as_deref());
     world.bots.nav = level.nav.clone();
     let cfg = level
