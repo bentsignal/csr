@@ -125,6 +125,24 @@ fn preserves_authored_ownership_order_axes_and_repeated_fields() {
 }
 
 #[test]
+fn encoded_ledge_extent_can_include_its_owned_point_array() {
+    let mut data = file(&metadata(), 2);
+    for index in 0..2 {
+        let at = 16 + index * (4 + solid().len()) + 4 + 28;
+        // Triangle records occupy80 bytes; this encoded144-byte extent also
+        // owns the64-byte point array, as observed in installed player PHYs.
+        set_i32(&mut data, at + 56, (9 << 8) | 4);
+    }
+    let ragdoll = Ragdoll::parse(&data).unwrap();
+    let static_phy = super::super::Phy::parse(&data).unwrap();
+    assert_eq!(static_phy.hulls.len(), 2);
+    for (typed, flattened) in ragdoll.solids.iter().zip(&static_phy.hulls) {
+        assert_eq!(typed.hulls[0].points, flattened.points);
+        assert_eq!(typed.hulls[0].triangles, flattened.triangles);
+    }
+}
+
+#[test]
 fn binding_rejects_wrong_model_missing_or_ambiguous_bones() {
     let ragdoll = Ragdoll::parse(&file(&metadata(), 2)).unwrap();
     assert!(ragdoll.bind(124, &bones()).is_err());

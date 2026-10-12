@@ -424,8 +424,11 @@ fn read_geometry(bytes: &[u8], budget: &mut Budget) -> io::Result<Vec<ConvexHull
             return Err(invalid("invalid compact point location"));
         }
         end = end.min(points_at);
-        if add(at, size)? > end {
-            return Err(invalid("ledge overlaps point data"));
+        // Installed player ledges include their owned points in the encoded
+        // extent. Only triangle records must precede the point array; the full
+        // extent still must fit the source (checked above).
+        if add(at, 16 + triangles * 16)? > end {
+            return Err(invalid("ledge triangles overlap point data"));
         }
         budget.hulls += 1;
         budget.triangles += triangles;
