@@ -382,6 +382,11 @@ pub fn prepare(force_ask: bool) -> Result<(), String> {
         std::env::set_current_dir(data).map_err(|e| format!("Cannot use {}: {e}", data.display()))?;
     }
     let data = std::env::current_dir().map_err(|e| e.to_string())?;
+    if data_override.is_some() {
+        // Resolve a relative override once, before worker threads start. Pack
+        // and Workshop stores must not apply it again after chdir.
+        unsafe { std::env::set_var("CSR_DATA_DIR", &data) };
+    }
 
     if std::env::var_os("CSR_GAME_DIR").is_none() || force_ask {
         if let Some(game) = find_game(&layout, &data, force_ask)? {
