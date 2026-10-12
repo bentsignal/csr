@@ -209,8 +209,9 @@ pub(crate) fn request_load(
     state: Res<State<AppState>>,
     mut next: ResMut<NextState<AppState>>,
     menu: Res<crate::menu::Menu>,
+    remote: Option<Res<crate::remote::RemoteClient>>,
 ) {
-    if *state.get() == AppState::Match && !menu.in_match {
+    if *state.get() == AppState::Match && !menu.in_match && !crate::remote_join::loading(remote.as_deref()) {
         next.set(AppState::Menu);
     }
     if *state.get() == AppState::Loading {
@@ -568,7 +569,9 @@ mod tests {
             info.content,
         ));
         app.insert_resource(remote);
-        crate::remote_join::update(app.world_mut());
+        app.init_resource::<crate::menu::LoadRequest>()
+            .add_systems(Update, (crate::remote_join::update, request_load).chain());
+        app.update();
         assert!(!app.world().contains_resource::<crate::player::SimWorld>());
         assert!(
             !app.world()
@@ -584,6 +587,7 @@ mod tests {
                 .contains_resource::<crate::remote::RemoteClient>()
         );
         assert!(app.world().resource::<Loader>().wanted.is_none());
+        assert!(matches!(app.world().resource::<NextState<AppState>>(), NextState::Pending(AppState::Loading)));
     }
 
     #[test]

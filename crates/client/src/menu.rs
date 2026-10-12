@@ -169,8 +169,7 @@ pub(crate) fn input(
     keys: Res<ButtonInput<KeyCode>>,
     actions: Query<(&Interaction, &Action), Changed<Interaction>>,
     mut exit: MessageWriter<AppExit>,
-    load_request: Res<LoadRequest>,
-    opts: Res<crate::Options>,
+    (load_request, opts, remote): (Res<LoadRequest>, Res<crate::Options>, Option<Res<crate::remote::RemoteClient>>),
     mut local: ResMut<LocalPlayer>,
     mut buy: ResMut<crate::buymenu::BuyMenu>,
     mut clock: ResMut<Time<Virtual>>,
@@ -351,7 +350,7 @@ pub(crate) fn input(
         local.pending_drop = false;
         local.pending_slot = 0;
         local.pending_buys.clear();
-        clock.pause();
+        if remote.is_some() { clock.unpause(); } else { clock.pause(); }
         cursor.grab_mode = CursorGrabMode::None;
         cursor.visible = true;
     } else if was_open {
@@ -1691,6 +1690,22 @@ mod tests {
         a.update();
         assert_eq!(a.world().resource::<Menu>().map, 26);
     }
+    #[test]
+    fn remote_pause_releases_controls_without_freezing_presentation() {
+        let mut a = harness();
+        a.insert_resource(crate::remote::RemoteClient::discover(
+            "127.0.0.1:1".parse().unwrap(), "Test".into(), sim::Team::CounterTerrorist,
+        ).unwrap());
+        a.world_mut().resource_mut::<LocalPlayer>().latched = movement::buttons::JUMP;
+        a.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::Escape);
+        a.update();
+        assert!(a.world().resource::<Menu>().open());
+        assert!(!a.world().resource::<Time<Virtual>>().is_paused());
+        assert_eq!(a.world().resource::<LocalPlayer>().latched, 0);
+        let mut cursor = a.world_mut().query::<&CursorOptions>();
+        assert_eq!(cursor.single(a.world()).unwrap().grab_mode, CursorGrabMode::None);
+    }
+
     #[test]
     fn escape_pause_resume_clears_actions_and_recaptures_cursor() {
         let mut a = harness();

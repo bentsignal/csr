@@ -51,6 +51,10 @@ pub mod remote;
 pub mod remote_map;
 pub mod remote_render_gate;
 pub mod remote_scene_assets;
+pub mod remote_servers;
+pub mod frontend_servers_data;
+pub mod frontend_servers;
+mod server_browser;
 pub mod remote_join;
 mod remote_flow;
 pub mod props;
@@ -162,13 +166,14 @@ impl Plugin for CsgoPlugin {
             .init_resource::<session::Loader>()
             .init_resource::<remote_join::JoinRequest>()
             .init_resource::<pack_ui::PackUi>()
+            .init_resource::<server_browser::Browser>()
             .add_observer(session::own_entity::<Transform>)
             .add_observer(session::own_entity::<Node>)
             .add_observer(session::own_entity::<bevy::audio::AudioPlayer>)
             .insert_resource(Time::<Fixed>::from_hz(sim::DEFAULT_TICK_RATE as f64))
-            .add_systems(Startup, (ui_assets::load, case_ui::setup, menu_scene::setup, menu::setup, frontend::setup).chain())
-            .add_systems(Update, (frontend::update, pack_ui::update, pack_ui::scroll, pack_ui::draw, frontend::input, frontend::cancel_loading).chain())
-            .add_systems(Last, pack_ui::gate_exit.after(bevy::window::ExitSystems))
+            .add_systems(Startup, (ui_assets::load, case_ui::setup, menu_scene::setup, menu::setup, frontend::setup, server_browser::setup).chain())
+            .add_systems(Update, (frontend::update, pack_ui::update, server_browser::update, server_browser::input, server_browser::draw, pack_ui::scroll, pack_ui::draw, frontend::input, frontend::cancel_loading).chain())
+            .add_systems(Last, (server_browser::gate_exit, pack_ui::gate_exit).chain().after(bevy::window::ExitSystems))
             .add_systems(Update, (menu::apply, audio::update).chain().after(player::update_camera))
             .add_systems(OnEnter(AppState::Loading), session::begin_load)
             .add_systems(OnExit(AppState::Loading), session::cancel_load)

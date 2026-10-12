@@ -6,7 +6,7 @@ use crate::{
 };
 use bevy::{
     prelude::*,
-    render::view::screenshot::{Screenshot, save_to_disk},
+    render::view::screenshot::{Screenshot, ScreenshotCaptured, save_to_disk},
 };
 use std::time::{Duration, Instant};
 
@@ -40,7 +40,13 @@ impl Proof {
     }
 }
 
+#[derive(Resource, Default)]
+struct Captures(u8);
+
 fn capture(world: &mut World, name: &str) {
+    if !world.contains_resource::<Captures>() {
+        world.init_resource::<Captures>();
+    }
     let destination = world
         .resource::<crate::Options>()
         .0
@@ -50,7 +56,8 @@ fn capture(world: &mut World, name: &str) {
         .with_file_name(name);
     world
         .spawn(Screenshot::primary_window())
-        .observe(save_to_disk(destination));
+        .observe(save_to_disk(destination))
+        .observe(|_: On<ScreenshotCaptured>, mut captures: ResMut<Captures>| captures.0 += 1);
 }
 fn failed(world: &mut World, message: &str) {
     error!("remote flow: {message}; failures: 1");
@@ -121,15 +128,25 @@ pub(crate) fn update(world: &mut World, mut proof: Local<Proof>) {
         }
         3 if ready && proof.entered.elapsed() > Duration::from_millis(250) => {
             proof.tick = world.resource::<crate::player::SimWorld>().0.tick;
+            // Screenshot runs disable controls by default. Enable the normal
+            // menu-input path so this phase actually exercises pause ownership.
+            world.resource_mut::<crate::player::InputEnabled>().0 = true;
             world.resource_mut::<crate::menu::Menu>().page = Some(crate::menu::Page::Main);
             world.resource_mut::<crate::player::LocalPlayer>().latched = movement::buttons::JUMP;
             proof.next();
         }
         4 if ready && proof.entered.elapsed() > Duration::from_secs(1) => {
             if world.resource::<crate::player::SimWorld>().0.tick <= proof.tick
-                || !world.resource::<Time<Virtual>>().is_paused()
+                || world.resource::<Time<Virtual>>().is_paused()
                 || world.resource::<crate::player::LocalPlayer>().latched != 0
             {
+                error!(
+                    "remote pause proof: tick {} -> {}, virtual paused {}, latched {}",
+                    proof.tick,
+                    world.resource::<crate::player::SimWorld>().0.tick,
+                    world.resource::<Time<Virtual>>().is_paused(),
+                    world.resource::<crate::player::LocalPlayer>().latched
+                );
                 failed(world, "pause stopped authority or retained gameplay input");
                 return;
             }
@@ -179,7 +196,11 @@ pub(crate) fn update(world: &mut World, mut proof: Local<Proof>) {
             capture(world, "remote-offline-reload.png");
             proof.next();
         }
-        9 if proof.entered.elapsed() > Duration::from_secs(1) => {
+        9 if world
+            .get_resource::<Captures>()
+            .is_some_and(|captures| captures.0 == 4)
+            && proof.entered.elapsed() > Duration::from_secs(1) =>
+        {
             info!(
                 "remote flow: discovery -> exact local map -> prepared render -> authority -> paused authority -> Home -> offline reload; failures: 0"
             );

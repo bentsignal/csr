@@ -140,6 +140,10 @@ impl Engine for Bridge {
             }
         }
         let arg = |index: usize| args.get(index).map(Value::str).unwrap_or_default();
+        if object == "MainMenu" && method == "IsMultiplayerPrivilegeEnabled" {
+            // Community connections use our local transport without Steam.
+            return Some(Value::Bool(matches!(self.data.lock().unwrap().state, AppState::Menu | AppState::Browser)));
+        }
         if object == "StartSinglePlayer" {
             let text = match args {
                 [Value::String(text)] => Some(text.as_str()),
@@ -1002,7 +1006,7 @@ pub(crate) fn input(
     remote: Option<Res<crate::remote::RemoteClient>>,
 ) {
     let (window_entity, window) = *window;
-    let blocked = crate::remote_join::loading(remote.as_deref()) || packs.is_some_and(|packs| packs.blocks_movie()) || crate::frontend_flow::enabled() || !enabled.0 || !front.visible || front.failed.is_some() || !window.focused;
+    let blocked = *state.get() == AppState::Browser || crate::remote_join::loading(remote.as_deref()) || packs.is_some_and(|packs| packs.blocks_movie()) || crate::frontend_flow::enabled() || !enabled.0 || !front.visible || front.failed.is_some() || !window.focused;
     for input in ownership.transition(blocked, window.focused) { front.send(input); }
     if blocked {
         keys.clear();

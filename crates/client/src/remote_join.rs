@@ -25,12 +25,17 @@ pub struct Connect {
 pub struct JoinRequest(pub Mutex<Option<Connect>>);
 
 pub(crate) fn local_stores() -> Result<(packs::Installed, workshop::Store), String> {
-    let current = std::env::current_dir().map_err(|e| format!("Could not locate player data: {e}"))?;
+    let current =
+        std::env::current_dir().map_err(|e| format!("Could not locate player data: {e}"))?;
     let data = match std::env::var_os("CSR_DATA_DIR") {
         Some(path) => PathBuf::from(path),
         None => current.clone(),
     };
-    let data = if data.is_absolute() { data } else { current.join(data) };
+    let data = if data.is_absolute() {
+        data
+    } else {
+        current.join(data)
+    };
     Ok((packs::Installed::new(&data), workshop::Store::new(&data)))
 }
 
@@ -187,7 +192,10 @@ pub(crate) fn update(world: &mut World) {
                             admission.assets_captured = true;
                         }
                         Err(_) => {
-                            fail(world, "The map renderer could not prepare its assets".into());
+                            fail(
+                                world,
+                                "The map renderer could not prepare its assets".into(),
+                            );
                             return;
                         }
                     }
