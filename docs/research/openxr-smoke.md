@@ -75,7 +75,12 @@ The generated stationary scene has a red cube on the left, green cube on the
 right, a farther white pillar and a floor, in metre-scaled LOCAL space. An actual
 headset check must separately record whether both eyes see it, view changes
 follow head movement, focus loss/recovery behaves correctly, and no compositor
-errors occurred. No hardware evidence has been produced by this leaf.
+errors occurred. Engine-level connected-headset evidence is recorded below;
+headset visual fidelity remains unverified.
+
+All smoke cameras, including plugin-created eyes, explicitly use Reinhard
+tonemapping. Bevy's default TonyMcMapface requires LUT assets that this optional
+asset-free build does not include.
 
 ## Bounds and failure limits
 
@@ -141,6 +146,24 @@ Pure acknowledgment tests cover pre-session/pre-request observations, a failed
 message queue, main-only/render-only cleanup and revocation of an earlier clean
 render observation. A world-level test checks the shared flag, started flag and
 remaining XR camera without constructing a native session.
-Connected-headset stereo rendering, focus transitions and actual session-loss
-cleanup still require owned runtime executions and headset observation before
-the hardware paths can be called verified.
+On 2026-10-12, the owner's wireless Quest connection provided SteamVR/OpenXR
+2.17.10, Vulkan, two recommended 2084×2228 eye images and OPAQUE composition.
+The owned executable from `a01e749` observed 30 fresh valid two-eye samples while
+FOCUSED with `should_render=true`, then completed request-exit, STOPPING/end,
+EXITING/destroy and independent main/render cleanup. The log contains no
+compositor `end_frame` error. This verifies the engine observation and orderly
+cleanup path; the process exit code was not retained in that first invocation.
+Private logs and executable provenance are retained under
+`C:\Users\shawn\csr-fidelity\xr-smoke-steamvr-connected-1`.
+
+That run exposed the default tonemapping/LUT configuration error; the revised
+example selects Reinhard and its seven tests and build pass. A second bounded
+execution could not initialize OpenXR; subsequent process inventory showed
+SteamVR was no longer running. It created no session and therefore does not
+verify the revised camera configuration on hardware. Logs are retained in
+`xr-smoke-steamvr-tonemapping-verified`; despite the private folder label, that
+attempt is an unavailable-runtime result, not successful hardware evidence.
+
+Successful compositor submission, actual eye appearance, focus loss/recovery
+and session-loss cleanup remain unverified. Game VR controls and cross-play
+remain separate roadmap work.

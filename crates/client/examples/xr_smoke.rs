@@ -3,6 +3,7 @@
 use bevy::{
     audio::AudioPlugin,
     camera::ManualTextureViewHandle,
+    core_pipeline::tonemapping::Tonemapping,
     prelude::*,
     render::{
         Render, RenderApp, RenderSystems, pipelined_rendering::PipelinedRenderingPlugin,
@@ -184,9 +185,16 @@ fn run(start: Instant) -> AppExit {
         .insert_resource(ClearColor(Color::srgb(0.025, 0.035, 0.055)))
         .insert_resource(WinitSettings::continuous())
         .add_oxr_event_handler(raw_event)
+        .add_observer(configure_camera)
         .add_systems(Startup, setup)
         .add_systems(Update, drive)
         .run()
+}
+
+fn configure_camera(added: On<Add, Camera3d>, mut commands: Commands) {
+    // Includes plugin-created eye cameras. The default needs absent LUT assets;
+    // this generated smoke scene uses a built-in transform without LUTs.
+    commands.entity(added.entity).insert(Tonemapping::Reinhard);
 }
 
 fn validate_runtime(world: &World) -> Result<(), String> {
