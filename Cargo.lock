@@ -1684,6 +1684,7 @@ dependencies = [
  "level",
  "mdl",
  "movement",
+ "netcode",
  "rodio",
  "sim",
  "vfs",

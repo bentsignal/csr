@@ -16,6 +16,10 @@ impl Pose {
     pub fn player(p: &sim::Player) -> Self {
         Self { velocity: p.movement.velocity, on_ground: p.movement.on_ground, origin: p.movement.origin, eye: p.eye(), angles: p.view_angles, punch: p.view_punch().into(), alive: p.alive }
     }
+    pub fn remote(p: &netcode::remote_pose::RenderPose) -> Self {
+        Self { origin: p.origin, velocity: p.velocity, on_ground: p.on_ground,
+            eye: p.eye, angles: p.view_angles, punch: p.punch, alive: p.alive }
+    }
     fn lerp(self, next: Self, alpha: f32) -> Self {
         Self {
             velocity: self.velocity.lerp(next.velocity, alpha), on_ground: next.on_ground,
@@ -28,7 +32,7 @@ impl Pose {
 fn angle_lerp(a: f32, b: f32, alpha: f32) -> f32 { a + ((b - a + 180.0).rem_euclid(360.0) - 180.0) * alpha }
 
 #[derive(Resource, Default)]
-pub struct RenderPoses(HashMap<sim::PlayerId, (Pose, Pose)>, HashMap<sim::PlayerId, f32>);
+pub struct RenderPoses(HashMap<sim::PlayerId, (Pose, Pose)>, HashMap<sim::PlayerId, f32>, HashMap<sim::PlayerId, Pose>);
 
 /// Eases a stair step out of the camera at 140 units/s (`dt`: seconds per tick).
 fn stair_offset(offset: f32, rise: f32, grounded: bool, reset: bool, dt: f32) -> f32 {
@@ -38,6 +42,12 @@ fn stair_offset(offset: f32, rise: f32, grounded: bool, reset: bool, dt: f32) ->
     offset - offset.signum() * offset.abs().min(140.0 * dt)
 }
 impl RenderPoses {
+    /// Already-sampled render poses; never write these into gameplay state.
+    pub fn set_overrides(&mut self, poses: impl IntoIterator<Item = (sim::PlayerId, Pose)>) {
+        self.2.clear();
+        self.2.extend(poses);
+    }
+    pub fn clear_overrides(&mut self) { self.2.clear(); }
     pub fn capture(&mut self, world: &sim::World) {
         let round_start = world.events.iter().any(|e| matches!(e, sim::GameEvent::RoundStart { .. }));
         self.0.retain(|id, _| world.player(*id).is_some());
@@ -53,6 +63,7 @@ impl RenderPoses {
         }
     }
     pub fn sample(&self, player: &sim::Player, alpha: f32) -> Pose {
+        if let Some(pose) = self.2.get(&player.id) { return *pose; }
         self.0.get(&player.id).map_or_else(|| Pose::player(player), |&(a, b)| a.lerp(b, alpha.clamp(0.0, 1.0)))
     }
 }
