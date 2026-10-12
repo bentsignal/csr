@@ -51,28 +51,29 @@ pub fn run(args: &[String]) -> Option<i32> {
                 Ok(())
             }),
         _ => {
-            let (packs, errors) = store.load();
-            for pack in packs {
+            let catalog = store.catalog();
+            for entry in catalog.entries {
+                let manifest = entry.manifest();
                 println!(
                     "{} {} — {}",
-                    pack.manifest().id,
-                    pack.manifest().version,
-                    pack.manifest().name
+                    manifest.id,
+                    manifest.version,
+                    manifest.name
                 );
-                for map in &pack.manifest().maps {
+                for map in &manifest.maps {
                     println!(
                         "  {}: {} ({:?}, maps/{}.bsp)",
                         map.id, map.name, map.source, map.bsp
                     );
                 }
-                for resource in &pack.manifest().resources {
+                for resource in &manifest.resources {
                     println!("  {}: {}", resource.id, resource.path);
                 }
             }
-            if errors.is_empty() {
+            if catalog.errors.is_empty() {
                 Ok(())
             } else {
-                Err(errors.join("\n"))
+                Err(catalog.errors.join("\n"))
             }
         }
     };
@@ -89,9 +90,14 @@ pub fn run(args: &[String]) -> Option<i32> {
 pub fn absolutize(args: &mut [String], cwd: &Path) {
     if args
         .first()
-        .is_some_and(|s| matches!(s.as_str(), "install-pack" | "check-pack"))
+        .is_some_and(|s| matches!(s.as_str(), "install-pack" | "check-pack" | "--open-pack"))
         && let Some(path) = args.get_mut(1)
     {
+        let parsed = PathBuf::from(&*path);
+        if parsed.is_relative() {
+            *path = cwd.join(parsed).to_string_lossy().into_owned();
+        }
+    } else if let Some(path) = args.first_mut().filter(|s| crate::packopen::is_pack(s)) {
         let parsed = PathBuf::from(&*path);
         if parsed.is_relative() {
             *path = cwd.join(parsed).to_string_lossy().into_owned();
@@ -104,11 +110,19 @@ mod tests {
     #[test]
     fn relative_pack_argument_survives_userdata_directory_change() {
         let cwd = std::env::current_dir().unwrap();
-        let mut args = vec!["install-pack".into(), "friend pack.csrpack".into()];
-        super::absolutize(&mut args, &cwd);
+        for command in ["install-pack", "check-pack", "--open-pack"] {
+            let mut args = vec![command.into(), "friend pack.csrpack".into()];
+            super::absolutize(&mut args, &cwd);
+            assert_eq!(
+                std::path::PathBuf::from(&args[1]),
+                cwd.join("friend pack.csrpack")
+            );
+        }
+        let mut bare = vec!["friend pack.CSRPACK".into()];
+        super::absolutize(&mut bare, &cwd);
         assert_eq!(
-            std::path::PathBuf::from(&args[1]),
-            cwd.join("friend pack.csrpack")
+            std::path::PathBuf::from(&bare[0]),
+            cwd.join("friend pack.CSRPACK")
         );
     }
 }

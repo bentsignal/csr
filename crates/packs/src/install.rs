@@ -92,26 +92,50 @@ impl Installed {
     /// Explicit map selection by stable ContentId. Only the selected pack is
     /// mounted for that level; unrelated private packs cannot alter a match.
     pub fn resolve_map(&self, id: &ContentId) -> Result<(Pack, MapDef), String> {
-        let (packs, errors) = self.load();
-        for pack in packs {
-            if let Some(map) = pack
-                .manifest
-                .maps
-                .iter()
-                .find(|m| m.id == id.to_string())
-                .cloned()
-            {
-                return Ok((pack, map));
+        let catalog = self.catalog();
+        for entry in &catalog.entries {
+            if entry.manifest().maps.iter().any(|m| m.id == id.to_string()) {
+                return self.resolve_catalog_map(entry, id);
             }
         }
         Err(format!(
             "map ContentId {id} is not installed{}",
-            if errors.is_empty() {
+            if catalog.errors.is_empty() {
                 String::new()
             } else {
-                format!(": {}", errors.join("; "))
+                format!(": {}", catalog.errors.join("; "))
             }
         ))
+    }
+
+    /// A menu may retain this immutable catalog entry and reopen only its
+    /// selected pack. Revalidation and the full archive hash bind the displayed
+    /// definition to the bytes actually mounted, even across a concurrent update.
+    pub fn resolve_catalog_map(
+        &self,
+        entry: &CatalogEntry,
+        id: &ContentId,
+    ) -> Result<(Pack, MapDef), String> {
+        let map = entry
+            .manifest()
+            .maps
+            .iter()
+            .find(|m| m.id == id.to_string())
+            .cloned()
+            .ok_or_else(|| {
+                format!(
+                    "map ContentId {id} is not provided by {}",
+                    entry.manifest().id
+                )
+            })?;
+        no_link(&self.dir)?;
+        let path = self.dir.join(entry.file_name());
+        no_link(&path)?;
+        let pack = Pack::open(&path)?;
+        if pack.archive_hash() != entry.archive_hash() {
+            return Err("installed pack changed; refresh the content list before playing".into());
+        }
+        Ok((pack, map))
     }
 
     /// Installs the exact already validated bytes. Replacing an existing pack
@@ -123,21 +147,32 @@ impl Installed {
     }
 
     pub fn install_validated(&self, pack: &Pack) -> Result<(), String> {
+        self.install_inner(pack, &Control::default(), false)
+    }
+
+    pub(crate) fn install_controlled(&self, pack: &Pack, control: &Control) -> Result<(), String> {
+        self.install_inner(pack, control, true)
+    }
+
+    fn install_inner(&self, pack: &Pack, control: &Control, wait: bool) -> Result<(), String> {
+        control.update(Stage::Waiting, 0, 0)?;
         no_link(&self.dir)?;
         fs::create_dir_all(&self.dir).map_err(|e| e.to_string())?;
-        let _lock = self.lock()?;
+        let _lock = self.lock_controlled(control, wait)?;
         let target = self.dir.join(format!("{}.csrpack", pack.manifest.id));
         no_link(&target)?;
-        let (existing, errors) = self.load();
+        control.update(Stage::CheckingInstalled, 0, 0)?;
+        let mut registry = Registry::default();
+        let mut conflict = Ok(());
+        let errors = self.scan(control, |other, _| {
+            if other.manifest.id != pack.manifest.id && conflict.is_ok() {
+                conflict = registry.add_pack(&other);
+            }
+            // `other` is dropped here, before the next archive is opened.
+        })?;
+        conflict?;
         for error in errors {
             eprintln!("warning: invalid installed pack skipped: {error}");
-        }
-        let mut registry = Registry::default();
-        for other in existing
-            .iter()
-            .filter(|p| p.manifest.id != pack.manifest.id)
-        {
-            registry.add_pack(other)?;
         }
         registry.add_pack(pack)?;
         static NEXT: AtomicU64 = AtomicU64::new(0);
@@ -152,10 +187,22 @@ impl Installed {
             .open(&temp)
             .map_err(|e| e.to_string())?;
         let pending = Pending(temp);
-        file.write_all(&pack.archive)
-            .and_then(|_| file.sync_all())
-            .map_err(|e| e.to_string())?;
+        let mut written = 0;
+        let writing = (|| {
+            for chunk in pack.archive.chunks(job::CHUNK) {
+                control.update(Stage::Writing, written, pack.archive_size())?;
+                file.write_all(chunk).map_err(|e| e.to_string())?;
+                written += chunk.len() as u64;
+            }
+            file.sync_all().map_err(|e| e.to_string())
+        })();
+        // Close the file before the pending guard removes it on cancellation,
+        // including platforms where an open handle prevents unlinking.
         drop(file);
+        writing?;
+        // The final cancellation boundary precedes the atomic commit. There is
+        // deliberately no cancellation check after publication succeeds.
+        control.update(Stage::Publishing, written, pack.archive_size())?;
         publish(&pending.0, &target)
             .map_err(|e| format!("installing {}: {e}", pack.manifest.name))?;
         Ok(())
@@ -164,17 +211,51 @@ impl Installed {
     /// Returns independent valid snapshots. Corrupt files are reported and
     /// never mounted; an unreadable folder is reported rather than silently empty.
     pub fn load(&self) -> (Vec<Pack>, Vec<String>) {
+        let mut packs = Vec::new();
+        let errors = self
+            .scan(&Control::default(), |pack, _| packs.push(pack))
+            .unwrap_or_else(|e| vec![e]);
+        (packs, errors)
+    }
+
+    /// Validates one archive at a time, retaining only immutable small metadata.
+    /// Use CatalogJob on a UI thread; this synchronous helper performs disk I/O.
+    pub fn catalog(&self) -> Catalog {
+        self.catalog_controlled(&Control::default())
+            .expect("uncancellable catalog scan")
+    }
+
+    pub(crate) fn catalog_controlled(&self, control: &Control) -> Result<Catalog, String> {
+        let mut entries = Vec::new();
+        let errors = self.scan(control, |pack, path| {
+            entries.push(CatalogEntry::from_pack(
+                &pack,
+                path.file_name().expect("scanned filename"),
+            ))
+        })?;
+        Ok(Catalog { entries, errors })
+    }
+
+    // Visitors receive one validated snapshot. None of the scanner's retained
+    // bookkeeping holds asset/archive buffers; only legacy load() collects them.
+    pub(crate) fn scan(
+        &self,
+        control: &Control,
+        mut visit: impl FnMut(Pack, &Path),
+    ) -> Result<Vec<String>, String> {
+        control.check()?;
         if let Err(e) = no_link(&self.dir) {
-            return (Vec::new(), vec![e]);
+            return Ok(vec![e]);
         }
         let entries = match fs::read_dir(&self.dir) {
             Ok(entries) => entries,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return (Vec::new(), Vec::new()),
-            Err(e) => return (Vec::new(), vec![e.to_string()]),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(e) => return Ok(vec![e.to_string()]),
         };
         let mut paths = Vec::new();
         let mut errors = Vec::new();
         for entry in entries {
+            control.check()?;
             match entry {
                 Ok(entry)
                     if entry
@@ -189,13 +270,13 @@ impl Installed {
             }
         }
         paths.sort();
-        let mut packs = Vec::new();
         let mut registry = Registry::default();
         let mut ids = BTreeSet::new();
         for path in paths {
+            control.check()?;
             let result: Result<Pack, String> = (|| {
                 no_link(&path)?;
-                let pack = Pack::open(&path)?;
+                let pack = Pack::open_controlled(&path, Limits::default(), control)?;
                 if path.file_stem().and_then(|s| s.to_str()) != Some(&pack.manifest.id) {
                     return Err("installed filename must match pack id".into());
                 }
@@ -205,12 +286,17 @@ impl Installed {
                 registry.add_pack(&pack)?;
                 Ok(pack)
             })();
+            // Do not disguise cancellation as a corrupt pack or emit partial
+            // catalog results after a cancelled read/decompression/hash.
+            control.check()?;
             match result {
-                Ok(pack) => packs.push(pack),
+                Ok(pack) => visit(pack, &path),
                 Err(e) => errors.push(format!("{}: {e}", path.display())),
             }
         }
-        (packs, errors)
+        control.check()?;
+        errors.sort();
+        Ok(errors)
     }
 
     /// Rejects unsafe ids even when removing a corrupt pack.
@@ -233,6 +319,10 @@ impl Installed {
     }
 
     fn lock(&self) -> Result<std::fs::File, String> {
+        self.lock_controlled(&Control::default(), false)
+    }
+
+    fn lock_controlled(&self, control: &Control, wait: bool) -> Result<std::fs::File, String> {
         let path = self.dir.join(".install.lock");
         no_link(&path)?;
         let file = OpenOptions::new()
@@ -242,8 +332,16 @@ impl Installed {
             .truncate(false)
             .open(path)
             .map_err(|e| e.to_string())?;
-        file.try_lock()
-            .map_err(|e| format!("another pack installation is in progress: {e}"))?;
+        loop {
+            control.check()?;
+            match file.try_lock() {
+                Ok(()) => break,
+                Err(std::fs::TryLockError::WouldBlock) if wait => {
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                }
+                Err(e) => return Err(format!("another pack installation is in progress: {e}")),
+            }
+        }
         Ok(file)
     }
 }

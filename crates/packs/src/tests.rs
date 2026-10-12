@@ -49,6 +49,330 @@ fn manifest() -> Manifest {
     }
 }
 
+fn catalog_pack(store: &Installed, id: &str, map_id: &str, data: &[u8]) -> Vec<u8> {
+    let mut m = manifest();
+    m.id = id.into();
+    m.maps[0].id = map_id.into();
+    m.provides = vec![map_id.into()];
+    let bytes = build(&m, &[("maps/arena_file.bsp", data)]).unwrap();
+    fs::create_dir_all(store.dir()).unwrap();
+    fs::write(store.dir().join(format!("{id}.csrpack")), &bytes).unwrap();
+    bytes
+}
+
+#[test]
+fn metadata_catalog_matches_full_loading_validation_order_and_errors() {
+    let temp = Temp::new();
+    let store = Installed::new(&temp.0);
+    catalog_pack(&store, "b_second", "mod_map_second", b"second");
+    let first = catalog_pack(&store, "a_first", "mod_map_first", b"first");
+    catalog_pack(&store, "c_conflict", "mod_map_first", b"conflicting");
+    fs::write(store.dir().join("d_corrupt.csrpack"), b"not a zip").unwrap();
+    let wrong = catalog_pack(&store, "wrong_id", "mod_map_wrong", b"wrong filename");
+    fs::remove_file(store.dir().join("wrong_id.csrpack")).unwrap();
+    fs::write(store.dir().join("e_filename.csrpack"), wrong).unwrap();
+    let mut bad_hash = manifest();
+    bad_hash.id = "f_hash".into();
+    bad_hash.content_hash = format!("sha256:{}", "0".repeat(64));
+    fs::write(
+        store.dir().join("f_hash.csrpack"),
+        raw_zip(&bad_hash, &[("maps/arena_file.bsp", b"hash edit")]),
+    )
+    .unwrap();
+    let catalog = store.catalog();
+    let (loaded, errors) = store.load();
+    assert_eq!(catalog.entries.len(), 2);
+    assert_eq!(catalog.errors, errors);
+    assert_eq!(catalog.errors.len(), 4);
+    assert!(
+        catalog
+            .errors
+            .iter()
+            .any(|e| e.contains("ContentId already provided"))
+    );
+    assert!(
+        catalog
+            .errors
+            .iter()
+            .any(|e| e.contains("filename must match"))
+    );
+    assert!(catalog.errors.iter().any(|e| e.contains("hash mismatch")));
+    assert_eq!(catalog, store.catalog());
+    for (metadata, pack) in catalog.entries.iter().zip(&loaded) {
+        assert_eq!(metadata.manifest(), pack.manifest());
+        assert_eq!(metadata.archive_hash(), pack.archive_hash());
+        assert_eq!(metadata.archive_size(), pack.archive_size());
+    }
+    assert_eq!(catalog.entries[0].manifest().id, "a_first");
+    assert_eq!(catalog.entries[0].archive_size(), first.len() as u64);
+}
+
+#[test]
+fn streaming_scan_frees_archive_and_asset_buffers_before_next_file_read() {
+    use std::sync::{Mutex, Weak};
+    let temp = Temp::new();
+    let store = Installed::new(&temp.0);
+    let data = vec![7; job::CHUNK * 2];
+    catalog_pack(&store, "a_first", "mod_map_first", &data);
+    catalog_pack(&store, "b_second", "mod_map_second", &data);
+    #[derive(Default)]
+    struct State {
+        archive: Option<Weak<[u8]>>,
+        asset: Option<Weak<[u8]>>,
+        reads: usize,
+        visits: usize,
+    }
+    let state = Arc::new(Mutex::new(State::default()));
+    let observed = state.clone();
+    let mut control = Control::default();
+    control.hook = Some(Arc::new(move |progress| {
+        if progress.stage == Stage::Reading && progress.bytes == 0 && progress.total > 0 {
+            let mut state = observed.lock().unwrap();
+            assert_eq!(
+                state.reads, state.visits,
+                "archives were eagerly loaded before emitting metadata"
+            );
+            assert!(state.archive.as_ref().is_none_or(|w| w.upgrade().is_none()));
+            assert!(state.asset.as_ref().is_none_or(|w| w.upgrade().is_none()));
+            state.reads += 1;
+        }
+    }));
+    let mut entries = Vec::new();
+    let errors = store
+        .scan(&control, |pack, path| {
+            entries.push(CatalogEntry::from_pack(&pack, path.file_name().unwrap()));
+            let mut state = state.lock().unwrap();
+            state.archive = Some(Arc::downgrade(&pack.archive));
+            state.asset = Some(Arc::downgrade(
+                pack.assets.get("maps/arena_file.bsp").unwrap(),
+            ));
+            state.visits += 1;
+        })
+        .unwrap();
+    assert!(errors.is_empty());
+    assert_eq!(entries.len(), 2);
+    let state = state.lock().unwrap();
+    assert_eq!((state.reads, state.visits), (2, 2));
+    assert!(state.archive.as_ref().unwrap().upgrade().is_none());
+    assert!(state.asset.as_ref().unwrap().upgrade().is_none());
+}
+
+#[test]
+fn cancellation_between_catalog_entries_returns_no_partial_refresh() {
+    use std::sync::atomic::AtomicUsize;
+    let temp = Temp::new();
+    let store = Installed::new(&temp.0);
+    catalog_pack(&store, "a_first", "mod_map_first", b"first");
+    catalog_pack(&store, "b_second", "mod_map_second", b"second");
+    let reads = Arc::new(AtomicUsize::new(0));
+    let count = reads.clone();
+    let mut control = Control::default();
+    let cancel = control.clone();
+    control.hook = Some(Arc::new(move |progress| {
+        if progress.stage == Stage::Reading
+            && progress.bytes == 0
+            && progress.total > 0
+            && count.fetch_add(1, Ordering::Relaxed) == 1
+        {
+            cancel.cancel();
+        }
+    }));
+    assert_eq!(
+        store.catalog_controlled(&control).unwrap_err(),
+        "pack installation cancelled"
+    );
+    assert_eq!(reads.load(Ordering::Relaxed), 2);
+    assert_eq!(store.catalog().entries.len(), 2);
+}
+
+#[test]
+fn selected_metadata_reopens_only_that_pack_and_rejects_a_valid_changed_archive() {
+    let temp = Temp::new();
+    let store = Installed::new(&temp.0);
+    catalog_pack(&store, "a_first", "mod_map_first", b"first");
+    catalog_pack(&store, "b_second", "mod_map_second", b"second");
+    let catalog = store.catalog();
+    let first = &catalog.entries[0];
+    let id: ContentId = "mod_map_first".parse().unwrap();
+    fs::write(
+        store.dir().join("b_second.csrpack"),
+        b"unrelated pack is now invalid",
+    )
+    .unwrap();
+    let (pack, map) = store.resolve_catalog_map(first, &id).unwrap();
+    assert_eq!(map.id, "mod_map_first");
+    assert_eq!(pack.archive_hash(), first.archive_hash());
+    let mut update = first.manifest().clone();
+    update.version = "1.0.1".into(); // payload hash is unchanged; full archive hash binds metadata.
+    let bytes = build(&update, &[("maps/arena_file.bsp", b"first")]).unwrap();
+    store
+        .install_validated(&Pack::from_bytes(bytes).unwrap())
+        .unwrap();
+    assert!(
+        store
+            .resolve_catalog_map(first, &id)
+            .unwrap_err()
+            .contains("installed pack changed")
+    );
+    let (fresh, _) = store.resolve_map(&id).unwrap();
+    assert_eq!(fresh.manifest().version, "1.0.1");
+    assert_eq!(fresh.manifest().content_hash, first.manifest().content_hash);
+    assert_ne!(fresh.archive_hash(), first.archive_hash());
+    assert!(
+        store
+            .resolve_catalog_map(first, &"mod_map_other".parse().unwrap())
+            .is_err()
+    );
+}
+
+#[test]
+fn catalog_worker_emits_only_metadata_and_one_terminal_result() {
+    use std::time::{Duration, Instant};
+    let temp = Temp::new();
+    let store = Installed::new(&temp.0);
+    catalog_pack(&store, "a_first", "mod_map_first", b"first");
+    let expected = store.catalog();
+    let mut worker = CatalogJob::start(store);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let outcome = loop {
+        if let Some(outcome) = worker.poll() {
+            break outcome;
+        }
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(5));
+    };
+    let CatalogOutcome::Loaded(catalog) = outcome else {
+        panic!("{outcome:?}")
+    };
+    assert_eq!(catalog, expected);
+    assert!(worker.poll().is_none());
+}
+
+#[test]
+fn cancellation_during_archive_reads_and_decompression_never_returns_a_pack() {
+    let temp = Temp::new();
+    let mut seed = 42u64;
+    let data: Vec<u8> = (0..job::CHUNK * 3)
+        .map(|_| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed as u8
+        })
+        .collect();
+    let bytes = build(&manifest(), &[("maps/arena_file.bsp", &data)]).unwrap();
+    let path = temp.write("source.csrpack", &bytes);
+    for stage in [Stage::Reading, Stage::Validating] {
+        let mut control = Control::default();
+        let cancel = control.clone();
+        control.hook = Some(Arc::new(move |p| {
+            if p.stage == stage && p.bytes >= job::CHUNK as u64 {
+                cancel.cancel();
+            }
+        }));
+        let error = Pack::open_controlled(&path, Limits::default(), &control).unwrap_err();
+        assert_eq!(error, "pack installation cancelled");
+    }
+}
+
+#[test]
+fn cancellation_during_writing_and_at_publish_preserves_old_pack_and_cleans_pending() {
+    let temp = Temp::new();
+    let store = Installed::new(&temp.0);
+    let old = build(&manifest(), &[("maps/arena_file.bsp", b"old")]).unwrap();
+    store
+        .install_validated(&Pack::from_bytes(old.clone()).unwrap())
+        .unwrap();
+    let mut update = manifest();
+    update.version = "1.0.1".into();
+    let data = vec![9; job::CHUNK * 3];
+    // Stored ZIP makes the archive write itself span multiple chunks.
+    let mut files = BTreeMap::new();
+    files.insert(
+        "maps/arena_file.bsp".into(),
+        Arc::<[u8]>::from(data.as_slice()),
+    );
+    update.content_hash = content_hash(&files);
+    let pack = Pack::from_bytes(raw_zip(&update, &[("maps/arena_file.bsp", &data)])).unwrap();
+    for stage in [Stage::Writing, Stage::Publishing] {
+        let mut control = Control::default();
+        let cancel = control.clone();
+        control.hook = Some(Arc::new(move |p| {
+            if p.stage == stage && p.bytes > 0 {
+                cancel.cancel();
+            }
+        }));
+        assert_eq!(
+            store.install_controlled(&pack, &control).unwrap_err(),
+            "pack installation cancelled"
+        );
+        assert_eq!(
+            fs::read(store.dir().join("test_arena.csrpack")).unwrap(),
+            old
+        );
+        assert!(
+            !fs::read_dir(store.dir()).unwrap().any(|e| e
+                .unwrap()
+                .path()
+                .extension()
+                .is_some_and(|s| s == "part"))
+        );
+    }
+}
+
+#[test]
+fn install_job_waits_cancellably_for_lock_and_reports_only_committed_receipts() {
+    use std::time::{Duration, Instant};
+    let temp = Temp::new();
+    let store = Installed::new(&temp.0);
+    let bytes = build(&manifest(), &[("maps/arena_file.bsp", b"synthetic")]).unwrap();
+    let source = temp.write("source.csrpack", &bytes);
+    fs::create_dir_all(store.dir()).unwrap();
+    let lock = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .open(store.dir().join(".install.lock"))
+        .unwrap();
+    lock.lock().unwrap();
+    let mut job = InstallJob::start(store.clone(), source.clone());
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while job.progress().stage != Stage::Waiting && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(job.progress().stage, Stage::Waiting);
+    assert!(job.poll().is_none());
+    job.cancel();
+    let outcome = loop {
+        if let Some(outcome) = job.poll() {
+            break outcome;
+        }
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(5));
+    };
+    assert!(matches!(outcome, Outcome::Cancelled));
+    assert!(!store.dir().join("test_arena.csrpack").exists());
+    lock.unlock().unwrap();
+    let mut job = InstallJob::start(store.clone(), source);
+    let outcome = loop {
+        if let Some(outcome) = job.poll() {
+            break outcome;
+        }
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(5));
+    };
+    let Outcome::Installed(receipt) = outcome else {
+        panic!("{outcome:?}")
+    };
+    assert_eq!(receipt.manifest.provides, ["mod_map_arena"]);
+    assert_eq!(
+        fs::read(store.dir().join("test_arena.csrpack")).unwrap(),
+        bytes
+    );
+    assert_eq!(store.load().0[0].archive_hash(), receipt.archive_hash);
+    assert!(job.poll().is_none());
+}
+
 fn raw_zip(manifest: &Manifest, files: &[(&str, &[u8])]) -> Vec<u8> {
     let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
     let opts =
