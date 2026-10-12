@@ -7,7 +7,7 @@ use sim::{PlayerId, Team, TickInput, World, WorldState};
 use std::{collections::VecDeque, net::SocketAddr, time::Duration};
 
 pub const MAX_EVENT_BATCHES: usize = 128;
-pub const MAX_QUEUED_EVENTS: usize = 4096;
+pub const MAX_QUEUED_EVENTS: usize = MAX_EVENTS;
 const JOIN_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Debug, PartialEq, Eq)]

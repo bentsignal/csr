@@ -36,6 +36,13 @@ existing admitted tracked limits, normalized rotations/rays, duck fraction
 and headshot/hit-group consistency. No current actor lookup is required;
 receipts for removed actors or older lives remain meaningful.
 
+The direct transport client and RemoteSession share an aggregate 4,096-event
+cap; the existing per-batch, message-byte and batch-count bounds remain.
+Validation and capacity checks precede whole-batch queue mutation. Consuming
+a batch releases its event budget. Transport failure/overflow and explicit
+disconnect clear pending events so a terminal client cannot expose a valid
+prefix from an update that failed later.
+
 Prediction clears all its events after replay. Only authoritative events
 reach presentation. Cancellation clears existing queues and match teardown
 releases the feed. A future corpse adapter must separately define bounded

@@ -43,6 +43,9 @@ pub struct Server {
 #[cfg(test)]
 #[path = "transport_snapshot_tests.rs"]
 mod snapshot_tests;
+#[cfg(test)]
+#[path = "transport_event_tests.rs"]
+mod event_tests;
 
 impl Server {
     pub fn bind(address: SocketAddr, session: Session, max_clients: usize) -> Result<Self, String> {
@@ -359,6 +362,7 @@ pub struct Client {
     latest_ack: u64,
     latest: Option<StateUpdate>,
     events: VecDeque<EventBatch>,
+    queued_events: usize,
     failure: Option<String>,
     snapshots: Cache,
     // One pending latest receipt/recovery, plus at most 512 total control
@@ -468,6 +472,7 @@ impl Client {
             latest_ack: 0,
             latest: None,
             events: VecDeque::new(),
+            queued_events: 0,
             failure: None,
             snapshots: Cache::default(),
             snapshot_feedback: None,
@@ -503,7 +508,20 @@ impl Client {
         self.latest.take()
     }
     pub fn take_events(&mut self) -> Option<EventBatch> {
-        self.events.pop_front()
+        let batch = self.events.pop_front()?;
+        self.queued_events -= batch.events.len();
+        Some(batch)
+    }
+    fn queue_events(&mut self, batch: EventBatch) -> Result<(), String> {
+        validate_events(&batch)?;
+        if self.events.len() >= 512
+            || self.queued_events.saturating_add(batch.events.len()) > MAX_EVENTS
+        {
+            return Err("client is not consuming match events".into());
+        }
+        self.queued_events += batch.events.len();
+        self.events.push_back(batch);
+        Ok(())
     }
 
     /// One call per local simulation tick; batches repeat unacknowledged input
@@ -542,7 +560,7 @@ impl Client {
         let result = self.poll(elapsed);
         if let Err(reason) = &result {
             self.failure = Some(reason.clone());
-            self.transport.disconnect();
+            self.disconnect();
         }
         result
     }
@@ -671,12 +689,8 @@ impl Client {
             let Some(bytes) = self.connection.receive_message(EVENTS) else {
                 break;
             };
-            if self.events.len() >= 512 {
-                return Err("client is not consuming match events".into());
-            }
             let batch: EventBatch = decode(&bytes)?;
-            validate_events(&batch)?;
-            self.events.push_back(batch);
+            self.queue_events(batch)?;
         }
         self.transport
             .send_packets(&mut self.connection)
@@ -695,6 +709,8 @@ impl Client {
         Ok(())
     }
     pub fn disconnect(&mut self) {
+        self.events.clear();
+        self.queued_events = 0;
         self.snapshots = Cache::default();
         self.snapshot_feedback = None;
         self.transport.disconnect();

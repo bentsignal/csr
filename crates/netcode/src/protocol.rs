@@ -9,6 +9,8 @@ pub const INPUT: u8 = 1;
 pub const SNAPSHOT: u8 = 2;
 pub const EVENTS: u8 = 3;
 pub const MAX_INPUT_BATCH: usize = 8;
+/// Shared aggregate event budget, including direct transport users.
+pub const MAX_EVENTS: usize = 4096;
 pub const MAX_MESSAGE: usize = 256 * 1024;
 pub(crate) const CONTROL_MEMORY: usize = 16 * 1024;
 /// Exact f64 tick representation, with room for bounded local replay.
@@ -16,7 +18,7 @@ pub const MAX_LOCAL_TICK: u64 = (1_u64 << 53) - 1;
 pub const MAX_PROTOCOL_COUNTER: u64 = MAX_LOCAL_TICK - crate::prediction::MAX_PENDING_INPUTS as u64;
 
 pub(crate) fn validate_events(batch: &EventBatch) -> Result<(), String> {
-    if batch.tick > MAX_PROTOCOL_COUNTER || batch.events.len() > 4096 {
+    if batch.tick > MAX_PROTOCOL_COUNTER || batch.events.len() > MAX_EVENTS {
         return Err("invalid event batch bounds".into());
     }
     let text = |value: &str| {
