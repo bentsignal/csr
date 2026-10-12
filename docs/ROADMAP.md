@@ -247,6 +247,10 @@ thing is uncanny. Fidelity is measured, never eyeballed:
       exact gain curves, DSP/occlusion, ricochets/near misses, map soundscapes
       and music. Evidence and limits: [FIDELITY.md](FIDELITY.md).
 - [ ] Ragdolls/death animations; burst, suppressor and revolver modes.
+      Installed death-pose/PHY and classic kill-feed metadata, authority
+      receipt gaps and remaining observation plan:
+      [DEATH_PRESENTATION.md](DEATH_PRESENTATION.md). No dynamics or
+      authored death-notice integration is complete.
 - [ ] Validate the map pool beyond Dust II (Mirage, Inferno, Nuke, Overpass,
       Train, Cache, Vertigo, Office, Italy, ...).
 - [ ] The inherited fidelity checklist below (M2–M4).
