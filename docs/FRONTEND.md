@@ -29,6 +29,11 @@ They do not decode game function bodies.
 - Match entities and map resources are removed on leaving a match; persistent
   UI, inventory and settings survive. Tests cover teardown, late cancelled
   errors and a new selection waiting for an existing worker.
+- The authored pause movie renders during a match and follows menu visibility.
+  Closing pause through a movie callback resumes the simulation clock, captures
+  the cursor and blocks the closing click from firing a weapon. A regression
+  test covers that external transition; native Resume and Exit callbacks still
+  need a rendered interaction proof.
 - The offline map picker defaults to Competitive. Unsupported Casual, Wingman
   and War Games buttons are disabled using their authored controls. Mapgroups
   are filtered against installed maps and the original shared-library thumbnail
@@ -81,8 +86,9 @@ saved config checked afterward. `audio-5.png` shows the correctly initialized
 volume slider, and `audio-drag-4.png` shows the pointer-driven 76% result with
 its matching number and saved config. The home capture's masked MAE is 19.77 against the reference;
 this integration has not reached the earlier offscreen spike's fidelity.
+`pause-2.png` shows the original pause movie with its Resume and Exit controls.
 
-The combined integration checkpoint passes 262 workspace tests (two installed-data
+The combined integration checkpoint passes 263 workspace tests (two installed-data
 tests ignored), three menu-probe tests, release Dust II probe and ten-round sim
 with zero failures, and the 1,425-file weapon/feedback/foley decode audit with
 zero unsupported or crashing sounds. These checks do not establish completion

@@ -271,7 +271,10 @@ pub fn run(opts: ClientOptions) -> i32 {
             unfocused_mode: bevy::winit::UpdateMode::Continuous,
         })
         .add_systems(Update, smoke_test.run_if(in_state(AppState::Match)))
-        .add_systems(Update, frontend::capture_menu.run_if(in_state(AppState::Menu)));
+        .add_systems(Update, frontend::capture_menu.run_if(|state: Res<State<AppState>>| {
+            *state.get() == AppState::Menu || (*state.get() == AppState::Match
+                && std::env::var("CSR_TEST_MENU").as_deref() == Ok("pause"))
+        }));
     }
     let result = app.run();
     match result { AppExit::Success=>0,AppExit::Error(code)=>code.get() as i32 }
@@ -572,6 +575,8 @@ fn smoke_test(
     mut events: ResMut<effects::PendingEvents>,
     level: Res<LoadedLevel>,
 ) {
+    // Menu captures wait for the movie and its asynchronous fonts/widgets.
+    if std::env::var("CSR_TEST_MENU").as_deref() == Ok("pause") { return; }
     *frame += 1;
 
     let opts = &options.0;

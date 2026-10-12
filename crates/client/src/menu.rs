@@ -162,11 +162,13 @@ pub(crate) fn input(
     enabled: Res<InputEnabled>,
     mut inventory: ResMut<crate::inventory::Inventory>,
     collection: Res<crate::inventory::Collection>,
+    mut previous_open: Local<bool>,
 ) {
     if !enabled.0 {
         return;
     }
-    let was_open = menu.open();
+    // Native movie callbacks may close the menu between input passes.
+    let was_open = menu.open() || *previous_open;
     if let Some(index) = menu.capture {
         if keys.just_pressed(KeyCode::Escape) {
             menu.capture = None;
@@ -343,6 +345,7 @@ pub(crate) fn input(
         // A UI click cannot also fire in the resumed match.
         commands.insert_resource(crate::player::InputBlockFrames(2));
     }
+    *previous_open = menu.open();
 }
 
 pub(crate) fn label(
@@ -1698,6 +1701,22 @@ mod tests {
             .press(KeyCode::Escape);
         a.update();
         assert!(!a.world().resource::<Menu>().open());
+        assert!(!a.world().resource::<Time<Virtual>>().is_paused());
+        assert!(a.world().resource::<crate::player::InputBlockFrames>().0 > 0);
+        let mut q = a.world_mut().query::<&CursorOptions>();
+        let cursor = q.single(a.world()).unwrap();
+        assert_eq!(cursor.grab_mode, CursorGrabMode::Locked);
+        assert!(!cursor.visible);
+    }
+    #[test]
+    fn a_movie_callback_closing_pause_resumes_clock_and_blocks_its_click() {
+        let mut a = harness();
+        a.world_mut().resource_mut::<Menu>().page = Some(Page::Pause);
+        a.update();
+        assert!(a.world().resource::<Time<Virtual>>().is_paused());
+        // The movie queues this change during Update, after the input pass.
+        a.world_mut().resource_mut::<Menu>().page = None;
+        a.update();
         assert!(!a.world().resource::<Time<Virtual>>().is_paused());
         assert!(a.world().resource::<crate::player::InputBlockFrames>().0 > 0);
         let mut q = a.world_mut().query::<&CursorOptions>();

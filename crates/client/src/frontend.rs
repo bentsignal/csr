@@ -30,6 +30,7 @@ struct Data {
     localization: crate::localize::Localization,
     game_modes: kv::Block,
     state: AppState,
+    menu_open: bool,
     loading: String,
 }
 enum Action {
@@ -135,6 +136,20 @@ impl Engine for Bridge {
                 self.roots.insert(object.into(), path.into());
                 if object == "MainMenu" {
                     calls.call(path, "onUIShow", vec![]);
+                    if !matches!(
+                        self.data.lock().unwrap().state,
+                        AppState::Menu | AppState::Browser
+                    ) {
+                        calls.call(path, "hidePanelImmediate", vec![]);
+                    }
+                } else if object == "PauseMenu" {
+                    let data = self.data.lock().unwrap();
+                    if data.state == AppState::Match && data.menu_open {
+                        calls.call(path, "SetPlayerName", vec!["You".into()]);
+                        calls.call(path, "showPanel", vec![]);
+                    } else {
+                        calls.call(path, "hidePanel", vec![]);
+                    }
                 }
             }
             return None;
@@ -382,6 +397,7 @@ pub(crate) fn setup(
         localization: crate::localize::Localization::load(&data.vfs),
         game_modes: crate::frontend_game::load(&data.vfs, &installed),
         state: AppState::Menu,
+        menu_open: menu.open(),
         loading: String::new(),
     }));
     let actions = Arc::new(Mutex::new(vec![]));
@@ -526,6 +542,7 @@ pub(crate) fn update(
     {
         let mut snapshot = front.data.lock().unwrap();
         snapshot.state = *state.get();
+        snapshot.menu_open = menu.open();
         snapshot.loading = loader.status.clone();
     }
     if settings.is_changed() {
@@ -645,9 +662,27 @@ pub(crate) fn update(
         }
         if visible && *state.get() == AppState::Match && front.ready {
             front.send(Input::RequestElement("PauseMenu".into()));
+            front.send(Input::Call {
+                path: "_level100".into(),
+                function: "showPanel".into(),
+                args: vec![],
+            });
+        } else if *state.get() == AppState::Match && front.ready {
+            front.send(Input::Call {
+                path: "_level100".into(),
+                function: "hidePanel".into(),
+                args: vec![],
+            });
         }
     }
     if front.scene != Some(*state.get()) {
+        if *state.get() != AppState::Match {
+            front.send(Input::Call {
+                path: "_level100".into(),
+                function: "hidePanel".into(),
+                args: vec![],
+            });
+        }
         if *state.get() == AppState::Loading {
             front.send(Input::Call {
                 path: "_global.MainMenuMovie".into(),
