@@ -155,6 +155,11 @@ player keys and secure connect tokens before treating names or ids as trusted.
 
 ## Development verification
 
+The frontend-facing [owned remote session API](REMOTESESSION.md) composes
+discovery, exact installed-content admission, prediction, remote pose history,
+bounded authoritative events and cancellation. Its proof is headless;
+rendered joining remains client integration work.
+
 The separate `csr-server` executable has no `client` or Bevy dependency.
 Source builds use:
 
@@ -162,6 +167,8 @@ Source builds use:
 cargo run --profile play -p server -- de_dust2 --bind 127.0.0.1:27015 --bots 8
 cargo run --profile play -p server -- de_dust2 --netcheck --bots 2
 cargo run --profile play -p server -- de_dust2 --netcheck --tickrate 64 --bots 2
+cargo run --profile play -p server -- de_dust2 --remotecheck --bots 2
+cargo run --profile play -p server -- de_dust2 --remotecheck --tickrate 64 --bots 2
 ```
 
 `--deathmatch`, `--maxplayers`, `--tickrate` and `--ticks` configure the
@@ -188,3 +195,9 @@ recovery after loss and reordering. CI runs the Dust II UDP check with bots.
 
 These commands are development checks. The friend-facing hosting and joining
 flow belongs in the menu and installer, without terminal setup.
+
+`--remotecheck` drives two owned `RemoteSession`s through discovery, local map
+provision and synchronization against the installed Dust II data. It requires
+128 acknowledged inputs each, fractional remote samples, independent tracked
+head/hands and aim rays, exact final reconciliation and repeated cancellation
+with server-player cleanup. CI runs this proof at both supported test rates.

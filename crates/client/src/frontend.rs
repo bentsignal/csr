@@ -50,6 +50,7 @@ struct Bridge {
 }
 
 fn show_single_player(path: &str, calls: &mut Calls) {
+    calls.set(path, "_visible", true.into());
     calls.call(
         "_global.csrBindings",
         "bindApi",
@@ -199,10 +200,16 @@ impl Engine for Bridge {
                         AppState::Menu | AppState::Browser
                     ) {
                         calls.call(path, "hidePanelImmediate", vec![]);
+                        calls.set(path, "_visible", false.into());
                     }
                 } else if object == "PauseMenu" {
                     let data = self.data.lock().unwrap();
                     if data.state == AppState::Match && data.menu_open {
+                        for element in ["MainMenu", "StartSinglePlayer", "OptionsMenu"] {
+                            if let Some(root) = self.roots.get(element) {
+                                calls.set(root, "_visible", false.into());
+                            }
+                        }
                         calls.call(path, "SetPlayerName", vec!["You".into()]);
                         calls.call(path, "showPanel", vec![]);
                     } else {
@@ -214,14 +221,27 @@ impl Engine for Bridge {
         }
         if method == "OnReady" && object == "StartSinglePlayer" {
             if let Some(path) = self.roots.get(object) {
-                show_single_player(path, calls);
+                if matches!(
+                    self.data.lock().unwrap().state,
+                    AppState::Menu | AppState::Browser
+                ) {
+                    show_single_player(path, calls);
+                } else {
+                    calls.set(path, "_visible", false.into());
+                }
             }
             return None;
         }
         if method == "OnReady" && object == "OptionsMenu" {
             if let Some(path) = self.roots.get(object) {
-                self.options
-                    .show(path, &self.data.lock().unwrap().settings, calls);
+                let data = self.data.lock().unwrap();
+                if matches!(data.state, AppState::Menu | AppState::Browser)
+                    || (data.state == AppState::Match && data.menu_open)
+                {
+                    self.options.show(path, &data.settings, calls);
+                } else {
+                    calls.set(path, "_visible", false.into());
+                }
             }
             return None;
         }
@@ -421,8 +441,9 @@ pub struct Frontend {
     camera: Entity,
     visible: bool,
     pub ready: bool,
-    failed: Option<String>,
+    pub(crate) failed: Option<String>,
     viewport: (u32, u32),
+    requested: HashSet<String>,
     scene: Option<AppState>,
     notice: Entity,
     notice_text: Entity,
@@ -430,9 +451,16 @@ pub struct Frontend {
 }
 
 impl Frontend {
-    fn send(&self, input: Input) {
+    pub(crate) fn send(&self, input: Input) {
         if let Some(movie) = &self.movie {
             movie.lock().unwrap().send(input);
+        }
+    }
+    fn request(&mut self, element: &str) {
+        // RequestElement mutates an already-loaded movie's stage transform.
+        // Reopen the cached movie instead of applying that transform twice.
+        if self.requested.insert(element.into()) {
+            self.send(Input::RequestElement(element.into()));
         }
     }
     fn poll(&self) -> Option<scaleform::Event> {
@@ -573,6 +601,7 @@ pub(crate) fn setup(
         ready: false,
         failed: None,
         viewport: (options.0.width, options.0.height),
+        requested: HashSet::new(),
         scene: None,
         notice,
         notice_text,
@@ -705,6 +734,7 @@ pub(crate) fn update(
         if *state.get() == AppState::Match {
             elements.push("PauseMenu".into());
         }
+        front.requested.extend(elements.iter().cloned());
         front.movie = Some(Mutex::new(scaleform::Menu::spawn(
             scaleform::Config {
                 game_dir: data.game_dir.clone(),
@@ -734,7 +764,7 @@ pub(crate) fn update(
             });
         }
         if visible && *state.get() == AppState::Match && front.ready {
-            front.send(Input::RequestElement("PauseMenu".into()));
+            front.request("PauseMenu");
             front.send(Input::Call {
                 path: "_level100".into(),
                 function: "showPanel".into(),
@@ -749,6 +779,17 @@ pub(crate) fn update(
         }
     }
     if front.scene != Some(*state.get()) {
+        // Movie animations and late callbacks can leave cached launch panels
+        // visible. Own the root visibility across scenes, including descendants.
+        for path in ["_global.MainMenuMovie", "_global.SinglePlayerMovie"] {
+            front.send(Input::Set {
+                path: path.into(),
+                property: "_visible".into(),
+                value: (matches!(state.get(), AppState::Menu | AppState::Browser)
+                    && path == "_global.MainMenuMovie")
+                    .into(),
+            });
+        }
         if *state.get() != AppState::Match {
             front.send(Input::Call {
                 path: "_level100".into(),
@@ -768,11 +809,11 @@ pub(crate) fn update(
                 args: vec![true.into()],
             });
             front.send(Input::Call {
-                path: "_level21".into(),
+                path: "_global.SinglePlayerMovie.Panel.Panel.BotDiffPanel".into(),
                 function: "HidePanel".into(),
                 args: vec![],
             });
-            front.send(Input::RequestElement("LoadingScreen".into()));
+            front.request("LoadingScreen");
             front.send(Input::Call {
                 path: "_level1000".into(),
                 function: "setLoadingText".into(),
@@ -945,7 +986,7 @@ pub(crate) fn input(
     buttons: Res<ButtonInput<KeyCode>>,
     mut focus: MessageReader<WindowFocused>,
 ) {
-    if !enabled.0 || !front.visible || front.failed.is_some() {
+    if crate::frontend_flow::enabled() || !enabled.0 || !front.visible || front.failed.is_some() {
         keys.clear();
         wheel.clear();
         return;
@@ -1080,6 +1121,9 @@ pub(crate) fn capture_menu(
     mut commands: Commands,
     mut exit: MessageWriter<AppExit>,
 ) {
+    if crate::frontend_flow::enabled() {
+        return;
+    }
     let started = started_at.get_or_insert_with(std::time::Instant::now);
     if front.failed.is_some() || started.elapsed() > std::time::Duration::from_secs(60) {
         error!(

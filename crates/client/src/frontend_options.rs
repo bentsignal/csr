@@ -199,6 +199,7 @@ impl Scene {
     }
 
     pub fn show(&mut self, path: &str, settings: &Settings, calls: &mut Calls) {
+        calls.set(path, "_visible", true.into());
         self.layout_initialized = false;
         self.focused_widget = None;
         calls.call(path, "Init", vec![self.count().into(), self.mode.into()]);

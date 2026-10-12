@@ -22,6 +22,7 @@ pub struct Level {
     /// Private asset-map metadata never falls back to an installed map with
     /// the same basename. Recipe and built-in maps retain their own source.
     metadata_pack: Option<String>,
+    pack_archive_hash: Option<String>,
     pub timings: Vec<(&'static str, f32)>,
 }
 
@@ -80,10 +81,7 @@ impl Level {
     /// Loads `maps/<name>.bsp` and builds its collision world.
     pub fn load(name: &str, game_dir: Option<&Path>) -> Result<Level, LoadError> {
         if let Ok(id) = name.parse::<ContentId>() {
-            if id.kind != ContentKind::Map { return Err(LoadError::Io(format!("{id} is not a map"))); }
-            let (pack, map) = packs::Installed::current().resolve_map(&id).map_err(LoadError::Io)?;
-            let (game_dir, fs) = mount_game(game_dir)?;
-            return Self::load_pack(&pack, &map, game_dir, fs);
+            return Self::load_id(&id, game_dir);
         }
         if !packs::valid_bsp_name(name) { return Err(LoadError::Io("invalid map name".into())); }
         let t = Instant::now();
@@ -99,6 +97,53 @@ impl Level {
         level.timings.insert(0, ("mount", mount_time));
         Ok(level)
     }
+
+    /// Canonical identity loading for menu selections and remote map requests.
+    /// Built-in names come from install/archive definitions, never ID.name.
+    pub fn load_id(id: &ContentId, game_dir: Option<&Path>) -> Result<Level, LoadError> {
+        if id.kind != ContentKind::Map { return Err(LoadError::Io(format!("{id} is not a map"))); }
+        match &id.origin {
+            GameOrigin::Csgo => {
+                let (game_dir, fs) = mount_game(game_dir)?;
+                let store = workshop::Store::current();
+                let entry = maps::definition(id, &game_dir, &fs, &store).map_err(LoadError::Io)?;
+                // Known archived definitions retain their existing zero-step
+                // acquisition. Fetch uses the fixed definition, not user paths.
+                if let Some(old) = entry.old && entry.status != maps::MapStatus::Ready { fetch_old_map(old)?; }
+                Self::load_local_id_from_vfs(id, game_dir, fs, &store)
+            }
+            GameOrigin::Mod | GameOrigin::Other(_) => {
+                let (pack, map) = packs::Installed::current().resolve_map(id).map_err(LoadError::Io)?;
+                let (game_dir, fs) = mount_game(game_dir)?;
+                Self::load_pack(&pack, &map, game_dir, fs)
+            }
+            origin => Err(LoadError::Io(format!("no map reader is available for origin {}", origin.prefix()))),
+        }
+    }
+
+    /// Resolve only already local install/archive data in a caller-owned VFS.
+    /// This does not fetch or fall back to another source with the same basename.
+    pub fn load_local_id_from_vfs(id: &ContentId, game_dir: PathBuf, fs: vfs::Vfs, store: &workshop::Store) -> Result<Level, LoadError> {
+        let entry = maps::definition(id, &game_dir, &fs, store).map_err(LoadError::Io)?;
+        let source = maps::local_source(&entry, &fs, store).map_err(LoadError::Io)?;
+        Self::load_from_vfs_scoped(entry.id, &entry.name, game_dir, fs, None, Some(&source))
+    }
+
+    /// Keep a menu's selected immutable entry bound to the bytes mounted by
+    /// this level. A concurrent pack update requires a fresh selection.
+    pub fn load_catalog_map(store: &packs::Installed, entry: &packs::CatalogEntry, id: &ContentId, game_dir: Option<&Path>) -> Result<Level, LoadError> {
+        let (pack, map) = store.resolve_catalog_map(entry, id).map_err(LoadError::Io)?;
+        let (game_dir, fs) = mount_game(game_dir)?;
+        Self::load_pack(&pack, &map, game_dir, fs)
+    }
+
+    /// The same hash-bound selection for headless/self-contained asset packs.
+    pub fn load_catalog_map_from_vfs(store: &packs::Installed, entry: &packs::CatalogEntry, id: &ContentId, game_dir: PathBuf, fs: vfs::Vfs) -> Result<Level, LoadError> {
+        let (pack, map) = store.resolve_catalog_map(entry, id).map_err(LoadError::Io)?;
+        Self::load_pack(&pack, &map, game_dir, fs)
+    }
+
+    pub fn pack_archive_hash(&self) -> Option<&str> { self.pack_archive_hash.as_deref() }
 
     /// Loads a validated pack selection into a session-owned VFS. Asset maps
     /// can use an empty VFS without a Legacy install; recipes need a mounted
@@ -117,7 +162,9 @@ impl Level {
             None
         };
         let id = map.id.parse().map_err(|e| LoadError::Io(format!("{e}")))?;
-        Self::load_from_vfs_scoped(id, &map.bsp, game_dir, fs, metadata_pack)
+        let mut level = Self::load_from_vfs_scoped(id, &map.bsp, game_dir, fs, metadata_pack, None)?;
+        level.pack_archive_hash = Some(pack.archive_hash().into());
+        Ok(level)
     }
 
     /// Loads a map from an already mounted file system, including content
@@ -125,10 +172,10 @@ impl Level {
     /// records the source directory; the loader reads all data through VFS.
     /// `name` selects the BSP filename independently of the stable content ID.
     pub fn load_from_vfs(id: ContentId, name: &str, game_dir: PathBuf, fs: vfs::Vfs) -> Result<Level, LoadError> {
-        Self::load_from_vfs_scoped(id, name, game_dir, fs, None)
+        Self::load_from_vfs_scoped(id, name, game_dir, fs, None, None)
     }
 
-    fn load_from_vfs_scoped(id: ContentId, name: &str, game_dir: PathBuf, mut fs: vfs::Vfs, metadata_pack: Option<String>) -> Result<Level, LoadError> {
+    fn load_from_vfs_scoped(id: ContentId, name: &str, game_dir: PathBuf, mut fs: vfs::Vfs, metadata_pack: Option<String>, bsp_mount: Option<&str>) -> Result<Level, LoadError> {
         if id.kind != ContentKind::Map {
             return Err(LoadError::Io(format!("{id} is not a map")));
         }
@@ -136,7 +183,8 @@ impl Level {
         let mut timings = Vec::new();
         let t = Instant::now();
         let map_path = format!("maps/{name}.bsp");
-        let bytes = fs.read(&map_path).ok_or_else(|| LoadError::Io(format!("{map_path} not found")))?;
+        let bytes = match bsp_mount { Some(label) => fs.read_from(label, &map_path), None => fs.read(&map_path) }
+            .ok_or_else(|| LoadError::Io(format!("{map_path} not found in its selected source")))?;
         let bsp = bsp::Bsp::parse(&bytes).map_err(|e| LoadError::Io(format!("{map_path}: {e}")))?;
         drop(bytes);
         fs.mount_map_pakfile(bsp.pakfile.clone())
@@ -173,6 +221,7 @@ impl Level {
             catalog: Arc::new(catalog),
             nav,
             metadata_pack,
+            pack_archive_hash: None,
             timings,
         })
     }
@@ -276,3 +325,6 @@ mod tests {
         assert!(level.vfs.labels().contains(&"pack:test_pack"));
     }
 }
+
+#[cfg(test)]
+mod selection_tests;

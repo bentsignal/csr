@@ -131,6 +131,32 @@ for combined catalogs; the existing built-in catalogs have not all migrated.
   the pending file; successful publication always reports success. Loading
   snapshots stay separate from a running match. Window drops, catalog refresh
   and selected ContentId session loading are frontend work still in progress.
+- Menu refreshes can queue `CatalogJob::start(store)` on the same one-worker
+  flow. `progress()`, `cancel()` and `poll()` mirror installation; successful
+  `CatalogOutcome::Loaded` returns a `Catalog` with deterministic entries/errors.
+  `CatalogEntry` exposes read-only `manifest()`, `archive_hash()` and
+  `archive_size()` snapshots without retaining assets or exposing storage paths.
+  Archives are fully validated one at a time; each archive's buffers are released
+  before reading the next. `Installed::catalog()` is the synchronous equivalent
+  for headless/developer callers. Installation conflict checks also stream.
+  `resolve_catalog_map(entry,id)` reopens just the selected pack and verifies
+  its full archive hash against the displayed metadata; if the pack changed,
+  refresh before playing. `resolve_map(id)` performs that metadata resolution
+  itself. Current levels keep their existing immutable mounts during refresh.
+- Shared level selection accepts `Level::load_id(id,game_dir)` for canonical
+  IDs. CS:GO IDs resolve through discovered game mounts and fixed Workshop
+  definitions; an ID's name is never treated as an arbitrary BSP path. Known
+  archive downloads retain their verified first-use acquisition. A canonical
+  archived selection reads only its Workshop source, so an installed alias
+  cannot substitute another BSP. Unsupported game readers and ambiguous local
+  identities are errors. `load_local_id_from_vfs` is the headless/local-only
+  equivalent and never fetches.
+  For a private selected `CatalogEntry`, call
+  `Level::load_catalog_map(store,entry,id,game_dir)`, or
+  `load_catalog_map_from_vfs` with a session-owned VFS for a self-contained
+  asset pack. The full entry hash is revalidated before mounting and retained
+  as `Level::pack_archive_hash()`; a changed entry requires refresh. Frontend
+  drop/picker integration consumes these APIs separately.
 - Track A can advertise exact archive hashes/sizes, stage downloads outside
   active installed packs, validate bytes, then mount an explicit session set.
   A server's files must not replace the player's global pack set automatically.

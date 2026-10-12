@@ -10,6 +10,7 @@ pub mod frontend;
 mod frontend_inventory;
 mod frontend_game;
 mod frontend_options;
+mod frontend_flow;
 pub mod foley;
 mod sound_probe;
 pub mod surfaces;
@@ -261,7 +262,7 @@ pub fn run(opts: ClientOptions) -> i32 {
     .insert_resource(load_request.clone())
     .insert_resource(player::InputEnabled(opts.screenshot.is_none()))
     .add_plugins(CsgoPlugin)
-    .insert_state(if std::env::var("CSR_TEST_MENU").as_deref() == Ok("main") { AppState::Menu }
+    .insert_state(if frontend_flow::enabled() || std::env::var("CSR_TEST_MENU").as_deref() == Ok("main") { AppState::Menu }
         else if opts.direct || opts.screenshot.is_some() { AppState::Loading } else { AppState::Menu });
     if opts.screenshot.is_some() {
         // Automated runs never have focus; don't let the unfocused 60 Hz
@@ -270,6 +271,7 @@ pub fn run(opts: ClientOptions) -> i32 {
             focused_mode: bevy::winit::UpdateMode::Continuous,
             unfocused_mode: bevy::winit::UpdateMode::Continuous,
         })
+        .add_systems(Update, frontend_flow::update.after(frontend::update).run_if(frontend_flow::enabled))
         .add_systems(Update, smoke_test.run_if(in_state(AppState::Match)))
         .add_systems(Update, frontend::capture_menu.run_if(|state: Res<State<AppState>>| {
             *state.get() == AppState::Menu || (*state.get() == AppState::Match
@@ -577,7 +579,7 @@ fn smoke_test(
     level: Res<LoadedLevel>,
 ) {
     // Menu captures wait for the movie and its asynchronous fonts/widgets.
-    if std::env::var("CSR_TEST_MENU").as_deref() == Ok("pause") { return; }
+    if frontend_flow::enabled() || std::env::var("CSR_TEST_MENU").as_deref() == Ok("pause") { return; }
     *frame += 1;
 
     let opts = &options.0;

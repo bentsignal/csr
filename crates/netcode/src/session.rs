@@ -57,6 +57,9 @@ impl Session {
     pub fn content(&self) -> &ContentManifest {
         &self.content
     }
+    pub fn lag_policy(&self) -> LagPolicy {
+        self.lag
+    }
     pub fn player_for(&self, client: u64) -> Option<PlayerId> {
         self.peers.get(&client).map(|p| p.player)
     }
