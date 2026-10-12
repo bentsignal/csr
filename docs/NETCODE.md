@@ -168,8 +168,9 @@ player keys and secure connect tokens before treating names or ids as trusted.
 
 The frontend-facing [owned remote session API](REMOTESESSION.md) composes
 discovery, exact installed-content admission, prediction, remote pose history,
-bounded authoritative events and cancellation. Its proof is headless;
-rendered joining remains client integration work.
+bounded authoritative events and cancellation. Its library proof is headless;
+the [rendered join integration](REMOTE_JOIN.md) additionally exercises two
+clients, pause, Home teardown and offline reload at 64 and 128 tick.
 
 The separate `csr-server` executable has no `client` or Bevy dependency.
 Source builds use:
@@ -197,8 +198,8 @@ checks all 128 acknowledgements and exact final reconciliation, and verifies
 predicted effects remain absent. It exits with `failures: 0`.
 It also samples fractional remote poses from decoded snapshots, checks exact
 snapshot poses against authority, validates tracked rotations and bounds the
-pose history. These are headless checks; rendered multiplayer proof remains
-client integration work.
+pose history. These are headless checks; rendered lifecycle proof is documented
+separately in [REMOTE_JOIN.md](REMOTE_JOIN.md).
 The default test data also exercises input ownership, atomic validation,
 duplicate/reordered commands, neutral controls after timeout, fixed-tick
 accumulation, reliable delivery after packet loss, and fragmented snapshot
