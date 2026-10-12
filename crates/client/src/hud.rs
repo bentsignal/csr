@@ -478,7 +478,7 @@ pub fn update(
 /// Hide gameplay UI during transparent menus without disturbing per-widget visibility.
 #[derive(Component)]
 pub struct GameHud;
-pub fn mark_roots(mut commands:Commands,roots:Query<Entity,(With<Node>,Without<ChildOf>)>) {
+pub fn mark_roots(mut commands:Commands,roots:Query<Entity,(With<Node>,Without<ChildOf>,Without<crate::session::Persistent>)>) {
     for e in &roots {commands.entity(e).insert(GameHud);}
 }
 pub fn menu_visibility(menu:Res<crate::menu::Menu>,mut roots:Query<&mut Node,With<GameHud>>) {

@@ -61,9 +61,16 @@ impl Menu {
     pub fn open(&self) -> bool {
         self.page.is_some()
     }
+    pub(crate) fn reset_match(&mut self) {
+        self.root = None;
+        self.in_match = false;
+        self.page = Some(Page::Main);
+        self.dirty = true;
+        self.capture = None;
+    }
 }
 #[derive(Resource, Clone, Default)]
-pub struct Relaunch(pub Arc<Mutex<Option<crate::ClientOptions>>>);
+pub struct LoadRequest(pub Arc<Mutex<Option<crate::ClientOptions>>>);
 #[derive(Component, Clone, Copy)]
 pub enum Action {
     Page(Page),
@@ -88,10 +95,10 @@ pub enum Action {
 pub(crate) fn setup(
     mut menu: ResMut<Menu>,
     opts: Res<crate::Options>,
-    level: Res<crate::LoadedLevel>,
+    level: Res<crate::GameData>,
     mut clock: ResMut<Time<Virtual>>,
 ) {
-    let mut maps: Vec<String> = std::fs::read_dir(level.0.game_dir.join("maps"))
+    let mut maps: Vec<String> = std::fs::read_dir(level.game_dir.join("maps"))
         .into_iter()
         .flatten()
         .filter_map(Result::ok)
@@ -100,7 +107,6 @@ pub(crate) fn setup(
         .collect();
     maps.extend(
         level
-            .0
             .vfs
             .archive_paths_with_prefix("maps/")
             .iter()
@@ -147,7 +153,7 @@ pub(crate) fn input(
     keys: Res<ButtonInput<KeyCode>>,
     actions: Query<(&Interaction, &Action), Changed<Interaction>>,
     mut exit: MessageWriter<AppExit>,
-    relaunch: Res<Relaunch>,
+    load_request: Res<LoadRequest>,
     opts: Res<crate::Options>,
     mut local: ResMut<LocalPlayer>,
     mut buy: ResMut<crate::buymenu::BuyMenu>,
@@ -156,11 +162,13 @@ pub(crate) fn input(
     enabled: Res<InputEnabled>,
     mut inventory: ResMut<crate::inventory::Inventory>,
     collection: Res<crate::inventory::Collection>,
+    mut previous_open: Local<bool>,
 ) {
     if !enabled.0 {
         return;
     }
-    let was_open = menu.open();
+    // Native movie callbacks may close the menu between input passes.
+    let was_open = menu.open() || *previous_open;
     if let Some(index) = menu.capture {
         if keys.just_pressed(KeyCode::Escape) {
             menu.capture = None;
@@ -281,8 +289,7 @@ pub(crate) fn input(
                         next.direct = true;
                         next.screenshot = None;
                         next.camera = None;
-                        *relaunch.0.lock().unwrap() = Some(next);
-                        exit.write(AppExit::Success);
+                        *load_request.0.lock().unwrap() = Some(next);
                     }
                 },
                 Action::Adjust(id, delta) => match id {
@@ -338,6 +345,7 @@ pub(crate) fn input(
         // A UI click cannot also fire in the resumed match.
         commands.insert_resource(crate::player::InputBlockFrames(2));
     }
+    *previous_open = menu.open();
 }
 
 pub(crate) fn label(
@@ -1571,7 +1579,7 @@ pub fn hover(
 pub(crate) fn apply(
     settings: Res<Settings>,
     opts: Res<crate::Options>,
-    mut local: ResMut<LocalPlayer>,
+    mut local: Option<ResMut<LocalPlayer>>,
     mut sounds: ResMut<crate::audio::SoundLibrary>,
     mut materials: ResMut<Assets<crate::material::WorldMaterial>>,
     mut window: Single<&mut Window, With<PrimaryWindow>>,
@@ -1579,10 +1587,10 @@ pub(crate) fn apply(
     mut sinks: Query<(&crate::audio::SoundGain, &mut bevy::audio::AudioSink)>,
     mut spatial: Query<(&crate::audio::SoundGain, &mut bevy::audio::SpatialAudioSink)>,
 ) {
-    if !settings.is_changed() {
+    if !settings.is_changed() && !local.as_ref().is_some_and(|local| local.is_added()) {
         return;
     }
-    local.sensitivity = settings.sensitivity;
+    if let Some(local) = local.as_mut() { local.sensitivity = settings.sensitivity; }
     sounds.master_volume = settings.volume;
     use bevy::audio::AudioSinkPlayback;
     for (gain, mut sink) in &mut sinks {
@@ -1625,7 +1633,7 @@ mod tests {
         let mut a = App::new();
         a.init_resource::<Menu>()
             .init_resource::<Settings>()
-            .init_resource::<Relaunch>()
+            .init_resource::<LoadRequest>()
             .init_resource::<crate::inventory::Inventory>()
             .init_resource::<crate::inventory::Collection>()
             .init_resource::<ButtonInput<KeyCode>>()
@@ -1693,6 +1701,22 @@ mod tests {
             .press(KeyCode::Escape);
         a.update();
         assert!(!a.world().resource::<Menu>().open());
+        assert!(!a.world().resource::<Time<Virtual>>().is_paused());
+        assert!(a.world().resource::<crate::player::InputBlockFrames>().0 > 0);
+        let mut q = a.world_mut().query::<&CursorOptions>();
+        let cursor = q.single(a.world()).unwrap();
+        assert_eq!(cursor.grab_mode, CursorGrabMode::Locked);
+        assert!(!cursor.visible);
+    }
+    #[test]
+    fn a_movie_callback_closing_pause_resumes_clock_and_blocks_its_click() {
+        let mut a = harness();
+        a.world_mut().resource_mut::<Menu>().page = Some(Page::Pause);
+        a.update();
+        assert!(a.world().resource::<Time<Virtual>>().is_paused());
+        // The movie queues this change during Update, after the input pass.
+        a.world_mut().resource_mut::<Menu>().page = None;
+        a.update();
         assert!(!a.world().resource::<Time<Virtual>>().is_paused());
         assert!(a.world().resource::<crate::player::InputBlockFrames>().0 > 0);
         let mut q = a.world_mut().query::<&CursorOptions>();

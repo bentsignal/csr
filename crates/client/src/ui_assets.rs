@@ -33,8 +33,8 @@ fn decode_font(mut bytes: Vec<u8>) -> Option<Vec<u8>> {
     Some(bytes)
 }
 
-pub fn load(mut commands: Commands, level: Res<crate::LoadedLevel>, mut fonts: ResMut<Assets<Font>>, mut images: ResMut<Assets<Image>>) {
-    let fs = &level.0.vfs;
+pub fn load(mut commands: Commands, level: Res<crate::GameData>, mut fonts: ResMut<Assets<Font>>, mut images: ResMut<Assets<Image>>) {
+    let fs = &level.vfs;
     let mut font = |name: &str| {
         fs.read(&format!("panorama/fonts/{name}.vfont")).and_then(decode_font).map(|bytes| fonts.add(Font::from_bytes(bytes))).unwrap_or_else(|| {
             warn!("Missing or invalid original font: {name}"); Handle::default()
@@ -63,7 +63,7 @@ pub fn load(mut commands: Commands, level: Res<crate::LoadedLevel>, mut fonts: R
         png(&format!("character-{side}"), &format!("resource/flash/econ/characters/customplayer_{model}.png"));
     }
     png("knife_default_t", "materials/panorama/images/hud/deathnotice/icon-knife_default_t.png");
-    for weapon in &level.0.catalog.weapons {
+    for weapon in &level.catalog.weapons {
         let name = weapon.class_name.trim_start_matches("weapon_");
         png(name, &format!("materials/panorama/images/hud/deathnotice/icon-{name}.png"));
         png(&format!("item-{name}"), &format!("resource/flash/econ/weapons/base_weapons/weapon_{name}.png"));

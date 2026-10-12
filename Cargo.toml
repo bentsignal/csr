@@ -17,6 +17,7 @@ members = [
     "crates/netcode",
     "crates/server",
     "crates/level",
+    "crates/scaleform",
     "crates/client",
     "crates/launcher",
     "crates/workshop",
@@ -35,6 +36,7 @@ repository = "https://github.com/"
 # share one Bevy app when the games are stitched together.
 bevy = { version = "0.19", default-features = false, features = [
     "bevy_window",
+    "bevy_state",
     "bevy_winit",
     "bevy_ui",
     "bevy_ui_render",
@@ -80,6 +82,7 @@ netcode = { path = "crates/netcode" }
 nav = { path = "crates/nav" }
 level = { path = "crates/level" }
 weapons = { path = "crates/weapons" }
+scaleform = { path = "crates/scaleform" }
 client = { path = "crates/client" }
 workshop = { path = "crates/workshop" }
 packs = { path = "crates/packs" }
