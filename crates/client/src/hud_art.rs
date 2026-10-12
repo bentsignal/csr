@@ -75,13 +75,21 @@ fn radar_image(bytes: &[u8]) -> Option<Image> {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn update(mut commands: Commands, art: Res<UiAssets>, world: Res<SimWorld>, local: Res<LocalPlayer>, radar: Res<Radar>, poses: Res<crate::interpolation::RenderPoses>, time: Res<Time<Fixed>>, mut state: ResMut<Inventory>, mut armor: Query<&mut ImageNode, With<ArmorIcon>>, mut carts: Query<&mut Visibility, (With<BuyIcon>, Without<RadarDot>)>, mut dots: Query<(&RadarDot, &mut Node, &mut Visibility), Without<BuyIcon>>) {
+pub fn update(mut commands: Commands, art: Res<UiAssets>, world: Res<SimWorld>, local: Res<LocalPlayer>, radar: Res<Radar>, poses: Res<crate::interpolation::RenderPoses>, time: Res<Time<Fixed>>, mut state: ResMut<Inventory>, mut armor: Query<&mut ImageNode, With<ArmorIcon>>, mut carts: Query<&mut Visibility, (With<BuyIcon>, Without<RadarDot>)>, mut dots: Query<(Entity, &RadarDot, &mut Node, &mut Visibility), Without<BuyIcon>>) {
     let w = &world.0;
     let Some(p) = w.player(local.view_target()) else { return };
     for mut image in &mut armor { if let Some(handle) = art.image(if p.helmet { "helmet" } else { "armor" }) { image.image = handle; } }
     for mut visibility in &mut carts { *visibility = if p.alive && p.in_buy_zone && w.competitive() && w.round.can_buy(&w.rules, w.time()) { Visibility::Inherited } else { Visibility::Hidden }; }
-    for (dot, mut node, mut visibility) in &mut dots {
+    let present: std::collections::HashSet<_> = dots.iter().map(|(_, dot, _, _)| dot.0).collect();
+    for player in w.players.iter().filter(|player| !present.contains(&player.id)) {
+        if let Some(image) = art.image(if player.team == sim::Team::CounterTerrorist { "radar-ct" } else { "radar-t" }) {
+            let entity = icon(&mut commands, image, Node { position_type: PositionType::Absolute, width: px(10.0), height: px(10.0), ..default() });
+            commands.entity(entity).insert((RadarDot(player.id), Visibility::Hidden, GlobalZIndex(1)));
+        }
+    }
+    for (entity, dot, mut node, mut visibility) in &mut dots {
         *visibility = Visibility::Hidden;
+        if w.player(dot.0).is_none() { commands.entity(entity).despawn(); continue; }
         let Some(teammate) = w.player(dot.0).filter(|t| t.team == p.team && t.alive) else { continue };
         if radar.scale <= 0.0 { continue; }
         let pos = poses.sample(teammate, time.overstep_fraction()).origin;

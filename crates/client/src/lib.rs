@@ -51,6 +51,7 @@ pub mod remote;
 pub mod remote_map;
 pub mod remote_render_gate;
 pub mod remote_join;
+mod remote_flow;
 pub mod props;
 pub mod scoreboard;
 pub mod scope;
@@ -278,7 +279,7 @@ pub fn run(opts: ClientOptions) -> i32 {
     .insert_resource(load_request.clone())
     .insert_resource(player::InputEnabled(opts.screenshot.is_none()))
     .add_plugins(CsgoPlugin)
-    .insert_state(if pack_ui::proof_enabled() || frontend_flow::enabled() || std::env::var("CSR_TEST_MENU").as_deref() == Ok("main") { AppState::Menu }
+    .insert_state(if remote_flow::enabled() || pack_ui::proof_enabled() || frontend_flow::enabled() || std::env::var("CSR_TEST_MENU").as_deref() == Ok("main") { AppState::Menu }
         else if opts.direct || opts.screenshot.is_some() { AppState::Loading } else { AppState::Menu });
     if opts.screenshot.is_some() {
         // Automated runs never have focus; don't let the unfocused 60 Hz
@@ -289,10 +290,11 @@ pub fn run(opts: ClientOptions) -> i32 {
         })
         .add_systems(Update, frontend_flow::update.after(frontend::update).run_if(frontend_flow::enabled))
         .add_systems(First, pack_ui::proof.run_if(pack_ui::proof_enabled))
-        .add_systems(Update, smoke_test.run_if(remote_join::ready).run_if(remote_join::offline))
+        .add_systems(First, remote_flow::update.run_if(remote_flow::enabled))
+        .add_systems(Update, smoke_test.run_if(remote_join::ready).run_if(remote_join::offline).run_if(|| !remote_flow::enabled()))
         .add_systems(Update, frontend::capture_menu.run_if(|state: Res<State<AppState>>| {
-            *state.get() == AppState::Menu || (*state.get() == AppState::Match
-                && std::env::var("CSR_TEST_MENU").as_deref() == Ok("pause"))
+            !remote_flow::enabled() && (*state.get() == AppState::Menu || (*state.get() == AppState::Match
+                && std::env::var("CSR_TEST_MENU").as_deref() == Ok("pause")))
         }));
     }
     let result = app.run();
