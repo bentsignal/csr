@@ -188,6 +188,10 @@ byte-identical to 2018.
       Ruffle fixes (fork `bentsignal/ruffle`, branch `csgo-scaleform`).
 - [x] Integrate Ruffle as the menu layer (`crates/scaleform`), with native
       offline launch, pause/resume/exit, and saved numeric options.
+- [x] Remove the moving-cursor input backlog and preload cached Pause during
+      normal map loading. Production-input stress and a five-bot movement,
+      fire/reload, pause/resume run pass with inspected captures; this does not
+      establish physical display latency or full fidelity. [MENU_PERFORMANCE.md](MENU_PERFORMANCE.md).
 - [ ] Complete the game API bridge for inventory/cases and the remaining
       classic panels. Original reset defaults still need verified evidence.
 - The fallback (a native Bevy layout built from the SWFs with the `swf`
