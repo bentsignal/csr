@@ -66,6 +66,13 @@ fn failed(world: &mut World, message: &str) {
     world.write_message(AppExit::Error(std::num::NonZeroU8::new(7).unwrap()));
 }
 
+fn guest_capture_ready(key: &str) -> bool {
+    std::env::var_os(key).is_none_or(|path| {
+        let path = std::path::PathBuf::from(path);
+        path.is_absolute() && path.is_file()
+    })
+}
+
 pub(crate) fn update(world: &mut World, mut proof: Local<Proof>) {
     // Each hidden loopback window owns its engine inputs independently. This
     // fixture cannot claim simultaneous operating-system window focus.
@@ -163,9 +170,28 @@ pub(crate) fn update(world: &mut World, mut proof: Local<Proof>) {
             proof.next();
         }
         2 if ready && proof.entered.elapsed() > Duration::from_secs(2) => {
+            if std::env::var_os("CSR_TEST_HOST").is_some()
+                && !guest_capture_ready("CSR_TEST_HOST_GUEST_READY")
+            {
+                return;
+            }
             let world_state = &world.resource::<crate::player::SimWorld>().0;
             if world_state.tick <= proof.tick || world_state.players.len() < 2 {
                 failed(world, "authority or remote actor did not advance");
+                return;
+            }
+            if std::env::var_os("CSR_TEST_HOST_GUEST_READY").is_some()
+                && world_state
+                    .players
+                    .iter()
+                    .filter(|player| !player.is_bot)
+                    .count()
+                    < 2
+            {
+                failed(
+                    world,
+                    "guest capture did not correspond to a second authoritative human",
+                );
                 return;
             }
             info!(
@@ -183,6 +209,24 @@ pub(crate) fn update(world: &mut World, mut proof: Local<Proof>) {
                 .is_some_and(|captures| captures.0 >= 1)
             && proof.entered.elapsed() > Duration::from_millis(250) =>
         {
+            if std::env::var_os("CSR_TEST_HOST").is_some()
+                && !guest_capture_ready("CSR_TEST_HOST_GUEST_DONE")
+            {
+                return;
+            }
+            if std::env::var_os("CSR_TEST_HOST_GUEST_DONE").is_some()
+                && world
+                    .resource::<crate::player::SimWorld>()
+                    .0
+                    .players
+                    .iter()
+                    .filter(|player| !player.is_bot)
+                    .count()
+                    != 1
+            {
+                failed(world, "departed guest remained in the hosting authority");
+                return;
+            }
             proof.tick = world.resource::<crate::player::SimWorld>().0.tick;
             // Screenshot runs disable controls by default. Enable the normal
             // menu-input path so this phase actually exercises pause ownership.
