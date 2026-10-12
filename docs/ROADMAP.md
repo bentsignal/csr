@@ -221,6 +221,12 @@ byte-identical to 2018.
 
 ### Track D: Fidelity and gameplay completeness
 
+The 2026-10-12 desktop playtest confirms usable menu navigation and bot play,
+but identifies major remaining feel/presentation gaps. The owner clarified a
+2015 gameplay/audio baseline. The active measured backlog is
+[PLAYTEST_FEEDBACK.md](PLAYTEST_FEEDBACK.md); defer new feature polish until
+this base is faithful.
+
 The owner's first playtest (2026-10-11): "very far from one-to-one". Many
 sounds are wrong, textures look off, the gameplay feels wrong, and the whole
 thing is uncanny. Fidelity is measured, never eyeballed:
