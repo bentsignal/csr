@@ -164,6 +164,161 @@ pub fn channels() -> renet::ConnectionConfig {
     }
 }
 
+pub(crate) fn validate_state(
+    state: &StateUpdate,
+    welcome: Option<&ServerControl>,
+    sent: u64,
+    last_ack: u64,
+) -> Result<(), String> {
+    let Some(ServerControl::Welcome {
+        player, tick_rate, ..
+    }) = welcome
+    else {
+        return Err("state before admission".into());
+    };
+    let world = &state.snapshot.state;
+    if world.tick_rate != *tick_rate
+        || state.acknowledged_input > sent
+        || state.acknowledged_input < last_ack
+    {
+        return Err("invalid snapshot rate or input acknowledgement".into());
+    }
+    if world.players.len() > 64
+        || world.items.len() > 4096
+        || world.projectiles.len() > 4096
+        || world.utility_fields.len() > 4096
+    {
+        return Err("snapshot entity limit exceeded".into());
+    }
+    let c = &world.config;
+    let r = &world.rules;
+    if [
+        c.gravity,
+        c.friction,
+        c.stop_speed,
+        c.accelerate,
+        c.air_accelerate,
+        c.air_max_wishspeed,
+        c.max_speed,
+        c.max_velocity,
+        c.step_size,
+        c.jump_impulse,
+        c.stamina_max,
+        c.stamina_jump_cost,
+        c.stamina_land_cost,
+        c.stamina_recovery_rate,
+        c.walk_speed_modifier,
+        c.duck_speed_modifier,
+        c.duck_speed,
+        r.freeze_time,
+        r.buy_time,
+        r.round_time,
+        r.restart_delay,
+        r.c4_timer,
+        r.plant_time,
+        r.defuse_time,
+        r.defuse_time_kit,
+        r.kill_award_factor,
+        world.round.phase_start,
+        world.round.live_start,
+    ]
+    .iter()
+    .any(|n| !n.is_finite())
+    {
+        return Err("nonfinite snapshot physics or rules".into());
+    }
+    let mut ids = std::collections::HashSet::new();
+    for actor in &world.players {
+        if actor.id == 0
+            || !ids.insert(actor.id)
+            || !actor.movement.origin.is_finite()
+            || !actor.movement.velocity.is_finite()
+            || !actor.view_angles.is_finite()
+            || [
+                actor.movement.duck_amount,
+                actor.movement.stamina,
+                actor.movement.last_fall_speed,
+                actor.respawn_at,
+                actor.flash_until,
+            ]
+            .iter()
+            .any(|n| !n.is_finite())
+            || actor.weapons.len() > 64
+            || (!actor.weapons.is_empty() && actor.active >= actor.weapons.len())
+        {
+            return Err("invalid snapshot player state".into());
+        }
+        for weapon in &actor.weapons {
+            validate_weapon(weapon)?;
+        }
+        crate::session::validate_input(actor.last_input)?;
+        let mut input = actor.last_input;
+        input.tracked = actor.tracked;
+        input.aim = actor.aim;
+        crate::session::validate_input(input)?;
+    }
+    for item in &world.items {
+        if !item.pos.is_finite() || !item.yaw.is_finite() || !item.pickup_after.is_finite() {
+            return Err("invalid dropped item state".into());
+        }
+        if let sim::GroundKind::Weapon(weapon) = &item.kind {
+            validate_weapon(weapon)?;
+        }
+    }
+    if world
+        .projectiles
+        .iter()
+        .any(|p| !p.pos.is_finite() || !p.velocity.is_finite() || !p.born.is_finite())
+        || world
+            .utility_fields
+            .iter()
+            .any(|f| !f.pos.is_finite() || !f.born.is_finite() || !f.until.is_finite())
+    {
+        return Err("invalid snapshot utility state".into());
+    }
+    if world.bomb.is_some_and(|b| {
+        !b.pos.is_finite()
+            || !b.planted_at.is_finite()
+            || !b.explode_at.is_finite()
+            || b.defuser.is_some_and(|(_, started)| !started.is_finite())
+    }) {
+        return Err("invalid snapshot bomb state".into());
+    }
+    if *player == 0 || !ids.contains(player) {
+        return Err("snapshot omits assigned player".into());
+    }
+    Ok(())
+}
+
+fn validate_weapon(weapon: &sim::weapon::WeaponState) -> Result<(), String> {
+    if [
+        weapon.next_attack,
+        weapon.reload_start,
+        weapon.next_secondary_attack,
+        weapon.zoom_changed_at,
+        weapon.zoom_from_fov,
+        weapon.accuracy_penalty,
+        weapon.recoil_index,
+    ]
+    .iter()
+    .any(|n| !n.is_finite())
+        || weapon.reload_end.is_some_and(|n| !n.is_finite())
+        || weapon.last_melee_attack.is_some_and(|n| !n.is_finite())
+    {
+        return Err("invalid snapshot weapon timing".into());
+    }
+    if weapon.cosmetic.is_some_and(|c| {
+        !c.wear.is_finite()
+            || c.stickers
+                .iter()
+                .flatten()
+                .any(|(_, wear)| !wear.is_finite())
+    }) {
+        return Err("invalid snapshot cosmetic state".into());
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

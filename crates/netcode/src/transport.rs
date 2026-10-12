@@ -392,49 +392,6 @@ impl Drop for Client {
     }
 }
 
-fn validate_state(
-    state: &StateUpdate,
-    welcome: Option<&ServerControl>,
-    sent: u64,
-    last_ack: u64,
-) -> Result<(), String> {
-    let Some(ServerControl::Welcome {
-        player, tick_rate, ..
-    }) = welcome
-    else {
-        return Err("state before admission".into());
-    };
-    let world = &state.snapshot.state;
-    if world.tick_rate != *tick_rate
-        || state.acknowledged_input > sent
-        || state.acknowledged_input < last_ack
-    {
-        return Err("invalid snapshot rate or input acknowledgement".into());
-    }
-    if world.players.len() > 64
-        || world.items.len() > 4096
-        || world.projectiles.len() > 4096
-        || world.utility_fields.len() > 4096
-    {
-        return Err("snapshot entity limit exceeded".into());
-    }
-    let mut ids = std::collections::HashSet::new();
-    for actor in &world.players {
-        if actor.id == 0
-            || !ids.insert(actor.id)
-            || !actor.movement.origin.is_finite()
-            || !actor.movement.velocity.is_finite()
-            || !actor.view_angles.is_finite()
-        {
-            return Err("invalid snapshot player state".into());
-        }
-    }
-    if *player == 0 || !ids.contains(player) {
-        return Err("snapshot omits assigned player".into());
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

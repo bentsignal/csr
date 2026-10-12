@@ -187,7 +187,7 @@ impl Session {
     }
 }
 
-fn validate_input(mut input: TickInput) -> Result<TickInput, String> {
+pub(crate) fn validate_input(mut input: TickInput) -> Result<TickInput, String> {
     if !input.view_angles.is_finite()
         || !input.forward_move.is_finite()
         || !input.side_move.is_finite()
