@@ -272,11 +272,15 @@ mod tests {
         let mut remote =
             RemoteSession::discover(address, "Local".into(), Team::CounterTerrorist).unwrap();
         discover(&mut old, &mut remote);
-        drop(old);
         let mut world = map();
         world.set_tick_rate(64);
-        let mut changed =
-            Server::bind(address, Session::new(world, manifest()).unwrap(), 4).unwrap();
+        old.replace_unjoined_session(Session::new(world, manifest()).unwrap());
+        let mut changed = old;
+        assert_eq!(changed.address(), address);
+        assert_eq!(
+            std::net::UdpSocket::bind(address).unwrap_err().kind(),
+            std::io::ErrorKind::AddrInUse
+        );
         remote.provide_map(map(), manifest()).unwrap();
         discover(&mut changed, &mut remote);
         assert_eq!(remote.server_info().unwrap().tick_rate, 64);
@@ -295,19 +299,19 @@ mod tests {
         let mut remote =
             RemoteSession::discover(address, "Local".into(), Team::CounterTerrorist).unwrap();
         discover(&mut old, &mut remote);
-        drop(old);
         let mut world = map();
         world.set_tick_rate(128);
         let policy = crate::lag::LagPolicy {
             interpolation_allowance_ticks: 1,
             ..crate::lag::LagPolicy::prototype(128)
         };
-        let mut changed = Server::bind(
-            address,
-            Session::with_lag_policy(world, manifest(), policy).unwrap(),
-            4,
-        )
-        .unwrap();
+        old.replace_unjoined_session(Session::with_lag_policy(world, manifest(), policy).unwrap());
+        let mut changed = old;
+        assert_eq!(changed.address(), address);
+        assert_eq!(
+            std::net::UdpSocket::bind(address).unwrap_err().kind(),
+            std::io::ErrorKind::AddrInUse
+        );
         remote.provide_map(map(), manifest()).unwrap();
         discover(&mut changed, &mut remote);
         assert_eq!(remote.server_info().unwrap().tick_rate, 128);
@@ -321,6 +325,39 @@ mod tests {
             changed.update(Duration::from_secs_f64(1. / 128.)).unwrap();
         }
         assert!(changed.session().world().players.is_empty());
+    }
+
+    #[test]
+    fn ready_policy_change_reprobes_and_discards_old_owned_state() {
+        let mut server = server(128, 8);
+        let mut remote =
+            RemoteSession::discover(server.address(), "Local".into(), Team::CounterTerrorist)
+                .unwrap();
+        ready(&mut server, &mut remote);
+        let mut changed = remote.server_info().unwrap().clone();
+        changed.interpolation_allowance_ticks = 1;
+        changed.validate().unwrap();
+        remote.events.push_back(EventBatch {
+            tick: 1,
+            events: vec![sim::GameEvent::Jump {
+                player: remote.player().unwrap(),
+            }],
+        });
+        remote.queued_events = 1;
+        server.inject_info(changed);
+        server.update(Duration::from_secs_f64(1. / 128.)).unwrap();
+        remote.update(1. / 128.).unwrap();
+        assert_eq!(remote.status(), &Status::Discovering);
+        assert!(remote.predicted_world().is_none());
+        assert!(remote.authoritative_state().is_none());
+        assert!(remote.pose_history().is_none());
+        assert!(remote.server_info().is_none());
+        assert!(remote.events.is_empty());
+        assert!(remote.take_events().is_none());
+        assert_eq!(remote.queued_events, 0);
+        discover(&mut server, &mut remote);
+        assert!(matches!(remote.status(), Status::AwaitingMap(_)));
+        assert!(remote.predicted_world().is_none());
     }
 
     #[test]
