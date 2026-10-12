@@ -112,7 +112,7 @@ match camera with radar, crosshair, round timer, health and ammo visible.
 `flow-pause-exit.png`, `flow-returned-home.png` and `flow-inferno.png` are the
 inspected single-process proof; its log reports zero lifecycle failures.
 
-The combined integration checkpoint passes 288 workspace tests (four installed-data/helper
+The combined integration checkpoint passes 306 workspace tests (four installed-data/helper
 tests ignored), three menu-probe tests, release Dust II probe and ten-round sim
 with zero failures, and the 1,425-file weapon/feedback/foley decode audit with
 zero unsupported or crashing sounds. These checks do not establish completion
