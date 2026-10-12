@@ -336,6 +336,7 @@ impl World {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Team;
     #[test]
     fn lethal_he_and_fire_capture_notice_without_inventing_hit_rays() {
         for rate in [64, 128] {
