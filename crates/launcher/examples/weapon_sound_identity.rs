@@ -17,16 +17,13 @@ fn main() {
             "Weapon_AK47.Single",
             Some((
                 "sound/weapons/ak47/ak47-1.wav",
-                "sound/weapons/ak47/ak47-1-distant.wav",
+                Some("sound/weapons/ak47/ak47-1-distant.wav"),
             )),
         ),
         (
             "weapon_m4a1_silencer",
             "Weapon_M4A1.Silenced",
-            Some((
-                "sound/weapons/m4a1/m4a1-1.wav",
-                "sound/weapons/m4a1/m4a1-1-distant.wav",
-            )),
+            Some(("sound/weapons/m4a1/m4a1-1.wav", None)),
         ),
         ("weapon_usp_silencer", "Weapon_USP.SilencedShot", None),
         ("weapon_m4a1", "Weapon_M4A1.Single", None),
@@ -53,14 +50,35 @@ fn main() {
                 "verified classic profile unavailable: {weapon}"
             );
             assert_eq!(near, &[near_path.to_string()]);
-            let distant = classic
-                .distant_entry(selected)
-                .expect("verified distant partner");
-            assert_eq!(classic.waves(distant).unwrap(), &[distant_path.to_string()]);
-            println!(
-                "{} default={binding} selected={selected} near={near_path} distant={distant_path}; retained bytes verified+decoded",
-                definition.id
-            );
+            if let Some(distant_path) = distant_path {
+                let distant = classic
+                    .distant_entry(selected)
+                    .expect("verified distant partner");
+                assert_eq!(classic.waves(distant).unwrap(), &[distant_path.to_string()]);
+                println!(
+                    "{} default={binding} selected={selected} near={near_path} distant={distant_path}; retained bytes verified+decoded",
+                    definition.id
+                );
+            } else {
+                assert_eq!(installed.distant_entry(binding), None);
+                assert_eq!(
+                    classic.distant_entry(selected),
+                    None,
+                    "invented suppressed distant routing"
+                );
+                println!(
+                    "{} default={binding} selected={selected} near={near_path} distant=None; verified near, installed no-distant routing preserved",
+                    definition.id
+                );
+                let historical_far = fs
+                    .read("sound/weapons/m4a1/m4a1-1-distant.wav")
+                    .expect("historical audit candidate");
+                assert_eq!(historical_far.len(), 23122);
+                assert_eq!(crc32fast::hash(&historical_far), 0xb994e5b9);
+                println!(
+                    "M4 historical far audit: 23122 bytes CRC b994e5b9 matches 2015; NOT routed or played, mixing remains unmeasured"
+                );
+            }
         } else {
             assert_eq!(selected, binding, "unverified era override: {weapon}");
             println!(
@@ -86,6 +104,6 @@ fn main() {
         );
     }
     println!(
-        "weapon sound identity: 5 default mappings, 2 verified classic pairs, custom definitions preserved; failures: 0"
+        "weapon sound identity: 5 default mappings, verified classic AK pair and suppressed M4 near, no invented distant routing, custom definitions preserved; failures: 0"
     );
 }

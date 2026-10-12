@@ -38,11 +38,15 @@ struct WaveSpec<'a> {
 struct WeaponSpec<'a> {
     weapon: &'static str,
     binding: &'static str,
-    distant: &'static str,
     alias: &'static str,
-    alias_distant: &'static str,
     near_wave: WaveSpec<'a>,
-    distant_wave: WaveSpec<'a>,
+    distant: Option<DistantSpec<'a>>,
+}
+
+struct DistantSpec<'a> {
+    binding: &'static str,
+    alias: &'static str,
+    wave: WaveSpec<'a>,
 }
 
 // Names/size/hash are derived observations from the player's retained files,
@@ -51,36 +55,34 @@ const STOCK: [WeaponSpec<'static>; 2] = [
     WeaponSpec {
         weapon: "ak47",
         binding: "Weapon_AK47.Single",
-        distant: "weapon_ak47.singledistant",
         alias: "csr.classic2015.ak47.single",
-        alias_distant: "csr.classic2015.ak47.distant",
         near_wave: WaveSpec {
             path: "sound/weapons/ak47/ak47-1.wav",
             size: 288436,
             sha256: "a504312e586d54332bc42b533242bb7b57ba8704439138a624bf4edc18f71903",
         },
-        distant_wave: WaveSpec {
-            path: "sound/weapons/ak47/ak47-1-distant.wav",
-            size: 203206,
-            sha256: "260c3237643c74e4950ba2a96d1179228023f9e759235c43e4d1bc34f5ab95b9",
-        },
+        distant: Some(DistantSpec {
+            binding: "weapon_ak47.singledistant",
+            alias: "csr.classic2015.ak47.distant",
+            wave: WaveSpec {
+                path: "sound/weapons/ak47/ak47-1-distant.wav",
+                size: 203206,
+                sha256: "260c3237643c74e4950ba2a96d1179228023f9e759235c43e4d1bc34f5ab95b9",
+            },
+        }),
     },
     WeaponSpec {
         weapon: "m4a1_silencer",
         binding: "Weapon_M4A1.Silenced",
-        distant: "weapon_m4a1.silenceddistant",
         alias: "csr.classic2015.m4a1_silencer.single",
-        alias_distant: "csr.classic2015.m4a1_silencer.distant",
         near_wave: WaveSpec {
             path: "sound/weapons/m4a1/m4a1-1.wav",
             size: 44438,
             sha256: "8548c3b0937bf07656c73021439b76a946a4a8bb339b208508af6e916f072195",
         },
-        distant_wave: WaveSpec {
-            path: "sound/weapons/m4a1/m4a1-1-distant.wav",
-            size: 23122,
-            sha256: "fe23d5c351f5b095437c4326a715693cd380c8e81b1f0f8fa2793a2b9970f80c",
-        },
+        // Current suppressed M4 routing has no distant entry. The historical
+        // far file is fingerprinted in the audit, but its routing/mix is unmeasured.
+        distant: None,
     },
 ];
 
@@ -126,35 +128,46 @@ impl Profile {
         entries: &mut HashMap<String, Entry>,
         spec: &WeaponSpec<'_>,
     ) -> Result<(), &'static str> {
-        if entries.contains_key(spec.alias) || entries.contains_key(spec.alias_distant) {
+        if entries.contains_key(spec.alias)
+            || spec
+                .distant
+                .as_ref()
+                .is_some_and(|d| entries.contains_key(d.alias))
+        {
             return Err("profile entry name already declared");
         }
         let mut near = entries
             .get(&spec.binding.to_ascii_lowercase())
             .cloned()
             .ok_or("installed shot entry missing")?;
-        if near.distant.as_deref() != Some(spec.distant) {
+        if near.distant.as_deref() != spec.distant.as_ref().map(|d| d.binding) {
             return Err("installed distant binding differs");
         }
-        let mut distant = entries
-            .get(spec.distant)
-            .cloned()
-            .ok_or("installed distant entry missing")?;
         // Validate the complete pair before publishing anything. Never mix a
         // classic near shot with a modern distant waveform after a partial failure.
         let near_audio = verified_wave(fs, &spec.near_wave)?;
-        let distant_audio = verified_wave(fs, &spec.distant_wave)?;
+        let distant = if let Some(spec) = &spec.distant {
+            let mut distant = entries
+                .get(spec.binding)
+                .cloned()
+                .ok_or("installed distant entry missing")?;
+            let audio = verified_wave(fs, &spec.wave)?;
+            distant.waves = vec![spec.wave.path.to_string()];
+            distant.frozen_wave = Some(audio);
+            // Retain the measured current mixer/limits; era-specific DSP is unknown.
+            distant.distant = None;
+            distant.distant_layer = true;
+            Some((spec.alias, distant))
+        } else {
+            None
+        };
         near.waves = vec![spec.near_wave.path.to_string()];
         near.frozen_wave = Some(near_audio);
-        near.distant = Some(spec.alias_distant.to_string());
-        distant.waves = vec![spec.distant_wave.path.to_string()];
-        distant.frozen_wave = Some(distant_audio);
-        // Retain the measured current mixer/limits; era-specific DSP is unknown.
-        // The alias distant layer must not recurse into an unrelated entry.
-        distant.distant = None;
-        distant.distant_layer = true;
+        near.distant = distant.as_ref().map(|(alias, _)| alias.to_string());
         entries.insert(spec.alias.to_string(), near);
-        entries.insert(spec.alias_distant.to_string(), distant);
+        if let Some((alias, entry)) = distant {
+            entries.insert(alias.to_string(), entry);
+        }
         self.selections.insert(
             ContentId::csgo(ContentKind::Weapon, spec.weapon),
             Selection {
@@ -225,19 +238,21 @@ mod tests {
         WeaponSpec {
             weapon: "ak47",
             binding: "Test.Single",
-            distant: "test.distant",
             alias: "csr.test.near",
-            alias_distant: "csr.test.distant",
             near_wave: WaveSpec {
                 path: "sound/old_near.wav",
                 size: 46,
                 sha256: near,
             },
-            distant_wave: WaveSpec {
-                path: "sound/old_distant.wav",
-                size: 46,
-                sha256: distant,
-            },
+            distant: Some(DistantSpec {
+                binding: "test.distant",
+                alias: "csr.test.distant",
+                wave: WaveSpec {
+                    path: "sound/old_distant.wav",
+                    size: 46,
+                    sha256: distant,
+                },
+            }),
         }
     }
 
@@ -418,6 +433,58 @@ mod tests {
         assert_eq!(entries.len(), 3);
         assert!(entries["csr.test.near"].frozen_wave.is_none());
         assert!(profile.selections.is_empty());
+    }
+
+    #[test]
+    fn absent_distant_routing_publishes_only_verified_near_without_inventing_a_layer() {
+        use bevy::{
+            audio::{AudioPlayer, AudioSource},
+            ecs::world::CommandQueue,
+            prelude::*,
+        };
+        let near = wav(1000);
+        let hash = format!("{:x}", Sha256::digest(&near));
+        let mut spec = spec(&hash, "");
+        spec.distant = None;
+        let mut entries = entries();
+        entries.get_mut("test.single").unwrap().distant = None;
+        let mut profile = Profile::default();
+        // Unrouted/missing distant bytes do not affect a near-only definition.
+        let fs = fs(near.clone(), vec![]);
+        profile.install(&fs, &mut entries, &spec).unwrap();
+        assert_eq!(entries.len(), 3);
+        assert!(!entries.contains_key("csr.test.distant"));
+        assert!(entries["csr.test.near"].distant.is_none());
+        assert!(!entries["csr.test.near"].distant_layer);
+        assert!(entries["test.single"].distant.is_none());
+        let mut library = super::super::SoundLibrary {
+            entries,
+            classic: profile,
+            ..Default::default()
+        };
+        let mut world = World::new();
+        let mut queue = CommandQueue::default();
+        let mut sources = Assets::<AudioSource>::default();
+        {
+            let mut commands = Commands::new(&mut queue, &world);
+            library.play_with(
+                &mut commands,
+                &fs,
+                &mut sources,
+                "csr.test.near",
+                super::super::Emit {
+                    at: Some(glam::Vec3::ZERO),
+                    ..Default::default()
+                },
+            );
+        }
+        queue.apply(&mut world);
+        let played: Vec<_> = world
+            .query::<&AudioPlayer<AudioSource>>()
+            .iter(&world)
+            .map(|player| sources.get(&player.0).unwrap().bytes.to_vec())
+            .collect();
+        assert_eq!(played, vec![near]);
     }
 
     #[test]

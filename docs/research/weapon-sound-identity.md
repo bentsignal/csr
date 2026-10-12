@@ -80,7 +80,10 @@ USP-S remains a separate content gap: the 2015 `usp/usp1.wav` was 44068 bytes /
 CRC `2e40d830`, but the installed file is 45830 bytes / CRC `4199d4d7`.
 Its distant file also differs (historical 44068 / `3c84cb85`, installed
 144098 / `b58cd43a`). It receives the suppressed current-Legacy mapping fix,
-but no 2015 waveform substitution or era-fidelity label.
+but no 2015 waveform substitution or era-fidelity label. Removing only the
+installed near file's iXML metadata and repairing RIFF length produces the
+historical 44068-byte / `2e40d830` identity; the far file still does not match.
+That is a narrower metadata-only near-file observation, not a verified pair.
 
 ## Runtime classic policy
 
@@ -92,9 +95,15 @@ The profile applies only to exact `csgo_weapon_ak47` /
 Public soundscript entries and catalog definitions remain intact.
 
 Own internal entries clone the current parsed mixing/limits/crossfade metadata
-and replace only the verified near/distant waveforms. The complete pair must
+and replace only the verified waveforms. AK's complete near/distant pair must
 pass expected byte size, SHA256 and the actual audio decoder before either
-entry is published. Missing/changed/unsupported data or reserved entry-name
+entry is published. Current Legacy's suppressed M4 entry has **no distant
+partner** and no `Weapon_M4A1.SilencedDistant` declaration. Its profile therefore
+replaces only the verified near waveform and preserves `None` routing. The
+historical M4 distant file remains fingerprinted in the audit (SHA256
+`fe23d5c351f5b095437c4326a715693cd380c8e81b1f0f8fa2793a2b9970f80c`);
+its routing/mix is unmeasured, and no distant entry/gain is invented.
+Missing/changed/unsupported data or reserved entry-name
 collisions preserve the installed shot with at most two fixed diagnostics per
 load. No partial classic/modern pair is constructed.
 
@@ -116,6 +125,23 @@ fingerprint mismatch, unsupported bytes, custom ID/binding exclusion,
 unchanged public entries, and both actual Bevy AudioSource byte identities
 after a synthetic pack shadows the verified paths. No audio device or GPU is
 needed for those generated tests; no copyrighted fixture bytes are used.
+The near-only regression asserts that spatial playback produces exactly one
+verified source with no constructed distant alias or route.
+
+The first actual installed audit exposed a stale normal weapon-library artifact
+in the shared target, while unit tests had rebuilt separately. Freshening all
+owned workspace Rust source mtimes, without changing bytes or cleaning Cargo,
+proved the corrected M4 binding. It then exposed the real absent-distant
+distinction above; the corrected audit explicitly checks that case. Frozen
+runtime verification must freshen member source timestamps when switching
+worktrees that share a target, or use an isolated target.
+
+An owned native Legacy observation in private
+`classic-reference-20261012` confirmed visible suppressed M4A1-S ammo 20 to 17
+playing `m4a1_silencer_01.wav` at 73dB / volume 0.90, with no M4A4 wave in that
+interval. The separate M4A4 ammo 30 to 26 interval used `m4a1_01.wav` /
+`m4a1_02.wav`. HUD/model/ammo distinguish the variant; entity classname alone
+does not. This confirms current suppressed identity, not native 2015 mixing.
 
 Required checks are workspace tests, release Dust II probe/sim and the existing
 soundcheck decoding every weapon waveform. Targeted identity proof should
