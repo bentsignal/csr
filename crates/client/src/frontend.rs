@@ -45,6 +45,41 @@ struct Bridge {
     options: crate::frontend_options::Scene,
 }
 
+fn show_single_player(path: &str, calls: &mut Calls) {
+    calls.call(
+        path,
+        "InitDialogData",
+        vec![false.into(), false.into(), false.into()],
+    );
+    calls.call(path, "showPanel", vec![]);
+    let modes = format!("{path}.Panel.Panel.ModeChooser.TabDefault");
+    calls.call(&format!("{modes}.ModeCompetitive"), "Action", vec![]);
+    for mode in ["ModeCasual", "ModeWingman", "ModeWargames"] {
+        calls.call(&format!("{modes}.{mode}"), "setDisabled", vec![true.into()]);
+    }
+}
+
+/// Update the menu's pending snapshot and Bevy's saved settings identically.
+/// Invalid values must not turn an unanswered native getter into zero volume.
+fn apply_setting(settings: &mut Settings, name: &str, value: &Value) -> bool {
+    let number = match value {
+        Value::Number(number) => Some(*number),
+        Value::String(text) => text.parse::<f64>().ok(),
+        Value::Bool(value) => Some(u8::from(*value) as f64),
+        _ => None,
+    };
+    let Some(number) = number.filter(|number| number.is_finite()) else {
+        return false;
+    };
+    match name {
+        "volume" => settings.volume = number.clamp(0.0, 1.0) as f32,
+        "sensitivity" => settings.sensitivity = number.clamp(0.1, 10.0) as f32,
+        "m_pitch" => settings.invert_y = number < 0.0,
+        _ => return false,
+    }
+    true
+}
+
 fn keyvalues(block: &kv::Block, localization: &crate::localize::Localization) -> Value {
     Value::Object(
         block
@@ -81,7 +116,13 @@ impl Engine for Bridge {
         args: &[Value],
         calls: &mut Calls,
     ) -> Option<Value> {
-        if self.seen.insert((object.into(), method.into())) {
+        if self.seen.insert((object.into(), method.into()))
+            || matches!(
+                method,
+                "BasePanelRunCommand" | "OnUpdateValue" | "SendUIEvent"
+            )
+            || method.starts_with("SetConvar")
+        {
             if std::env::var_os("CSR_UI_TRACE").is_some() {
                 info!("UI {object}.{method} {args:?}");
             } else {
@@ -100,12 +141,7 @@ impl Engine for Bridge {
         }
         if method == "OnReady" && object == "StartSinglePlayer" {
             if let Some(path) = self.roots.get(object) {
-                calls.call(
-                    path,
-                    "InitDialogData",
-                    vec![false.into(), false.into(), false.into()],
-                );
-                calls.call(path, "showPanel", vec![]);
+                show_single_player(path, calls);
             }
             return None;
         }
@@ -135,10 +171,17 @@ impl Engine for Bridge {
                 calls.call("_global.MainMenuMovie", "hidePanelImmediate", vec![]);
             }
             match command.as_str() {
-                "OpenCreateSinglePlayerGameDialog" => calls.request_element("StartSinglePlayer"),
+                "OpenCreateSinglePlayerGameDialog" => {
+                    if let Some(path) = self.roots.get("StartSinglePlayer") {
+                        show_single_player(path, calls);
+                    } else {
+                        calls.request_element("StartSinglePlayer");
+                    }
+                }
                 "OpenVideoSettingsDialog"
                 | "OpenAudioSettingsDialog"
                 | "OpenGameSettingsDialog"
+                | "OpenMouseDialog"
                 | "OpenKeyboardMouseDialog" => {
                     let data = self.data.lock().unwrap();
                     self.options = crate::frontend_options::Scene::load(
@@ -166,6 +209,27 @@ impl Engine for Bridge {
             }
         }
         match (object, method) {
+            ("OptionsMenu", "OnUpdateValue") => {
+                if let Some((name, value)) = self.options.value(
+                    args.first()?,
+                    args.get(1)?,
+                    self.roots.get("OptionsMenu")?,
+                    calls,
+                ) {
+                    apply_setting(&mut data.settings, &name, &value);
+                    self.actions
+                        .lock()
+                        .unwrap()
+                        .push(Action::Convar(name, value));
+                }
+                None
+            }
+            ("OptionsMenu", "OnLayoutComplete") => {
+                if let Some(path) = self.roots.get("OptionsMenu") {
+                    self.options.layout_ready(path, &data.settings, calls);
+                }
+                None
+            }
             ("OptionsMenu", "GetTotalOptionsSlots") => Some(self.options.count().into()),
             ("OptionsMenu", "GetSafeZoneXMin") => Some(0.8.into()),
             ("GameInterface", "GetConvarNumberMin" | "GetConvarNumberMax") => {
@@ -252,6 +316,14 @@ impl Engine for Bridge {
                     .unwrap_or("");
                 Some(data.localization.get(value).unwrap_or(value).into())
             }
+            ("GameTypes", "GetMapGroupAttributeSubKeys") => Some(Value::List(
+                data.game_modes
+                    .block("mapgroups")
+                    .and_then(|groups| groups.block(&arg(0)))
+                    .and_then(|group| group.block(&arg(1)))
+                    .map(|block| block.iter().map(|(name, _)| name.into()).collect())
+                    .unwrap_or_default(),
+            )),
             _ => None,
         }
     }
@@ -437,7 +509,7 @@ pub(crate) fn update(
     mut menu: ResMut<crate::menu::Menu>,
     state: Res<State<AppState>>,
     mut settings: ResMut<Settings>,
-    (data, loader): (Res<GameData>, Res<crate::session::Loader>),
+    (data, loader, options): (Res<GameData>, Res<crate::session::Loader>, Res<Options>),
     loc: Res<crate::localize::Localization>,
     (inventory, practice): (
         Res<crate::cosmetics::Inventory>,
@@ -527,7 +599,8 @@ pub(crate) fn update(
     }
     let visible = matches!(state.get(), AppState::Menu | AppState::Browser)
         || (*state.get() == AppState::Match && menu.open())
-        || *state.get() == AppState::Loading;
+        || (*state.get() == AppState::Loading
+            && (front.movie.is_some() || (!options.0.direct && options.0.screenshot.is_none())));
     // A UI-only camera must not overwrite a match's resolved color target.
     // During play the existing viewmodel camera continues drawing the HUD.
     if let Ok((mut camera, mut msaa)) = cameras.get_mut(front.camera) {
@@ -708,18 +781,9 @@ pub(crate) fn update(
                 _ => info!("Classic UI command: {command}"),
             },
             Action::Convar(name, value) => {
-                let number = value.num();
-                if !number.is_finite() {
+                if !apply_setting(&mut settings, &name, &value) {
+                    info!("Classic UI setting is not implemented or invalid: {name}={value:?}");
                     continue;
-                }
-                match name.as_str() {
-                    "volume" => settings.volume = number.clamp(0.0, 1.0) as f32,
-                    "sensitivity" => settings.sensitivity = number.clamp(0.1, 10.0) as f32,
-                    "m_pitch" => settings.invert_y = number < 0.0,
-                    _ => {
-                        info!("Classic UI setting is not implemented: {name}={value:?}");
-                        continue;
-                    }
                 }
                 if let Err(error) = settings.save() {
                     menu.status = format!("Could not save settings: {error}");
@@ -920,34 +984,50 @@ pub(crate) fn capture_menu(
         Ok("video") => vec![(1412.0, 26.0), (1450.0, 222.0)],
         _ => vec![],
     };
-    let points = std::env::var("CSR_MENU_CLICKS")
+    let points: Vec<(String, f64, f64)> = std::env::var("CSR_MENU_CLICKS")
         .ok()
         .map(|text| {
             text.split(';')
                 .filter_map(|point| {
+                    let (kind, point) = point.split_once(':').unwrap_or(("click", point));
+                    if !matches!(kind, "click" | "down" | "move" | "up") {
+                        return None;
+                    }
                     let (x, y) = point.split_once(',')?;
-                    Some((x.parse().ok()?, y.parse().ok()?))
+                    let (x, y): (f64, f64) = (x.parse().ok()?, y.parse().ok()?);
+                    (x.is_finite() && y.is_finite()).then(|| (kind.into(), x, y))
                 })
                 .collect()
         })
-        .unwrap_or(points);
+        .unwrap_or_else(|| {
+            points
+                .into_iter()
+                .map(|(x, y)| ("click".into(), x, y))
+                .collect()
+        });
     if *step < points.len() && ready.elapsed().as_secs_f64() >= 5.0 + *step as f64 * 3.0 {
-        let (x, y) = points[*step];
+        let (kind, x, y) = &points[*step];
         let (x, y) = (
             x * front.viewport.0 as f64 / 1920.0,
             y * front.viewport.1 as f64 / 1080.0,
         );
-        front.send(Input::MouseMove { x, y });
-        front.send(Input::MouseDown {
-            x,
-            y,
-            button: scaleform::MouseButton::Left,
-        });
-        front.send(Input::MouseUp {
-            x,
-            y,
-            button: scaleform::MouseButton::Left,
-        });
+        if matches!(kind.as_str(), "click" | "move" | "down") {
+            front.send(Input::MouseMove { x, y });
+        }
+        if matches!(kind.as_str(), "click" | "down") {
+            front.send(Input::MouseDown {
+                x,
+                y,
+                button: scaleform::MouseButton::Left,
+            });
+        }
+        if matches!(kind.as_str(), "click" | "up") {
+            front.send(Input::MouseUp {
+                x,
+                y,
+                button: scaleform::MouseButton::Left,
+            });
+        }
         *step += 1;
     }
     if ready.elapsed().as_secs_f64() < 5.0 + points.len() as f64 * 3.0 {
@@ -963,5 +1043,30 @@ pub(crate) fn capture_menu(
     }
     if *frame == opts.0.frames + 30 {
         exit.write(AppExit::Success);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unanswered_or_malformed_native_values_cannot_reset_saved_settings() {
+        let mut settings = Settings::default();
+        let original = settings.clone();
+        for value in [
+            Value::Undefined,
+            Value::Null,
+            "not a number".into(),
+            f64::NAN.into(),
+            f64::INFINITY.into(),
+        ] {
+            assert!(!apply_setting(&mut settings, "volume", &value));
+            assert_eq!(settings, original);
+        }
+        assert!(apply_setting(&mut settings, "volume", &"0.76".into()));
+        assert_eq!(settings.volume, 0.76);
+        assert!(apply_setting(&mut settings, "m_pitch", &(-0.022).into()));
+        assert!(settings.invert_y);
     }
 }

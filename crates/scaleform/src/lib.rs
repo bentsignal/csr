@@ -17,6 +17,12 @@ pub mod diff;
 mod host;
 mod rewrite;
 
+/// Reads public export/import names without interpreting movie instructions.
+/// The frontend uses these names to offer cards present in the installed UI.
+pub fn library_symbols(data: &[u8]) -> Result<std::collections::HashSet<String>, String> {
+    rewrite::symbol_names(data).map_err(|error| error.to_string())
+}
+
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, Sender, TryRecvError, channel};
 use std::sync::{Arc, Mutex};

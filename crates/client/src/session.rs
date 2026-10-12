@@ -79,6 +79,7 @@ impl Loader {
 pub(crate) fn begin_load(mut loader: ResMut<Loader>, opts: Res<Options>, data: Res<GameData>) {
     loader.serial = loader.serial.wrapping_add(1);
     loader.wanted = Some((loader.serial, opts.0.clone()));
+    loader.status = format!("Loading {}…", opts.0.map);
     loader.start(&data.game_dir);
 }
 
@@ -162,7 +163,7 @@ pub(crate) fn match_ready(
     mut window: Single<&mut Window, With<bevy::window::PrimaryWindow>>,
 ) {
     menu.in_match = true;
-    if std::env::var_os("CSR_TEST_MENU").is_none() {
+    if std::env::var("CSR_TEST_MENU").as_deref() != Ok("pause") {
         menu.page = None;
     }
     if !menu.open() {
@@ -174,7 +175,7 @@ pub(crate) fn match_ready(
 
 pub(crate) fn clear_match(world: &mut World) {
     let entities: Vec<_> = world
-        .query_filtered::<Entity, With<MatchEntity>>()
+        .query_filtered::<Entity, (With<MatchEntity>, Without<Persistent>)>()
         .iter(world)
         .collect();
     for entity in entities {
@@ -309,6 +310,9 @@ mod tests {
             .id();
         let joint = app.world_mut().spawn(Transform::default()).id();
         let hud = app.world_mut().spawn(Node::default()).id();
+        // UI audio can receive its persistent marker in a later command,
+        // after the generic match ownership observer has already tagged it.
+        let ui_sound = app.world_mut().spawn((MatchEntity, Persistent)).id();
         app.world_mut().flush();
         assert!(app.world().get::<MatchEntity>(joint).is_some());
         app.world_mut()
@@ -318,6 +322,7 @@ mod tests {
         assert!(app.world().get_entity(camera).is_ok());
         assert!(app.world().get_entity(joint).is_err());
         assert!(app.world().get_entity(hud).is_err());
+        assert!(app.world().get_entity(ui_sound).is_ok());
         assert_eq!(
             *app.world().resource::<State<AppState>>().get(),
             AppState::Menu

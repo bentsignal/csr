@@ -4,24 +4,34 @@
 use crate::{localize::Localization, settings::Settings};
 use scaleform::{Calls, Value};
 
-pub(super) struct Slider {
+enum Kind {
+    Slider {
+        min: f64,
+        max: f64,
+    },
+    Choice {
+        choices: Vec<(String, f64)>,
+        selected: usize,
+    },
+}
+struct Widget {
     convar: String,
     label: String,
     tooltip: String,
-    min: f64,
-    max: f64,
+    kind: Kind,
     priority: i64,
 }
 #[derive(Default)]
 pub(super) struct Scene {
     pub mode: u32,
-    sliders: Vec<Slider>,
+    widgets: Vec<Widget>,
+    layout_initialized: bool,
 }
 impl Scene {
     pub fn load(fs: &vfs::Vfs, command: &str, loc: &Localization) -> Self {
         let (file, mode) = match command {
             "OpenAudioSettingsDialog" => ("audio_options", 8),
-            "OpenKeyboardMouseDialog" => ("mouse_keyboard_options", 0),
+            "OpenMouseDialog" | "OpenKeyboardMouseDialog" => ("mouse_keyboard_options", 0),
             "OpenGameSettingsDialog" => ("game_options", 2),
             _ => ("video_options", 6),
         };
@@ -34,83 +44,261 @@ impl Scene {
             .first()
             .and_then(|(_, value)| value.as_block())
             .unwrap_or(&doc);
-        let mut sliders: Vec<_> = root
+        Self::from_block(root, mode, loc)
+    }
+
+    fn from_block(root: &kv::Block, mode: u32, loc: &Localization) -> Self {
+        let mut widgets: Vec<_> = root
             .iter()
             .filter_map(|(_, value)| {
                 let block = value.as_block()?;
                 let convar = block.str("convar")?;
-                if block.str("type") != Some("slider")
-                    || !matches!(convar, "volume" | "sensitivity")
-                {
-                    return None;
-                }
-                let min = f64::from(block.f32("minvalue")?);
-                let max = f64::from(block.f32("maxvalue")?);
-                if !min.is_finite() || !max.is_finite() || min >= max {
-                    return None;
-                }
+                let kind = match (block.str("type")?, convar) {
+                    ("slider", "volume" | "sensitivity") => {
+                        let min = f64::from(block.f32("minvalue")?);
+                        let max = f64::from(block.f32("maxvalue")?);
+                        if !min.is_finite() || !max.is_finite() || min >= max {
+                            return None;
+                        }
+                        Kind::Slider { min, max }
+                    }
+                    ("choice", "m_pitch") => {
+                        let choices = block
+                            .block("choices")?
+                            .iter()
+                            .map(|(label, value)| {
+                                let value = value.as_str()?.parse::<f64>().ok()?;
+                                value
+                                    .is_finite()
+                                    .then(|| (loc.get(label).unwrap_or(label).into(), value))
+                            })
+                            .collect::<Option<Vec<_>>>()?;
+                        if choices.len() < 2 || choices.len() > 32 {
+                            return None;
+                        }
+                        Kind::Choice {
+                            choices,
+                            selected: 0,
+                        }
+                    }
+                    _ => return None,
+                };
                 let name = block.str("name").unwrap_or(convar);
                 let tooltip = block.str("tooltip").unwrap_or("");
-                Some(Slider {
+                Some(Widget {
                     convar: convar.into(),
                     label: loc.get(name).unwrap_or(name).into(),
                     tooltip: loc.get(tooltip).unwrap_or(tooltip).into(),
-                    min,
-                    max,
+                    kind,
                     priority: block.i64("priority").unwrap_or(0),
                 })
             })
             .collect();
-        sliders.sort_by_key(|slider| slider.priority);
-        Self { mode, sliders }
+        widgets.sort_by_key(|widget| widget.priority);
+        Self {
+            mode,
+            widgets,
+            layout_initialized: false,
+        }
     }
 
     pub fn count(&self) -> u32 {
-        self.sliders.len() as u32
+        self.widgets.len() as u32
     }
     pub fn bounds(&self, name: &str) -> Option<(f64, f64)> {
-        self.sliders
+        self.widgets
             .iter()
             .find(|slider| slider.convar == name)
-            .map(|slider| (slider.min, slider.max))
+            .and_then(|widget| match widget.kind {
+                Kind::Slider { min, max } => Some((min, max)),
+                Kind::Choice { .. } => None,
+            })
     }
 
-    pub fn show(&self, path: &str, settings: &Settings, calls: &mut Calls) {
+    pub fn value(
+        &mut self,
+        index: &Value,
+        value: &Value,
+        path: &str,
+        calls: &mut Calls,
+    ) -> Option<(String, Value)> {
+        let (Value::Number(index), Value::Number(value)) = (index, value) else {
+            return None;
+        };
+        if !index.is_finite() || *index < 0.0 || index.fract() != 0.0 || !value.is_finite() {
+            return None;
+        }
+        let widget = self.widgets.get_mut(*index as usize)?;
+        let control = format!("{path}.TopPanel.Panel.arraySlots.{index}.Widget");
+        let number = match &mut widget.kind {
+            Kind::Slider { min, max } => {
+                if !(0.0..=100.0).contains(value) {
+                    return None;
+                }
+                // SetValueScaled also resets the authored drag state. Leave the
+                // pointer-driven control active while publishing its new value.
+                let number = *min + (*max - *min) * value / 100.0;
+                let caption = Value::String(number.to_string());
+                calls.set(
+                    &format!("{control}.InputField.InputField"),
+                    "text",
+                    caption.clone(),
+                );
+                calls.set(&format!("{control}.InputField"), "inputString", caption);
+                number
+            }
+            Kind::Choice { choices, selected } => {
+                let delta = match *value {
+                    -1.0 => -1,
+                    1.0 => 1,
+                    _ => return None,
+                };
+                *selected =
+                    (*selected as isize + delta).rem_euclid(choices.len() as isize) as usize;
+                calls.call(
+                    &control,
+                    "SetText",
+                    vec![choices[*selected].0.clone().into()],
+                );
+                choices[*selected].1
+            }
+        };
+        Some((widget.convar.clone(), number.into()))
+    }
+
+    pub fn show(&mut self, path: &str, settings: &Settings, calls: &mut Calls) {
+        self.layout_initialized = false;
         calls.call(path, "Init", vec![self.count().into(), self.mode.into()]);
-        for (index, slider) in self.sliders.iter().enumerate() {
+        for (index, widget) in self.widgets.iter_mut().enumerate() {
+            let (kind, label, data) = match &mut widget.kind {
+                Kind::Slider { min, max } => (
+                    0u32,
+                    widget.label.clone(),
+                    Value::List(vec![(*min).into(), (*max).into()]),
+                ),
+                Kind::Choice { choices, selected } => {
+                    *selected = choices
+                        .iter()
+                        .position(|(_, value)| (*value < 0.0) == settings.invert_y)
+                        .unwrap_or(0);
+                    (1u32, choices[*selected].0.clone(), Value::Undefined)
+                }
+            };
             calls.call(
                 path,
                 "onUpdateWidget",
                 vec![
                     (index as u32).into(),
-                    0u32.into(),
-                    slider.label.clone().into(),
-                    slider.convar.clone().into(),
-                    Value::List(vec![slider.min.into(), slider.max.into()]),
-                    slider.tooltip.clone().into(),
+                    kind.into(),
+                    label.into(),
+                    widget.convar.clone().into(),
+                    data,
+                    widget.tooltip.clone().into(),
                 ],
             );
-            let widget = format!("{path}.TopPanel.Panel.arraySlots.{index}.Widget");
-            calls.call(&widget, "Init", vec![slider.convar.clone().into()]);
-            calls.call(&widget, "onLoad", vec![]);
-            calls.call(
-                &widget,
-                "DefineScaledValueRange",
-                vec![slider.min.into(), slider.max.into()],
-            );
-            let current = match slider.convar.as_str() {
-                "volume" => settings.volume,
-                "sensitivity" => settings.sensitivity,
-                _ => continue,
-            };
-            calls.call(&widget, "SetValueScaled", vec![(current as f64).into()]);
+        }
+        calls.call(path, "ShowPanel", vec![]);
+    }
+
+    /// Apply values after the movie reports that its asynchronous widgets loaded.
+    /// Calling onLoad ourselves races the movie's own load and double-counts it.
+    pub fn layout_ready(&mut self, path: &str, settings: &Settings, calls: &mut Calls) {
+        if self.layout_initialized {
+            return;
+        }
+        self.layout_initialized = true;
+        for (index, widget) in self.widgets.iter().enumerate() {
+            let control = format!("{path}.TopPanel.Panel.arraySlots.{index}.Widget");
+            match &widget.kind {
+                Kind::Slider { min, max } => {
+                    calls.call(&control, "Init", vec![widget.convar.clone().into()]);
+                    calls.call(
+                        &control,
+                        "DefineScaledValueRange",
+                        vec![(*min).into(), (*max).into()],
+                    );
+                    let current = match widget.convar.as_str() {
+                        "volume" => settings.volume,
+                        "sensitivity" => settings.sensitivity,
+                        _ => continue,
+                    };
+                    calls.call(&control, "SetValueScaled", vec![(current as f64).into()]);
+                }
+                Kind::Choice { choices, selected } => calls.call(
+                    &control,
+                    "SetText",
+                    vec![choices[*selected].0.clone().into()],
+                ),
+            }
             calls.set(
                 &format!("{path}.TopPanel.Panel.Control_Dummy.Control_{index}.Control_Text"),
                 "text",
-                slider.label.clone().into(),
+                widget.label.clone().into(),
             );
         }
         calls.call(path, "RefreshWidgetLayout", vec![]);
-        calls.call(path, "ShowPanel", vec![]);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn scene() -> Scene {
+        let block = kv::parse(
+            r#"reverse { type choice convar m_pitch choices { Off 0.022 On -0.022 } priority 1 }
+            sensitivity { type slider convar sensitivity minvalue 1 maxvalue 8 priority 2 }
+            unsupported { type slider convar pretend minvalue 0 maxvalue 1 }"#,
+        )
+        .unwrap();
+        Scene::from_block(&block, 0, &Localization::default())
+    }
+    #[test]
+    fn native_percentage_and_signed_choice_updates_use_the_installed_ranges() {
+        let mut scene = scene();
+        let mut calls = Calls::default();
+        assert_eq!(scene.count(), 2);
+        let (_, value) = scene
+            .value(&1u32.into(), &71.0.into(), "_level21", &mut calls)
+            .unwrap();
+        assert!((value.num() - 5.97).abs() < 1e-10);
+        for (direction, expected) in [(1.0, -0.022), (1.0, 0.022), (-1.0, -0.022), (-1.0, 0.022)] {
+            assert_eq!(
+                scene
+                    .value(&0u32.into(), &direction.into(), "_level21", &mut calls)
+                    .unwrap()
+                    .1
+                    .num(),
+                expected
+            );
+        }
+    }
+    #[test]
+    fn malformed_callbacks_cannot_change_the_selected_choice() {
+        let mut scene = scene();
+        let mut calls = Calls::default();
+        for (index, value) in [
+            (-1.0, 1.0),
+            (0.5, 1.0),
+            (10.0, 1.0),
+            (0.0, 0.0),
+            (0.0, 2.0),
+            (0.0, f64::NAN),
+            (1.0, 101.0),
+            (1.0, -1.0),
+        ] {
+            assert!(
+                scene
+                    .value(&index.into(), &value.into(), "_level21", &mut calls)
+                    .is_none()
+            );
+        }
+        assert_eq!(
+            scene
+                .value(&0u32.into(), &1.0.into(), "_level21", &mut calls)
+                .unwrap()
+                .1
+                .num(),
+            -0.022
+        );
     }
 }

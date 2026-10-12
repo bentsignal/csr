@@ -9,11 +9,15 @@ pub(super) fn load(fs: &vfs::Vfs, installed: &HashSet<String>) -> kv::Block {
         return kv::Block::new();
     };
     let mut root = doc.block("GameModes.txt").unwrap_or(&doc).clone();
-    filter(&mut root, installed);
+    let symbols = fs
+        .read("resource/flash/sharedlib.swf")
+        .and_then(|bytes| scaleform::library_symbols(&bytes).ok())
+        .unwrap_or_default();
+    filter(&mut root, installed, &symbols);
     root
 }
 
-fn filter(root: &mut kv::Block, installed: &HashSet<String>) {
+fn filter(root: &mut kv::Block, installed: &HashSet<String>, symbols: &HashSet<String>) {
     let mut bomb_groups = HashSet::new();
     let mut all_groups = HashSet::new();
     if let Some(kv::Value::Block(groups)) = root.get_mut("mapgroups") {
@@ -21,6 +25,12 @@ fn filter(root: &mut kv::Block, installed: &HashSet<String>) {
             let Some(group) = value.as_block_mut() else {
                 return false;
             };
+            if !group
+                .str("imagename")
+                .is_some_and(|name| symbols.contains(name))
+            {
+                return false;
+            }
             let Some(kv::Value::Block(maps)) = group.get_mut("maps") else {
                 return false;
             };
@@ -36,35 +46,37 @@ fn filter(root: &mut kv::Block, installed: &HashSet<String>) {
         });
     }
     if let Some(kv::Value::Block(types)) = root.get_mut("gameTypes") {
-        types.entries.retain_mut(|(_, value)| {
+        for (_, value) in &mut types.entries {
             let Some(kind) = value.as_block_mut() else {
-                return false;
+                continue;
             };
             let Some(kv::Value::Block(modes)) = kind.get_mut("gameModes") else {
-                return false;
+                continue;
             };
-            modes.entries.retain_mut(|(name, value)| {
-                if !matches!(name.as_str(), "competitive" | "deathmatch") {
-                    return false;
-                }
+            for (name, value) in &mut modes.entries {
                 let Some(mode) = value.as_block_mut() else {
-                    return false;
+                    continue;
                 };
-                let allowed = if name == "competitive" {
-                    &bomb_groups
-                } else {
-                    &all_groups
+                let allowed = match name.as_str() {
+                    "competitive" => Some(&bomb_groups),
+                    "deathmatch" => Some(&all_groups),
+                    _ => None,
                 };
                 for field in ["mapgroupsSP", "mapgroupsMP"] {
                     if let Some(kv::Value::Block(groups)) = mode.get_mut(field) {
-                        groups.entries.retain(|(group, _)| allowed.contains(group));
+                        groups
+                            .entries
+                            .retain(|(group, _)| allowed.is_some_and(|set| set.contains(group)));
+                        // The movie addresses slots by these numbers, not by
+                        // their position in the object. Filtering must leave
+                        // contiguous indices or the first card stays blank.
+                        for (index, (_, value)) in groups.entries.iter_mut().enumerate() {
+                            *value = kv::Value::Str(index.to_string());
+                        }
                     }
                 }
-                mode.block("mapgroupsSP")
-                    .is_some_and(|groups| !groups.entries.is_empty())
-            });
-            !modes.entries.is_empty()
-        });
+            }
+        }
     }
     if let Some(kv::Value::Block(maps)) = root.get_mut("maps") {
         maps.entries.retain(|(name, _)| installed.contains(name));
@@ -102,20 +114,21 @@ pub(super) fn mode_name(root: &kv::Block, game_type: f64, game_mode: f64) -> &st
 mod tests {
     use super::*;
     #[test]
-    fn unavailable_maps_and_unimplemented_modes_are_not_offered() {
+    fn retains_mode_labels_but_filters_cards_and_reindexes_slots() {
         let mut root = kv::parse(r#"
             gameTypes { classic { value 0 gameModes {
                 casual { value 0 mapgroupsSP { dust 0 } }
-                competitive { value 1 mapgroupsSP { dust 0 office 1 missing 2 } }
+                competitive { value 1 mapgroupsSP { missing 0 dust 4 office 8 modern 9 } }
             } } gungame { value 1 gameModes { deathmatch { value 2 mapgroupsSP { dust 0 office 1 } } armsrace { value 0 } } } }
-            mapgroups { dust { maps { de_dust2 0 } } office { maps { cs_office 0 } } missing { maps { de_missing 0 } } }
-            maps { de_dust2 {} cs_office {} de_missing {} }
+            mapgroups { dust { imagename map-dust maps { de_dust2 0 } } office { imagename map-office maps { cs_office 0 } } missing { imagename map-dust maps { de_missing 0 } } modern { imagename map-modern maps { de_modern 0 } } }
+            maps { de_dust2 {} cs_office {} de_missing {} de_modern {} }
         "#).unwrap();
         filter(
             &mut root,
-            &HashSet::from(["de_dust2".into(), "cs_office".into()]),
+            &HashSet::from(["de_dust2".into(), "cs_office".into(), "de_modern".into()]),
+            &HashSet::from(["map-dust".into(), "map-office".into()]),
         );
-        assert_eq!(mode_name(&root, 0.0, 0.0), "");
+        assert_eq!(mode_name(&root, 0.0, 0.0), "casual");
         assert_eq!(mode_name(&root, 0.0, 1.0), "competitive");
         assert_eq!(mode_name(&root, 1.0, 2.0), "deathmatch");
         let competitive = root
@@ -130,6 +143,14 @@ mod tests {
             .as_block()
             .unwrap();
         assert_eq!(competitive.entries.len(), 1);
+        assert_eq!(competitive.str("dust"), Some("0"));
+        let casual = root
+            .path(&["gameTypes", "classic", "gameModes", "casual", "mapgroupsSP"])
+            .unwrap()
+            .as_block()
+            .unwrap();
+        assert!(casual.entries.is_empty());
+        assert!(root.block("mapgroups").unwrap().get("modern").is_none());
         assert!(root.block("maps").unwrap().get("de_missing").is_none());
     }
 }
