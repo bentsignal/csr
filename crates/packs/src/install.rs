@@ -123,12 +123,23 @@ impl Installed {
     }
 
     pub fn install_validated(&self, pack: &Pack) -> Result<(), String> {
+        self.install_inner(pack, &Control::default(), false)
+    }
+
+    pub(crate) fn install_controlled(&self, pack: &Pack, control: &Control) -> Result<(), String> {
+        self.install_inner(pack, control, true)
+    }
+
+    fn install_inner(&self, pack: &Pack, control: &Control, wait: bool) -> Result<(), String> {
+        control.update(Stage::Waiting, 0, 0)?;
         no_link(&self.dir)?;
         fs::create_dir_all(&self.dir).map_err(|e| e.to_string())?;
-        let _lock = self.lock()?;
+        let _lock = self.lock_controlled(control, wait)?;
         let target = self.dir.join(format!("{}.csrpack", pack.manifest.id));
         no_link(&target)?;
-        let (existing, errors) = self.load();
+        control.update(Stage::CheckingInstalled, 0, 0)?;
+        let (existing, errors) = self.load_controlled(control);
+        control.check()?;
         for error in errors {
             eprintln!("warning: invalid installed pack skipped: {error}");
         }
@@ -152,10 +163,22 @@ impl Installed {
             .open(&temp)
             .map_err(|e| e.to_string())?;
         let pending = Pending(temp);
-        file.write_all(&pack.archive)
-            .and_then(|_| file.sync_all())
-            .map_err(|e| e.to_string())?;
+        let mut written = 0;
+        let writing = (|| {
+            for chunk in pack.archive.chunks(job::CHUNK) {
+                control.update(Stage::Writing, written, pack.archive_size())?;
+                file.write_all(chunk).map_err(|e| e.to_string())?;
+                written += chunk.len() as u64;
+            }
+            file.sync_all().map_err(|e| e.to_string())
+        })();
+        // Close the file before the pending guard removes it on cancellation,
+        // including platforms where an open handle prevents unlinking.
         drop(file);
+        writing?;
+        // The final cancellation boundary precedes the atomic commit. There is
+        // deliberately no cancellation check after publication succeeds.
+        control.update(Stage::Publishing, written, pack.archive_size())?;
         publish(&pending.0, &target)
             .map_err(|e| format!("installing {}: {e}", pack.manifest.name))?;
         Ok(())
@@ -164,6 +187,10 @@ impl Installed {
     /// Returns independent valid snapshots. Corrupt files are reported and
     /// never mounted; an unreadable folder is reported rather than silently empty.
     pub fn load(&self) -> (Vec<Pack>, Vec<String>) {
+        self.load_controlled(&Control::default())
+    }
+
+    fn load_controlled(&self, control: &Control) -> (Vec<Pack>, Vec<String>) {
         if let Err(e) = no_link(&self.dir) {
             return (Vec::new(), vec![e]);
         }
@@ -193,9 +220,13 @@ impl Installed {
         let mut registry = Registry::default();
         let mut ids = BTreeSet::new();
         for path in paths {
+            if let Err(e) = control.check() {
+                errors.push(e);
+                break;
+            }
             let result: Result<Pack, String> = (|| {
                 no_link(&path)?;
-                let pack = Pack::open(&path)?;
+                let pack = Pack::open_controlled(&path, Limits::default(), control)?;
                 if path.file_stem().and_then(|s| s.to_str()) != Some(&pack.manifest.id) {
                     return Err("installed filename must match pack id".into());
                 }
@@ -233,6 +264,10 @@ impl Installed {
     }
 
     fn lock(&self) -> Result<std::fs::File, String> {
+        self.lock_controlled(&Control::default(), false)
+    }
+
+    fn lock_controlled(&self, control: &Control, wait: bool) -> Result<std::fs::File, String> {
         let path = self.dir.join(".install.lock");
         no_link(&path)?;
         let file = OpenOptions::new()
@@ -242,8 +277,16 @@ impl Installed {
             .truncate(false)
             .open(path)
             .map_err(|e| e.to_string())?;
-        file.try_lock()
-            .map_err(|e| format!("another pack installation is in progress: {e}"))?;
+        loop {
+            control.check()?;
+            match file.try_lock() {
+                Ok(()) => break,
+                Err(std::fs::TryLockError::WouldBlock) if wait => {
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                }
+                Err(e) => return Err(format!("another pack installation is in progress: {e}")),
+            }
+        }
         Ok(file)
     }
 }

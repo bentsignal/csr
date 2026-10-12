@@ -65,6 +65,17 @@ start copies your progress from it (from your Desktop, Downloads or
 Documents).
 
 
+CONTENT PACKS
+-------------
+After installing CSGO Rewrite, double-click a .csrpack file to install it.
+The game checks the file and shows progress with a Cancel button. If the
+file cannot be installed, a message explains why. A successful install
+opens the game, or shows a notification if the game is already running.
+Cancelling before installation finishes keeps the previous pack version.
+Packs are kept with your other data and survive game updates.
+Choosing installed pack maps from the menu is still being added.
+
+
 UNINSTALLING
 ------------
 Windows Settings > Apps > Installed apps > CSGO Rewrite > Uninstall. This

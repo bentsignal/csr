@@ -49,6 +49,131 @@ fn manifest() -> Manifest {
     }
 }
 
+#[test]
+fn cancellation_during_archive_reads_and_decompression_never_returns_a_pack() {
+    let temp = Temp::new();
+    let mut seed = 42u64;
+    let data: Vec<u8> = (0..job::CHUNK * 3)
+        .map(|_| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed as u8
+        })
+        .collect();
+    let bytes = build(&manifest(), &[("maps/arena_file.bsp", &data)]).unwrap();
+    let path = temp.write("source.csrpack", &bytes);
+    for stage in [Stage::Reading, Stage::Validating] {
+        let mut control = Control::default();
+        let cancel = control.clone();
+        control.hook = Some(Arc::new(move |p| {
+            if p.stage == stage && p.bytes >= job::CHUNK as u64 {
+                cancel.cancel();
+            }
+        }));
+        let error = Pack::open_controlled(&path, Limits::default(), &control).unwrap_err();
+        assert_eq!(error, "pack installation cancelled");
+    }
+}
+
+#[test]
+fn cancellation_during_writing_and_at_publish_preserves_old_pack_and_cleans_pending() {
+    let temp = Temp::new();
+    let store = Installed::new(&temp.0);
+    let old = build(&manifest(), &[("maps/arena_file.bsp", b"old")]).unwrap();
+    store
+        .install_validated(&Pack::from_bytes(old.clone()).unwrap())
+        .unwrap();
+    let mut update = manifest();
+    update.version = "1.0.1".into();
+    let data = vec![9; job::CHUNK * 3];
+    // Stored ZIP makes the archive write itself span multiple chunks.
+    let mut files = BTreeMap::new();
+    files.insert(
+        "maps/arena_file.bsp".into(),
+        Arc::<[u8]>::from(data.as_slice()),
+    );
+    update.content_hash = content_hash(&files);
+    let pack = Pack::from_bytes(raw_zip(&update, &[("maps/arena_file.bsp", &data)])).unwrap();
+    for stage in [Stage::Writing, Stage::Publishing] {
+        let mut control = Control::default();
+        let cancel = control.clone();
+        control.hook = Some(Arc::new(move |p| {
+            if p.stage == stage && p.bytes > 0 {
+                cancel.cancel();
+            }
+        }));
+        assert_eq!(
+            store.install_controlled(&pack, &control).unwrap_err(),
+            "pack installation cancelled"
+        );
+        assert_eq!(
+            fs::read(store.dir().join("test_arena.csrpack")).unwrap(),
+            old
+        );
+        assert!(
+            !fs::read_dir(store.dir()).unwrap().any(|e| e
+                .unwrap()
+                .path()
+                .extension()
+                .is_some_and(|s| s == "part"))
+        );
+    }
+}
+
+#[test]
+fn install_job_waits_cancellably_for_lock_and_reports_only_committed_receipts() {
+    use std::time::{Duration, Instant};
+    let temp = Temp::new();
+    let store = Installed::new(&temp.0);
+    let bytes = build(&manifest(), &[("maps/arena_file.bsp", b"synthetic")]).unwrap();
+    let source = temp.write("source.csrpack", &bytes);
+    fs::create_dir_all(store.dir()).unwrap();
+    let lock = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .open(store.dir().join(".install.lock"))
+        .unwrap();
+    lock.lock().unwrap();
+    let mut job = InstallJob::start(store.clone(), source.clone());
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while job.progress().stage != Stage::Waiting && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(job.progress().stage, Stage::Waiting);
+    assert!(job.poll().is_none());
+    job.cancel();
+    let outcome = loop {
+        if let Some(outcome) = job.poll() {
+            break outcome;
+        }
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(5));
+    };
+    assert!(matches!(outcome, Outcome::Cancelled));
+    assert!(!store.dir().join("test_arena.csrpack").exists());
+    lock.unlock().unwrap();
+    let mut job = InstallJob::start(store.clone(), source);
+    let outcome = loop {
+        if let Some(outcome) = job.poll() {
+            break outcome;
+        }
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(5));
+    };
+    let Outcome::Installed(receipt) = outcome else {
+        panic!("{outcome:?}")
+    };
+    assert_eq!(receipt.manifest.provides, ["mod_map_arena"]);
+    assert_eq!(
+        fs::read(store.dir().join("test_arena.csrpack")).unwrap(),
+        bytes
+    );
+    assert_eq!(store.load().0[0].archive_hash(), receipt.archive_hash);
+    assert!(job.poll().is_none());
+}
+
 fn raw_zip(manifest: &Manifest, files: &[(&str, &[u8])]) -> Vec<u8> {
     let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
     let opts =

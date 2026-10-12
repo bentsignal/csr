@@ -11,7 +11,7 @@ const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 fn powershell_command(script: &str) -> Command {
     let mut cmd = Command::new("powershell");
     cmd.args(["-NoProfile", "-NonInteractive", "-STA", "-Command"]).arg(format!(
-        "[Console]::OutputEncoding=[Text.Encoding]::UTF8; Add-Type -AssemblyName System.Windows.Forms; \
+        "[Console]::InputEncoding=[Text.Encoding]::UTF8; [Console]::OutputEncoding=[Text.Encoding]::UTF8; Add-Type -AssemblyName System.Windows.Forms; \
          Add-Type -AssemblyName System.Drawing; [System.Windows.Forms.Application]::EnableVisualStyles(); {script}"
     ));
     #[cfg(windows)]
@@ -102,6 +102,21 @@ impl Waiting {
         Waiting(powershell_command(&script).stdin(Stdio::null()).stdout(Stdio::null()).spawn().ok())
     }
 
+    /// A worker owns the actual installation; stdin carries plain status text,
+    /// never executable script. A runspace reads the pipe without blocking the
+    /// form's event thread. Closing the form is the caller's cancellation signal.
+    pub fn progress(title: &str, text: &str) -> Waiting {
+        let script = progress_script(title, text);
+        Waiting(powershell_command(&script).stdin(Stdio::piped()).stdout(Stdio::null()).spawn().ok())
+    }
+
+    pub fn status(&mut self, text: &str) {
+        use std::io::Write;
+        if let Some(input) = self.0.as_mut().and_then(|c| c.stdin.as_mut()) {
+            let _ = writeln!(input, "{}", text.replace(['\r', '\n'], " "));
+        }
+    }
+
     /// True once the player has closed the window.
     pub fn dismissed(&mut self) -> bool {
         self.0.as_mut().is_some_and(|c| c.try_wait().ok().flatten().is_some())
@@ -110,14 +125,30 @@ impl Waiting {
     pub fn close(mut self) {
         if let Some(mut c) = self.0.take() {
             let _ = c.kill();
+            let _ = c.wait();
         }
     }
+}
+
+fn progress_script(title: &str, text: &str) -> String {
+    form_script(title, text, &["Cancel"]) + r#"
+            $state=[hashtable]::Synchronized(@{Text=$l.Text});
+            $reader=[powershell]::Create();
+            [void]$reader.AddScript({param($state)
+                while($null -ne ($line=[Console]::In.ReadLine())){$state.Text=$line}
+            }).AddArgument($state);
+            $async=$reader.BeginInvoke();
+            $timer=New-Object System.Windows.Forms.Timer;$timer.Interval=100;
+            $timer.Add_Tick({$l.Text=$state.Text});$timer.Start();
+            [void]$f.ShowDialog();$timer.Stop();[Environment]::Exit(0);
+        "#
 }
 
 impl Drop for Waiting {
     fn drop(&mut self) {
         if let Some(mut c) = self.0.take() {
             let _ = c.kill();
+            let _ = c.wait();
         }
     }
 }
@@ -177,6 +208,40 @@ pub fn hide_own_console() {
 /// `CSR_DIALOG_PREVIEW=<folder> cargo test -p launcher render_dialogs -- --ignored`.
 #[cfg(test)]
 mod preview {
+    #[test]
+    #[ignore = "visible private UI proof; set CSR_DIALOG_PREVIEW outside Git"]
+    fn render_pack_progress() {
+        use std::io::Write;
+        use std::process::Stdio;
+        use std::time::{Duration, Instant};
+        let out = std::env::var("CSR_DIALOG_PREVIEW").unwrap();
+        let path = std::path::Path::new(&out).join("pack-progress.png");
+        // Exercise the real pipe reader and real form. The timer closes only
+        // after the status delivered as plain stdin text reaches the label.
+        let capture = format!(r#"
+            $capture=New-Object System.Windows.Forms.Timer;$capture.Interval=100;
+            $capture.Add_Tick({{
+                if($l.Text -eq 'Installing the pack… 43%'){{
+                    $capture.Stop();$bmp=New-Object System.Drawing.Bitmap($f.Width,$f.Height);
+                    $f.DrawToBitmap($bmp,(New-Object System.Drawing.Rectangle(0,0,$f.Width,$f.Height)));
+                    $bmp.Save({});$bmp.Dispose();$f.Close();
+                }}
+            }});$capture.Start();[void]$f.ShowDialog()
+        "#, super::ps_quote(&path.display().to_string()));
+        let script = super::progress_script("Install content pack", "Checking the pack…")
+            .replace("[void]$f.ShowDialog()", &capture);
+        let mut child = super::powershell_command(&script).stdin(Stdio::piped()).spawn().unwrap();
+        // Match the production protocol's UTF-8 status line.
+        writeln!(child.stdin.as_mut().unwrap(), "Installing the pack… 43%").unwrap();
+        let deadline = Instant::now() + Duration::from_secs(15);
+        let status = loop {
+            if let Some(status) = child.try_wait().unwrap() { break Some(status); }
+            if Instant::now() >= deadline { child.kill().unwrap(); child.wait().unwrap(); break None; }
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        assert!(status.is_some_and(|s| s.success()), "progress reader/form failed or did not close");
+        assert!(path.exists(), "status never reached the form");
+    }
     #[test]
     #[ignore]
     fn render_dialogs() {

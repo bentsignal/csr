@@ -12,6 +12,8 @@
 /config/cosmetics.cfg
 /config/cosmetics.tmp
 /config/cosmetics.lock
+/config/game.instance.lock
+/config/game.launch.lock
 
 /worlds/
 
