@@ -31,8 +31,9 @@ validated, including rejection of host paths. The front end must resolve
 the id against its supported registry and perform a cancellable load before
 reconnecting. Receiving the manifest does not mount or download anything.
 
-Control, inputs and events use postcard. Wire v4 state frames carry exact
-postcard WorldState bytes inside a bounded lossless full/patch envelope. Channels are:
+Control, inputs and events use postcard. Wire v5 retains the bounded lossless
+full/patch state envelope introduced in v4, carrying exact postcard WorldState
+bytes. Channels are:
 
 | Channel | Delivery | Contents |
 |---|---|---|
@@ -41,9 +42,15 @@ postcard WorldState bytes inside a bounded lossless full/patch envelope. Channel
 | State | Unreliable, fragmented | Full or lossless baseline delta with last applied input sequence |
 | Events | Reliable, ordered | Tick-stamped `GameEvent` batches |
 
-Protocol version 4 rejects older peers and retains replicated spawn epochs and
+Protocol version 5 rejects older peers and retains replicated spawn epochs and
 server-derived hitscan rewind ticks. See [LAGCOMP.md](LAGCOMP.md) for server timing/lifecycle
 bounds and the remaining hitbox fidelity scope.
+
+Kill events retain an immutable authoritative death receipt, including the
+victim's life/tick/current pose and original names/teams. Actual firearm/melee
+hit rays are optional metadata, never inferred impulses. Independent reliable
+events can arrive after a respawn snapshot; consumers use the receipt rather
+than current actor lookup. See [DEATH_RECEIPTS.md](DEATH_RECEIPTS.md).
 
 Inputs include the existing optional tracked head/hand poses and separate
 aim ray. The server rejects nonfinite values, clamps movement to 450, limits

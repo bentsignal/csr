@@ -10,6 +10,9 @@ use crate::{R, invalid};
 use glam::Vec3;
 use std::io;
 
+/// Strict, bounded articulated-player metadata; separate from static-prop parsing.
+pub mod ragdoll;
+
 /// Inches per metre as used by the physics conversion.
 const METERS_TO_INCHES: f32 = 1.0 / 0.0254;
 
