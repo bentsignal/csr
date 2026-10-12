@@ -423,6 +423,7 @@ pub struct Model {
     pub tab: Tab,
     pub selected: Option<ServerKey>,
     pub row_offset: usize,
+    pub context_row: Option<ServerKey>,
     pub add_open: bool,
     pub address_focused: bool,
     pub address: AddressEdit,
@@ -447,6 +448,13 @@ impl Model {
         if !self
             .rows(snapshot)
             .iter()
+            .any(|r| Some(r.key) == self.context_row && r.favorite)
+        {
+            self.context_row = None;
+        }
+        if !self
+            .rows(snapshot)
+            .iter()
             .any(|r| Some(r.key) == self.selected)
         {
             self.selected = None;
@@ -459,6 +467,19 @@ impl Model {
         } else {
             false
         }
+    }
+    pub fn remove_favorite(&self, key: ServerKey, snapshot: &Snapshot) -> Option<Intent> {
+        (!snapshot.busy
+            && !self.add_open
+            && self.context_row == Some(key)
+            && self
+                .rows(snapshot)
+                .iter()
+                .any(|r| r.key == key && r.favorite))
+        .then_some(Intent::RemoveFavorite {
+            key,
+            generation: snapshot.generation,
+        })
     }
     pub fn connect(&self, snapshot: &Snapshot) -> Option<Intent> {
         if snapshot.busy || self.add_open {
@@ -479,6 +500,7 @@ impl Model {
                 (!snapshot.busy && !self.add_open).then_some(Intent::Refresh(self.tab))
             }
             "AddServerByName" if !snapshot.busy => {
+                self.context_row = None;
                 self.add_open = true;
                 self.address_focused = true;
                 None
