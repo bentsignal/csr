@@ -230,20 +230,24 @@ landed the bounded, data-only private pack format, atomic installation,
 transactional ContentId registry and selected-pack Level/VFS loading. A
 manifest-only Legacy recipe and a private Dust II asset pack both passed
 release probe/simulation and a rendered private-pack proof; PR #12 was closed
-as superseded. File opening and window-drop integration are the next seam;
-server downloads and other-game importers remain open.
+as superseded. Local file opening, owned native selection and the Home content
+manager now connect installation to hash-bound map selection; server downloads
+and other-game importers remain open. See [PACKUI.md](PACKUI.md).
 
 - [x] Pack format `.csrpack`: a zip with `pack.toml` (id, version, origin,
       provided `ContentId`s, content hash) plus data definitions and
       optional assets. Mounted into `vfs` as another search path.
 - [ ] A content registry keyed by `ContentId`, replacing hardcoded names
       (`de_`/`cs_` prefixes, the `"overworld"` special case).
-- [ ] Install with zero steps: **drag onto the game window**, double-click
-      (the installer registers `.csrpack`), or **downloaded automatically
-      from the server on join** (the server advertises required pack hashes
-      and serves them, like Source's `sv_downloadurl`). Stored under
-      `userdata\packs`.
-- [ ] Two pack kinds:
+- [x] Local installation: **drag onto the game window**, double-click
+      (the installer registers `.csrpack`), or choose a file in the Home
+      content manager. Bounded workers, cancellation, progress and immutable
+      selected-map ownership; stored under `userdata\packs`. Native picker
+      protocol/lifetime checks pass; actual dialog interaction is pending.
+- [ ] **Download automatically from the server on join**: advertise required
+      pack hashes and serve them, like Source's `sv_downloadurl`.
+- [x] Two pack formats (Legacy recipes and private asset maps verified;
+      other-game importers remain open):
       - *recipe packs* hold no assets; they tell the game how to read content
         from the player's own install (e.g. MW2 from Steam). Public-safe.
       - *asset packs* contain extracted assets. Private only: never
