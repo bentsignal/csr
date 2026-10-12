@@ -21,6 +21,7 @@ movement.workspace = true
 sim.workspace = true
 netcode.workspace = true
 level.workspace = true
+scaleform.workspace = true
 
 image = { version = "0.25", default-features = false, features = ["png"] }
 

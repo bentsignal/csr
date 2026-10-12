@@ -98,7 +98,7 @@ pub enum Action {
 pub struct Reel;
 pub fn setup(
     mut commands: Commands,
-    level: Res<crate::LoadedLevel>,
+    level: Res<crate::GameData>,
     mut sources: ResMut<Assets<AudioSource>>,
     catalog: Res<Catalog>,
 ) {
@@ -118,7 +118,7 @@ pub fn setup(
         ("1", "sound/ui/item_reveal3_rare.wav"),
         ("2", "sound/ui/item_reveal3_rare.wav"),
     ] {
-        if let Some(bytes) = level.0.vfs.read(path).and_then(crate::audio::playable) {
+        if let Some(bytes) = level.vfs.read(path).and_then(crate::audio::playable) {
             ui.sounds.insert(
                 key.into(),
                 sources.add(AudioSource {

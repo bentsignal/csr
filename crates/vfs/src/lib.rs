@@ -198,6 +198,12 @@ impl Vfs {
         self.mounts.iter().any(|m| m.mount.exists(&path))
     }
 
+    /// Tests one named source without accepting a copy from another mount.
+    pub fn exists_from(&self, label: &str, path: &str) -> bool {
+        let Some(path) = lookup_path(path) else { return false };
+        self.mounts.iter().filter(|m| m.label == label).any(|m| m.mount.exists(&path))
+    }
+
     /// Paths known to archive mounts (VPK and pakfile) under a prefix.
     /// Loose directories are not enumerated.
     pub fn archive_paths_with_prefix(&self, prefix: &str) -> Vec<String> {
@@ -348,8 +354,10 @@ mod tests {
             assert!(fs.read(path).is_none(), "{path}");
             assert!(fs.read_from("loose", path).is_none(), "{path}");
             assert!(!fs.exists(path), "{path}");
+            assert!(!fs.exists_from("loose", path), "{path}");
         }
         assert_eq!(fs.read("/SAFE.TXT").unwrap(), b"inside");
+        assert!(fs.exists_from("loose", "/SAFE.TXT"));
         std::fs::remove_dir_all(root).unwrap();
     }
 

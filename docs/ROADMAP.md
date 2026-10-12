@@ -149,8 +149,11 @@ menu, friends list, store tiles, `inventorypanel.swf` with the case opening,
 HUD, scoreboard, buy menu), and the UI sounds, case sounds and menu music are
 byte-identical to 2018.
 
-- [ ] New UI layer with an app state machine (menu ↔ loading ↔ match ↔
-      server browser) instead of relaunching the process.
+- [x] Persistent menu ↔ loading ↔ match state machine instead of relaunching
+      the process. Bounded loading/cancellation, native offline GO, pause
+      Resume/Exit and a rendered Dust II → home → Inferno lifecycle proof.
+      [PR #10](https://github.com/bentsignal/global-offensive/pull/10).
+- [ ] Connect the server browser and rendered network joins to that state machine.
 - [x] **Spike: play Valve's own SWFs with [Ruffle](https://github.com/ruffle-rs/ruffle)**
       (Rust Flash player, MIT/Apache, wgpu), read from the player's install
       at runtime, with the Scaleform game API stubbed. It works: the home
