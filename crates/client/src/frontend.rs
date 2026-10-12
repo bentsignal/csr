@@ -377,7 +377,9 @@ impl Engine for Bridge {
                 let value = args.get(1).cloned().unwrap_or(Value::Undefined);
                 // Authored numeric entry immediately asks the bridge to refresh.
                 // Update this snapshot before the following callback reads it.
-                apply_setting(&mut data.settings, &name, &value);
+                if apply_setting(&mut data.settings, &name, &value) {
+                    self.options.convar_committed(&name);
+                }
                 self.actions.lock().unwrap().push(Action::Convar(name, value));
                 None
             }

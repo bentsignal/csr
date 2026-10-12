@@ -169,6 +169,13 @@ impl Scene {
         Some((widget.convar.clone(), number.into()))
     }
 
+    /// Numeric entry identifies its row by convar before the native refresh callback.
+    pub fn convar_committed(&mut self, name: &str) {
+        if let Some(index) = self.widgets.iter().position(|widget| widget.convar == name) {
+            self.focused_widget = Some(index);
+        }
+    }
+
     /// Preserve the validated row when the authored mouse highlight reports NaN.
     pub fn highlight(&mut self, index: &Value, path: &str, calls: &mut Calls) {
         if let Value::Number(index) = index {
@@ -325,6 +332,17 @@ mod tests {
             );
         }
     }
+    #[test]
+    fn numeric_commit_selects_its_row_without_a_prior_slider_drag() {
+        let mut scene = scene();
+        let mut calls = Calls::default();
+        scene.highlight(&0u32.into(), "_level21", &mut calls);
+        scene.convar_committed("sensitivity");
+        assert_eq!(scene.focused_widget, Some(1));
+        scene.convar_committed("unknown");
+        assert_eq!(scene.focused_widget, Some(1));
+    }
+
     #[test]
     fn refreshed_choices_cycle_from_the_latest_saved_value() {
         let mut scene = scene();
