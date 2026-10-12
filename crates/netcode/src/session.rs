@@ -482,4 +482,68 @@ mod tests {
         assert_eq!(s.world.players[0].last_input.rewind_tick, None);
         assert_eq!(s.snapshot_for(10).unwrap().acknowledged_input, 2);
     }
+
+    #[test]
+    fn only_valid_outer_view_metadata_can_produce_an_authoritative_historical_hit() {
+        let catalog = Arc::new(
+            weapons::Catalog::from_items_game(
+                r##"
+            "items_game" { "items" { "1" {
+                "name" "weapon_test" "baseitem" "1"
+                "item_type_name" "#CSGO_Type_Rifle"
+                "attributes" { "damage" "35" "range" "8192"
+                    "primary clip size" "30" "is full auto" "1" "cycletime" "0.1" }
+            } } }
+        "##,
+            )
+            .unwrap(),
+        );
+        for valid in [true, false] {
+            let world =
+                World::with_catalog(Arc::new(collision::CollisionWorld::new()), catalog.clone());
+            let mut s = Session::new(world, manifest()).unwrap();
+            s.join(10, hello());
+            let mut target_hello = hello();
+            if let ClientControl::Hello { team, .. } = &mut target_hello {
+                *team = Team::Terrorist;
+            }
+            s.join(20, target_hello);
+            let shooter = s.player_for(10).unwrap();
+            let victim = s.player_for(20).unwrap();
+            s.world.players[0].movement = movement::PlayerMove::spawn_at(glam::Vec3::ZERO);
+            s.world.players[0].weapons = vec![sim::weapon::WeaponState::new(Arc::new(
+                catalog.get("weapon_test").unwrap().clone(),
+            ))];
+            s.world.players[0].active = 0;
+            s.world.players[1].movement = movement::PlayerMove::spawn_at(glam::Vec3::X * 100.);
+            s.world.players[1].armor = 0;
+            s.step(); // Tick zero target pose is now in server history.
+            s.world.players[1].movement.origin.y = 64.;
+            let input = InputCommand {
+                sequence: 1,
+                view_tick: if valid { 0 } else { 100 },
+                input: TickInput {
+                    buttons: movement::buttons::ATTACK,
+                    rewind_tick: Some(0),
+                    ..Default::default()
+                },
+            };
+            s.input(10, InputBatch(vec![input])).unwrap();
+            let events = s.step();
+            assert_eq!(
+                events
+                    .events
+                    .iter()
+                    .any(|e| matches!(e, sim::GameEvent::Damage {
+                attacker, victim: hit, .. } if *attacker == shooter && *hit == victim)),
+                valid
+            );
+            assert_eq!(s.world.player(victim).unwrap().health < 100, valid);
+            assert_eq!(s.world.player(victim).unwrap().movement.origin.y, 64.);
+            assert_eq!(
+                s.world.player(shooter).unwrap().last_input.rewind_tick,
+                valid.then_some(0)
+            );
+        }
+    }
 }
