@@ -89,6 +89,7 @@ pub(crate) struct Proof {
     step: usize,
     pointer: Option<(Entity, Vec2, u64, Instant)>,
     pointer_diagnostic: Duration,
+    presented_wait: Option<(Instant, u64)>,
     endpoint: String,
     key: Option<ServerKey>,
     map: String,
@@ -104,6 +105,7 @@ impl Default for Proof {
             step: 0,
             pointer: None,
             pointer_diagnostic: Duration::ZERO,
+            presented_wait: None,
             endpoint: String::new(),
             key: None,
             map: String::new(),
@@ -117,6 +119,7 @@ impl Proof {
         self.step = 0;
         self.pointer = None;
         self.pointer_diagnostic = Duration::ZERO;
+        self.presented_wait = None;
         self.entered = Instant::now();
         info!("browser flow: entered {phase:?}");
     }
@@ -468,6 +471,23 @@ fn clean_home(world: &mut World) -> bool {
             .is_none()
 }
 
+fn presented_home_ready(world: &World, proof: &mut Proof) -> bool {
+    let front = world.resource::<Frontend>();
+    presented_ready(
+        front.loaded("MainMenu"),
+        front.presented_serial(),
+        &mut proof.presented_wait,
+    )
+}
+fn presented_ready(loaded: bool, serial: u64, wait: &mut Option<(Instant, u64)>) -> bool {
+    if !loaded {
+        *wait = None;
+        return false;
+    }
+    let (observed, baseline) = wait.get_or_insert_with(|| (Instant::now(), serial));
+    observed.elapsed() >= Duration::from_secs(5) && serial.saturating_sub(*baseline) >= 2
+}
+
 pub(crate) fn update(world: &mut World, mut proof: Local<Proof>) {
     if proof.phase == Phase::Done {
         return;
@@ -701,7 +721,9 @@ pub(crate) fn update(world: &mut World, mut proof: Local<Proof>) {
             }
         }
         Phase::CaptureFavorite => {
-            capture_then(world, &mut proof, "browser-favorite.png", Phase::Select)
+            if proof.settled() {
+                capture_then(world, &mut proof, "browser-favorite.png", Phase::Select);
+            }
         }
         Phase::Select => {
             let key = proof.key.unwrap();
@@ -811,6 +833,9 @@ pub(crate) fn update(world: &mut World, mut proof: Local<Proof>) {
                 failed(world, &mut proof, "Home retained remote/match owners");
                 return;
             }
+            if !presented_home_ready(world, &mut proof) {
+                return;
+            }
             proof.enter(Phase::CaptureHome);
         }
         Phase::CaptureHome => {
@@ -842,7 +867,9 @@ pub(crate) fn update(world: &mut World, mut proof: Local<Proof>) {
             proof.enter(Phase::CaptureReopen);
         }
         Phase::CaptureReopen => {
-            capture_then(world, &mut proof, "browser-reopened.png", Phase::Context)
+            if proof.settled() {
+                capture_then(world, &mut proof, "browser-reopened.png", Phase::Context);
+            }
         }
         Phase::Context => {
             let key = proof.key.unwrap();
@@ -862,7 +889,9 @@ pub(crate) fn update(world: &mut World, mut proof: Local<Proof>) {
             }
         }
         Phase::CaptureContext => {
-            capture_then(world, &mut proof, "browser-context.png", Phase::Remove)
+            if proof.settled() {
+                capture_then(world, &mut proof, "browser-context.png", Phase::Remove);
+            }
         }
         Phase::Remove => {
             let key = proof.key.unwrap();
@@ -900,7 +929,9 @@ pub(crate) fn update(world: &mut World, mut proof: Local<Proof>) {
             proof.enter(Phase::CaptureRemoved);
         }
         Phase::CaptureRemoved => {
-            capture_then(world, &mut proof, "browser-removed.png", Phase::Close)
+            if proof.settled() {
+                capture_then(world, &mut proof, "browser-removed.png", Phase::Close);
+            }
         }
         Phase::Close => {
             if escape(world, &mut proof, id) {
@@ -914,6 +945,9 @@ pub(crate) fn update(world: &mut World, mut proof: Local<Proof>) {
                     &mut proof,
                     "closing Browser retained match/remote owners",
                 );
+                return;
+            }
+            if !presented_home_ready(world, &mut proof) {
                 return;
             }
             proof.enter(Phase::CaptureClosed);
@@ -940,6 +974,19 @@ pub(crate) fn update(world: &mut World, mut proof: Local<Proof>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn home_capture_needs_loaded_movie_and_two_uploaded_frames_after_observation() {
+        let mut wait = None;
+        assert!(!presented_ready(false, 100, &mut wait));
+        assert!(!presented_ready(true, 100, &mut wait));
+        // Advancing Bevy/time alone cannot satisfy a stalled movie upload.
+        wait.as_mut().unwrap().0 = Instant::now() - Duration::from_secs(6);
+        assert!(!presented_ready(true, 100, &mut wait));
+        assert!(!presented_ready(true, 101, &mut wait));
+        assert!(presented_ready(true, 102, &mut wait));
+        assert!(!presented_ready(false, 102, &mut wait));
+        assert!(wait.is_none());
+    }
     #[test]
     fn changed_favorites_tab_finishes_release_before_advance_and_next_press() {
         // Actual InputPlugin processing: a held button suppresses the next
