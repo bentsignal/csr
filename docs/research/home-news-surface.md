@@ -64,6 +64,15 @@ Scaleform image/texture seam, not the game's custom HTML binding. Searches of
 the Autodesk and Steamworks documentation did not identify the named Legacy
 initialization method's contract. No SDK implementation was copied.
 
+Autodesk's [custom-image FAQ](https://help.autodesk.com/cloudhelp/ENU/Scaleform-Help/scaleform_help/faqs/images_icons.html)
+documents host-supplied `img://` images and texture replacement by an exported
+linkage name. Its [LoadProtocolImage reference](https://help.autodesk.com/cloudhelp/ENU/Scaleform-Help/cpp_ref/00732.html)
+allows the host to interpret a UTF-8 image-protocol URL. Our existing navigator
+already delegates non-avatar `img://` requests to `Engine::image`; this is a
+possible host image seam, not evidence of the Blog initialization signature,
+image identifier or required resize/update behavior. No Blog surface image
+request was observed in these runs.
+
 The older [Scaleform spike](scaleform-spike.md) identifies the HTML target as a
 future integration seam. Its proposed news image is not an implemented or
 verified native surface contract.
