@@ -15,6 +15,15 @@ send gameplay state. Admission checks the protocol version, the map's stable
 already have matching content. Required pack downloads are a later layer;
 there is no asset transfer in this protocol.
 
+Build manifests from `Level::bsp_sha1()` and `Level::catalog_sha1()`: these
+retain the exact BSP input parsed before its pak mounts, and the exact catalog
+input successfully parsed after that pak mounts. A later VFS lookup can resolve
+a shadowed file or changed loose data, so it must not establish the running
+level's identity. Missing or malformed catalog data retains the local default
+fallback but has no catalog file digest; the dedicated server rejects that
+fallback before advertising a manifest. These SHA-1 fields compare content and
+are not a pack authenticity or download-verification mechanism.
+
 A content mismatch returns typed `ContentRequired` metadata through
 `Client::required_content()`. Content ids, map filenames and hashes are
 validated, including rejection of host paths. The front end must resolve

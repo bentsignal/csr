@@ -4,6 +4,7 @@ pub mod maps;
 
 use collision::{CollisionWorld, MapCollisionOptions};
 use content::{ContentId, ContentKind, GameOrigin};
+use sha1::{Digest, Sha1};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
@@ -23,6 +24,8 @@ pub struct Level {
     /// the same basename. Recipe and built-in maps retain their own source.
     metadata_pack: Option<String>,
     pack_archive_hash: Option<String>,
+    bsp_sha1: [u8; 20],
+    catalog_sha1: Option<[u8; 20]>,
     pub timings: Vec<(&'static str, f32)>,
 }
 
@@ -145,6 +148,15 @@ impl Level {
 
     pub fn pack_archive_hash(&self) -> Option<&str> { self.pack_archive_hash.as_deref() }
 
+    /// SHA-1 of the exact input parsed as this BSP, before mounting its pakfile.
+    /// A later VFS lookup may resolve a different source with the same filename.
+    pub fn bsp_sha1(&self) -> &[u8; 20] { &self.bsp_sha1 }
+
+    /// SHA-1 of the exact successfully parsed items_game input after the BSP
+    /// pakfile mounts. Missing/malformed input uses the local default catalog
+    /// and has no file identity suitable for matching network content.
+    pub fn catalog_sha1(&self) -> Option<&[u8; 20]> { self.catalog_sha1.as_ref() }
+
     /// Loads a validated pack selection into a session-owned VFS. Asset maps
     /// can use an empty VFS without a Legacy install; recipes need a mounted
     /// Legacy VFS. No other installed pack is automatically mounted.
@@ -186,6 +198,7 @@ impl Level {
         let bytes = match bsp_mount { Some(label) => fs.read_from(label, &map_path), None => fs.read(&map_path) }
             .ok_or_else(|| LoadError::Io(format!("{map_path} not found in its selected source")))?;
         let bsp = bsp::Bsp::parse(&bytes).map_err(|e| LoadError::Io(format!("{map_path}: {e}")))?;
+        let bsp_sha1 = Sha1::digest(&bytes).into();
         drop(bytes);
         fs.mount_map_pakfile(bsp.pakfile.clone())
             .map_err(|e| LoadError::Io(format!("pakfile: {e}")))?;
@@ -201,9 +214,13 @@ impl Level {
         timings.push(("collision", t.elapsed().as_secs_f32()));
 
         let t = Instant::now();
-        let catalog = fs
-            .read_string("scripts/items/items_game.txt")
-            .and_then(|text| weapons::Catalog::from_items_game(&text).ok())
+        let (catalog, catalog_sha1) = fs
+            .read("scripts/items/items_game.txt")
+            .and_then(|bytes| {
+                weapons::Catalog::from_items_game(&kv::decode_text(&bytes))
+                    .ok()
+                    .map(|catalog| (catalog, Some(Sha1::digest(&bytes).into())))
+            })
             .unwrap_or_default();
         timings.push(("weapons", t.elapsed().as_secs_f32()));
 
@@ -222,6 +239,8 @@ impl Level {
             nav,
             metadata_pack,
             pack_archive_hash: None,
+            bsp_sha1,
+            catalog_sha1,
             timings,
         })
     }

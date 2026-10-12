@@ -8,7 +8,6 @@ use netcode::{
     session::Session,
     transport::{Client, Server},
 };
-use sha1::{Digest, Sha1};
 use sim::{GameMode, RulesConfig, Team, TickInput, World};
 use std::{
     net::SocketAddr,
@@ -151,16 +150,11 @@ fn main() {
 
 fn run(options: Options) -> Result<(), String> {
     let level = level::Level::load(&options.map, None).map_err(|e| e.to_string())?;
-    let map_bytes = level
-        .vfs
-        .read(&format!("maps/{}.bsp", level.name))
-        .ok_or("map bytes unavailable")?;
-    let catalog_bytes = level
-        .vfs
-        .read("scripts/items/items_game.txt")
-        .ok_or("weapon catalog unavailable")?;
-    let hash = |bytes: &[u8]| {
-        Sha1::digest(bytes)
+    let catalog_sha1 = level
+        .catalog_sha1()
+        .ok_or("weapon catalog unavailable or malformed; cannot identify parsed definitions")?;
+    let hash = |digest: &[u8; 20]| {
+        digest
             .iter()
             .map(|b| format!("{b:02x}"))
             .collect::<String>()
@@ -168,8 +162,8 @@ fn run(options: Options) -> Result<(), String> {
     let content = ContentManifest {
         map_id: level.id.to_string(),
         map_name: level.name.clone(),
-        map_hash: hash(&map_bytes),
-        catalog_hash: hash(&catalog_bytes),
+        map_hash: hash(level.bsp_sha1()),
+        catalog_hash: hash(catalog_sha1),
     };
     let mut world = World::with_catalog(level.collision.clone(), level.catalog.clone());
     world.set_tick_rate(options.tick_rate);
