@@ -25,7 +25,9 @@ mod dialog;
 mod fileassoc;
 mod mapcmd;
 mod packcmd;
+mod packopen;
 mod probe;
+mod presence;
 mod setup;
 mod simcheck;
 mod steam;
@@ -38,6 +40,8 @@ fn main() {
     update::startup();
     let mut args: Vec<String> = std::env::args().skip(1).collect();
     packcmd::absolutize(&mut args, &std::env::current_dir().unwrap_or_default());
+    let pack_open = packopen::request(&args);
+    if pack_open.is_some() { dialog::hide_own_console(); }
     if args.iter().any(|a| a == "--help" || a == "-h") {
         println!("CSGO Rewrite\n\n\
             csr play [map] [options]  Open the main menu (default: de_dust2)\n\
@@ -51,6 +55,7 @@ fn main() {
             csr fetch-map NAME|all    Download old map versions now\n\
             csr remove-map NAME|all   Delete downloaded old maps\n\n\
             csr install-pack FILE    Install a private .csrpack\n\
+            csr --open-pack FILE     Install a pack and open the game\n\
             csr check-pack FILE      Validate without installing\n\
             csr packs                List installed content packs\n\
             csr remove-pack ID       Remove an installed pack\n\n\
@@ -87,6 +92,15 @@ fn main() {
         return;
     }
     update::check_in_background();
+    if let Some(source) = pack_open {
+        let result = source.and_then(|source| packopen::run(source, &std::env::current_dir().unwrap_or_default()));
+        let code = match result {
+            Ok(Some(_game)) => client::run(client::ClientOptions::default()),
+            Ok(None) => 0,
+            Err(error) => { dialog::message("Content pack", &error); 1 }
+        };
+        std::process::exit(code);
+    }
     if let Some(code) = packcmd::run(&args) { std::process::exit(code); }
     if let Some(code) = mapcmd::run(&args) {
         std::process::exit(code);
@@ -113,7 +127,10 @@ fn main() {
         "weapons" => weapons_cmd(),
         "cases" | "give-case" | "give-skin" | "give-sticker" | "stickers" | "skins" => cosmetics_cmd(cmd,rest),
         _ => match parse_play(&map, rest) {
-            Ok(opts) => client::run(opts),
+            Ok(opts) => match presence::Game::launch(&std::env::current_dir().unwrap_or_default()) {
+                Ok(_game) => client::run(opts),
+                Err(e) => { eprintln!("error: cannot track running game: {e}"); 1 }
+            },
             Err(e) => {
                 eprintln!("error: {e}");
                 2

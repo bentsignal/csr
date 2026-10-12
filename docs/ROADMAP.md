@@ -209,11 +209,15 @@ thing is uncanny. Fidelity is measured, never eyeballed:
 The archive-loader groundwork in [PR #15](https://github.com/bentsignal/global-offensive/pull/15)
 gives listed maps and loaded levels stable `ContentId`s and exposes
 `Level::load_from_vfs` for maps in mounted content packs. A synthetic pack
-loads without a game install. The interrupted pack-format draft remains
-in [PR #12](https://github.com/bentsignal/global-offensive/pull/12); the items
-below are still open.
+loads without a game install. [PR #17](https://github.com/bentsignal/global-offensive/pull/17)
+landed the bounded, data-only private pack format, atomic installation,
+transactional ContentId registry and selected-pack Level/VFS loading. A
+manifest-only Legacy recipe and a private Dust II asset pack both passed
+release probe/simulation and a rendered private-pack proof; PR #12 was closed
+as superseded. File opening and window-drop integration are the next seam;
+server downloads and other-game importers remain open.
 
-- [ ] Pack format `.csrpack`: a zip with `pack.toml` (id, version, origin,
+- [x] Pack format `.csrpack`: a zip with `pack.toml` (id, version, origin,
       provided `ContentId`s, content hash) plus data definitions and
       optional assets. Mounted into `vfs` as another search path.
 - [ ] A content registry keyed by `ContentId`, replacing hardcoded names
