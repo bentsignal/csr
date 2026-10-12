@@ -2,6 +2,7 @@
 use netcode::{
     prediction::{Predictor, Reconciliation},
     protocol::{ContentManifest, InputCommand, StateUpdate},
+    remote_pose::{PoseHistory, SampleMode},
     session::Session,
     transport::{Client, Server},
 };
@@ -286,6 +287,15 @@ fn netcheck(session: Session, catalog: Arc<weapons::Catalog>) -> Result<(), Stri
     let mut snapshots = [0; 2];
     let mut acks = [0; 2];
     let mut maximum_replay = 0;
+    let rate = server.session().world().tick_rate;
+    let mut poses = [
+        PoseHistory::new(rate, 16, 8, 128.)?,
+        PoseHistory::new(rate, 16, 8, 128.)?,
+    ];
+    for n in 0..2 {
+        poses[n].push(predictors[n].authoritative_state())?;
+    }
+    let mut interpolated_samples = 0;
     for step in 1..=128 {
         // Delay transport polling for four ticks while changing movement and
         // jumping. The server repeats old input; prediction keeps local intent.
@@ -340,6 +350,7 @@ fn netcheck(session: Session, catalog: Arc<weapons::Catalog>) -> Result<(), Stri
             if let Some(state) = client.take_state() {
                 snapshots[n] += 1;
                 acks[n] = state.acknowledged_input;
+                interpolated_samples += sample_remote_checked(&mut poses[n], &state, ids[1 - n])?;
                 maximum_replay =
                     maximum_replay.max(reconcile_checked(&mut predictors[n], state, &history)?);
             }
@@ -360,6 +371,7 @@ fn netcheck(session: Session, catalog: Arc<weapons::Catalog>) -> Result<(), Stri
             if let Some(state) = client.take_state() {
                 snapshots[n] += 1;
                 acks[n] = state.acknowledged_input;
+                interpolated_samples += sample_remote_checked(&mut poses[n], &state, ids[1 - n])?;
                 maximum_replay =
                     maximum_replay.max(reconcile_checked(&mut predictors[n], state, &history)?);
             }
@@ -374,6 +386,9 @@ fn netcheck(session: Session, catalog: Arc<weapons::Catalog>) -> Result<(), Stri
     }
     if maximum_replay == 0 {
         return Err("delayed IO did not exercise prediction replay".into());
+    }
+    if interpolated_samples < 16 {
+        return Err("decoded snapshots did not exercise remote pose interpolation".into());
     }
     for n in 0..2 {
         if snapshots[n] < 16 || acks[n] != 128 || predictors[n].pending_inputs() != 0 {
@@ -407,13 +422,53 @@ fn netcheck(session: Session, catalog: Arc<weapons::Catalog>) -> Result<(), Stri
         return Err("disconnected players remain in simulation".into());
     }
     println!(
-        "UDP netcheck: 2 clients, {} tick, snapshots {:?}, acknowledged {:?}, ContentId resolution and VR poses verified\nPrediction: delayed IO, up to {} replayed inputs, no replayed effects, fully reconciled\nfailures: 0",
+        "UDP netcheck: 2 clients, {} tick, snapshots {:?}, acknowledged {:?}, ContentId resolution and VR poses verified\nPrediction: delayed IO, up to {} replayed inputs, no replayed effects, fully reconciled\nRemote poses: {} fractional samples, bounded history, separate from authoritative state\nfailures: 0",
         server.session().world().tick_rate,
         snapshots,
         acks,
-        maximum_replay
+        maximum_replay,
+        interpolated_samples
     );
     Ok(())
+}
+
+fn sample_remote_checked(
+    poses: &mut PoseHistory,
+    state: &StateUpdate,
+    remote: sim::PlayerId,
+) -> Result<usize, String> {
+    let previous = poses.latest_tick();
+    let authoritative = &state.snapshot.state;
+    poses.push(authoritative)?;
+    let tick = authoritative.tick as f64;
+    let sample = poses
+        .sample(remote, tick)?
+        .ok_or("remote player missing from pose history")?;
+    let player = authoritative
+        .players
+        .iter()
+        .find(|p| p.id == remote)
+        .ok_or("remote player missing from authority")?;
+    if sample.pose.origin != player.movement.origin || sample.pose.eye != player.eye() {
+        return Err("exact snapshot render pose differs from authority".into());
+    }
+    if let Some(tracked) = sample.pose.tracked {
+        for pose in [tracked.head, tracked.left_hand, tracked.right_hand] {
+            if !pose.rotation.is_finite() || (pose.rotation.length() - 1.).abs() > 0.001 {
+                return Err("decoded remote tracked rotation is invalid".into());
+            }
+        }
+    }
+    let Some(previous) = previous.filter(|old| *old < authoritative.tick) else {
+        return Ok(0);
+    };
+    let middle = poses
+        .sample(remote, (previous as f64 + tick) * 0.5)?
+        .ok_or("fractional remote sample missing")?;
+    if !middle.pose.origin.is_finite() || !middle.pose.eye.is_finite() || poses.len() > 16 {
+        return Err("fractional remote pose/history exceeds bounds".into());
+    }
+    Ok(usize::from(middle.mode == SampleMode::Interpolated))
 }
 
 fn reconcile_checked(
