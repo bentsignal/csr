@@ -37,13 +37,32 @@ pub(crate) fn own_entity<T: Component>(
 
 struct Job {
     serial: u64,
-    result: Mutex<Receiver<Result<level::Level, String>>>,
+    result: Mutex<Receiver<Result<LoadedMap, String>>>,
+}
+
+#[derive(Clone)]
+enum Selection {
+    Offline(crate::menu::MapRequest),
+    Remote(netcode::protocol::ServerInfo),
+}
+impl Selection {
+    fn label(&self) -> String {
+        match self {
+            Self::Offline(request) => request.label(),
+            Self::Remote(info) => info.content.map_name.clone(),
+        }
+    }
+}
+
+pub(crate) struct LoadedMap {
+    pub level: level::Level,
+    pub remote: Option<crate::remote_join::Admission>,
 }
 
 #[derive(Resource, Default)]
 pub(crate) struct Loader {
     serial: u64,
-    wanted: Option<(u64, crate::menu::MapRequest)>,
+    wanted: Option<(u64, Selection)>,
     selection: Option<crate::menu::MapRequest>,
     job: Option<Job>,
     pub status: String,
@@ -59,21 +78,56 @@ impl Loader {
             return;
         };
         let serial = *serial;
-        let map = options.options.map.clone();
-        let pack = options.pack.clone();
+        let selection = options.clone();
+        let stores = crate::remote_join::local_stores();
         let game_dir = game_dir.to_path_buf();
         let (tx, rx) = mpsc::channel();
         self.status = format!("Loading {}…", options.label());
         match std::thread::Builder::new()
             .name("map-loader".into())
             .spawn(move || {
-                let result = match pack {
-                    Some((store, entry, id)) => {
-                        level::Level::load_catalog_map(&store, &entry, &id, Some(&game_dir))
+                let result = match selection {
+                    Selection::Offline(request) => {
+                        let result = match request.pack {
+                            Some((store, entry, id)) => {
+                                level::Level::load_catalog_map(&store, &entry, &id, Some(&game_dir))
+                            }
+                            None => level::Level::load(&request.options.map, Some(&game_dir)),
+                        };
+                        result
+                            .map(|level| LoadedMap {
+                                level,
+                                remote: None,
+                            })
+                            .map_err(|e| e.to_string())
                     }
-                    None => level::Level::load(&map, Some(&game_dir)),
-                }
-                .map_err(|e| e.to_string());
+                    Selection::Remote(info) => {
+                        let (packs, archives) = match stores {
+                            Ok(stores) => stores,
+                            Err(error) => {
+                                let _ = tx.send(Err(error));
+                                return;
+                            }
+                        };
+                        crate::remote_map::LocalMapRequest::resolve(
+                            &info.content,
+                            &game_dir,
+                            &packs,
+                            &archives,
+                        )
+                        .and_then(|request| request.prepare())
+                        .map(|prepared| LoadedMap {
+                            level: prepared.level,
+                            remote: Some(crate::remote_join::Admission::new(
+                                serial,
+                                info,
+                                prepared.world,
+                                prepared.manifest,
+                            )),
+                        })
+                        .map_err(|e| e.to_string())
+                    }
+                };
                 let _ = tx.send(result);
             }) {
             Ok(_) => {
@@ -85,22 +139,67 @@ impl Loader {
             Err(e) => self.status = format!("Could not start map loader: {e}"),
         }
     }
+
+    pub(crate) fn prepare_remote(
+        &mut self,
+        info: &netcode::protocol::ServerInfo,
+        game_dir: &std::path::Path,
+    ) {
+        if self.wanted.as_ref().is_some_and(
+            |(_, selected)| matches!(selected, Selection::Remote(current) if current == info),
+        ) {
+            return;
+        }
+        self.serial = self.serial.wrapping_add(1);
+        self.title = info.content.map_name.clone();
+        self.wanted = Some((self.serial, Selection::Remote(info.clone())));
+        self.status = format!("Loading {}…", self.title);
+        self.start(game_dir);
+    }
+
+    pub(crate) fn owns_remote(&self, serial: u64, info: &netcode::protocol::ServerInfo) -> bool {
+        self.wanted.as_ref().is_some_and(|(current, selected)| {
+            *current == serial && matches!(selected, Selection::Remote(current) if current == info)
+        })
+    }
+
+    pub(crate) fn invalidate(&mut self) {
+        self.wanted = None;
+        self.selection = None;
+    }
 }
 
-pub(crate) fn begin_load(mut loader: ResMut<Loader>, opts: Res<Options>, data: Res<GameData>) {
+pub(crate) fn begin_load(
+    mut loader: ResMut<Loader>,
+    opts: Res<Options>,
+    data: Res<GameData>,
+    remote: Option<Res<crate::remote::RemoteClient>>,
+) {
+    if remote.is_some() {
+        loader.invalidate();
+        loader.status = "Contacting server…".into();
+        return;
+    }
     loader.serial = loader.serial.wrapping_add(1);
     let selection = loader
         .selection
         .take()
         .unwrap_or_else(|| opts.0.clone().into());
     loader.title = selection.label();
-    loader.wanted = Some((loader.serial, selection));
+    loader.wanted = Some((loader.serial, Selection::Offline(selection)));
     loader.status = format!("Loading {}…", loader.title);
     loader.start(&data.game_dir);
 }
 
 pub(crate) fn cancel_load(mut loader: ResMut<Loader>) {
-    loader.wanted = None;
+    // A remote preparation retains its generation through Match render warmup.
+    if !loader
+        .wanted
+        .as_ref()
+        .is_some_and(|(_, selection)| matches!(selection, Selection::Remote(_)))
+    {
+        loader.wanted = None;
+    }
 }
 
 pub(crate) fn request_load(
@@ -132,6 +231,7 @@ pub(crate) fn poll_load(
     state: Res<State<AppState>>,
     mut next: ResMut<NextState<AppState>>,
     mut menu: ResMut<crate::menu::Menu>,
+    remote: Option<Res<crate::remote::RemoteClient>>,
 ) {
     let Some(job) = &loader.job else {
         if loader.wanted.is_some() && *state.get() == AppState::Loading {
@@ -155,10 +255,18 @@ pub(crate) fn poll_load(
     if *state.get() == AppState::Loading {
         if let Some(wanted) = wanted {
             match result {
-                Ok(level) => {
-                    info!("loaded {}: {:?}", level.name, level.timings);
-                    *pending.0.lock().unwrap() = Some(level);
-                    options.0 = wanted.options;
+                Ok(loaded) => {
+                    if let Selection::Remote(info) = &wanted {
+                        if !remote.as_ref().is_some_and(|client| matches!(client.status(), netcode::remote_session::Status::AwaitingMap(current) if current == info)) {
+                            loader.invalidate();
+                            return;
+                        }
+                    }
+                    info!("loaded {}: {:?}", loaded.level.name, loaded.level.timings);
+                    *pending.0.lock().unwrap() = Some(loaded);
+                    if let Selection::Offline(wanted) = wanted {
+                        options.0 = wanted.options;
+                    }
                     next.set(AppState::Match);
                 }
                 Err(error) => {
@@ -216,6 +324,7 @@ pub(crate) fn clear_match(world: &mut World) {
     world.remove_resource::<crate::feedback::FeedbackAssets>();
     world.remove_resource::<crate::utility_fx::AssetsFx>();
     world.remove_resource::<crate::hud_art::Radar>();
+    world.remove_resource::<crate::hud_art::Inventory>();
     world.insert_resource(crate::characters::Characters::default());
     world.insert_resource(crate::viewmodel::ViewModelState::default());
     world.insert_resource(crate::items::GroundInstances::default());
@@ -299,11 +408,13 @@ mod tests {
             });
             loader.wanted = Some((
                 2,
-                ClientOptions {
-                    map: "de_new_selection".into(),
-                    ..default()
-                }
-                .into(),
+                Selection::Offline(
+                    ClientOptions {
+                        map: "de_new_selection".into(),
+                        ..default()
+                    }
+                    .into(),
+                ),
             ));
             loader.start(std::path::Path::new("unused"));
             assert_eq!(loader.job.as_ref().unwrap().serial, 1);
@@ -360,5 +471,163 @@ mod tests {
             AppState::Menu
         );
         assert!(!app.world().resource::<crate::menu::Menu>().in_match);
+    }
+
+    fn waiting_remote(
+        rate: u32,
+    ) -> (
+        crate::remote::RemoteClient,
+        netcode::protocol::ServerInfo,
+        sim::World,
+    ) {
+        use netcode::{
+            remote_session::{RemoteSession, Status},
+            session::Session,
+            transport::Server,
+        };
+        let manifest = netcode::protocol::ContentManifest {
+            map_id: "csgo_map_session".into(),
+            map_name: "session".into(),
+            map_hash: "0".repeat(40),
+            catalog_hash: "1".repeat(40),
+        };
+        let mut map = sim::World::new(std::sync::Arc::new(collision::CollisionWorld::new()));
+        map.set_tick_rate(rate);
+        let mut server = Server::bind(
+            "127.0.0.1:0".parse().unwrap(),
+            Session::new(map.clone(), manifest).unwrap(),
+            4,
+        )
+        .unwrap();
+        let mut remote = RemoteSession::discover(
+            server.address(),
+            "Local".into(),
+            sim::Team::CounterTerrorist,
+        )
+        .unwrap();
+        for _ in 0..128 {
+            remote.update(1.0 / rate as f64).unwrap();
+            server
+                .update(std::time::Duration::from_secs_f64(1.0 / rate as f64))
+                .unwrap();
+            if matches!(remote.status(), Status::AwaitingMap(_)) {
+                break;
+            }
+        }
+        let Status::AwaitingMap(info) = remote.status().clone() else {
+            panic!("discovery did not complete")
+        };
+        // CPU/map preparation may span any elapsed time without admission.
+        remote.update(30.0).unwrap();
+        (crate::remote::RemoteClient::from_session(remote), info, map)
+    }
+
+    #[test]
+    fn incomplete_scene_capture_never_starts_remote_admission() {
+        for rate in [64, 128] {
+            let (remote, info, map) = waiting_remote(rate);
+            let mut app = loading_app(AppState::Match);
+            app.world_mut().resource_mut::<crate::menu::Menu>().in_match = true;
+            app.world_mut().resource_mut::<Loader>().wanted =
+                Some((7, Selection::Remote(info.clone())));
+            app.insert_resource(crate::remote_join::Admission::new(
+                7,
+                info.clone(),
+                map,
+                info.content.clone(),
+            ));
+            app.insert_resource(remote);
+            crate::remote_join::update(app.world_mut());
+            assert_eq!(
+                app.world()
+                    .resource::<crate::remote::RemoteClient>()
+                    .status(),
+                &netcode::remote_session::Status::AwaitingMap(info)
+            );
+            assert!(
+                app.world()
+                    .contains_resource::<crate::remote_join::Admission>()
+            );
+            assert!(
+                !app.world()
+                    .contains_resource::<crate::remote_render_gate::RenderGate>()
+            );
+            assert!(app.world().resource::<Loader>().status.contains("renderer"));
+        }
+    }
+
+    #[test]
+    fn changed_policy_discards_the_owned_scene_before_deferred_transition() {
+        let (remote, info, map) = waiting_remote(128);
+        let mut old = info.clone();
+        old.tick_rate = 64;
+        let mut app = loading_app(AppState::Match);
+        app.insert_resource(crate::player::SimWorld(map.clone()));
+        app.insert_resource(crate::player::LocalPlayer::new(0, glam::Vec3::ZERO, 0.0));
+        app.world_mut().resource_mut::<crate::menu::Menu>().in_match = true;
+        app.world_mut().resource_mut::<Loader>().wanted = Some((7, Selection::Remote(old.clone())));
+        app.insert_resource(crate::remote_join::Admission::new(
+            7,
+            old,
+            map,
+            info.content,
+        ));
+        app.insert_resource(remote);
+        crate::remote_join::update(app.world_mut());
+        assert!(!app.world().contains_resource::<crate::player::SimWorld>());
+        assert!(
+            !app.world()
+                .contains_resource::<crate::player::LocalPlayer>()
+        );
+        assert!(
+            !app.world()
+                .contains_resource::<crate::remote_join::Admission>()
+        );
+        assert!(!app.world().resource::<crate::menu::Menu>().in_match);
+        assert!(
+            app.world()
+                .contains_resource::<crate::remote::RemoteClient>()
+        );
+        assert!(app.world().resource::<Loader>().wanted.is_none());
+    }
+
+    #[test]
+    fn returning_home_revokes_the_render_ticket_and_remote_generation() {
+        let (remote, info, map) = waiting_remote(128);
+        let mut app = loading_app(AppState::Match);
+        let mut gate = crate::remote_render_gate::RenderGate::default();
+        let ticket = gate.begin(&[], &[]).unwrap();
+        app.insert_resource(gate);
+        app.world_mut().resource_mut::<Loader>().wanted =
+            Some((7, Selection::Remote(info.clone())));
+        app.insert_resource(crate::remote_join::Admission::new(
+            7,
+            info.clone(),
+            map,
+            info.content,
+        ));
+        app.insert_resource(remote);
+        crate::remote_join::home(app.world_mut());
+        assert_eq!(
+            ticket.status(),
+            crate::remote_render_gate::GateStatus::Cancelled
+        );
+        assert!(
+            !app.world()
+                .contains_resource::<crate::remote::RemoteClient>()
+        );
+        assert!(
+            !app.world()
+                .contains_resource::<crate::remote_join::Admission>()
+        );
+        assert!(app.world().resource::<Loader>().wanted.is_none());
+        assert!(
+            app.world()
+                .resource::<PendingLevel>()
+                .0
+                .lock()
+                .unwrap()
+                .is_none()
+        );
     }
 }

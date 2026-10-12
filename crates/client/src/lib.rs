@@ -48,6 +48,9 @@ pub mod localize;
 pub mod material;
 pub mod player;
 pub mod remote;
+pub mod remote_map;
+pub mod remote_render_gate;
+pub mod remote_join;
 pub mod props;
 pub mod scoreboard;
 pub mod scope;
@@ -121,7 +124,7 @@ pub struct LevelInfo {
 
 /// The loaded level, handed to the startup system once.
 #[derive(Resource)]
-struct PendingLevel(Mutex<Option<level::Level>>);
+struct PendingLevel(Mutex<Option<session::LoadedMap>>);
 
 #[derive(Resource)]
 pub struct LoadedLevel(pub level::Level);
@@ -155,6 +158,7 @@ impl Plugin for CsgoPlugin {
             .add_plugins(MaterialPlugin::<WorldMaterial>::default())
             .init_state::<AppState>()
             .init_resource::<session::Loader>()
+            .init_resource::<remote_join::JoinRequest>()
             .init_resource::<pack_ui::PackUi>()
             .add_observer(session::own_entity::<Transform>)
             .add_observer(session::own_entity::<Node>)
@@ -168,14 +172,15 @@ impl Plugin for CsgoPlugin {
             .add_systems(OnExit(AppState::Loading), session::cancel_load)
             .add_systems(OnEnter(AppState::Match), (spawn_level, hud::setup, hud_art::setup, scope::setup, feedback::setup, utility_fx::setup, hud::mark_roots, session::match_ready).chain())
             .add_systems(OnExit(AppState::Match), session::clear_match)
-            .add_systems(Update, (session::request_load, session::poll_load).chain())
+            .add_systems(OnEnter(AppState::Menu), remote_join::home)
+            .add_systems(Update, (remote_join::request, remote::drive.run_if(resource_exists::<remote::RemoteClient>), remote_join::update, session::request_load, session::poll_load).chain().before(frontend::update).before(player::update_camera))
             .add_systems(
                 RunFixedMainLoop,
                 (menu::input, buymenu::input, player::look, player::grab_cursor).chain()
-                    .run_if(in_state(AppState::Match))
+                    .run_if(remote_join::ready)
                     .in_set(bevy::app::RunFixedMainLoopSystems::BeforeFixedMainLoop),
             )
-            .add_systems(Update, player::update_camera.run_if(in_state(AppState::Match)))
+            .add_systems(Update, player::update_camera.run_if(remote_join::ready))
             .init_resource::<interpolation::RenderPoses>()
             .init_resource::<tracers::Muzzles>()
             .init_resource::<skin_finish::SkinTextures>()
@@ -198,7 +203,7 @@ impl Plugin for CsgoPlugin {
             .add_systems(
                 Update,
                 (
-                    (skin_finish::record, skin_finish::sync_loadout, effects::process).chain(),
+                    (skin_finish::record, skin_finish::sync_loadout.run_if(remote_join::offline), effects::process).chain(),
                     (feedback::update, utility_fx::update).chain(),
                     sky::follow_camera,
                     visibility::update,
@@ -215,14 +220,17 @@ impl Plugin for CsgoPlugin {
                     (menu::draw, case_ui::input, case_ui::draw, case_ui::animate).chain().run_if(frontend::native_enabled),
                     menu::cards.run_if(frontend::native_enabled),
                     menu::hover.run_if(frontend::native_enabled),
-                    (ui_assets::fonts, hud::menu_visibility).chain(),
+                    ui_assets::fonts,
                     hud::update.run_if(|| std::env::var_os("CSR_NO_HUD").is_none()),
                 )
                     .chain()
-                    .run_if(in_state(AppState::Match))
+                    .run_if(remote_join::ready)
                     .after(player::update_camera),
             )
-            .add_systems(FixedUpdate, (player::tick, foley::update).chain().run_if(in_state(AppState::Match)));
+            .add_systems(FixedUpdate, (player::tick, foley::update).chain().run_if(remote_join::ready).run_if(remote_join::offline))
+            .add_systems(Update, hud::menu_visibility.run_if(in_state(AppState::Match)).after(remote_join::update))
+            .add_systems(Update, foley::update.run_if(remote_join::ready).run_if(resource_exists::<remote::RemoteClient>).after(remote_join::update));
+        if let Err(error) = remote_render_gate::install(app) { error!("Remote render preparation unavailable: {error:?}"); }
     }
 }
 
@@ -281,7 +289,7 @@ pub fn run(opts: ClientOptions) -> i32 {
         })
         .add_systems(Update, frontend_flow::update.after(frontend::update).run_if(frontend_flow::enabled))
         .add_systems(First, pack_ui::proof.run_if(pack_ui::proof_enabled))
-        .add_systems(Update, smoke_test.run_if(in_state(AppState::Match)))
+        .add_systems(Update, smoke_test.run_if(remote_join::ready).run_if(remote_join::offline))
         .add_systems(Update, frontend::capture_menu.run_if(|state: Res<State<AppState>>| {
             *state.get() == AppState::Menu || (*state.get() == AppState::Match
                 && std::env::var("CSR_TEST_MENU").as_deref() == Ok("pause"))
@@ -302,7 +310,10 @@ fn spawn_level(
     mut images: ResMut<Assets<Image>>,
     mut bindposes: ResMut<Assets<bevy::mesh::skinning::SkinnedMeshInverseBindposes>>,
 ) {
-    let Some(level) = pending.0.lock().unwrap().take() else { return };
+    let Some(loaded) = pending.0.lock().unwrap().take() else { return };
+    let level = loaded.level;
+    let mut admission = loaded.remote;
+    let remote = admission.is_some();
     let opts = &options.0;
     let t = Instant::now();
     let mut textures = textures::TextureCache::new(&mut images);
@@ -434,27 +445,32 @@ fn spawn_level(
     commands.insert_resource(localization);
 
     // Simulation: the local player on CT, bots on both teams.
-    let mut world = sim::World::with_catalog(level.collision.clone(), level.catalog.clone());
-    world.load_map(&level.bsp, level.overview().as_deref());
+    let mut world = if let Some(admission) = &admission {
+        admission.world.as_ref().expect("prepared remote world").clone()
+    } else {
+        let mut world = sim::World::with_catalog(level.collision.clone(), level.catalog.clone());
+        world.load_map(&level.bsp, level.overview().as_deref());
+        world
+    };
     let (mine, theirs) = if opts.terrorist {
         (sim::Team::Terrorist, sim::Team::CounterTerrorist)
     } else {
         (sim::Team::CounterTerrorist, sim::Team::Terrorist)
     };
-    let id = world.add_player("You", mine);
+    let id = if remote { 0 } else { world.add_player("You", mine) };
     let names = |team: sim::Team| if team == sim::Team::Terrorist { &BOT_NAMES_T } else { &BOT_NAMES_CT };
-    let bot_count = opts.bots;
+    let bot_count = if remote { 0 } else { opts.bots };
     for i in 0..bot_count {
         world.add_bot(names(theirs)[i as usize % 8], theirs);
     }
     for i in 0..bot_count.saturating_sub(1) {
         world.add_bot(names(mine)[i as usize % 8], mine);
     }
-    if !opts.deathmatch {
+    if !remote && !opts.deathmatch {
         world.set_mode(sim::GameMode::Competitive, competitive_rules(&level));
     }
     // Deterministic visual checks only; interactive sessions ignore these controls.
-    if opts.screenshot.is_some() {
+    if !remote && opts.screenshot.is_some() {
         if let Ok(name) = std::env::var("CSR_TEST_WEAPON") {
             if let Some(def) = world.catalog.get(&name).cloned() {
                 let p = world.player_mut(id).unwrap();
@@ -469,17 +485,21 @@ fn spawn_level(
     // Deathmatch practice weapons from the saved loadout; finishes and the
     // knife follow once the cosmetics profile is loaded (skin_finish).
     let inventory = inventory::Inventory::load();
-    if opts.screenshot.is_none() {
+    if !remote && opts.screenshot.is_none() {
         world.set_loadout(id, sim::Loadout { practice: inventory.practice(), ..Default::default() });
         if world.mode == sim::GameMode::Deathmatch { world.respawn(id); }
     }
     commands.insert_resource(inventory::Collection(level.catalog.clone()));
-    let probe = sound_probe::SoundProbe::from_env(opts.screenshot.is_some());
-    probe.prepare(&mut world, id);
+    let probe = sound_probe::SoundProbe::from_env(!remote && opts.screenshot.is_some());
+    if !remote { probe.prepare(&mut world, id); }
     commands.insert_resource(probe);
-    let p = world.player(id).expect("player just added");
-    let mut local = LocalPlayer::new(id, p.movement.eye_position(), p.view_angles.y);
-    if let Some((pos, pitch, yaw)) = opts.camera {
+    let mut local = if remote {
+        LocalPlayer::new(0, glam::Vec3::ZERO, 0.0)
+    } else {
+        let p = world.player(id).expect("player just added");
+        LocalPlayer::new(id, p.movement.eye_position(), p.view_angles.y)
+    };
+    if let Some((pos, pitch, yaw)) = opts.camera.filter(|_| !remote) {
         local.noclip = true;
         local.noclip_pos = pos;
         local.prev_eye = pos;
@@ -488,7 +508,7 @@ fn spawn_level(
         local.yaw = yaw;
     }
 
-    if opts.screenshot.is_some() {
+    if !remote && opts.screenshot.is_some() {
         if let Ok(look) = std::env::var("CSR_TEST_LOOK") {
             let values: Vec<f32> = look.split(',').filter_map(|v|v.parse().ok()).collect();
             if values.len()==2 {local.pitch=values[0];local.yaw=values[1];}
@@ -558,7 +578,10 @@ fn spawn_level(
         menu_blur::PostProcessSettings::default(),
     ));
     commands.insert_resource(local);
-    world.bots = sim::bots::Bots::with_skill(0.6).with_nav(level.nav.clone());
+    if !remote { world.bots = sim::bots::Bots::with_skill(0.6).with_nav(level.nav.clone()); }
+    if let Some(admission) = admission.take() {
+        commands.insert_resource(admission);
+    }
     commands.insert_resource(Time::<Fixed>::from_hz(world.tick_rate as f64));
     commands.insert_resource(SimWorld(world));
     commands.insert_resource(LoadedLevel(level));

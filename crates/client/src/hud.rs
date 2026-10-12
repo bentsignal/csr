@@ -481,7 +481,7 @@ pub struct GameHud;
 pub fn mark_roots(mut commands:Commands,roots:Query<Entity,(With<Node>,Without<ChildOf>,Without<crate::session::Persistent>)>) {
     for e in &roots {commands.entity(e).insert(GameHud);}
 }
-pub fn menu_visibility(menu:Res<crate::menu::Menu>,mut roots:Query<&mut Node,With<GameHud>>) {
-    let display=if menu.open(){Display::None}else{Display::Flex};
+pub fn menu_visibility(menu:Res<crate::menu::Menu>,remote:Option<Res<crate::remote::RemoteClient>>,mut roots:Query<&mut Node,With<GameHud>>) {
+    let display=if menu.open() || crate::remote_join::loading(remote.as_deref()){Display::None}else{Display::Flex};
     for mut node in &mut roots {if node.display!=display {node.display=display;}}
 }

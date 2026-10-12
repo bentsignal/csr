@@ -532,6 +532,7 @@ pub(crate) fn setup(
                 ..default()
             },
             ImageNode::new(image.clone()),
+            BackgroundColor(Color::NONE),
             UiTargetCamera(camera),
             GlobalZIndex(100),
         ))
@@ -616,19 +617,21 @@ pub(crate) fn setup(
 pub(crate) fn update(
     mut front: ResMut<Frontend>,
     mut images: ResMut<Assets<Image>>,
-    (mut nodes, mut cameras, mut texts): (
+    (mut nodes, mut cameras, mut texts, mut backgrounds): (
         Query<&mut Node>,
         Query<(&mut Camera, &mut Msaa)>,
         Query<&mut Text>,
+        Query<&mut BackgroundColor>,
     ),
     mut menu: ResMut<crate::menu::Menu>,
     state: Res<State<AppState>>,
     mut settings: ResMut<Settings>,
-    (data, loader, options, request): (
+    (data, loader, options, request, remote): (
         Res<GameData>,
         Res<crate::session::Loader>,
         Res<Options>,
         Res<crate::menu::LoadRequest>,
+        Option<Res<crate::remote::RemoteClient>>,
     ),
     loc: Res<crate::localize::Localization>,
     (inventory, practice): (
@@ -643,9 +646,11 @@ pub(crate) fn update(
     mut sounds: ResMut<crate::audio::SoundLibrary>,
     mut sources: ResMut<Assets<AudioSource>>,
 ) {
+    let remote_loading = crate::remote_join::loading(remote.as_deref());
+    let scene = if remote_loading { AppState::Loading } else { *state.get() };
     {
         let mut snapshot = front.data.lock().unwrap();
-        snapshot.state = *state.get();
+        snapshot.state = scene;
         snapshot.menu_open = menu.open();
         snapshot.loading = loader.status.clone();
     }
@@ -718,15 +723,15 @@ pub(crate) fn update(
         }
         front.data.lock().unwrap().inventory.replace(items);
     }
-    let visible = matches!(state.get(), AppState::Menu | AppState::Browser)
-        || (*state.get() == AppState::Match && menu.open())
-        || (*state.get() == AppState::Loading
+    let visible = matches!(scene, AppState::Menu | AppState::Browser)
+        || (scene == AppState::Match && menu.open())
+        || (scene == AppState::Loading
             && (front.movie.is_some() || (!options.0.direct && options.0.screenshot.is_none())));
     // A UI-only camera must not overwrite a match's resolved color target.
     // During play the existing viewmodel camera continues drawing the HUD.
     if let Ok((mut camera, mut msaa)) = cameras.get_mut(front.camera) {
-        camera.is_active = *state.get() != AppState::Match || menu.open();
-        *msaa = if *state.get() == AppState::Match && settings.msaa {
+        camera.is_active = scene != AppState::Match || menu.open();
+        *msaa = if scene == AppState::Match && settings.msaa {
             Msaa::Sample4
         } else {
             Msaa::Off
@@ -734,7 +739,7 @@ pub(crate) fn update(
     }
     if visible && front.movie.is_none() && front.failed.is_none() {
         let mut elements = vec!["MainMenu".into()];
-        if *state.get() == AppState::Match {
+        if scene == AppState::Match {
             elements.push("PauseMenu".into());
         }
         front.requested.extend(elements.iter().cloned());
@@ -759,21 +764,21 @@ pub(crate) fn update(
     if front.visible != visible {
         front.send(Input::SetActive(visible));
         front.visible = visible;
-        if visible && *state.get() == AppState::Menu && front.ready {
+        if visible && scene == AppState::Menu && front.ready {
             front.send(Input::Call {
                 path: "_global.MainMenuMovie".into(),
                 function: "showPanel".into(),
                 args: vec![],
             });
         }
-        if visible && *state.get() == AppState::Match && front.ready {
+        if visible && scene == AppState::Match && front.ready {
             front.request("PauseMenu");
             front.send(Input::Call {
                 path: "_level100".into(),
                 function: "showPanel".into(),
                 args: vec![],
             });
-        } else if *state.get() == AppState::Match && front.ready {
+        } else if scene == AppState::Match && front.ready {
             front.send(Input::Call {
                 path: "_level100".into(),
                 function: "hidePanel".into(),
@@ -781,26 +786,26 @@ pub(crate) fn update(
             });
         }
     }
-    if front.scene != Some(*state.get()) {
+    if front.scene != Some(scene) {
         // Movie animations and late callbacks can leave cached launch panels
         // visible. Own the root visibility across scenes, including descendants.
         for path in ["_global.MainMenuMovie", "_global.SinglePlayerMovie"] {
             front.send(Input::Set {
                 path: path.into(),
                 property: "_visible".into(),
-                value: (matches!(state.get(), AppState::Menu | AppState::Browser)
+                value: (matches!(scene, AppState::Menu | AppState::Browser)
                     && path == "_global.MainMenuMovie")
                     .into(),
             });
         }
-        if *state.get() != AppState::Match {
+        if scene != AppState::Match {
             front.send(Input::Call {
                 path: "_level100".into(),
                 function: "hidePanel".into(),
                 args: vec![],
             });
         }
-        if *state.get() == AppState::Loading {
+        if scene == AppState::Loading {
             front.send(Input::Call {
                 path: "_global.MainMenuMovie".into(),
                 function: "hidePanelImmediate".into(),
@@ -833,7 +838,7 @@ pub(crate) fn update(
                 function: "hidePanel".into(),
                 args: vec![],
             });
-            if *state.get() == AppState::Menu {
+            if scene == AppState::Menu {
                 front.send(Input::Call {
                     path: "_global.MainMenuMovie".into(),
                     function: "showPanel".into(),
@@ -841,9 +846,9 @@ pub(crate) fn update(
                 });
             }
         }
-        front.scene = Some(*state.get());
+        front.scene = Some(scene);
     }
-    let loading = *state.get() == AppState::Loading;
+    let loading = scene == AppState::Loading;
     if let Ok(mut node) = nodes.get_mut(front.notice) {
         node.display = if loading || (visible && !menu.status.is_empty()) {
             Display::Flex
@@ -866,11 +871,14 @@ pub(crate) fn update(
         };
     }
     if let Ok(mut root) = nodes.get_mut(front.root) {
-        root.display = if visible && front.failed.is_none() {
+        root.display = if (visible && front.failed.is_none()) || loading {
             Display::Flex
         } else {
             Display::None
         };
+    }
+    if let Ok(mut background) = backgrounds.get_mut(front.root) {
+        background.0 = if loading { Color::BLACK } else { Color::NONE };
     }
     let size = (window.physical_width(), window.physical_height());
     if size != front.viewport {
@@ -913,7 +921,7 @@ pub(crate) fn update(
     for action in actions {
         match action {
             Action::Launch(selection, no_bots) => {
-                if matches!(state.get(), AppState::Menu | AppState::Browser) {
+                if matches!(scene, AppState::Menu | AppState::Browser) {
                     let mut selected = options.0.clone();
                     selected.map = selection.map;
                     selected.deathmatch = selection.deathmatch;
@@ -966,8 +974,9 @@ pub(crate) fn cancel_loading(
     interactions: Query<&Interaction>,
     mut next: ResMut<NextState<AppState>>,
     mut menu: ResMut<crate::menu::Menu>,
+    remote: Option<Res<crate::remote::RemoteClient>>,
 ) {
-    if *state.get() == AppState::Loading
+    if (*state.get() == AppState::Loading || crate::remote_join::loading(remote.as_deref()))
         && (keys.just_pressed(KeyCode::Escape)
             || interactions.get(front.cancel) == Ok(&Interaction::Pressed))
     {
@@ -990,9 +999,10 @@ pub(crate) fn input(
     mut cursor: Single<&mut CursorOptions, With<PrimaryWindow>>,
     buttons: Res<ButtonInput<KeyCode>>,
     mut focus: MessageReader<WindowFocused>,
+    remote: Option<Res<crate::remote::RemoteClient>>,
 ) {
     let (window_entity, window) = *window;
-    let blocked = packs.is_some_and(|packs| packs.blocks_movie()) || crate::frontend_flow::enabled() || !enabled.0 || !front.visible || front.failed.is_some() || !window.focused;
+    let blocked = crate::remote_join::loading(remote.as_deref()) || packs.is_some_and(|packs| packs.blocks_movie()) || crate::frontend_flow::enabled() || !enabled.0 || !front.visible || front.failed.is_some() || !window.focused;
     for input in ownership.transition(blocked, window.focused) { front.send(input); }
     if blocked {
         keys.clear();
