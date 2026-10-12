@@ -39,8 +39,15 @@ fn file(text: &str, n: usize) -> Vec<u8> {
     set_i32(&mut bytes, 0, 16);
     set_i32(&mut bytes, 8, n as i32);
     set_i32(&mut bytes, 12, 123);
-    for _ in 0..n {
-        let solid = solid();
+    for index in 0..n {
+        let mut solid = solid();
+        // Distinct authored geometry per binary solid makes declaration-order
+        // ownership failures observable, instead of comparing identical hulls.
+        for point in 0..4 {
+            let at = 28 + 128 + point * 16;
+            let x = f32::from_le_bytes(solid[at..at + 4].try_into().unwrap());
+            solid[at..at + 4].copy_from_slice(&(x + index as f32 * 2.).to_le_bytes());
+        }
         bytes.extend_from_slice(&(solid.len() as i32).to_le_bytes());
         bytes.extend_from_slice(&solid);
     }
@@ -85,6 +92,7 @@ fn preserves_authored_ownership_order_axes_and_repeated_fields() {
     let data = file(&metadata(), 2);
     let ragdoll = Ragdoll::parse(&data).unwrap();
     assert_eq!(ragdoll.solids[0].name, "Pelvis");
+    assert!(ragdoll.solids[1].hulls[0].bounds().0.x > ragdoll.solids[0].hulls[0].bounds().1.x);
     assert_eq!(ragdoll.solids[1].parent.as_deref(), Some("Pelvis"));
     assert_eq!(ragdoll.solids[1].mass_bias, Some(3.));
     assert_eq!(
