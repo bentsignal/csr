@@ -26,6 +26,9 @@ Relative input filenames are resolved before the launcher changes directory.
 the selected pack is mounted; its assets have priority over the read-only
 Legacy install, and the BSP's embedded pakfile retains highest priority.
 The BSP filename is independent of the id and needs no `de_`/`cs_` prefix.
+Asset-map NAV and overview metadata come only from the selected pack or its
+BSP's embedded pakfile. Missing metadata cannot silently use another pack or
+the newer installed map with the same basename. Recipe aliases read Legacy.
 
 Updates atomically replace the installed file without deleting the old copy
 first. Validation errors, conflicts and failed publication preserve that copy.
