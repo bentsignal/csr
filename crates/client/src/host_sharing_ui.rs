@@ -801,7 +801,7 @@ fn settings_capture(world: &mut World, name: &str, bit: u8) {
         );
 }
 
-/// Opens Audio through its observed controller command and presses the actual
+/// Invokes the inventoried public Pause Audio callback and presses the actual
 /// installed Back button through owned Bevy window input. No OS input claim.
 pub(crate) fn prove_settings(world: &mut World) -> Result<bool, String> {
     use bevy::input::{ButtonState, mouse::MouseButtonInput};
@@ -824,6 +824,10 @@ pub(crate) fn prove_settings(world: &mut World) -> Result<bool, String> {
         && serial.saturating_sub(world.resource::<ProofSink>().settings_serial) >= 2;
     match step {
         0 => {
+            let pause_root = world
+                .resource::<crate::frontend::Frontend>()
+                .pause_root()
+                .ok_or("Settings proof has no registered Pause movie")?;
             // Move away from the address card before native navigation.
             world
                 .get_mut::<Window>(window)
@@ -832,9 +836,9 @@ pub(crate) fn prove_settings(world: &mut World) -> Result<bool, String> {
             world
                 .resource::<crate::frontend::Frontend>()
                 .send(scaleform::Input::Call {
-                    path: "_global.GameInterface".into(),
-                    function: "ExecuteCommand".into(),
-                    args: vec!["OpenAudioSettingsDialog".into()],
+                    path: format!("{pause_root}.Panel.MainMenuNav"),
+                    function: "OnOpenAudioSettingsDialog".into(),
+                    args: vec![],
                 });
             let mut sink = world.resource_mut::<ProofSink>();
             sink.settings_step = 1;

@@ -50,6 +50,10 @@ pub(crate) struct Tracker {
     visible: bool,
 }
 impl Tracker {
+    pub(crate) fn pause_root(&self) -> Option<&str> {
+        self.pause.as_deref()
+    }
+
     pub(crate) fn options_root(&self) -> Option<&str> {
         self.options.as_deref()
     }

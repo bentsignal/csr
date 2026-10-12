@@ -683,6 +683,7 @@ impl Frontend {
     pub(crate) fn camera(&self) -> Entity { self.camera }
     pub(crate) fn pause_surface_visible(&self) -> bool { self.data.lock().unwrap().pause_surface.visible() }
     pub(crate) fn options_requested(&self) -> bool { self.data.lock().unwrap().pause_surface.options_requested() }
+    pub(crate) fn pause_root(&self) -> Option<String> { self.data.lock().unwrap().pause_surface.pause_root().map(str::to_owned) }
     pub(crate) fn loaded(&self, name: &str) -> bool { self.loaded.contains(name) }
     /// Authored OnReady received for the current cached movie; Loaded alone is earlier.
     pub(crate) fn movie_ready(&self, name: &str) -> bool {
