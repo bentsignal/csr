@@ -29,6 +29,10 @@ The wire format is postcard. Channels are:
 | State | Unreliable, fragmented | Full authoritative state with last applied input sequence |
 | Events | Reliable, ordered | Tick-stamped `GameEvent` batches |
 
+Protocol version 2 includes replicated spawn epochs and server-derived
+hitscan rewind ticks. See [LAGCOMP.md](LAGCOMP.md) for server timing/lifecycle
+bounds and the remaining hitbox fidelity scope.
+
 Inputs include the existing optional tracked head/hand poses and separate
 aim ray. The server rejects nonfinite values, clamps movement to 450, limits
 tracked offsets and normalizes rotations. These initial offset limits protect

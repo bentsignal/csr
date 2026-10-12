@@ -94,6 +94,8 @@ impl Server {
             }
         }
         for client in self.connection.clients_id() {
+            self.session
+                .observe_rtt(client, self.connection.rtt(client));
             // Bound decoded work per peer per update, even if it floods.
             for _ in 0..16 {
                 let Some(bytes) = self.connection.receive_message(client, CONTROL) else {

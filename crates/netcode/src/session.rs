@@ -1,4 +1,5 @@
 //! Transport-independent ownership and tick scheduling.
+use crate::lag::LagPolicy;
 use crate::protocol::*;
 use sim::{PlayerId, TickInput, World};
 use std::collections::{BTreeMap, HashMap};
@@ -13,6 +14,7 @@ struct Peer {
     acknowledged: u64,
     pending: BTreeMap<u64, InputCommand>,
     last_input_tick: u64,
+    rtt_seconds: f64,
 }
 
 pub struct Session {
@@ -20,19 +22,32 @@ pub struct Session {
     content: ContentManifest,
     peers: HashMap<u64, Peer>,
     departed_events: Vec<sim::GameEvent>,
+    lag: LagPolicy,
 }
 
 impl Session {
     pub fn new(world: World, content: ContentManifest) -> Result<Self, String> {
+        let policy = LagPolicy::prototype(world.tick_rate);
+        Self::with_lag_policy(world, content, policy)
+    }
+
+    pub fn with_lag_policy(
+        mut world: World,
+        content: ContentManifest,
+        policy: LagPolicy,
+    ) -> Result<Self, String> {
         content.validate()?;
         if !sim::TICK_RATE_RANGE.contains(&world.tick_rate) {
             return Err("unsupported tick rate".into());
         }
+        let lag = policy.validate(world.tick_rate)?;
+        world.configure_hit_history(lag.max_history_ticks, lag.teleport_distance)?;
         Ok(Self {
             world,
             content,
             peers: HashMap::new(),
             departed_events: Vec::new(),
+            lag,
         })
     }
 
@@ -44,6 +59,17 @@ impl Session {
     }
     pub fn player_for(&self, client: u64) -> Option<PlayerId> {
         self.peers.get(&client).map(|p| p.player)
+    }
+
+    /// Transport-observed latency only, never a client-supplied ping value.
+    pub fn observe_rtt(&mut self, client: u64, seconds: f64) {
+        if let Some(peer) = self.peers.get_mut(&client) {
+            peer.rtt_seconds = if seconds.is_finite() && seconds >= 0. {
+                seconds.min(2.)
+            } else {
+                0.
+            };
+        }
     }
 
     pub fn join(&mut self, client: u64, hello: ClientControl) -> ServerControl {
@@ -125,10 +151,14 @@ impl Session {
             if command.sequence - peer.acknowledged > 4096 {
                 return Err("input sequence too far ahead".into());
             }
-            if command.view_tick > self.world.tick {
-                return Err("view tick is in the future".into());
-            }
             command.input = validate_input(command.input)?;
+            command.input.rewind_tick = self.lag.accepted_tick(
+                self.world.tick,
+                self.world.oldest_hit_tick(),
+                command.view_tick,
+                self.world.tick_rate,
+                peer.rtt_seconds,
+            );
             accepted.push(command);
         }
         for command in accepted {
@@ -146,9 +176,18 @@ impl Session {
         let timeout = self.world.ticks(INPUT_TIMEOUT);
         let mut inputs = Vec::with_capacity(self.peers.len());
         for peer in self.peers.values_mut() {
-            if let Some((sequence, command)) = peer.pending.pop_first() {
+            if let Some((sequence, mut command)) = peer.pending.pop_first() {
                 peer.acknowledged = sequence;
                 peer.last_input_tick = self.world.tick;
+                command.input.rewind_tick = command.input.rewind_tick.and_then(|tick| {
+                    self.lag.accepted_tick(
+                        self.world.tick,
+                        self.world.oldest_hit_tick(),
+                        tick,
+                        self.world.tick_rate,
+                        peer.rtt_seconds,
+                    )
+                });
                 inputs.push((peer.player, command.input));
             } else if self.world.tick.saturating_sub(peer.last_input_tick) >= timeout {
                 let angles = self
@@ -351,8 +390,9 @@ mod tests {
         s.join(10, hello());
         let mut future = command(1);
         future.view_tick = 1;
-        assert!(s.input(10, InputBatch(vec![future])).is_err());
-        let mut invalid = command(1);
+        future.input.rewind_tick = Some(0); // Inner metadata is not trusted.
+        s.input(10, InputBatch(vec![future])).unwrap();
+        let mut invalid = command(2);
         invalid.input.tracked = Some(sim::TrackedPose {
             head: sim::Pose {
                 position: glam::Vec3::ZERO,
@@ -362,7 +402,8 @@ mod tests {
         });
         assert!(s.input(10, InputBatch(vec![invalid])).is_err());
         s.step();
-        assert_eq!(s.snapshot_for(10).unwrap().acknowledged_input, 0);
+        assert_eq!(s.snapshot_for(10).unwrap().acknowledged_input, 1);
+        assert_eq!(s.world.players[0].last_input.rewind_tick, None);
         assert!(s.world.players[0].movement.origin.is_finite());
     }
     #[test]
@@ -402,5 +443,43 @@ mod tests {
         assert_eq!(clock.advance(Duration::from_secs(1)), 8);
         assert_eq!(clock.discarded_wall_ticks, 120);
         assert_eq!(clock.advance(Duration::ZERO), 0);
+    }
+
+    #[test]
+    fn old_protocol_cannot_join_or_spawn_a_player() {
+        let mut s = session();
+        let mut old = hello();
+        if let ClientControl::Hello { version, .. } = &mut old {
+            *version = 1;
+        }
+        assert!(matches!(s.join(10, old), ServerControl::Rejected { .. }));
+        assert!(s.world.players.is_empty());
+    }
+
+    #[test]
+    fn rewind_is_revalidated_on_consume_and_never_upgrades_an_invalid_request() {
+        let mut s = session();
+        s.join(10, hello());
+        for _ in 0..16 {
+            s.step();
+        }
+        let mut c = command(1);
+        c.view_tick = s.world.tick - 2;
+        c.input.rewind_tick = Some(u64::MAX);
+        s.input(10, InputBatch(vec![c])).unwrap();
+        assert_eq!(s.peers[&10].pending[&1].input.rewind_tick, Some(14));
+        // Queued command ages beyond the server allowance before consumption.
+        for _ in 0..16 {
+            s.world.step(&[]);
+        }
+        s.step();
+        assert_eq!(s.world.players[0].last_input.rewind_tick, None);
+        let mut future = command(2);
+        future.view_tick = s.world.tick + 1;
+        s.input(10, InputBatch(vec![future])).unwrap();
+        s.world.step(&[]); // It is now a valid time, but was invalid on receipt.
+        s.step();
+        assert_eq!(s.world.players[0].last_input.rewind_tick, None);
+        assert_eq!(s.snapshot_for(10).unwrap().acknowledged_input, 2);
     }
 }
