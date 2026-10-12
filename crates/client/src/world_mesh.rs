@@ -256,7 +256,19 @@ pub fn build(bsp: &Bsp, atlas: &LightmapAtlas, include: &dyn Fn(usize) -> bool) 
                 continue;
             }
             let (tw, th) = (td.width.max(1) as f32, td.height.max(1) as f32);
-            let verts_for_bounds = bsp.face_vertices(face);
+            let planar = if face.dispinfo < 0 {
+                match bsp.face_mesh(face) {
+                    Ok(mesh) => Some(mesh),
+                    Err(error) => { warn!("world face {face_index}: {error}"); continue; }
+                }
+            } else { None };
+            let displacement_bounds;
+            let verts_for_bounds = if let Some(mesh) = &planar {
+                &mesh.positions
+            } else {
+                displacement_bounds = bsp.face_vertices(face);
+                &displacement_bounds
+            };
             let center = verts_for_bounds.iter().copied().sum::<glam::Vec3>() / verts_for_bounds.len().max(1) as f32 + origin;
             let mb = groups.entry((name, spatial_cell(center))).or_default();
 
@@ -287,10 +299,8 @@ pub fn build(bsp: &Bsp, atlas: &LightmapAtlas, include: &dyn Fn(usize) -> bool) 
                 continue;
             }
 
-            let verts = bsp.face_vertices(face);
-            if verts.len() < 3 {
-                continue;
-            }
+            let Some(planar) = planar else { continue };
+            let verts = planar.positions;
             let Some(normal) = bsp.face_normal(face) else { continue };
             let lv = &ti.lightmap_vecs;
             let base = mb.positions.len() as u32;
@@ -299,29 +309,8 @@ pub fn build(bsp: &Bsp, atlas: &LightmapAtlas, include: &dyn Fn(usize) -> bool) 
                 let t = lv[1].truncate().dot(*v) + lv[1].w - face.lightmap_mins[1] as f32;
                 mb.push(*v + origin, normal, texture_uv(ti, *v, tw, th), atlas.uv(face_index, s, t), 0.0);
             }
-            // Fan triangulation, wound counter-clockwise around the normal.
-            // Newell's method: the compiler inserts collinear vertices to fix
-            // T-junctions, so the first three points are not reliable.
-            let ccw = {
-                let mut n = glam::Vec3::ZERO;
-                for i in 0..verts.len() {
-                    let (a, b) = (verts[i], verts[(i + 1) % verts.len()]);
-                    n += glam::Vec3::new(
-                        (a.y - b.y) * (a.z + b.z),
-                        (a.z - b.z) * (a.x + b.x),
-                        (a.x - b.x) * (a.y + b.y),
-                    );
-                }
-                n.dot(normal) >= 0.0
-            };
-            for i in 1..verts.len() as u32 - 1 {
-                if ccw {
-                    mb.indices.extend_from_slice(&[base, base + i, base + i + 1]);
-                } else {
-                    mb.indices.extend_from_slice(&[base, base + i + 1, base + i]);
-                }
-                triangles += 1;
-            }
+            triangles += planar.indices.len() / 3;
+            mb.indices.extend(planar.indices.into_iter().map(|i| base + i));
         }
     }
 
@@ -331,6 +320,98 @@ pub fn build(bsp: &Bsp, atlas: &LightmapAtlas, include: &dyn Fn(usize) -> bool) 
         .map(|((name, _), mb)| (name, mb.into_mesh()))
         .collect();
     WorldBuild { meshes, triangles }
+}
+
+#[cfg(test)]
+mod compiled_topology_tests {
+    use super::*;
+    use bevy::mesh::VertexAttributeValues;
+
+    #[test]
+    fn renderer_keeps_compiled_boundary_split_and_original_uv_mapping() {
+        let mut bsp = Bsp::default();
+        bsp.planes.push(bsp::Plane {
+            normal: glam::Vec3::Z,
+            dist: 0.0,
+            kind: 2,
+        });
+        bsp.vertices = vec![
+            glam::Vec3::ZERO,
+            glam::Vec3::X,
+            glam::Vec3::X * 2.0,
+            glam::Vec3::new(2., 2., 0.),
+            glam::Vec3::Y * 2.0,
+        ];
+        bsp.edges = vec![[0, 1], [1, 2], [2, 3], [3, 4], [4, 0]];
+        bsp.surfedges = vec![0, 1, 2, 3, 4];
+        bsp.texdata.push(bsp::TexData {
+            reflectivity: glam::Vec3::ONE,
+            name_id: 0,
+            width: 2,
+            height: 2,
+        });
+        bsp.texdata_strings.push("synthetic/boundary".into());
+        bsp.texinfo.push(bsp::TexInfo {
+            texture_vecs: [glam::Vec4::X, glam::Vec4::Y],
+            lightmap_vecs: [glam::Vec4::X, glam::Vec4::Y],
+            flags: 0,
+            texdata: 0,
+        });
+        bsp.faces.push(bsp::Face {
+            plane: 0,
+            side: 0,
+            first_edge: 0,
+            num_edges: 5,
+            texinfo: 0,
+            dispinfo: -1,
+            styles: [255; 4],
+            light_offset: -1,
+            lightmap_mins: [0; 2],
+            lightmap_size: [0; 2],
+            num_prims: 1,
+            first_prim_id: 0,
+        });
+        bsp.models.push(bsp::Model {
+            mins: glam::Vec3::ZERO,
+            maxs: glam::Vec3::splat(2.),
+            origin: glam::Vec3::ZERO,
+            head_node: 0,
+            first_face: 0,
+            num_faces: 1,
+        });
+        bsp.primitives.push(bsp::Primitive {
+            kind: 0,
+            first_index: 0,
+            index_count: 9,
+            first_vertex: 0,
+            vertex_count: 0,
+        });
+        bsp.primitive_indices = vec![0, 1, 4, 1, 3, 4, 1, 2, 3];
+        let built = build(&bsp, &LightmapAtlas::build(&bsp), &|_| true);
+        assert_eq!(built.triangles, 3);
+        assert_eq!(built.meshes.len(), 1);
+        let mesh = &built.meshes[0].1;
+        assert_eq!(
+            mesh.indices().unwrap().iter().collect::<Vec<_>>(),
+            vec![0, 1, 4, 1, 3, 4, 1, 2, 3]
+        );
+        let Some(VertexAttributeValues::Float32x3(normals)) =
+            mesh.attribute(Mesh::ATTRIBUTE_NORMAL)
+        else {
+            panic!("missing normals")
+        };
+        assert!(normals.iter().all(|n| *n == [0., 1., 0.]));
+        let Some(VertexAttributeValues::Float32x2(uv)) = mesh.attribute(Mesh::ATTRIBUTE_UV_0)
+        else {
+            panic!("missing UVs")
+        };
+        assert_eq!(uv[1], [0.5, 0.]);
+        // A bad explicit index must not turn back into the old fan.
+        bsp.primitive_indices[0] = 5;
+        let rejected = build(&bsp, &LightmapAtlas::build(&bsp), &|_| true);
+        assert_eq!(rejected.triangles, 0);
+        assert!(rejected.meshes.is_empty());
+    }
 }
 
 /// Creates the material for a world surface.
