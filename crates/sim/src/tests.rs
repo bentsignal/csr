@@ -20,6 +20,29 @@ fn disconnected_competitive_player_leaves_bomb_and_cancels_defusing() {
 }
 
 #[test]
+fn removed_competitive_bot_keeps_existing_gear_and_bomb_cleanup() {
+    let mut w = world();
+    let t = w.add_bot("departing carrier", Team::Terrorist);
+    let ct = w.add_bot("departing defuser", Team::CounterTerrorist);
+    w.set_mode(GameMode::Competitive, rules());
+    w.step(&[]);
+    assert!(w.player(t).unwrap().has_bomb());
+    assert!(w.remove_player(t));
+    assert!(w.dropped_bomb().is_some());
+    assert_eq!(w.items.iter().filter(|item| item.class_name() == C4).count(), 1);
+    assert!(w.items.iter().any(|item| item.class_name() == "weapon_glock"));
+    let drops = w.events.iter().filter(|event| matches!(event, GameEvent::Dropped { player, .. } if *player == t)).count();
+    assert_eq!(drops, 2);
+    assert!(!w.remove_player(t));
+    assert_eq!(w.events.iter().filter(|event| matches!(event, GameEvent::Dropped { player, .. } if *player == t)).count(), drops);
+    w.player_mut(ct).unwrap().defuse_kit = true;
+    w.bomb = Some(PlantedBomb { pos: Vec3::ZERO, planter: t, site: 0, planted_at: 0., explode_at: 40., defuser: Some((ct, 0.)) });
+    assert!(w.remove_player(ct));
+    assert!(w.bomb.unwrap().defuser.is_none());
+    assert!(w.items.iter().any(|item| item.class_name() == "item_defuser"));
+}
+
+#[test]
 fn prediction_preserves_bot_metadata_without_inventing_ai_or_replaying_events() {
     let mut w = world();
     let local = w.add_player("local", Team::CounterTerrorist);
