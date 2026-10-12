@@ -20,6 +20,9 @@ use bevy::prelude::*;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+mod classic;
+pub use classic::SoundEra;
+
 /// Rodio applies inverse-square attenuation in spatial-scale units; scaling
 /// the world down this far keeps every in-map distance under one unit, so
 /// rodio only pans and the measured curves below set the loudness.
@@ -204,6 +207,8 @@ struct Entry {
     limit: Option<usize>,
     /// This is a `…Distant` layer (cross-faded in with distance).
     distant_layer: bool,
+    /// Era-profile bytes verified and decoded once, independent of later mounts.
+    frozen_wave: Option<classic::FrozenWave>,
 }
 
 #[derive(Component)]
@@ -263,6 +268,7 @@ pub struct SoundLibrary {
     rng: u64,
     clock: f64,
     listener: Vec3,
+    classic: classic::Profile,
     /// `CSR_SOUND_LOG=1`: log every sound start (compare with the real
     /// game's `snd_showstart`, see docs/FIDELITY.md).
     log: bool,
@@ -425,11 +431,18 @@ fn parse_entry(b: &kv::Block) -> Option<Entry> {
         distant,
         limit,
         distant_layer: false,
+        frozen_wave: None,
     })
 }
 
 impl SoundLibrary {
     pub fn load(fs: &vfs::Vfs) -> Self {
+        Self::load_with_era(fs, SoundEra::default())
+    }
+
+    /// Explicit installed-era mode supports measured comparisons; players use
+    /// the classic default without configuring files or acquiring extra assets.
+    pub fn load_with_era(fs: &vfs::Vfs, era: SoundEra) -> Self {
         let mut lib = SoundLibrary {
             master_volume: 0.5,
             rng: 0x9E37_79B9_7F4A_7C15,
@@ -466,7 +479,16 @@ impl SoundLibrary {
                 e.distant_layer = true;
             }
         }
+        lib.classic = classic::Profile::load(fs, &mut lib.entries, era);
         lib
+    }
+
+    pub fn era(&self) -> SoundEra { self.classic.era() }
+
+    /// Only stock canonical definitions opt into verified classic waveforms.
+    /// Catalog bindings and public soundscript entries remain unchanged.
+    pub fn weapon_shot_entry<'a>(&'a self, weapon: &'a weapons::WeaponDefinition) -> &'a str {
+        self.classic.select(&weapon.id, &weapon.fire_sound).unwrap_or(&weapon.fire_sound)
     }
 
     /// Soundscript entry names (lower case).
@@ -477,6 +499,11 @@ impl SoundLibrary {
     /// The files an entry picks from.
     pub fn waves(&self, name: &str) -> Option<&[String]> {
         self.entries.get(&name.to_ascii_lowercase()).map(|e| e.waves.as_slice())
+    }
+
+    /// Distant partner identity for waveform audits; no entry is inferred.
+    pub fn distant_entry(&self, name: &str) -> Option<&str> {
+        self.entries.get(&name.to_ascii_lowercase()).and_then(|entry| entry.distant.as_deref())
     }
 
     /// The mixing category an entry falls into (for audits and tests).
@@ -544,7 +571,16 @@ impl SoundLibrary {
             self.play_with(commands, fs, sources, distant, emit);
         }
         let pick = ((self.random() * entry.waves.len() as f32) as usize).min(entry.waves.len() - 1);
-        let Some((handle, channels)) = self.source(fs, sources, &entry.waves[pick]) else { return };
+        let audio = if let Some(wave) = &entry.frozen_wave {
+            // This reserved key cannot collide with a VFS path. Keep verified
+            // bytes even if the selected BSP/pack later shadows the old path.
+            self.loaded.entry(format!("classic2015:{key}"))
+                .or_insert_with(|| Some((sources.add(AudioSource { bytes: wave.bytes.clone() }), wave.channels)))
+                .clone()
+        } else {
+            self.source(fs, sources, &entry.waves[pick])
+        };
+        let Some((handle, channels)) = audio else { return };
         let mut lerp = |(low, high): (f32, f32)| low + (high - low) * self.random();
         let volume = lerp(entry.volume).clamp(0.0, 1.0);
         let speed = (lerp(entry.pitch) / 100.0).clamp(0.25, 4.0);
