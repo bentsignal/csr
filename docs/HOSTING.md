@@ -59,11 +59,43 @@ in the same private evidence folder. The 64-tick source is `25e4796`; the
 became that commit. These still exercise typed hosting rather than the
 complete authored lobby path.
 
-The original lobby bridge is being integrated separately using observed
-ChooseGameSettings, checked query, UpdatedSelections and zero-argument
-LaunchGame callbacks. Its standalone mouse-driven probe completes mode/map,
-Accept, bot options and the original lobby Go. The integrated authored host
-flow must pass before this draft is complete.
+The original lobby bridge uses observed ChooseGameSettings, checked query,
+UpdatedSelections and zero-argument LaunchGame callbacks. An owned scene epoch
+guards cached API receivers; raw text only selects immutable catalog requests.
+The checked query must match before UpdatedSelections stages a selection, and
+the original Go consumes it once. No Steam identity or privacy is fabricated.
+
+The first integrated authored Competitive checkpoint completed Play, Friends,
+Create Lobby, Settings, Competitive, Dust II, Accept, No Bots and the original
+Go using pointer events, with actual movie OnReady and presented-frame gates.
+Both host and guest then passed Ready, Pause, Home and offline reload, exited
+0 and reported `failures: 0`. The source was `cae0149` plus its retained fixture
+diff (later committed in `0757e0c`); executable SHA256 was
+`5118BA5997C7A655FCF2B878AB5352821475520D566FCC208512DF86EA4D571A`.
+All ten private captures under `rendered-host-guest-authored-128-1` were
+reviewed. The late Competitive guest rendered a spectator view while waiting
+for a new round: this establishes joined rendering, not two active players.
+It also exposed our address notice overlapping the authored footer. The
+follow-up moves only our notice into the clear margin below navigation.
+
+The final Deathmatch fixture additionally cancels the first picker through its
+original X, returns the lobby Home, and reopens both cached movies before
+selecting Dust II and using the original Go. It requires actual owned phase
+changes and completed screenshot callbacks before advancing. Both clients
+then pass Ready, Pause, Home and offline reload with `failures: 0` and exit 0.
+Ready requires Deathmatch rules, the local player alive and at least two
+authoritative alive humans; both logs record two active humans at 128 tick.
+All twelve private images were reviewed, including the four authored stages;
+Accept and the complete Go footer remain unobscured. Provenance under
+`rendered-host-guest-authored-deathmatch-128-final` records source `2cc9d0f`
+plus its saved fixture diff, the alive-guard flag and executable SHA256
+`452FA2CDA0E6FAFAF380388EA40F7E995BEA79FE53A69DC741616B197D08DF6C`.
+
+The combined locked workspace passes 465 tests with four ignored. Current
+release Dust II probe/sim and audio checks, a fresh Competitive rerun and
+exact-head CI are the remaining final gates; this still is not OS-input or
+1:1 visual fidelity proof.
+
 Dynamic bot slot filling and original competitive warmup remain open.
 
 This is the existing unauthenticated address-based transport. It does not

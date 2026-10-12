@@ -10,6 +10,10 @@ use bevy::{
 };
 use std::time::{Duration, Instant};
 
+fn authored_deathmatch() -> bool {
+    std::env::var("CSR_TEST_HOST_MENU").as_deref() == Ok("deathmatch")
+}
+
 pub(crate) fn enabled() -> bool {
     std::env::var_os("CSR_TEST_REMOTE").is_some() || std::env::var_os("CSR_TEST_HOST").is_some()
 }
@@ -43,11 +47,11 @@ impl Default for Proof {
 struct AuthoredHost {
     step: usize,
     settled: Option<(Instant, u64)>,
-    picker_capture_requested: bool,
+    captures_requested: u8,
 }
 #[derive(Resource, Default)]
 struct AuthoredCaptures(u8);
-fn capture_authored(world: &mut World, name: &str) {
+fn capture_authored(world: &mut World, name: &str, flag: u8) {
     world.init_resource::<AuthoredCaptures>();
     let path = world
         .resource::<crate::Options>()
@@ -60,20 +64,26 @@ fn capture_authored(world: &mut World, name: &str) {
         .spawn(Screenshot::primary_window())
         .observe(save_to_disk(path))
         .observe(
-            |_: On<ScreenshotCaptured>, mut captures: ResMut<AuthoredCaptures>| captures.0 += 1,
+            move |_: On<ScreenshotCaptured>, mut captures: ResMut<AuthoredCaptures>| {
+                captures.0 |= flag
+            },
         );
 }
 impl AuthoredHost {
     fn update(&mut self, world: &mut World) -> bool {
         let front = world.resource::<crate::frontend::Frontend>();
-        let expected = match self.step {
-            0 | 1 => "MainMenu",
-            2 => "LobbyBrowser",
-            3 => "LobbyScreen",
-            4..=7 => "StartSinglePlayer",
-            _ => "LobbyScreen",
+        use crate::frontend_lobby::Phase;
+        let (expected, phase) = match self.step {
+            0 | 1 | 6 | 7 => ("MainMenu", Phase::Closed),
+            2 | 8 => ("LobbyBrowser", Phase::Browser),
+            3 | 5 | 9 => ("LobbyScreen", Phase::Lobby),
+            4 | 10..=13 => ("StartSinglePlayer", Phase::Picker),
+            _ => ("LobbyScreen", Phase::Lobby),
         };
-        if !front.movie_ready(expected) || (self.step >= 8 && !front.lobby_staged()) {
+        if !front.movie_ready(expected)
+            || front.lobby_phase() != phase
+            || (self.step >= 14 && !front.lobby_staged())
+        {
             self.settled = None;
             return false;
         }
@@ -82,36 +92,53 @@ impl AuthoredHost {
         if since.elapsed() < Duration::from_secs(2) || serial.saturating_sub(*first_frame) < 2 {
             return false;
         }
-        if self.step == 5 && !self.picker_capture_requested {
-            capture_authored(world, "host-authored-picker.png");
-            self.picker_capture_requested = true;
-            self.settled = None;
-            return false;
+        let capture = match self.step {
+            5 => Some(("host-authored-cancelled-picker.png", 1)),
+            6 => Some(("host-authored-cancelled-home.png", 2)),
+            11 => Some(("host-authored-picker.png", 4)),
+            _ => None,
+        };
+        if let Some((name, flag)) = capture {
+            if self.captures_requested & flag == 0 {
+                capture_authored(world, name, flag);
+                self.captures_requested |= flag;
+                self.settled = None;
+                return false;
+            }
         }
         let captures = world
             .get_resource::<AuthoredCaptures>()
             .map_or(0, |captures| captures.0);
-        if (self.step == 5 && captures < 1) || (self.step == 9 && captures < 2) {
+        if capture.is_some_and(|(_, flag)| captures & flag == 0)
+            || (self.step == 15 && captures & 8 == 0)
+        {
             return false;
         }
         let points = [
-            (486., 26.),    // Play
-            (503., 138.),   // Play with friends
-            (1390., 970.),  // Create lobby
-            (758., 879.),   // Settings
-            (1450., 206.),  // Competitive
-            (810., 680.),   // Dust II in the installed/available filtered grid
+            (486., 26.),   // Play
+            (503., 138.),  // Play with friends
+            (1390., 970.), // Create lobby
+            (758., 879.),  // Settings
+            (1615., 172.), // Cancel the first picker through its original X
+            (333., 26.),   // Cancel the first lobby through original Home
+            (486., 26.),   // Reopen Play
+            (503., 138.),  // Play with friends
+            (1390., 970.), // Reopen the cached lobby
+            (758., 879.),  // Reopen the cached picker
+            (if authored_deathmatch() { 850. } else { 1450. }, 206.),
+            // Each mode's filtered grid was inspected in a private capture.
+            (810., if authored_deathmatch() { 500. } else { 680. }),
             (1450., 1017.), // Accept
             (1164., 754.),  // No Bots modal: Go
             (1430., 1004.), // Lobby: Go
         ];
-        if self.step == 8 {
-            capture_authored(world, "host-authored-lobby.png");
+        if self.step == 14 {
+            capture_authored(world, "host-authored-lobby.png", 8);
             self.step += 1;
             self.settled = None;
             return false;
         }
-        let (x, y) = points[self.step.min(8)];
+        let (x, y) = points[self.step.min(14)];
         let window = world
             .query_filtered::<&Window, With<bevy::window::PrimaryWindow>>()
             .single(world)
@@ -234,7 +261,7 @@ pub(crate) fn update(world: &mut World, mut proof: Local<Proof>) {
                     failed(world, "authored host proof uses the production port 27015");
                     return;
                 }
-                if proof.host_menu.step >= 8
+                if proof.host_menu.step >= 14
                     && world.resource::<crate::frontend::Frontend>().lobby_staged()
                     && world
                         .resource::<crate::frontend::Frontend>()
@@ -310,6 +337,26 @@ pub(crate) fn update(world: &mut World, mut proof: Local<Proof>) {
                 failed(world, "authority or remote actor did not advance");
                 return;
             }
+            if std::env::var_os("CSR_TEST_REMOTE_REQUIRE_ALIVE").is_some() {
+                if world_state.mode != sim::GameMode::Deathmatch {
+                    failed(
+                        world,
+                        "active-player proof did not receive Deathmatch rules",
+                    );
+                    return;
+                }
+                let local = world.resource::<crate::player::LocalPlayer>().id;
+                if !world_state.player(local).is_some_and(|player| player.alive)
+                    || world_state
+                        .players
+                        .iter()
+                        .filter(|player| !player.is_bot && player.alive)
+                        .count()
+                        < 2
+                {
+                    return;
+                }
+            }
             if std::env::var_os("CSR_TEST_HOST_GUEST_READY").is_some()
                 && world_state
                     .players
@@ -325,9 +372,14 @@ pub(crate) fn update(world: &mut World, mut proof: Local<Proof>) {
                 return;
             }
             info!(
-                "remote flow: authoritative {} Hz, {} actors, tick {}",
+                "remote flow: authoritative {} Hz, {} actors, {} active humans, tick {}",
                 world_state.tick_rate,
                 world_state.players.len(),
+                world_state
+                    .players
+                    .iter()
+                    .filter(|player| !player.is_bot && player.alive)
+                    .count(),
                 world_state.tick
             );
             capture(world, "remote-ready.png");
