@@ -462,10 +462,20 @@ impl Host {
                 self.key(&name, vkey, down);
                 return;
             }
-            Input::Char(c) => PlayerEvent::TextInput { codepoint: c },
+            Input::Char(c) => {
+                self.player.lock().unwrap().handle_event(PlayerEvent::TextInput { codepoint: c });
+                self.character(c);
+                return;
+            },
             Input::Edit { name, control, shift } => {
                 let Some(code) = text_control(&name, control, shift) else { return; };
-                PlayerEvent::TextControl { code }
+                self.player.lock().unwrap().handle_event(PlayerEvent::TextControl { code });
+                if let Some(c) = authored_edit_character(&name, control, shift) {
+                    self.character(c);
+                } else {
+                    self.drain_calls();
+                }
+                return;
             }
             Input::Focus(focused) => if focused { PlayerEvent::FocusGained } else { PlayerEvent::FocusLost },
             _ => return,
@@ -481,6 +491,11 @@ impl Host {
             "csrKey",
             vec![ExtValue::String(name.to_string()), ExtValue::Number(vkey as f64), ExtValue::Bool(down)],
         );
+        self.drain_calls();
+    }
+
+    fn character(&mut self, typed: char) {
+        self.call_as("csrChar", character_args(typed));
         self.drain_calls();
     }
 
@@ -500,6 +515,19 @@ impl Host {
             .ok_or("unexpected renderer")?;
         let image = renderer.capture_frame().ok_or("no frame captured")?;
         Ok((image.width(), image.height(), image.into_raw()))
+    }
+}
+
+fn character_args(typed: char) -> Vec<ExtValue> {
+    // CharTyped accepts the character string, not its integer codepoint.
+    vec![ExtValue::String(typed.to_string())]
+}
+
+fn authored_edit_character(name: &str, control: bool, shift: bool) -> Option<char> {
+    match (name, control, shift) {
+        ("KEY_ENTER", false, false) => Some('\r'),
+        ("KEY_BACKSPACE", false, _) => Some('\x08'),
+        _ => None,
     }
 }
 
@@ -584,6 +612,18 @@ fn compile_shim() -> Result<Vec<u8>, Error> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn authored_character_contract_uses_strings_and_preserves_unicode() {
+        for typed in ['3', '\u{e9}', '\u{1f600}', '\r'] {
+            assert!(matches!(&super::character_args(typed)[0], ruffle_core::external::Value::String(text) if text == &typed.to_string()));
+        }
+        assert_eq!(super::authored_edit_character("KEY_ENTER", false, false), Some('\r'));
+        assert_eq!(super::authored_edit_character("KEY_ENTER", true, false), None);
+        assert_eq!(super::authored_edit_character("KEY_BACKSPACE", false, false), Some('\x08'));
+        assert_eq!(super::authored_edit_character("KEY_BACKSPACE", true, false), None);
+        assert_eq!(super::authored_edit_character("KEY_DELETE", false, false), None);
+    }
+
     #[test]
     fn editing_distinguishes_caret_selection_and_word_deletion() {
         use ruffle_core::events::TextControlCode::*;

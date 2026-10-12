@@ -26,6 +26,7 @@ pub(super) struct Scene {
     pub mode: u32,
     widgets: Vec<Widget>,
     layout_initialized: bool,
+    focused_widget: Option<usize>,
 }
 impl Scene {
     pub fn load(fs: &vfs::Vfs, command: &str, loc: &Localization) -> Self {
@@ -99,6 +100,7 @@ impl Scene {
             mode,
             widgets,
             layout_initialized: false,
+            focused_widget: None,
         }
     }
 
@@ -163,11 +165,42 @@ impl Scene {
                 choices[*selected].1
             }
         };
+        self.focused_widget = Some(*index as usize);
         Some((widget.convar.clone(), number.into()))
+    }
+
+    /// Preserve the validated row when the authored mouse highlight reports NaN.
+    pub fn highlight(&mut self, index: &Value, path: &str, calls: &mut Calls) {
+        if let Value::Number(index) = index {
+            if index.is_finite() && *index >= 0.0 && index.fract() == 0.0 {
+                let index = *index as usize;
+                if index < self.widgets.len() {
+                    self.focused_widget = Some(index);
+                    return;
+                }
+            }
+            // Only the observed NaN mouse callback needs repair. Negative
+            // indices can represent normal navigation away from a widget.
+            if !index.is_nan() {
+                return;
+            }
+        } else {
+            return;
+        }
+        if self.layout_initialized {
+            if let Some(index) = self.focused_widget {
+                calls.call(
+                    "_global.csrBindings",
+                    "focusWidget",
+                    vec![path.into(), (index as u32).into()],
+                );
+            }
+        }
     }
 
     pub fn show(&mut self, path: &str, settings: &Settings, calls: &mut Calls) {
         self.layout_initialized = false;
+        self.focused_widget = None;
         calls.call(path, "Init", vec![self.count().into(), self.mode.into()]);
         for (index, widget) in self.widgets.iter_mut().enumerate() {
             let (kind, label, data) = match &mut widget.kind {
@@ -208,15 +241,28 @@ impl Scene {
         }
         self.layout_initialized = true;
         for (index, widget) in self.widgets.iter().enumerate() {
+            if let Kind::Slider { min, max } = &widget.kind {
+                let control = format!("{path}.TopPanel.Panel.arraySlots.{index}.Widget");
+                calls.call(&control, "Init", vec![widget.convar.clone().into()]);
+                calls.call(
+                    &control,
+                    "DefineScaledValueRange",
+                    vec![(*min).into(), (*max).into()],
+                );
+            }
+        }
+        self.refresh_values(path, settings, calls);
+    }
+
+    /// Numeric entry commits convars before requesting a refresh; it is no longer dragging.
+    pub fn refresh_values(&mut self, path: &str, settings: &Settings, calls: &mut Calls) {
+        if !self.layout_initialized {
+            return;
+        }
+        for (index, widget) in self.widgets.iter_mut().enumerate() {
             let control = format!("{path}.TopPanel.Panel.arraySlots.{index}.Widget");
-            match &widget.kind {
-                Kind::Slider { min, max } => {
-                    calls.call(&control, "Init", vec![widget.convar.clone().into()]);
-                    calls.call(
-                        &control,
-                        "DefineScaledValueRange",
-                        vec![(*min).into(), (*max).into()],
-                    );
+            match &mut widget.kind {
+                Kind::Slider { .. } => {
                     let current = match widget.convar.as_str() {
                         "volume" => settings.volume,
                         "sensitivity" => settings.sensitivity,
@@ -224,11 +270,17 @@ impl Scene {
                     };
                     calls.call(&control, "SetValueScaled", vec![(current as f64).into()]);
                 }
-                Kind::Choice { choices, selected } => calls.call(
-                    &control,
-                    "SetText",
-                    vec![choices[*selected].0.clone().into()],
-                ),
+                Kind::Choice { choices, selected } => {
+                    *selected = choices
+                        .iter()
+                        .position(|(_, value)| (*value < 0.0) == settings.invert_y)
+                        .unwrap_or(0);
+                    calls.call(
+                        &control,
+                        "SetText",
+                        vec![choices[*selected].0.clone().into()],
+                    );
+                }
             }
             calls.set(
                 &format!("{path}.TopPanel.Panel.Control_Dummy.Control_{index}.Control_Text"),
@@ -272,6 +324,45 @@ mod tests {
             );
         }
     }
+    #[test]
+    fn refreshed_choices_cycle_from_the_latest_saved_value() {
+        let mut scene = scene();
+        scene.layout_initialized = true;
+        let mut calls = Calls::default();
+        let mut settings = Settings::default();
+        settings.invert_y = true;
+        scene.refresh_values("_level21", &settings, &mut calls);
+        let (_, value) = scene
+            .value(&0u32.into(), &1.0.into(), "_level21", &mut calls)
+            .unwrap();
+        assert_eq!(value.num(), 0.022);
+    }
+
+    #[test]
+    fn mouse_updates_retain_the_correct_row_for_nan_focus_repair() {
+        let mut scene = scene();
+        let mut calls = Calls::default();
+        scene.layout_initialized = true;
+        scene.highlight(&0u32.into(), "_level21", &mut calls);
+        assert_eq!(scene.focused_widget, Some(0));
+        scene
+            .value(&1u32.into(), &71.0.into(), "_level21", &mut calls)
+            .unwrap();
+        scene.highlight(&f64::NAN.into(), "_level21", &mut calls);
+        assert_eq!(scene.focused_widget, Some(1));
+        for index in [-1.0, 0.5, 10.0, f64::INFINITY] {
+            scene.highlight(&index.into(), "_level21", &mut calls);
+            assert_eq!(scene.focused_widget, Some(1));
+        }
+        scene.highlight(&0u32.into(), "_level21", &mut calls);
+        assert!(
+            scene
+                .value(&1u32.into(), &101.0.into(), "_level21", &mut calls)
+                .is_none()
+        );
+        assert_eq!(scene.focused_widget, Some(0));
+    }
+
     #[test]
     fn malformed_callbacks_cannot_change_the_selected_choice() {
         let mut scene = scene();

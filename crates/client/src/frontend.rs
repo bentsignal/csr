@@ -297,6 +297,18 @@ impl Engine for Bridge {
                 }
                 None
             }
+            ("OptionsMenu", "OnHighlightWidget") => {
+                if let (Some(index), Some(path)) = (args.first(), self.roots.get("OptionsMenu")) {
+                    self.options.highlight(index, path, calls);
+                }
+                None
+            }
+            ("OptionsMenu", "OnRefreshValues") => {
+                if let Some(path) = self.roots.get("OptionsMenu") {
+                    self.options.refresh_values(path, &data.settings, calls);
+                }
+                None
+            }
             ("OptionsMenu", "OnLayoutComplete") => {
                 if let Some(path) = self.roots.get("OptionsMenu") {
                     self.options.layout_ready(path, &data.settings, calls);
@@ -341,10 +353,12 @@ impl Engine for Bridge {
             | ("GameInterface", "SetConvarNumber")
             | ("GameInterface", "SetConvarString")
             | ("GameInterface", "SetConvarBoolean") => {
-                self.actions.lock().unwrap().push(Action::Convar(
-                    arg(0),
-                    args.get(1).cloned().unwrap_or(Value::Undefined),
-                ));
+                let name = arg(0);
+                let value = args.get(1).cloned().unwrap_or(Value::Undefined);
+                // Authored numeric entry immediately asks the bridge to refresh.
+                // Update this snapshot before the following callback reads it.
+                apply_setting(&mut data.settings, &name, &value);
+                self.actions.lock().unwrap().push(Action::Convar(name, value));
                 None
             }
             ("GameInterface", "GetConvarNumber") => Some(Value::Number(match arg(0).as_str() {
@@ -1156,6 +1170,37 @@ pub(crate) fn capture_menu(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn numeric_entry_updates_the_snapshot_before_the_following_native_getter() {
+        let fs = Arc::new(vfs::Vfs::new());
+        let data = Arc::new(Mutex::new(Data {
+            inventory: InventoryView::new(&fs),
+            fs,
+            settings: Settings::default(),
+            localization: crate::localize::Localization::default(),
+            game_modes: kv::Block::new(),
+            state: AppState::Menu,
+            menu_open: false,
+            loading: String::new(),
+        }));
+        let actions = Arc::new(Mutex::new(Vec::new()));
+        let mut bridge = Bridge {
+            data,
+            actions: actions.clone(),
+            seen: HashSet::new(),
+            roots: HashMap::new(),
+            options: crate::frontend_options::Scene::default(),
+            offline: crate::frontend_game::OfflineLaunch::default(),
+        };
+        let mut calls = Calls::default();
+        bridge.call("GameInterface", "SetConvar", &["volume".into(), "0.33".into()], &mut calls);
+        let value = bridge.call("GameInterface", "GetConvarNumber", &["volume".into()], &mut calls).unwrap();
+        assert!((value.num() - 0.33).abs() < 1e-6);
+        let actions = actions.lock().unwrap();
+        assert_eq!(actions.len(), 1);
+        assert!(matches!(&actions[0], Action::Convar(name, Value::String(value)) if name == "volume" && value == "0.33"));
+    }
 
     #[test]
     fn unanswered_or_malformed_native_values_cannot_reset_saved_settings() {
