@@ -1352,8 +1352,8 @@ mod tests {
                 if entity != movie {
                     assert!(layer.0 > world.get::<GlobalZIndex>(movie).unwrap().0);
                     assert_eq!(
-                        world.get::<ComputedUiTargetCamera>(entity).unwrap().camera,
-                        camera
+                        world.get::<ComputedUiTargetCamera>(entity).unwrap().get(),
+                        Some(camera)
                     );
                     layers.push(layer.0);
                 }
@@ -1363,8 +1363,8 @@ mod tests {
             assert!(world.get::<Node>(view.root).is_some());
             for (entity, _) in world.query::<(Entity, &UiAction)>().iter(world) {
                 assert_eq!(
-                    world.get::<ComputedUiTargetCamera>(entity).unwrap().camera,
-                    camera
+                    world.get::<ComputedUiTargetCamera>(entity).unwrap().get(),
+                    Some(camera)
                 );
             }
         }

@@ -6,11 +6,13 @@ concurrently (one agent or worktree per track), and the dependencies between
 them are listed. Every item ends in a verified state (`cargo test`,
 `csr probe`, `csr sim`, and screenshots for anything visual; see AGENTS.md).
 
-## Where we are (assessed 2026-10-11)
+## Where we are (assessed 2026-10-12)
 
-The inherited code is a **real, playable single-player base**. The engine
-layers are worth keeping. The UI, the gameplay/sim boundary and the bundled
-Minecraft code need work before multiplayer and public releases.
+The inherited code is a **real, playable single-player base**. Phase 0 and
+the installer/updater release are complete. Gameplay now lives in the fixed
+tick sim; dedicated multiplayer, prediction and local content packs have
+landed. The rendered browser/join integration is undergoing its final visual
+checks. Fidelity, full classic UI coverage and VR remain unfinished.
 
 | Area | State | Call |
 |---|---|---|
@@ -18,17 +20,17 @@ Minecraft code need work before multiplayer and public releases.
 | `sim`: Bevy-free, fixed tick (128 default, runtime setting), per-player `TickInput`, seeded RNG | Right shape for netcode; owns bots and loadouts since Track A | **Keep, extend** |
 | Rendering, animation, viewmodels, sounds | Dust II validated; other maps unverified | **Keep** |
 | Gameplay glue in `client` (bots, loadouts, skins, overworld rules run in Bevy systems, not `sim`) | Moved into `sim` (Track A) | **Done** |
-| Main menu (late-2023-style, rebuilt every change, ~950-line `draw`, relaunches the process to start a match) | Not the 2018 look | **Rewrite** |
+| Main menu | Installed Scaleform movies, persistent menu/loading/match flow, offline/pause/options bridge | **Extend and measure** |
 | Cases / inventory / cosmetics data | Works locally | **Keep data, rewrite UI** |
-| Netcode, server, browser | `World` is `Clone`; `TickInput` and the full replicated state (`WorldState`/`Snapshot`) serialise with serde + postcard. No transport yet | **Build** |
-| Install detection | Misses the current CS:GO Legacy app (4465480, `common\csgo legacy`) | **Fix now** |
-| Distribution | Manual zip; no CI, installer or updater | **Build** |
+| Netcode, server, browser | Renet UDP, dedicated server, full snapshots, prediction/interpolation, coarse rewind; rendered local browser/join checks in progress | **Finish integration, then hosting/discovery** |
+| Install detection | Current Legacy app 4465480 and older beta layout supported | **Done** |
+| Distribution | CI, portable zip, Velopack installer/updater; v0.3.0 published | **Done; private channel remains** |
 | `third_party/minecraftoss` + `minecraft_terrain` (~154k lines) | Ported from decompiled Minecraft, no licence files, hard dependency of `level` and `client`; release zip also bundled Minecraft assets | **Removed** (decision 1) |
-| VR | `TickInput` carries tracked head/hand poses and an aim ray; hitscan uses the aim ray. Cameras are still single-view | **Seam in place, build later** |
+| VR | Networked poses/separate aim, calibrated pure input adapter, server wall admission; optional OpenXR smoke under verification | **Prepare and verify hardware before game integration** |
 
-Tests: 258 passing tests, with two installed-data tests ignored by default
-(authoritative-rewind verification, 2026-10-11), mostly on synthetic data.
-Real-data checks are the `csr probe` / `csr sim` commands.
+Workspace tests and installed-data `csr probe` / `csr sim` checks run for each
+change. Rendered integration also requires freshly saved and inspected images;
+successful lifecycle logs alone do not establish visual correctness.
 
 ## Phase 0: take ownership
 
@@ -67,8 +69,8 @@ workspace tests pass; release-profile Dust II `probe` and `sim` report zero
 failures, including `sim --tickrate 64`; the rendered client screenshot was
 inspected. Review also fixed firing-snapshot equality after recoil-cache
 population and finish ownership on weapons dropped in their spawn, respawn
-or purchase tick. **Next: A2 transport, server/connect, prediction and lag
-compensation.** Bot brains remain server-only; snapshots alone do not replay
+or purchase tick. A2's transport and simulation foundations have since landed.
+Bot brains remain server-only; snapshots alone do not replay
 their decisions.
 
 - [x] Move all gameplay into `sim`: bots, loadout on spawn, skin and knife
@@ -102,18 +104,20 @@ events and idempotent cancellation. Its two-client Dust II lifecycle proof
 runs at 64 and 128 tick; frontend loading/join integration remains open.
 See [REMOTESESSION.md](REMOTESESSION.md).
 
-- [ ] Protocol: `TickInput` up (with **optional tracked head/hand poses and a
-      separate aim ray**, reserved now for VR), full-state snapshots then
-      deltas down. Serialisation via serde + a compact binary codec.
-- [ ] Transport: UDP with reliable channels (evaluate `renet`/`quinn`
-      against the sim's needs; the sim stays transport-agnostic).
-- [ ] Client prediction and reconciliation (re-run `World::step` from the
-      last acknowledged tick), entity interpolation, lag-compensated hits
-      (rewind hitboxes to the shooter's view tick).
-- [ ] `csr server <map>`: headless dedicated server binary without Bevy
-      rendering. Listen server from the menu ("host a game"). Bots fill
-      empty slots.
-- [ ] Join by IP and LAN discovery.
+- [x] Protocol: `TickInput` up, including optional tracked head/hand poses
+      and a separate aim ray; fragmented full snapshots and authoritative
+      events down, using serde/postcard and bounded compatibility admission.
+- [ ] Snapshot deltas and bandwidth optimization.
+- [x] Renet UDP with reliable control/events and redundant inputs; the sim
+      remains transport-agnostic.
+- [x] Prediction/reconciliation through shared `World::step`, remote pose
+      interpolation and server-authorized coarse hull rewind.
+- [ ] Full character-model and tracked VR hitboxes.
+- [x] `csr-server <map>`: headless dedicated executable without Bevy
+      rendering, configurable tick rate and server-owned bots.
+- [ ] Listen server from the menu ("host a game") and dynamic bot slot filling.
+- [x] Local address/favorites discovery and IP/hostname join backend.
+- [ ] LAN discovery and public server directory.
 - [ ] Hosting needs map data (BSP, nav, `items_game.txt`). A home PC host
       already has CS:GO Legacy. For a Linux VPS, verify whether SteamCMD can
       fetch the files (app 740) without a full client install.
@@ -161,8 +165,10 @@ byte-identical to 2018.
       content and avatars. Decision and evidence:
       [research/scaleform-spike.md](research/scaleform-spike.md). Needs three
       Ruffle fixes (fork `bentsignal/ruffle`, branch `csgo-scaleform`).
-- [ ] Integrate Ruffle as the menu layer (`crates/scaleform`), bridge the
-      game API to our real data, replace `client::menu`.
+- [x] Integrate Ruffle as the menu layer (`crates/scaleform`), with native
+      offline launch, pause/resume/exit, and saved numeric options.
+- [ ] Complete the game API bridge for inventory/cases and the remaining
+      classic panels. Original reset defaults still need verified evidence.
 - The fallback (a native Bevy layout built from the SWFs with the `swf`
   crate) is not needed.
 - [ ] Screenshot-diff harness: render the menu at 1920x1080 and diff it
@@ -280,12 +286,19 @@ and other-game importers remain open. See [PACKUI.md](PACKUI.md).
 
 ## Phase 3: VR cross-play
 
-Depends on Track A's protocol carrying tracked poses.
+Track A now carries tracked poses and a separate aim ray. Hardware rendering
+and the game's VR player are still separate work.
 
-- [ ] OpenXR through `bevy_mod_openxr` (successor of `bevy_oxr`). First
-      check its Bevy 0.19 support; pin, port or contribute as needed.
-      Quest connects to the PC through Steam Link / SteamVR (or Virtual
-      Desktop / Meta Link), so it is ordinary PC VR.
+- [x] Verify published Bevy 0.19 support and select exact OpenXR dependency
+      versions for an optional, asset-free smoke example.
+- [ ] Compile, run and verify that smoke's stereo rendering, focus and
+      main/render cleanup on the owner's PC runtime/headset before game use.
+      Implementation and verification are tracked in
+      [PR #40](https://github.com/bentsignal/global-offensive/pull/40).
+- [x] Pure calibrated input adapter: meters to Source units, recentering,
+      head/hands, independent aim and neutral controls on tracking loss.
+- [x] Server validates/clamps tracked aim origin against current eye-to-muzzle
+      collision; blocked/embedded origins cannot shoot through walls.
 - [ ] VR player: tracked head and hands, gun held in hand, aim from the
       weapon's ray, smooth thumbstick locomotion through CS:GO movement,
       world-space menus.

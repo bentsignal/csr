@@ -20,6 +20,7 @@ pub(crate) struct Proof {
     ready_at: Option<Instant>,
     phase: u8,
     tick: u64,
+    presented_serial: u64,
 }
 impl Default for Proof {
     fn default() -> Self {
@@ -29,6 +30,7 @@ impl Default for Proof {
             ready_at: None,
             phase: 0,
             tick: 0,
+            presented_serial: 0,
         }
     }
 }
@@ -157,14 +159,29 @@ pub(crate) fn update(world: &mut World, mut proof: Local<Proof>) {
             world.resource_mut::<crate::player::InputEnabled>().0 = true;
             world.resource_mut::<crate::menu::Menu>().page = Some(crate::menu::Page::Main);
             world.resource_mut::<crate::player::LocalPlayer>().latched = movement::buttons::JUMP;
+            proof.ready_at = None;
             proof.next();
         }
         4 if ready
             && world
                 .resource::<crate::frontend::Frontend>()
-                .loaded("PauseMenu")
-            && proof.entered.elapsed() > Duration::from_secs(5) =>
+                .loaded("PauseMenu") =>
         {
+            let serial = world
+                .resource::<crate::frontend::Frontend>()
+                .presented_serial();
+            if proof.ready_at.is_none() {
+                proof.ready_at = Some(Instant::now());
+                proof.presented_serial = serial;
+            }
+            // Loaded is emitted during the worker's step, before its first
+            // rendered frame. Wait from that observation, then require actual
+            // uploaded frames rather than capturing the outgoing menu image.
+            if proof.ready_at.unwrap().elapsed() < Duration::from_secs(5)
+                || serial.saturating_sub(proof.presented_serial) < 2
+            {
+                return;
+            }
             if world.resource::<crate::player::SimWorld>().0.tick <= proof.tick
                 || world.resource::<Time<Virtual>>().is_paused()
                 || world.resource::<crate::player::LocalPlayer>().latched != 0
@@ -190,9 +207,22 @@ pub(crate) fn update(world: &mut World, mut proof: Local<Proof>) {
             let mut menu = world.resource_mut::<crate::menu::Menu>();
             menu.in_match = false;
             menu.page = Some(crate::menu::Page::Main);
+            proof.ready_at = None;
             proof.next();
         }
-        6 if state == AppState::Menu && proof.entered.elapsed() > Duration::from_secs(3) => {
+        6 if state == AppState::Menu => {
+            let serial = world
+                .resource::<crate::frontend::Frontend>()
+                .presented_serial();
+            if proof.ready_at.is_none() {
+                proof.ready_at = Some(Instant::now());
+                proof.presented_serial = serial;
+            }
+            if proof.ready_at.unwrap().elapsed() < Duration::from_secs(3)
+                || serial.saturating_sub(proof.presented_serial) < 2
+            {
+                return;
+            }
             if world.contains_resource::<RemoteClient>()
                 || world.contains_resource::<crate::LoadedLevel>()
                 || world.contains_resource::<crate::player::SimWorld>()
