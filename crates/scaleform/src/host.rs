@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::mpsc::Sender as EventSender;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use async_channel::{Receiver, Sender};
 use ruffle_core::backend::navigator::{
@@ -278,6 +278,7 @@ pub(crate) struct Host {
     dispatcher: Rc<RefCell<Dispatcher>>,
     executor: NullExecutor,
     mouse: (f64, f64),
+    render_trace_remaining: usize,
 }
 
 impl Host {
@@ -347,7 +348,9 @@ impl Host {
             ],
             Box::new(|_| {}),
         );
-        Ok(Self { player, dispatcher, executor, mouse: (0.0, 0.0) })
+        Ok(Self { player, dispatcher, executor, mouse: (0.0, 0.0),
+            render_trace_remaining: if std::env::var("CSR_UI_RENDER_TRACE").as_deref() == Ok("1") { 1024 } else { 0 },
+        })
     }
 
     pub fn root_ready(&self) -> bool {
@@ -509,11 +512,20 @@ impl Host {
     }
 
     pub fn render(&mut self) -> Result<(u32, u32, Vec<u8>), Error> {
+        let started = (self.render_trace_remaining != 0).then(Instant::now);
         let mut player = self.player.lock().unwrap();
         player.render();
+        let submitted = started.map(|_| Instant::now());
         let renderer = <dyn Any>::downcast_mut::<WgpuRenderBackend<TextureTarget>>(player.renderer_mut())
             .ok_or("unexpected renderer")?;
         let image = renderer.capture_frame().ok_or("no frame captured")?;
+        if let (Some(started), Some(submitted)) = (started, submitted) {
+            self.render_trace_remaining -= 1;
+            tracing::info!(target: "scaleform::render_timing", width = image.width(), height = image.height(),
+                submit_ms = submitted.duration_since(started).as_secs_f64() * 1000.,
+                capture_ms = submitted.elapsed().as_secs_f64() * 1000.,
+                "UI render timing (capture includes GPU wait, row copy and alpha conversion)");
+        }
         Ok((image.width(), image.height(), image.into_raw()))
     }
 }
