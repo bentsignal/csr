@@ -65,7 +65,25 @@ fn failed(world: &mut World, message: &str) {
 }
 
 pub(crate) fn update(world: &mut World, mut proof: Local<Proof>) {
+    // Each hidden loopback window owns its engine inputs independently. This
+    // fixture cannot claim simultaneous operating-system window focus.
+    if let Ok(mut window) = world
+        .query_filtered::<&mut Window, With<bevy::window::PrimaryWindow>>()
+        .single_mut(world)
+    {
+        window.focused = true;
+    }
     if proof.start.elapsed() > Duration::from_secs(180) {
+        error!(
+            "remote flow: phase {}, scene {:?}, menu open {}, PauseMenu loaded {}, virtual paused {}",
+            proof.phase,
+            world.resource::<State<AppState>>().get(),
+            world.resource::<crate::menu::Menu>().open(),
+            world
+                .resource::<crate::frontend::Frontend>()
+                .loaded("PauseMenu"),
+            world.resource::<Time<Virtual>>().is_paused()
+        );
         failed(world, "timed out");
         return;
     }
@@ -94,6 +112,7 @@ pub(crate) fn update(world: &mut World, mut proof: Local<Proof>) {
             }
             let name =
                 std::env::var("CSR_TEST_REMOTE_NAME").unwrap_or_else(|_| "Rendered client".into());
+            info!("remote flow: loopback engine-input fixture for {name}; no OS focus/input claim");
             *world.resource::<JoinRequest>().0.lock().unwrap() = Some(Connect {
                 address,
                 name,
