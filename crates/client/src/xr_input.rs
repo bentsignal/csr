@@ -114,6 +114,9 @@ impl Calibration {
 
     /// Convert a fresh runtime pose for rendering without changing input state.
     /// Rotation changes basis by conjugation, then applies calibrated world yaw.
+    /// Its local axes retain XR meaning after conversion: +Y is forward, +X
+    /// right, +Z up. Gaze is `rotation * Vec3::Y`, unlike Source body yaw's
+    /// +X-forward convention. Model/bone consumers must align their local basis.
     pub fn convert_pose(&self, pose: RawPose) -> Result<Pose, Error> {
         self.pose(pose, "pose")
     }
@@ -380,6 +383,25 @@ mod tests {
         assert_eq!(sample.input.utility, 44);
         assert_eq!(sample.input.rewind_tick, None);
         assert!(sample.input.tracked.is_some());
+    }
+    #[test]
+    fn converted_pose_local_forward_matches_same_pose_weapon_ray() {
+        let mut a = Adapter::default();
+        a.begin_life(7, calibration(37.0));
+        let raw = pose(
+            head().position_m,
+            Quat::from_rotation_y(0.6) * Quat::from_rotation_x(-0.4),
+        );
+        let f = Frame {
+            head: Some(raw),
+            aim: Some(raw),
+            ..frame()
+        };
+        let sample = a.sample(7, f, Controls::default()).unwrap();
+        close(
+            sample.head.unwrap().rotation * Vec3::Y,
+            sample.input.aim.unwrap().direction,
+        );
     }
     #[test]
     fn missing_pose_never_fabricates_hands_or_falls_back_to_head_attack() {
