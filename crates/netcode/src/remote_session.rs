@@ -272,11 +272,15 @@ mod tests {
         let mut remote =
             RemoteSession::discover(address, "Local".into(), Team::CounterTerrorist).unwrap();
         discover(&mut old, &mut remote);
-        drop(old);
         let mut world = map();
         world.set_tick_rate(64);
-        let mut changed =
-            Server::bind(address, Session::new(world, manifest()).unwrap(), 4).unwrap();
+        old.replace_unjoined_session(Session::new(world, manifest()).unwrap());
+        let mut changed = old;
+        assert_eq!(changed.address(), address);
+        assert_eq!(
+            std::net::UdpSocket::bind(address).unwrap_err().kind(),
+            std::io::ErrorKind::AddrInUse
+        );
         remote.provide_map(map(), manifest()).unwrap();
         discover(&mut changed, &mut remote);
         assert_eq!(remote.server_info().unwrap().tick_rate, 64);
@@ -295,19 +299,19 @@ mod tests {
         let mut remote =
             RemoteSession::discover(address, "Local".into(), Team::CounterTerrorist).unwrap();
         discover(&mut old, &mut remote);
-        drop(old);
         let mut world = map();
         world.set_tick_rate(128);
         let policy = crate::lag::LagPolicy {
             interpolation_allowance_ticks: 1,
             ..crate::lag::LagPolicy::prototype(128)
         };
-        let mut changed = Server::bind(
-            address,
-            Session::with_lag_policy(world, manifest(), policy).unwrap(),
-            4,
-        )
-        .unwrap();
+        old.replace_unjoined_session(Session::with_lag_policy(world, manifest(), policy).unwrap());
+        let mut changed = old;
+        assert_eq!(changed.address(), address);
+        assert_eq!(
+            std::net::UdpSocket::bind(address).unwrap_err().kind(),
+            std::io::ErrorKind::AddrInUse
+        );
         remote.provide_map(map(), manifest()).unwrap();
         discover(&mut changed, &mut remote);
         assert_eq!(remote.server_info().unwrap().tick_rate, 128);
