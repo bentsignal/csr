@@ -248,6 +248,10 @@ thing is uncanny. Fidelity is measured, never eyeballed:
       instance-scoped checksum/count validation against installed Dust II.
       Record order, color interpretation and full VHV lighting remain open.
       [Foundation evidence](research/static-prop-vhv.md).
+- [x] Establish a localized native response to an opaque prop-lighting
+      payload intervention, with a repeated control and unchanged installed
+      data. A second marker supports hardware order for 16 selected records;
+      general record-order and color-decoder admission remain open.
 - [ ] Match jumping and **surfing** with native traces: supported input,
       ramp/crease/seam contact, speed retention and landing impact at recorded
       server settings and tick rates. Synthetic correctness tests and native
@@ -272,6 +276,10 @@ thing is uncanny. Fidelity is measured, never eyeballed:
       observed partial input, pre-recovery stamina cap, first supported height,
       full held recovery and coast. Numeric targets and synthetic floor remain
       separate from internal command phase, map replay and surfing parity.
+- [x] Compare 36 actual standing-hull traces on the selected surf map and
+      replay its recorded 64 Hz entry fall through current map collision.
+      Sampled geometry and this zero-input fall match; moving ramp contact,
+      continuous routes, trigger effects and surfing parity remain open.
 - [ ] Match repeated-crouch fatigue/cooldown after the current jump, landing
       and audio work; measure the original rather than invent a debounce.
 

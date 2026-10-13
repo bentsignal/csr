@@ -78,3 +78,69 @@ native lighting fidelity, VHV color interpretation or individual record order.
 Private receipts are retained in `vhv-foundation-6e836d4`, including
 `root-ci-review.json` and `root-render-review.json`. The final documentation
 commit does not change the runtime source or its artifact identity.
+
+## Private native payload intervention
+
+A private same-size copy of the installed Dust2 BSP changed nine bytes in
+each of tire prop 9's 561 opaque records to 64, preserving every fourth
+byte, all headers/tables and all unrelated entries. Only that payload and
+its two ZIP CRC fields changed; exact reversal and all 5,579 member CRCs
+passed. Installed content remained unchanged. This intervention assumes
+neither a color encoding nor a directional basis.
+
+Native control / modified / repeated-control captures used the same actual
+camera `(-1280, -458, 269.062561)`, angles `(16.5, 90, 0)` and 1600x900
+viewport. All three exited naturally with exact configuration/preference
+preservation and were independently inspected. A manually selected tire-rim
+annulus had control-repeat RGB MAE 0.978, compared with 3.824 and 4.746 for
+the modification against each control. The hole and broader world controls
+varied less than the tire. This supports a localized payload-associated
+response for that prop. Automatic exposure, one control repeat and a manual
+mask limit the conclusion; it is not a transfer-function or decoder proof.
+
+Private proofs are `vhv-usage64-20261013-1/root-triplet-review.json` and
+`vhv-marker-preparation`. A bounded actual-reader export subsequently retained
+all 561 vertices and 768 triangles, with a complete hardware-output to
+fixup-resolved VVD-index bijection. Its nominal projection closely matches
+the captured tire silhouette without registration. Two selected record
+cohorts predict spatially separated responses under those alternative orders.
+
+A second native baseline / marker / repeated-baseline triplet zeroed the same
+nine bytes in only 16 records, leaving all other records at 64 and retaining
+all fourth bytes. Independently verified file differences were exactly 144
+payload bytes and eight CRC bytes, with exact reversal and every ZIP CRC valid.
+The frozen hardware-order regions changed by RGB MAE 10.714/10.746 and
+10.546/10.572 against both baselines; repeat variation was 0.065 and 0.037.
+Alternative VVD-order regions changed by about one level, comparable to the
+retained global shift. The independently inspected spatial differences follow
+both hardware-order supports. No alignment or color correction was applied.
+
+This supports hardware-output order for those 16 records in this one mesh at
+the measured viewpoint. It does not prove the other 545 records, other models,
+meshes or LODs, byte encoding or lighting basis. Automatic exposure and the
+single control repeat remain limitations. All three captures exited naturally
+and retained exact configuration/preference and four-BSP hash checks.
+Private proofs are `vhv-marker16-20261013-1/root-independent-asset-review.json`
+and `vhv-marker-preparation/root-independent-marker-review.json`; the raw
+comparison output SHA256 is
+`072837D35F1943ABFE49895F9CCD71E5D175E744F809878A7ADA4129A80863BE`.
+No renderer behavior has changed, and historical fidelity remains open.
+
+A third bracket isolated physical byte offsets 0/4/8 for the same 16
+records, zeroing 48 payload bytes while preserving every other lane and
+fourth byte. The response followed both hardware-order supports predominantly
+in captured blue: signed blue deltas against the repeated baseline were
+-4.910 and -4.530 levels. Per-channel absolute differences were
+`(0.009, 0.019, 4.910)` and `(0.039, 0.044, 4.538)` in captured RGB order,
+so the selectivity is not cancellation of red/green changes. Hardware-region
+repeat RGB MAE was 0.039/0.051; alternative supports and world controls
+stayed near repeat variation. All three source images and the channel plot
+were independently inspected, without registration or color correction.
+
+This establishes influence of those physical offsets in the tested material
+and viewpoint. It does not assign the other lanes, fourth-byte meaning,
+full packing, directional groups or transfer function. Private proofs are
+`vhv-lane0-20261013-1/root-independent-asset-review.json` and
+`vhv-marker-preparation/root-independent-lane0-review.json`. Raw comparison
+output SHA256 is
+`47341D7DFCF980BAD400C4F0D42875D934DE3B331E1B7BADC9C73CFD375A6867`.
