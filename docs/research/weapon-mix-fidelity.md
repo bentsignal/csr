@@ -110,6 +110,16 @@ startup interpretation. `snd_sos_print_operators` lists available operator
 types, not proof that an imported weapon stack was accepted. The historical
 cue/graph admission gate therefore failed despite mixer acceptance.
 
+A subsequent same-writer inline VPK control contained byte-identical installed
+versions of those three scripts. Its full startup log also had operator parse
+and cue-precache failures (96 parse errors). This does not isolate older
+declaration syntax as the cause. The earlier normal 2023 control had no
+condebug startup capture; its later netconsole output cannot establish stock
+graph acceptance either. A fresh no-VPK/no-script-override private MOD
+counterpart with full startup capture is prepared, not yet executed. Actual
+loader bytes and cue execution remain separate qualification steps before
+historical PCM or numeric mixer changes.
+
 Private startup-log SHA256 is
 `40a9c00f54f7da1d285e4d83930d3a0761023d3871f78dd1b4b3ea3cc2df4c82`;
 netconsole-log SHA256 is
