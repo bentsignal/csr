@@ -8,8 +8,9 @@ fn first_spawn_jump_and_landing_replay_through_complete_tick_input_at_both_rates
         authority.set_mode(GameMode::Deathmatch, rules());
         let actor = authority.add_player("first-command mover", Team::CounterTerrorist);
         assert!(!authority.player(actor).unwrap().movement.on_ground);
-        let mut predicted =
-            World::with_catalog(authority.collision.clone(), authority.catalog.clone());
+        // Restoration replicates state, not the installed map's spawn/zone
+        // definitions. Both sides must retain the same map-owned fixture.
+        let mut predicted = world();
         predicted.restore(authority.state());
         let mut saw_landing = false;
         for tick in 0..rate * 2 {
