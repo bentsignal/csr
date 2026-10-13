@@ -2,8 +2,8 @@
 use serde::{Deserialize, Serialize};
 use sim::{GameEvent, PlayerId, Snapshot, Team, TickInput};
 
-pub const VERSION: u32 = 6;
-pub const PROTOCOL_ID: u64 = 0x4353_5257_0000_0006;
+pub const VERSION: u32 = 7;
+pub const PROTOCOL_ID: u64 = 0x4353_5257_0000_0007;
 pub const CONTROL: u8 = 0;
 pub const INPUT: u8 = 1;
 pub const SNAPSHOT: u8 = 2;

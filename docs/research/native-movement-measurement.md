@@ -64,10 +64,59 @@ is `1af043b2ad1f1397d42998ea9dc5a4ebfa8beeb2ded32adfd3891738da985d5f`;
 its compiled SMX is
 `b5741f66de0fe3d7507a3419aa828c6ccc18163e230e8a5520fced79e83d992b`.
 
+## Measured standing takeoff
+
+Separate genuine stationary jumps have now completed at both rates. Each
+retained all 512 command pairs and their state/context joins, with exactly one
+raw jump onset, takeoff and later supported post-state. TickBase advanced once
+within every command, and each post-state exactly matched the next pre-state.
+Both traces retained unchanged configuration/context and no lifecycle events.
+The initial state was supported, standing, unscoped and unfatigued, with zero
+velocity, directional input and base velocity. Held weapons differed (MAG-7
+and SSG 08); no running-speed claim follows from a stationary trial.
+
+| Actual rate | First airborne VZ | First command height gain | First post stamina |
+| --- | --- | --- | --- |
+| 64 | 283.243377685 | 4.523330689 | 23.659469604 |
+| 128 | 292.618377685 | 2.310497284 | 23.909469604 |
+
+With recorded impulse `J=301.993377`, gravity `g=800` and interval `dt`, the
+observed first post velocity matches `J-1.5*g*dt`; displacement matches
+`(post_vz+g*dt/2)*dt` within position serialization precision. Post stamina
+matches `0.08*(J-g*dt/2)`. Subsequent airborne velocity differences match
+`-g*dt`; stamina recovery matches 60 units per second. These are black-box
+command transition targets, not copied or inferred engine implementation.
+
+Rust previously published standing takeoff VZ `J-g*dt`, used a larger first
+displacement, and charged stamina from the full impulse. Its standing branch
+now applies the additional half-gravity before displacement and adjusts the
+jump cost. Regression tests compare measured first-state targets and subsequent
+free flight on a synthetic flat floor at both rates. They vary Rust-only
+`ground_ticks` and `last_fall_speed`, which the mover does not read, so missing
+native counterparts are not silently assigned equivalent values. The old
+implementation fails the measured first-transition test. Network protocol 7
+rejects prior movement versions, preventing mixed prediction behavior.
+
+Both gates exited zero, preserved twelve preference targets and the installed
+configuration inventory, and disabled private loaders. Independent reviews
+verified twelve actual module paths/hashes and eighteen byte-identical raw
+artifact copies per run. Proof identifiers are
+`scope6-stationary-64-20261013-045656-00075352` and
+`scope6-stationary-128-20261013-050534-afd8c197`. A mistaken compressed tick-rate
+argument produced an additional 64-tick run; it remains labeled 64 and is not
+used as 128 evidence. Neutral preflight failures remain preserved.
+
+This scoped observable transition comparison does not upgrade the raw
+observer's internal physics-phase flag or admit an entire installed-map replay.
+Crouched jumps, positive-stamina takeoff, running speed, effective surface
+friction and full surfing remain separate measurements. The crouched branch
+is unchanged. The first supported landing post also remained above its later
+settled floor position; support/snap and landing slowdown are still open.
+
 ## Next comparison
 
 Stable neutral state is a prerequisite, not movement parity. Next collect
-genuine stationary jumps and forward-running jumps, separating continued input
+forward-running jumps, separating continued input
 from airborne release/coasting. Observe clearance, actual input transitions,
 held speed and scope, takeoff, first supported post-state and subsequent speed
 decay. A first supported snapshot is not automatically the exact physical

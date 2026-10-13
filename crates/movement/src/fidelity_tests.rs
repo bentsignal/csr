@@ -97,6 +97,54 @@ fn first_supported_command_can_jump_without_an_idle_settling_tick() {
 }
 
 #[test]
+fn standing_takeoff_matches_observed_legacy_command_transitions() {
+    // Genuine unfatigued standing jumps in installed Legacy 1.38.8.1.
+    // These are input-to-post-state observations, not Source implementation
+    // details or a claim that this synthetic floor matches the native map.
+    for (rate, observed_vz, observed_dz, observed_stamina, peak_ordinal, observed_peak) in [
+        (64, 283.243_38, 4.523_330_7, 23.659_47, 23, 54.653_687),
+        (128, 292.618_38, 2.310_497_3, 23.909_47, 47, 55.825_32),
+    ] {
+        let dt = 1. / rate as f32;
+        let cfg = MoveConfig::default();
+        let world = floor();
+        let mut pm = PlayerMove::spawn_at(Vec3::Z * 0.0625);
+        player_move(&mut pm, &input(0), &cfg, &world, dt);
+        assert!(pm.on_ground);
+        assert_eq!(pm.stamina, 0.);
+        let supported_origin = pm.origin;
+        let supported_state = pm;
+        // These Rust-only bookkeeping fields have no native getter here.
+        // Vary them explicitly instead of inventing equivalent native values.
+        for (ground_ticks, last_fall_speed) in [(0, 0.), (u32::MAX, 400.)] {
+            pm = supported_state;
+            pm.ground_ticks = ground_ticks;
+            pm.last_fall_speed = last_fall_speed;
+            let events = player_move(&mut pm, &input(buttons::JUMP), &cfg, &world, dt);
+            assert!(events.jumped && !pm.on_ground);
+            assert!((pm.velocity.z - observed_vz).abs() < 0.0001, "{rate}Hz: {pm:?}");
+            assert!((pm.origin.z - supported_origin.z - observed_dz).abs() < 0.00001);
+            assert!((pm.stamina - observed_stamina).abs() < 0.0001);
+            for ordinal in 1..if rate == 64 { 32 } else { 64 } {
+                let events = player_move(&mut pm, &input(0), &cfg, &world, dt);
+                assert!(!pm.on_ground && events.landed.is_none());
+                assert_eq!(pm.velocity.truncate(), glam::Vec2::ZERO);
+                assert!((pm.velocity.z - (observed_vz - cfg.gravity * dt * ordinal as f32)).abs() < 0.0001);
+                let stamina = (observed_stamina - cfg.stamina_recovery_rate * dt * ordinal as f32).max(0.);
+                assert!((pm.stamina - stamina).abs() < 0.0001);
+                if ordinal == peak_ordinal {
+                    // Native absolute Z reaches150, versus56 on this floor.
+                    // Up to48 additions at those binary32 precisions can
+                    // accumulate <0.0004 difference despite identical VZ.
+                    assert!((pm.origin.z - supported_origin.z - observed_peak).abs() < 0.0004,
+                        "{rate}Hz ordinal{ordinal}: gain {}, observed {observed_peak}", pm.origin.z - supported_origin.z);
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn first_supported_duck_uses_ground_transition_not_airborne_feet_lift() {
     for rate in [64, 128] {
         let dt = 1. / rate as f32;
