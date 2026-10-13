@@ -675,3 +675,5 @@ pub fn player_move<W: TraceWorld + ?Sized>(
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod fidelity_tests;
