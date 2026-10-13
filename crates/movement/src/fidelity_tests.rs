@@ -132,11 +132,9 @@ fn floor_impact_keeps_incoming_downward_speed_after_slide_clipping() {
             (pm.stamina - (cfg.stamina_land_cost * incoming).min(cfg.stamina_max)).abs() < 1e-3
         );
         assert_eq!(pm.velocity.z, 0.);
-        assert!(
-            player_move(&mut pm, &input(0), &cfg, &floor(), dt)
-                .landed
-                .is_none()
-        );
+        assert!(player_move(&mut pm, &input(0), &cfg, &floor(), dt)
+            .landed
+            .is_none());
     }
 }
 
@@ -247,7 +245,79 @@ fn two_nonorthogonal_steep_contacts_keep_motion_along_their_intersection() {
 }
 
 #[test]
-fn coplanar_triangle_seam_does_not_snag_surf_motion_and_replays_exactly() {
+fn nearly_parallel_distinct_planes_are_not_deduplicated() {
+    let a = Vec3::new(-0.8, 0.006, 0.6).normalize();
+    let b = Vec3::new(-0.8, -0.006, 0.6).normalize();
+    let mut w = CollisionWorld::new();
+    w.add_convex(ramp(a));
+    w.add_convex(ramp(b));
+    w.finalize();
+    let cfg = MoveConfig {
+        gravity: 0.,
+        ..Default::default()
+    };
+    for rate in [64, 128] {
+        let mut pm =
+            PlayerMove::spawn_at(Vec3::Z * ((a.x.abs() * 16. + a.y.abs() * 16. + 0.02) / a.z));
+        let observed = ObservedTrace {
+            world: &w,
+            calls: RefCell::default(),
+        };
+        // Drive into both planes, rather than tangentially away from one.
+        let incoming = Vec3::new(0., 0., -400.);
+        pm.velocity = incoming;
+        let events = player_move(&mut pm, &input(0), &cfg, &observed, 1. / rate as f32);
+        // This is a feasible two-plane slide, not an opposed-plane crease:
+        // the second projection separates slightly from the first plane.
+        let expected = Mover::<CollisionWorld>::clip_velocity(
+            Mover::<CollisionWorld>::clip_velocity(incoming, a, 1.),
+            b,
+            1.,
+        );
+        assert!(
+            (pm.velocity - expected).length() < 1e-3,
+            "distinct planes lost at {rate}Hz: {pm:?}, traces: {:?}",
+            observed.calls.borrow()
+        );
+        assert!(observed
+            .calls
+            .borrow()
+            .iter()
+            .any(|(_, _, tr)| tr.normal == a && tr.fraction < 1.));
+        assert!(observed
+            .calls
+            .borrow()
+            .iter()
+            .any(|(_, _, tr)| tr.normal == b && tr.fraction < 1.));
+        assert!(pm.origin.x < -1.);
+        assert!(!pm.on_ground);
+        assert!(events.landed.is_none());
+    }
+}
+
+#[test]
+fn actual_all_solid_contact_never_uses_numerical_separation() {
+    let mut w = CollisionWorld::new();
+    w.add_convex(bounds(Vec3::splat(-100.), Vec3::splat(100.)));
+    w.finalize();
+    for rate in [64, 128] {
+        let mut pm = PlayerMove::spawn_at(Vec3::ZERO);
+        pm.velocity = Vec3::new(100., 200., -400.);
+        let events = player_move(
+            &mut pm,
+            &input(0),
+            &MoveConfig::default(),
+            &w,
+            1. / rate as f32,
+        );
+        assert_eq!(pm.origin, Vec3::ZERO);
+        assert_eq!(pm.velocity.truncate(), glam::Vec2::ZERO);
+        assert!(!pm.on_ground);
+        assert!(events.landed.is_none());
+    }
+}
+
+fn triangle_ramp() -> CollisionWorld {
     let mut w = CollisionWorld::new();
     let a = Vec3::new(-256., -512., -256. * (4. / 3.));
     let b = Vec3::new(256., -512., 256. * (4. / 3.));
@@ -256,6 +326,12 @@ fn coplanar_triangle_seam_does_not_snag_surf_motion_and_replays_exactly() {
     w.add_triangle([a, b, c], contents::SOLID, 0);
     w.add_triangle([a, c, d], contents::SOLID, 0);
     w.finalize();
+    w
+}
+
+#[test]
+fn coplanar_triangle_seam_does_not_snag_surf_motion_and_replays_exactly() {
+    let w = triangle_ramp();
     for rate in [64, 128] {
         let observed = ObservedTrace {
             world: &w,
@@ -292,4 +368,79 @@ fn coplanar_triangle_seam_does_not_snag_surf_motion_and_replays_exactly() {
         }
         assert!(pm.origin.y > 0.);
     }
+}
+
+#[test]
+fn repeated_ramp_contact_still_traces_and_stops_at_a_later_wall() {
+    let mut w = triangle_ramp();
+    w.add_convex(bounds(
+        Vec3::new(-1024., 20., -1024.),
+        Vec3::new(1024., 40., 1024.),
+    ));
+    w.finalize();
+    for rate in [64, 128] {
+        let mut pm = PlayerMove::spawn_at(Vec3::new(0., -64., 16. * (4. / 3.) + 0.0625));
+        pm.velocity = Vec3::new(0., 500., -40.);
+        for _ in 0..rate / 4 {
+            player_move(
+                &mut pm,
+                &input(0),
+                &MoveConfig::default(),
+                &w,
+                1. / rate as f32,
+            );
+            assert!(pm.origin.y < 4.);
+            assert!(
+                !w.trace_box(pm.origin, pm.origin, STAND_MINS, STAND_MAXS, MASK)
+                    .start_solid
+            );
+        }
+        assert!(
+            pm.origin.y > 3.,
+            "failed to reach actual blocking wall at {rate}Hz: {pm:?}"
+        );
+        assert_eq!(pm.velocity.y, 0.);
+    }
+}
+
+#[test]
+fn repeated_plane_repair_cannot_separate_through_an_adjacent_solid() {
+    let mut w = triangle_ramp();
+    let mut pm = PlayerMove::spawn_at(Vec3::new(-0.5504791, -52.28125, 20.651464));
+    // This is the actual coplanar ramp's zero-fraction contact, not a fake
+    // trace. A second solid leaves the starting hull clear but blocks any
+    // outward correction under the collision system's existing margin.
+    let tr = w.trace_box(
+        pm.origin,
+        pm.origin + Vec3::new(0., 4., -1.),
+        STAND_MINS,
+        STAND_MAXS,
+        MASK,
+    );
+    assert_eq!(tr.fraction, 0.);
+    assert!(!tr.start_solid);
+    w.add_convex(bounds(
+        Vec3::new(-100., -100., -100.),
+        Vec3::new(pm.origin.x + STAND_MINS.x - 0.001, 100., 100.),
+    ));
+    w.finalize();
+    assert!(
+        !w.trace_box(pm.origin, pm.origin, STAND_MINS, STAND_MAXS, MASK)
+            .start_solid
+    );
+    let before = pm.origin;
+    let cfg = MoveConfig::default();
+    let mut mover = Mover {
+        pm: &mut pm,
+        cfg: &cfg,
+        world: &w,
+        dt: 1. / 128.,
+        max_speed: 250.,
+        drop_scaffold: false,
+        landing_speed: None,
+        contact_repair_left: collision::DIST_EPSILON,
+    };
+    mover.repair_repeated_contact(&tr);
+    assert_eq!(mover.pm.origin, before);
+    assert_eq!(mover.contact_repair_left, collision::DIST_EPSILON);
 }
