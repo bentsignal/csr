@@ -159,6 +159,15 @@ proof of parity. Correct waveforms alone do not establish original sound tone,
 EQ, voice overlap, speaker routing or DSP. The owner need not supply clips
 before this research proceeds.
 
+After the movement candidate playtest, the owner still observed excess landing
+slowdown and described the result as playable rather than faithful. Measure
+native jump and landing behavior before tuning it. The owner considers current
+CS:GO Legacy a useful movement reference because the airborne and landing feel
+did not noticeably change for them; keep its measured version/profile explicit
+and continue distinguishing it from independently established 2015 behavior.
+Repeated-crouch fatigue (the original game's resistance to rapid crouching) is
+also required eventually, but follows the current movement and audio work.
+
 ### 8. VR cross-play (later, but designed for now)
 
 - The owner plays in **VR on a Quest** (through Steam Link or a similar

@@ -251,6 +251,12 @@ thing is uncanny. Fidelity is measured, never eyeballed:
       explicit complete state/input, retained map/catalog identities and
       held-weapon checks. Installed Dust II synthetic runs passed at 64/128;
       native comparison remains open. [Replay contract](research/movement-replay.md).
+- [ ] Measure and correct the movement candidate's reported excess landing
+      slowdown against native Legacy: matched command phase, initial state,
+      tick rate, server settings and horizontal-speed traces through impact
+      and recovery. Retain version-specific evidence before tuning constants.
+- [ ] Match repeated-crouch fatigue/cooldown after the current jump, landing
+      and audio work; measure the original rather than invent a debounce.
 
 - [ ] Grenades: HE, flash, smoke, molotov/incendiary, decoy.
 - [ ] Wall penetration (surface properties) and hit groups from the models'
