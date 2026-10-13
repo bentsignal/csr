@@ -391,16 +391,16 @@ impl<W: TraceWorld + ?Sized> Mover<'_, W> {
             // constraint. In particular it cannot define a two-plane crease.
             if planes[..num_planes].contains(&tr.normal) {
                 self.repair_repeated_contact(&tr);
-                self.pm.velocity = Self::clip_velocity(self.pm.velocity, tr.normal, 1.0);
-                continue;
+            } else {
+                if num_planes >= planes.len() {
+                    self.pm.velocity = Vec3::ZERO;
+                    break;
+                }
+                planes[num_planes] = tr.normal;
+                num_planes += 1;
             }
-            if num_planes >= planes.len() {
-                self.pm.velocity = Vec3::ZERO;
-                break;
-            }
-            planes[num_planes] = tr.normal;
-            num_planes += 1;
-
+            // A repeated plane still obeys every previous genuine constraint
+            // and the same anti-reversal check as any new contact.
             if num_planes == 1 && !self.pm.on_ground {
                 self.pm.velocity = Self::clip_velocity(original, planes[0], 1.0);
                 original = self.pm.velocity;

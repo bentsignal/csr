@@ -452,8 +452,8 @@ fn genuine_corner_followed_by_repeated_plane_keeps_all_constraints() {
         gravity: 0.,
         ..Default::default()
     };
-    let mut witnessed = false;
     for rate in [64, 128] {
+        let mut witnessed = false;
         for tilt in [0.003, 0.006, 0.01, 0.1] {
             let b = Vec3::new(0.8, tilt, 0.6).normalize();
             let mut w = CollisionWorld::new();
@@ -470,7 +470,19 @@ fn genuine_corner_followed_by_repeated_plane_keeps_all_constraints() {
                 for _ in 0..8 {
                     observed.calls.borrow_mut().clear();
                     let previous = pm.velocity;
-                    player_move(&mut pm, &input(0), &cfg, &observed, 1. / rate as f32);
+                    // Observe only slide traces, so a later ground query
+                    // cannot falsely count as the repeated solver contact.
+                    Mover {
+                        pm: &mut pm,
+                        cfg: &cfg,
+                        world: &observed,
+                        dt: 1. / rate as f32,
+                        max_speed: 250.,
+                        drop_scaffold: false,
+                        landing_speed: None,
+                        contact_repair_left: collision::DIST_EPSILON,
+                    }
+                    .try_player_move();
                     let calls = observed.calls.borrow();
                     let contacts: Vec<_> = calls
                         .iter()
@@ -500,9 +512,9 @@ fn genuine_corner_followed_by_repeated_plane_keeps_all_constraints() {
                 }
             }
         }
+        assert!(
+            witnessed,
+            "fixture must exercise a genuine corner then a repeated plane at {rate}Hz"
+        );
     }
-    assert!(
-        witnessed,
-        "fixture must exercise a genuine corner then a repeated plane"
-    );
 }
