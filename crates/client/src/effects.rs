@@ -105,7 +105,7 @@ pub fn process(
                     sounds.play_with(&mut commands, fs, &mut sources, &sound, emit(player, origin));
                 }
             }
-            GameEvent::DecoyShot {pos,..} => {sounds.play(&mut commands,fs,&mut sources,"Weapon_AK47.Single",Some(pos));}
+            GameEvent::DecoyShot {pos,..} => {sounds.play_decoy(&mut commands,fs,&mut sources,pos);}
             GameEvent::UtilityThrown { player,kind,pos } => {
                 let sound=match kind {sim::utility::Kind::Molotov=>"Molotov.Throw",sim::utility::Kind::Incendiary=>"IncGrenade.Throw",_=>"HEGrenade.Throw"};
                 sounds.play(&mut commands,fs,&mut sources,sound,if player==local.view_target(){None}else{Some(pos)});
