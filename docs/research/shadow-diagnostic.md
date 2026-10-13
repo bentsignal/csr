@@ -59,3 +59,40 @@ original material after its variant is cached are outside this first slice.
 Native shadow-toggle isolation and matched rendered comparisons remain needed
 before choosing any baked/direct composition law. No exposure adjustment or
 speculative lightmap subtraction is included.
+
+## Asset-free pipeline fixture
+
+The `client` example `shadow_fixture --output <fresh absolute PNG>` creates
+only procedural quads and three code-generated textures. Run separate off
+and on processes in the coordinated GPU slot: leave the startup environment
+absent for off, and set `CSR_SHADOW_DIAGNOSTIC=1` for on. It uses the same
+WorldMaterial callbacks and forward/shadow-depth shaders; it does not load
+CS:GO, install CsgoPlugin, or exercise BSP/PVS scene admission.
+
+An orthographic camera observes a non-casting receiver and four casters:
+opaque, front-facing checker mask, reversed two-sided checker mask, and an
+opaque caster outside the camera frustum. The synthetic layout unit is ten
+Source inches, leaving twenty-inch holes larger than the unchanged Bevy
+shadow bias/filter footprint. Scene generation reports one camera, one
+receiver, four casters, three materials, two meshes and three images. Off
+creates no light and disables the material's shadow callback; on creates one
+zero-illuminance layer31 directional light. No shadow bias or normal-render
+lighting parameter is changed.
+
+The fixture waits for the existing RenderGate's complete asset IDs and two
+settled render preparation/submission cycles, then five more main frames.
+It checks the off-view caster's real camera-frustum exclusion and, on mode,
+its real cascade membership. Camera-projected receiver rectangles identify
+the opaque, masked, reversed-mask and off-view shadows. The actual screenshot
+callback measures dark/white/magenta pixel counts: on requires predominantly
+dark opaque regions, both dark and white in each checker-mask region, and no
+magenta missing-data pixels. Off requires no dark receiver pixels. These
+synthetic acceptance ratios are not a native shadow-law calibration.
+
+PNG saving and acknowledgment must succeed before the owned app exits zero.
+Failures retain the screenshot when available and exit nonzero. A3,600-frame
+and30-second schedule bound covers preparation and capture; these bounds are
+evaluated when the main-world schedule advances, not an external process
+watchdog. The paired images still need independent visual inspection. No
+native, historical lighting, normal-game performance or default-map output
+claim follows from this fixture alone.

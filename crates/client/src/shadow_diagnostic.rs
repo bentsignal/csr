@@ -25,6 +25,8 @@ use std::{
 
 pub const ENVIRONMENT: &str = "CSR_SHADOW_DIAGNOSTIC";
 pub const SHADOW_SHADER: &str = "embedded://client/shaders/world_shadow.wgsl";
+#[path = "shadow_fixture.rs"]
+pub mod fixture;
 /// Reserved only while this developer diagnostic is active. Existing layers:
 /// main=0, sky=1, viewmodel=2. No ordinary scene asset uses layer31.
 const CASTER_LAYER: usize = 31;
