@@ -812,3 +812,4 @@ mod recoil;
 mod aim;
 mod rewind;
 mod death;
+mod movement_fidelity;
