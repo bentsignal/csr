@@ -410,6 +410,22 @@ fn clip_convex(planes: &[Plane], s: Vec3, e: Vec3, ext: Vec3, contents: i32, sur
         if d1 > 0.0 {
             start_out = true;
         }
+        // Reconsider only an entry whose f32 distance ordering would clamp
+        // to zero. The same stored geometry can provide a separating plane
+        // in higher precision; this rejects this convex, not other solids.
+        if d1 > 0.0 && d1 <= DIST_EPSILON && d2 < d1 {
+            let signed = |point: Vec3| {
+                (n.x as f64 * point.x as f64)
+                    + (n.y as f64 * point.y as f64)
+                    + (n.z as f64 * point.z as f64)
+                    - dist as f64
+            };
+            let precise_start = signed(s);
+            let precise_end = signed(e);
+            if precise_start > 0.0 && precise_end >= precise_start {
+                return;
+            }
+        }
         // Entirely in front of this plane: no contact with the solid.
         if d1 > 0.0 && (d2 >= DIST_EPSILON || d2 >= d1) {
             return;
@@ -874,3 +890,6 @@ mod long_trace_tests {
         assert!((tr.end.x - 9016.0).abs() < 0.1, "{:?}", tr.end);
     }
 }
+
+#[cfg(test)]
+mod separating_plane_tests;

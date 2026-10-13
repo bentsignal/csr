@@ -280,6 +280,11 @@ thing is uncanny. Fidelity is measured, never eyeballed:
       replay its recorded 64 Hz entry fall through current map collision.
       Sampled geometry and this zero-input fall match; moving ramp contact,
       continuous routes, trigger effects and surfing parity remain open.
+- [x] Correct the first measured ramp-contact false zero-fraction collision:
+      a separating-plane check removes the rounded ordering error while
+      preserving actual blocking contacts. Native hull queries confirm the
+      disputed sweep is clear; command 667 now matches, with later response
+      differences and full surfing parity still open. Physics protocol 9.
 - [ ] Match repeated-crouch fatigue/cooldown after the current jump, landing
       and audio work; measure the original rather than invent a debounce.
 

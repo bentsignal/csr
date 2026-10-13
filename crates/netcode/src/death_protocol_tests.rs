@@ -125,9 +125,9 @@ fn tracked_receipt_must_already_satisfy_existing_admission_limits() {
 }
 
 #[test]
-fn older_physics_versions_cannot_admit_a_peer_to_measured_ground_v8() {
-    assert_eq!(VERSION, 8);
-    assert_eq!(PROTOCOL_ID, 0x4353_5257_0000_0008);
+fn older_physics_versions_cannot_admit_a_peer_to_collision_ordering_v9() {
+    assert_eq!(VERSION, 9);
+    assert_eq!(PROTOCOL_ID, 0x4353_5257_0000_0009);
     let content = ContentManifest {
         map_id: "csgo_map_test".into(),
         map_name: "test".into(),
@@ -140,7 +140,7 @@ fn older_physics_versions_cannot_admit_a_peer_to_measured_ground_v8() {
     )
     .unwrap();
     let before = session.world().state();
-    for version in [4, 5, 6, 7] {
+    for version in [4, 5, 6, 7, 8] {
         let reply = session.join(
             version as u64,
             ClientControl::Hello {
