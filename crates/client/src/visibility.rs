@@ -2,13 +2,16 @@
 use bevy::prelude::*;
 use bevy::mesh::VertexAttributeValues;
 #[derive(Component)]
-pub struct MapClusters(Vec<usize>);
+pub struct MapClusters {
+    clusters: Vec<usize>,
+    bounds: Option<crate::shadow_diagnostic::Bounds>,
+}
 
 impl MapClusters {
     /// Include every leaf touching the full batch bounds, not just its centre.
     /// This deliberately overestimates visibility for large surfaces/props.
     pub fn mesh(bsp: &bsp::Bsp, mesh: &Mesh) -> Self {
-        let Some(VertexAttributeValues::Float32x3(vertices)) = mesh.attribute(Mesh::ATTRIBUTE_POSITION) else { return Self(Vec::new()); };
+        let Some(VertexAttributeValues::Float32x3(vertices)) = mesh.attribute(Mesh::ATTRIBUTE_POSITION) else { return Self { clusters:Vec::new(),bounds:None }; };
         let (mut lo, mut hi) = (glam::Vec3::splat(f32::INFINITY), glam::Vec3::splat(f32::NEG_INFINITY));
         for p in vertices {
             let p = crate::coords::to_source(Vec3::from_array(*p));
@@ -19,11 +22,12 @@ impl MapClusters {
             (0..3).all(|i| hi[i] >= leaf.mins[i] as f32 && lo[i] <= leaf.maxs[i] as f32)
         }).map(|leaf| leaf.cluster as usize).collect();
         clusters.sort_unstable(); clusters.dedup();
-        Self(clusters)
+        Self { clusters,bounds:crate::shadow_diagnostic::Bounds::new(lo,hi) }
     }
-    fn visible(&self, row: Option<&[u8]>) -> bool {
+    pub(crate) fn bounds(&self) -> Option<crate::shadow_diagnostic::Bounds> { self.bounds }
+    pub(crate) fn visible(&self, row: Option<&[u8]>) -> bool {
         let Some(row) = row else { return true; };
-        self.0.is_empty() || self.0.iter().any(|&c| row.get(c / 8).is_none_or(|b| b & (1 << (c % 8)) != 0))
+        self.clusters.is_empty() || self.clusters.iter().any(|&c| row.get(c / 8).is_none_or(|b| b & (1 << (c % 8)) != 0))
     }
 }
 
@@ -42,10 +46,11 @@ pub fn update(level: Res<crate::LoadedLevel>, local: Res<crate::player::LocalPla
 #[cfg(test)] mod tests {
     use super::*;
     #[test] fn batches_keep_any_visible_leaf_and_fail_open() {
-        assert!(MapClusters(vec![1,8]).visible(Some(&[0,1])));
-        assert!(!MapClusters(vec![1,8]).visible(Some(&[1,0])));
-        assert!(MapClusters(vec![]).visible(Some(&[0])));
-        assert!(MapClusters(vec![99]).visible(Some(&[0])));
-        assert!(MapClusters(vec![1]).visible(None));
+        let clusters=|clusters|MapClusters { clusters,bounds:None };
+        assert!(clusters(vec![1,8]).visible(Some(&[0,1])));
+        assert!(!clusters(vec![1,8]).visible(Some(&[1,0])));
+        assert!(clusters(vec![]).visible(Some(&[0])));
+        assert!(clusters(vec![99]).visible(Some(&[0])));
+        assert!(clusters(vec![1]).visible(None));
     }
 }

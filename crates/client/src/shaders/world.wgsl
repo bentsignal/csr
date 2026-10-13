@@ -7,6 +7,14 @@
 
 #import bevy_pbr::forward_io::VertexOutput
 #import bevy_pbr::mesh_view_bindings::view
+#ifdef CSR_SHADOW_DIAGNOSTIC
+#import bevy_pbr::{
+    shadows::fetch_directional_shadow,
+    mesh_view_bindings::lights,
+    mesh_view_types::DIRECTIONAL_LIGHT_FLAGS_SHADOWS_ENABLED_BIT,
+    view_transformations::position_world_to_view,
+}
+#endif
 
 struct WorldParams {
     color: vec4<f32>,
@@ -43,6 +51,7 @@ const NORMAL: u32 = 512u;
 const NORMAL2: u32 = 1024u;
 const SSBUMP: u32 = 2048u;
 const SSBUMP_MATHFIX: u32 = 4096u;
+const SHADOW_DIAGNOSTIC: u32 = 8192u;
 // Orthonormal radiosity basis, in texture tangent space.
 const RNM0 = vec3<f32>(0.81649658, 0.0, 0.57735027);
 const RNM1 = vec3<f32>(-0.40824829, 0.70710678, 0.57735027);
@@ -241,6 +250,22 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
 #endif
     }
     var light = vec3<f32>(1.0);
+#ifdef CSR_SHADOW_DIAGNOSTIC
+    if (params.flags & SHADOW_DIAGNOSTIC) != 0u {
+        // Only scene-owned main-layer material variants carry this flag. Pink
+        // identifies missing/preparing data, not a falsely successful lit sample.
+        if lights.n_directional_lights == 0u {
+            return vec4<f32>(1.0, 0.0, 1.0, albedo.a);
+        }
+        let diagnostic_light = lights.directional_lights[0];
+        if diagnostic_light.num_cascades == 0u || (diagnostic_light.flags & DIRECTIONAL_LIGHT_FLAGS_SHADOWS_ENABLED_BIT) == 0u {
+            return vec4<f32>(1.0, 0.0, 1.0, albedo.a);
+        }
+        let factor = fetch_directional_shadow(0u, in.world_position, normalize(in.world_normal),
+            position_world_to_view(in.world_position.xyz).z, in.position.xy);
+        return vec4<f32>(vec3<f32>(factor), albedo.a);
+    }
+#endif
     if (params.flags & LIGHTMAPPED) != 0u {
 #ifdef VERTEX_UVS_B
         light = textureSample(light_tex, light_samp, in.uv_b, 0).rgb;
