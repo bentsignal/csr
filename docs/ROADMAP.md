@@ -257,12 +257,16 @@ thing is uncanny. Fidelity is measured, never eyeballed:
       and recovery. Retain version-specific evidence before tuning constants.
 - [x] Admit stable native Legacy neutral command/context windows at actual
       64/128 tick, preserving typed scope, missing properties and rejected
-      lifecycle transitions. Moving-state phase and landing comparison remain
+      lifecycle transitions. Internal moving-state phase and map replay remain
       open. [Measurement checkpoints](research/native-movement-measurement.md).
 - [x] Measure and correct unfatigued standing takeoff velocity, displacement
       and jump stamina at both tick rates. Complete continuous native command
       traces qualify this scoped transition; crouched/fatigued takeoff and
-      running-landing slowdown remain open.
+      broader running/surface behavior remain open.
+- [ ] Correct the scoped standing P2000 ground run/landing at actual 64/128:
+      observed partial input, pre-recovery stamina cap, first supported height,
+      full held recovery and coast. Numeric targets and synthetic floor remain
+      separate from internal command phase, map replay and surfing parity.
 - [ ] Match repeated-crouch fatigue/cooldown after the current jump, landing
       and audio work; measure the original rather than invent a debounce.
 
