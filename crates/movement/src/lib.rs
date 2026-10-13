@@ -580,12 +580,22 @@ impl<W: TraceWorld + ?Sized> Mover<'_, W> {
         if self.pm.stamina > 0.0 {
             impulse *= ((self.cfg.stamina_max - self.pm.stamina) / self.cfg.stamina_max).clamp(0.0, 1.0);
         }
-        if self.pm.ducked || input.buttons & buttons::DUCK != 0 && self.pm.duck_amount > 0.0 {
+        let crouched_jump = self.pm.ducked || input.buttons & buttons::DUCK != 0 && self.pm.duck_amount > 0.0;
+        let stamina_speed;
+        if crouched_jump {
             self.pm.velocity.z = impulse;
+            // Crouched transitions have not yet been measured independently.
+            stamina_speed = self.cfg.jump_impulse;
         } else {
             self.pm.velocity.z += impulse;
+            // Measured unfatigued standing command transitions at 64/128 Hz
+            // advance position before the normal end-of-command half gravity
+            // with J-g*dt, and publish VZ=J-1.5*g*dt. Keep that extra half step
+            // local to the standing takeoff, not every airborne command.
+            self.finish_gravity();
+            stamina_speed = (self.cfg.jump_impulse - self.cfg.gravity * 0.5 * self.dt).max(0.0);
         }
-        self.pm.stamina = (self.cfg.stamina_jump_cost * self.cfg.jump_impulse).min(self.cfg.stamina_max);
+        self.pm.stamina = (self.cfg.stamina_jump_cost * stamina_speed).min(self.cfg.stamina_max);
         events.jumped = true;
     }
 

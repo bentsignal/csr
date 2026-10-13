@@ -125,9 +125,9 @@ fn tracked_receipt_must_already_satisfy_existing_admission_limits() {
 }
 
 #[test]
-fn wire_v4_and_v5_cannot_admit_a_peer_to_current_movement_v6() {
-    assert_eq!(VERSION, 6);
-    assert_eq!(PROTOCOL_ID, 0x4353_5257_0000_0006);
+fn older_physics_versions_cannot_admit_a_peer_to_measured_takeoff_v7() {
+    assert_eq!(VERSION, 7);
+    assert_eq!(PROTOCOL_ID, 0x4353_5257_0000_0007);
     let content = ContentManifest {
         map_id: "csgo_map_test".into(),
         map_name: "test".into(),
@@ -140,7 +140,7 @@ fn wire_v4_and_v5_cannot_admit_a_peer_to_current_movement_v6() {
     )
     .unwrap();
     let before = session.world().state();
-    for version in [4, 5] {
+    for version in [4, 5, 6] {
         let reply = session.join(
             version as u64,
             ClientControl::Hello {
