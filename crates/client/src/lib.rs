@@ -189,6 +189,7 @@ impl Plugin for CsgoPlugin {
             .add_systems(Update, (frontend::update, host_sharing_ui::update, pack_ui::update, server_browser::update, server_browser::input, server_browser::draw, pack_ui::scroll, pack_ui::draw, frontend::input, frontend::cancel_loading).chain())
             .add_systems(Last, (hosting::gate_exit, host_sharing_ui::gate_exit, server_browser::gate_exit, pack_ui::gate_exit).chain().after(bevy::window::ExitSystems))
             .add_systems(Update, (menu::apply, audio::update).chain().after(player::update_camera))
+            .add_systems(Last, audio::prune)
             .add_systems(OnEnter(AppState::Loading), session::begin_load)
             .add_systems(OnExit(AppState::Loading), session::cancel_load)
             .add_systems(OnEnter(AppState::Match), (spawn_level, hud::setup, hud_art::setup, scope::setup, feedback::setup, utility_fx::setup, hud::mark_roots, session::match_ready).chain())

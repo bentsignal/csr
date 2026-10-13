@@ -792,20 +792,8 @@ pub fn update(
     ears: Query<&GlobalTransform, With<SpatialListener>>,
     mut spatial: Query<(&Emitter, Option<&Fade>, &mut SpatialAudioSink)>,
     mut faded: Query<(Entity, &SoundGain, &Fade, Option<&mut AudioSink>, Has<Emitter>)>,
-    active: Query<(), With<AudioPlayer>>,
     mut traces: Query<(Entity, &mut SoundTrace, Has<AudioSink>, Has<SpatialAudioSink>)>,
 ) {
-    let trace_enabled = sounds.trace;
-    let prune_clock = sounds.clock;
-    sounds.playing.retain_mut(|p| {
-        let present = active.contains(p.entity);
-        if trace_enabled && !present {
-            info!("audio_trace prune_missing_player entity {:?} clock {prune_clock:.6} request_clock {:.6} entry {:?} owner {} channel {} player_previously_observed {}",
-                p.entity, p.request_clock, p.entry, p.owner, p.channel, p.player_observed);
-        }
-        p.player_observed |= present;
-        present
-    });
     sounds.clock += time.delta_secs_f64();
     if let Some(ear) = ears.iter().next() {
         listener.0 = ear.translation();
@@ -832,6 +820,26 @@ pub fn update(
             sink.set_volume(Volume::Linear(gain.0 * fade.value(clock) * master));
         }
     }
+}
+
+/// Reap tracked voices after the frame's producer and playback commands flush.
+///
+/// FixedUpdate/Update can reserve an AudioPlayer before it is query-visible.
+/// Last runs after their final deferred flush and PostUpdate's audio cleanup.
+/// Do not retain missing, never-observed players: cancelled requests must also
+/// disappear. A future Last audio producer must flush before this system.
+pub fn prune(mut sounds: ResMut<SoundLibrary>, active: Query<(), With<AudioPlayer>>) {
+    let trace_enabled = sounds.trace;
+    let prune_clock = sounds.clock;
+    sounds.playing.retain_mut(|p| {
+        let present = active.contains(p.entity);
+        if trace_enabled && !present {
+            info!("audio_trace prune_missing_player entity {:?} clock {prune_clock:.6} request_clock {:.6} entry {:?} owner {} channel {} player_previously_observed {} stage last",
+                p.entity, p.request_clock, p.entry, p.owner, p.channel, p.player_observed);
+        }
+        p.player_observed |= present;
+        present
+    });
 }
 
 #[cfg(test)]
@@ -879,35 +887,137 @@ mod tests {
         assert!(app.world().get::<SoundTrace>(entity).unwrap().sink_observed);
     }
 
-    #[test]
-    fn pending_commands_and_removed_player_are_distinct_prune_cases() {
-        use super::*;
-        #[derive(Resource, Default)]
-        struct Requested(Option<Entity>);
-        fn request(mut commands: Commands, mut sounds: ResMut<SoundLibrary>, mut requested: ResMut<Requested>) {
-            if requested.0.is_some() { return; }
-            let entity = commands.spawn(AudioPlayer::<AudioSource>(Handle::default())).id();
-            sounds.playing.push(Playing { entity, owner: 7, channel: 6, entry: "synthetic".into(), request_clock: 0.0, player_observed: false });
-            requested.0 = Some(entity);
+    // Actual play_with, deferred Commands and Main schedule; no device/assets.
+    #[derive(Resource, Default)]
+    struct VoiceFixture {
+        requests: Vec<Emit>,
+        cancel: bool,
+        pending_seen_in_update: usize,
+    }
+
+    fn synthetic_entry(limit: usize, distant: Option<&str>) -> Entry {
+        Entry {
+            waves: vec!["sound/synthetic.wav".into()], volume: (1.0, 1.0),
+            pitch: (100.0, 100.0), soundlevel: 79.0, channel: 6,
+            category: Category::Weapon, distant: distant.map(str::to_owned),
+            limit: Some(limit), distant_layer: distant.is_none(),
+            // No AudioPlugin is installed; only entity lifecycle is exercised.
+            frozen_wave: Some(classic::FrozenWave { bytes: Arc::from([0u8; 4]), channels: 1 }),
         }
+    }
+
+    fn request_voices(mut commands: Commands, mut sounds: ResMut<SoundLibrary>,
+        mut sources: ResMut<Assets<AudioSource>>, mut fixture: ResMut<VoiceFixture>) {
+        for emit in std::mem::take(&mut fixture.requests) {
+            sounds.play_with(&mut commands, &vfs::Vfs::new(), &mut sources, "synthetic.near", emit);
+        }
+        if fixture.cancel {
+            for voice in &sounds.playing { commands.entity(voice.entity).try_despawn(); }
+        }
+    }
+
+    fn witness_pending(sounds: Res<SoundLibrary>, active: Query<(), With<AudioPlayer>>,
+        mut fixture: ResMut<VoiceFixture>) {
+        fixture.pending_seen_in_update += sounds.playing.iter()
+            .filter(|voice| !active.contains(voice.entity)).count();
+    }
+
+    fn voices() -> App {
         let mut app = App::new();
         app.init_resource::<Time<Real>>().init_resource::<SoundLibrary>()
-            .init_resource::<Listener>().init_resource::<Requested>();
-        // Deliberately withhold the automatic command flush between request
-        // and update. This isolates the pending case, not a production schedule claim.
-        app.add_systems(Update, (request, update).chain_ignore_deferred());
+            .init_resource::<Listener>().init_resource::<Assets<AudioSource>>()
+            .init_resource::<VoiceFixture>();
+        let mut sounds = app.world_mut().resource_mut::<SoundLibrary>();
+        sounds.entries.insert("synthetic.near".into(), synthetic_entry(2, Some("synthetic.far")));
+        sounds.entries.insert("synthetic.far".into(), synthetic_entry(1, None));
+        drop(sounds);
+        // This forces the production-observed emit -> Update observer gap:
+        // the request is in Playing before Commands spawn becomes query-visible.
+        app.add_systems(Update, (request_voices, update, witness_pending).chain_ignore_deferred())
+            .add_systems(Last, prune);
+        app
+    }
+
+    fn local_voice(owner: u32) -> Emit { Emit { owner: Some(owner), local: true, ..default() } }
+
+    #[test]
+    fn pending_voice_survives_update_gap_and_is_reaped_after_real_removal() {
+        let mut app = voices();
+        app.world_mut().resource_mut::<VoiceFixture>().requests.push(local_voice(7));
         app.update();
-        let entity = app.world().resource::<Requested>().0.unwrap();
-        assert!(app.world().get::<AudioPlayer<AudioSource>>(entity).is_some());
-        assert!(app.world().resource::<SoundLibrary>().playing.is_empty(), "Pending request was pruned before its spawn flush");
-        app.world_mut().resource_mut::<SoundLibrary>().playing.push(Playing {
-            entity, owner: 7, channel: 6, entry: "synthetic".into(), request_clock: 0.0, player_observed: false,
-        });
-        app.update();
-        assert!(app.world().resource::<SoundLibrary>().playing[0].player_observed);
-        app.world_mut().despawn(entity);
+        assert_eq!(app.world().resource::<VoiceFixture>().pending_seen_in_update, 1);
+        let voice = &app.world().resource::<SoundLibrary>().playing[0];
+        assert!(voice.player_observed, "Last saw the flushed AudioPlayer");
+        let entity = voice.entity;
+        assert!(app.world().get::<AudioPlayer>(entity).is_some());
+        app.world_mut().entity_mut(entity).remove::<AudioPlayer>();
         app.update();
         assert!(app.world().resource::<SoundLibrary>().playing.is_empty());
+    }
+
+    #[test]
+    fn actual_local_bursts_keep_two_voices_across_update_gaps() {
+        let mut app = voices();
+        for shot in 1..=5 {
+            app.world_mut().resource_mut::<VoiceFixture>().requests.push(local_voice(7));
+            app.update();
+            assert_eq!(app.world().resource::<SoundLibrary>().playing.len(), shot.min(2));
+            let count = app.world_mut().query::<&AudioPlayer>().iter(app.world()).count();
+            assert_eq!(count, shot.min(2), "Steal despawns are applied, not just forgotten");
+        }
+        assert_eq!(app.world().resource::<VoiceFixture>().pending_seen_in_update, 5);
+    }
+
+    #[test]
+    fn actual_world_bursts_limit_near_and_far_per_owner() {
+        let mut app = voices();
+        for _ in 0..5 {
+            for owner in [7, 8] {
+                app.world_mut().resource_mut::<VoiceFixture>().requests.push(Emit {
+                    at: Some(glam::Vec3::ZERO), owner: Some(owner), local: false,
+                });
+            }
+            app.update();
+        }
+        let sounds = app.world().resource::<SoundLibrary>();
+        for owner in [7, 8] {
+            assert_eq!(sounds.playing.iter().filter(|v| v.owner == owner && v.entry == "synthetic.near").count(), 2);
+            assert_eq!(sounds.playing.iter().filter(|v| v.owner == owner && v.entry == "synthetic.far").count(), 1);
+        }
+        let count = app.world_mut().query::<&AudioPlayer>().iter(app.world()).count();
+        assert_eq!(count, 6);
+    }
+
+    #[test]
+    fn cancelled_never_observed_players_are_not_retained_forever() {
+        let mut app = voices();
+        let mut fixture = app.world_mut().resource_mut::<VoiceFixture>();
+        fixture.requests.push(local_voice(7)); fixture.cancel = true;
+        drop(fixture);
+        app.update();
+        assert_eq!(app.world().resource::<VoiceFixture>().pending_seen_in_update, 1);
+        assert!(app.world().resource::<SoundLibrary>().playing.is_empty());
+        assert_eq!(app.world_mut().query::<&AudioPlayer>().iter(app.world()).count(), 0);
+        app.update();
+        assert!(app.world().resource::<SoundLibrary>().playing.is_empty());
+    }
+
+    #[test]
+    fn fixed_and_late_postupdate_producers_are_visible_before_prune() {
+        let mut app = voices();
+        fn request_late(mut fixture: ResMut<VoiceFixture>, mut emitted: Local<bool>) {
+            if !*emitted { fixture.requests.push(local_voice(8)); *emitted = true; }
+        }
+        app.add_systems(FixedUpdate, request_voices)
+            .add_systems(PostUpdate, (request_late, request_voices).chain_ignore_deferred());
+        app.world_mut().resource_mut::<VoiceFixture>().requests.push(local_voice(7));
+        app.world_mut().run_schedule(FixedUpdate);
+        // The second producer queues after Update's observer, during the actual
+        // frame's PostUpdate. Its final command flush still precedes Last.
+        app.update();
+        let sounds = app.world().resource::<SoundLibrary>();
+        assert_eq!(sounds.playing.len(), 2);
+        assert!(sounds.playing.iter().all(|voice| voice.player_observed));
     }
     #[test]
     fn movie_wave_paths_resolve_doubled_separators() {
