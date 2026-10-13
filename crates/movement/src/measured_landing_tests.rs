@@ -96,7 +96,7 @@ fn measured_standing_running_landing_recovery_and_coast_64_128() {
                 }
                 if ordinal == run.landing {
                     near(pm.speed_2d(), 240., 0.0002, "first support speed", run.rate, ordinal);
-                    near(pm.origin.z - FLOOR_Z, run.landing_height, 0.002, "first support height", run.rate, ordinal);
+                    near(pm.origin.z - FLOOR_Z, run.landing_height, 0.0001, "first support height", run.rate, ordinal);
                     near(pm.stamina, run.landing_stamina, 0.0001, "landing stamina", run.rate, ordinal);
                     assert_eq!(pm.velocity.z, 0.);
                 }

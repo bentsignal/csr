@@ -203,3 +203,30 @@ Moving-state evidence alone does not qualify native pre/post correspondence with
 the existing [simulation replay](movement-replay.md). Match actual map/catalog
 identities, initial state, configuration and inputs before admitting that replay.
 Repeated-crouch fatigue remains a later measurement task.
+
+## Ground correction validation checkpoint
+
+On 2026-10-13, production leaf `c85b621` passed 31 movement and 85 netcode
+tests, including protocol-7 refusal. An isolated copy of our old `220b2b3`
+mover failed four independent measured regressions: partial-input runup,
+landing cost, first supported height and the following ground recovery cap.
+The disabled weapon-speed acceleration option passed against both versions.
+The public implementation was never temporarily replaced for that RED run.
+
+Separate private binaries replayed all 512 actual inputs at each rate using
+the corrected mover. Every raw command/state/reference pair remained unchanged
+in the outputs. All supported/airborne states matched. Maximum horizontal
+velocity residual was 0.00001526 (one `f32` ULP during runup); entire position
+trajectories matched within 0.000000001 and stamina within 0.000000000493,
+consistent with nine-decimal CSV serialization. All 32 supported recovery and
+complete coast speeds matched within 0.000000001. Both unobserved Rust-counter
+variants remained equal. Independent review verified source, executable,
+input/output hashes and all raw pairs. These error bounds apply to the scoped
+analytic-floor comparison and do not broaden its admission.
+
+The complete workspace passed 619 tests with six existing ignored tests,
+including a tightened 0.0001 first-support height tolerance. Required release
+`probe de_dust2` and `sim de_dust2` each reported zero failures. The sound
+decoder check retained 1,425 decodable sounds and zero failures; the asset
+guard passed. Actual process exit codes and private before/after logs remain
+retained alongside the comparison provenance.

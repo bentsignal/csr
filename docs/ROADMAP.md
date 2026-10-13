@@ -263,7 +263,7 @@ thing is uncanny. Fidelity is measured, never eyeballed:
       and jump stamina at both tick rates. Complete continuous native command
       traces qualify this scoped transition; crouched/fatigued takeoff and
       broader running/surface behavior remain open.
-- [ ] Correct the scoped standing P2000 ground run/landing at actual 64/128:
+- [x] Correct the scoped standing P2000 ground run/landing at actual 64/128:
       observed partial input, pre-recovery stamina cap, first supported height,
       full held recovery and coast. Numeric targets and synthetic floor remain
       separate from internal command phase, map replay and surfing parity.
