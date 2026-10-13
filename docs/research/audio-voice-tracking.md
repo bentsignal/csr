@@ -102,8 +102,8 @@ and ammunition29/90,27/90,25/90. PNG SHA256 values respectively:
 
 Raw logs, provenance, preference receipts and screenshots remain private.
 This documentation checkpoint changes no compiled source or Cargo inputs.
-Matched process-loopback PCM and native historical mix admission remain
-separate. The owner's reported AK tone/overlap mismatch is not declared fully
+Matched process-loopback PCM and native historical mix admission are separate
+checks. The owner's reported AK tone/overlap mismatch is not declared fully
 fixed by a tracking correction.
 
 ## Process output control and bot render smoke
@@ -118,8 +118,8 @@ RMS difference was about 0.00002157 (0.707 PCM16 least-significant bits).
 Single-shot output is effectively unchanged by this tracking correction.
 These are whole process recordings: suit/landing and possible ambient
 contributions remain in the signals. No cleaned waveform, calibrated gain or
-native historical mixer parity follows. Matched burst output analysis remains
-open; command-time voice stealing is not a measured audible cutoff.
+native historical mixer parity follows. Burst output was also measured below;
+command-time voice stealing is not a measured audible cutoff.
 
 The corrected executable also completed a separate stationary Dust II bot
 render smoke at 1600x900 with 2400 rendered frames. The CLI bot option 3
@@ -129,3 +129,58 @@ p95 7.87 ms, p99 11.09 ms and maximum 15.39 ms. The saved screenshot was
 inspected for scene, AK/hands, HUD and a rendered teammate. This is a render
 check with diagnostic audio logging; interactive input latency, an authoritative
 actor census and native performance equivalence were not measured.
+
+## Matched burst output
+
+Separate baseline/corrected recordings used the same two executables, fresh
+userdata, ordinary counted input and process-loopback format. Three-shot runs
+both produced Fire ticks 192,205,218 at 128 Hz, final clip 27 and three observed
+sinks. Five-shot runs added ticks 231,244 and ended at clip 25. Baseline lost
+the pending voice records and issued no steals; corrected issued one oldest
+voice removal for three shots and three removals for five shots. Each qualified
+game/recorder pair exited zero, reported no packet discontinuities or timestamp
+errors, and preserved twelve Steam preference targets exactly.
+
+The verified installed AK waveform was compared with untouched whole-process
+recordings. Fitted full-overlap and two-voice instantaneous-cutoff hypotheses
+used each recording's own correlation markers; no cues were subtracted.
+
+| Recording | Full overlap coherence / residual RMS | Two-voice coherence / residual RMS |
+| --- | --- | --- |
+| Baseline, three shots | 0.94752 / 0.05626 | 0.90585 / 0.07454 |
+| Corrected, three shots | 0.90958 / 0.07474 | 0.95024 / 0.05603 |
+| Baseline, five shots | 0.94508 / 0.06564 | 0.86807 / 0.09971 |
+| Corrected, five shots | 0.87123 / 0.09976 | 0.94322 / 0.06750 |
+
+The fit preference reverses in both bursts. In the three-shot pair, markers
+are 100 ms apart in both recordings. After aligning the first markers, the raw
+pair exceeds an analytical 10-PCM16-LSB difference at frame 8757, 63 samples
+before the third marker at 8820. Earlier difference RMS is 0.0789 LSB. This
+supports a real output overlap change near the third shot, beyond bookkeeping.
+Neither the threshold nor the fitted cutoff is an audibility or exact stop
+boundary. Whole-window RMS is slightly higher in the corrected three-shot run;
+fewer retained voices does not establish lower loudness.
+
+The five-shot markers are 100/100/100/100 ms in baseline and 110/100/100/100 ms
+in corrected output. Their raw difference therefore begins around the second
+shot, before the third-shot steal. This pair cannot isolate that steal's cutoff
+by subtraction. The recordings were not time-warped or gain-normalized to hide
+the difference. Producer tick spacing, request clocks, sink observations and
+sample-correlation markers remain separate timing domains. Draw, bolt, landing,
+suit, ambient, resampling and output processing remain in these signals.
+
+An initial corrected five-shot capture failed a growing-log reader bound and
+is retained as an unqualified harness failure. The qualified retry reads only
+the initial byte-length snapshot, rejecting truncation, oversize and malformed
+complete records; final whole-file validation remains strict. This harness
+change did not alter either executable or audio policy.
+
+Private three-shot proof IDs are `044412-e3b759b1` and `045849-e2e10444`;
+five-shot IDs are `051035-27bc8dcc` and `054005-ccd517c7`, all on 2026-10-13.
+The paired report SHA256 values are respectively
+`2d966d4c52e6e0a415ef6109528093330732c5f7fa98d52f8a5d01715030bf69` and
+`54edc4dacbd81cdd23594f7fd8277f06109b1a3b99bde2f4a7456c87b816a46b`.
+Independent offline analysis regenerated the five-shot report in memory and
+verified both original PCM hashes. Eight synthetic analysis regressions pass.
+Raw PCM, screenshots and game assets remain private. No original-game mix,
+historical DSP/EQ, authored stop curve or complete tone match is claimed.
