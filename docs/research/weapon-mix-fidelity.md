@@ -116,9 +116,32 @@ and cue-precache failures (96 parse errors). This does not isolate older
 declaration syntax as the cause. The earlier normal 2023 control had no
 condebug startup capture; its later netconsole output cannot establish stock
 graph acceptance either. A fresh no-VPK/no-script-override private MOD
-counterpart with full startup capture is prepared, not yet executed. Actual
-loader bytes and cue execution remain separate qualification steps before
-historical PCM or numeric mixer changes.
+counterpart with full startup capture subsequently exited zero. Its complete
+35,495-byte startup log has zero operator KeyValues errors, operator-load
+warnings or `Weapon_AK47.Single` mentions. Unrelated precache and command
+warnings remain. Read-only mixer queries produced no group rows and operator
+printing was refused with cheats disabled; absence of warnings does not prove
+cue execution, effective mixer values or graph acceptance. Three actual Legacy
+module paths/hashes were verified. Twelve preference targets and the 83
+top-level installed configuration files snapshotted by this run were unchanged;
+it did not take its own recursive configuration snapshot. Private proof ID is
+`native-stock-mod-control-gate-20261013-055513`, full-startup SHA256
+`514f77e67e352e7abdd85977499f466a3591db6d56a9e728ad5848013bd38c20`.
+Actual loader bytes and cue execution remain separate qualification steps
+before historical PCM or numeric mixer changes.
+
+A separately executed numbered-VPK stock counterpart also completed the same
+read-only loading/query sequence, with the same three installed script inputs.
+Its 35,951-byte complete startup log likewise has zero operator KeyValues
+errors, operator-load warnings or AK single-cue mentions; the same unrelated
+warnings, empty group queries and cheat refusal remain. It exited zero,
+preserved twelve preference targets and all 89 recursively snapshotted installed
+configuration files, and verified three actual Legacy module hashes. Private
+proof is `native-numbered-stock-readonly-gate-20261013-063450`, startup SHA256
+`0c3ab11eefee236ff3a0203d8490f92f132f8075e070e9a6dd99358a6481e2de`.
+Search-path output alone does not establish which VPK entry the native loader
+read. The contrast with the failing inline containers motivates direct file
+fingerprints; it does not yet identify a container defect or admit a cue graph.
 
 Private startup-log SHA256 is
 `40a9c00f54f7da1d285e4d83930d3a0761023d3871f78dd1b4b3ea3cc2df4c82`;
@@ -144,3 +167,8 @@ exact wave fingerprints and full tails, then compares PCM onset, stereo identity
 spectrum and overlapping envelopes. Counts come from actual shots/ammo/cue
 evidence, not presumed command sleep durations. No historical DSP/EQ, hidden
 layers or stop curves are inferred from names alone.
+
+Matched CSR single-, three- and five-shot process-output controls are recorded
+in [audio-voice-tracking.md](audio-voice-tracking.md#matched-burst-output).
+They establish an observed burst-overlap change after the deferred voice fix;
+they do not establish original-game mixing parity.

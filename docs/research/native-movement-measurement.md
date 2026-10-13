@@ -115,6 +115,17 @@ settled floor position; support/snap and landing slowdown are still open.
 
 ## Next comparison
 
+An initial untouched-spawn forward-route preflight was rejected before moving
+input. The private helper performed one standing/jump-height envelope sweep
+and 65 support probes over 512 units using the public player-solid trace API,
+excluding only the observed player. Actual traces reported an obstruction,
+uneven support and solid samples; all results remain retained. The game exited
+zero with preferences and installed configuration preserved. A flat-looking
+navigation surface is insufficient: offline inspection also found nonzero
+authored displacement offsets beneath another candidate's flat NAV heights.
+The next fixture uses separately recorded placement and actual native terrain
+qualification rather than treating those navigation heights as collision proof.
+
 Stable neutral state is a prerequisite, not movement parity. Next collect
 forward-running jumps, separating continued input
 from airborne release/coasting. Observe clearance, actual input transitions,
