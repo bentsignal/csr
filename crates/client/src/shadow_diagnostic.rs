@@ -14,7 +14,7 @@ use crate::{
 use bevy::{
     asset::{AssetId, embedded_asset},
     camera::visibility::{RenderLayers, VisibilitySystems},
-    light::{CascadeShadowConfigBuilder, DirectionalLight},
+    light::{CascadeShadowConfigBuilder, DirectionalLight, SimulationLightSystems},
     prelude::*,
     transform::TransformSystems,
 };
@@ -51,7 +51,8 @@ pub fn install(app: &mut App) {
         PostUpdate,
         update_scope
             .after(TransformSystems::Propagate)
-            .before(VisibilitySystems::VisibilityPropagate),
+            .before(VisibilitySystems::VisibilityPropagate)
+            .before(SimulationLightSystems::UpdateDirectionalLightCascades),
     );
 }
 
@@ -309,6 +310,7 @@ fn update_scope(world: &mut World) {
         .light
         .is_none_or(|light| world.get_entity(light).is_err())
     {
+        let transform = Transform::IDENTITY.looking_to(coords::to_bevy(-to_sun), Vec3::Y);
         state.light = Some(
             world
                 .spawn((
@@ -323,7 +325,10 @@ fn update_scope(world: &mut World) {
                         ..Default::default()
                     }
                     .build(),
-                    Transform::IDENTITY.looking_to(coords::to_bevy(-to_sun), Vec3::Y),
+                    transform,
+                    // Created after transform propagation: admit the actual
+                    // parentless direction to this frame's cascade preparation.
+                    GlobalTransform::from(transform),
                     RenderLayers::layer(CASTER_LAYER),
                     DiagnosticLight,
                     MatchEntity,
