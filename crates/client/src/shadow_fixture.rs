@@ -26,6 +26,10 @@ use bevy::{
 };
 use std::{
     path::PathBuf,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     time::{Duration, Instant},
 };
 
@@ -51,7 +55,35 @@ struct Proof {
     images: Vec<AssetId<Image>>,
     // Real camera-projected receiver rectangles, prepared after viewport setup.
     rectangles: Vec<[u32; 4]>,
-    completed: bool,
+    completed: Arc<AtomicBool>,
+}
+
+impl Proof {
+    fn new(output: PathBuf, completed: Arc<AtomicBool>) -> Self {
+        Self {
+            output,
+            start: Instant::now(),
+            frames: 0,
+            ticket: None,
+            ready: None,
+            requested: false,
+            camera: None,
+            light: None,
+            offview: None,
+            meshes: Vec::new(),
+            images: Vec::new(),
+            rectangles: Vec::new(),
+            completed,
+        }
+    }
+}
+
+fn completed_exit(exit: AppExit, completed: &AtomicBool) -> i32 {
+    if exit.is_success() && completed.load(Ordering::Acquire) {
+        0
+    } else {
+        1
+    }
 }
 
 /// CLI: `shadow_fixture --output <fresh absolute PNG>`. Set the immutable
@@ -94,29 +126,14 @@ pub fn run() -> i32 {
     if remote_render_gate::install(&mut app).is_err() {
         return 2;
     }
-    app.insert_resource(Proof {
-        output,
-        start: Instant::now(),
-        frames: 0,
-        ticket: None,
-        ready: None,
-        requested: false,
-        camera: None,
-        light: None,
-        offview: None,
-        meshes: Vec::new(),
-        images: Vec::new(),
-        rectangles: Vec::new(),
-        completed: false,
-    })
-    .add_systems(Startup, setup)
-    .add_systems(Last, advance);
+    // Bevy moves the app world into its runner; retain the actual completion
+    // witness outside that world rather than reading an emptied App afterward.
+    let completed = Arc::new(AtomicBool::new(false));
+    app.insert_resource(Proof::new(output, completed.clone()))
+        .add_systems(Startup, setup)
+        .add_systems(Last, advance);
     let exit = app.run();
-    if exit.is_success() && app.world().resource::<Proof>().completed {
-        0
-    } else {
-        1
-    }
+    completed_exit(exit, &completed)
 }
 
 fn quad(reverse: bool) -> Mesh {
@@ -420,11 +437,7 @@ fn advance(world: &mut World) {
     world.insert_resource(proof);
 }
 
-fn captured(
-    event: On<ScreenshotCaptured>,
-    mut proof: ResMut<Proof>,
-    mut exit: MessageWriter<AppExit>,
-) {
+fn captured(event: On<ScreenshotCaptured>, proof: Res<Proof>, mut exit: MessageWriter<AppExit>) {
     let image = match event.image.clone().try_into_dynamic() {
         Ok(i) => i.to_rgb8(),
         Err(e) => {
@@ -464,16 +477,48 @@ fn captured(
         error!("shadow-fixture PNG save: {e}");
         failures += 1;
     }
-    proof.completed = failures == 0;
+    if failures == 0 {
+        proof.completed.store(true, Ordering::Release);
+    }
     info!(
         "shadow-fixture screenshot_ACK=true frame={} dimensions={:?} failures={failures} output={}",
         proof.frames,
         image.dimensions(),
         proof.output.display()
     );
-    exit.write(if proof.completed {
+    exit.write(if failures == 0 {
         AppExit::Success
     } else {
         AppExit::error()
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn capture_witness_survives_actual_runner_world_move_but_requires_ack_and_success() {
+        // The custom runner simulates only completion publication. It opens no
+        // window and supplies no fabricated rendering or PNG-success evidence.
+        for (ack, success, expected) in [(true, true, 0), (false, true, 1), (true, false, 1)] {
+            let completed = Arc::new(AtomicBool::new(false));
+            let mut app = App::new();
+            app.insert_resource(Proof::new(PathBuf::new(), completed.clone()))
+                .set_runner(move |app| {
+                    let proof = app.world().resource::<Proof>();
+                    if ack {
+                        proof.completed.store(true, Ordering::Release);
+                    }
+                    if success {
+                        AppExit::Success
+                    } else {
+                        AppExit::error()
+                    }
+                });
+            let exit = app.run();
+            assert!(!app.world().contains_resource::<Proof>());
+            assert_eq!(completed_exit(exit, &completed), expected);
+        }
+    }
 }
