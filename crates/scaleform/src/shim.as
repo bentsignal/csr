@@ -29,9 +29,19 @@ _global.csrToHost = function(v) {
 
 _global.csrMakeProxy = function(prefix) {
     var proxy = new Object();
+    // Keep native method wrappers stable without exposing cache fields on the
+    // public proxy. Getter RESULTS still reach the host on every invocation.
+    // Unknown method names cannot grow this per-proxy cache without a bound.
+    var methods = new Object();
+    var methodCount = 0;
     proxy.__resolve = function(name) {
+        var key = "$" + name;
+        if (methods.hasOwnProperty(key)) {
+            return methods[key];
+        }
+        var fullName = prefix + "." + name;
         var method = function() {
-            var a = [prefix + "." + name];
+            var a = [fullName];
             var i = 0;
             while (i < arguments.length) {
                 a.push(_global.csrToHost(arguments[i]));
@@ -39,6 +49,10 @@ _global.csrMakeProxy = function(prefix) {
             }
             return csrEI.call.apply(csrEI, a);
         };
+        if (methodCount < 256) {
+            methods[key] = method;
+            methodCount = methodCount + 1;
+        }
         return method;
     };
     return proxy;

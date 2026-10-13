@@ -1018,7 +1018,11 @@ pub(crate) fn update(
         front.data.lock().unwrap().pause_surface.activate(generation,
             scene == AppState::Match && matches!(menu.page, Some(crate::menu::Page::Main | crate::menu::Page::Pause)));
         let mut elements = vec!["MainMenu".into()];
-        if matches!(scene, AppState::Loading | AppState::Match) {
+        // An interactive Home can lead into a fast map load. Begin the hidden
+        // Pause load now, so the first Escape need not pay its cold font/movie
+        // work. Existing Ready guards keep it hidden until an owned open.
+        // This does not keep the worker active during closed gameplay.
+        if options.0.screenshot.is_none() || matches!(scene, AppState::Loading | AppState::Match) {
             elements.push("PauseMenu".into());
         }
         front.requested.extend(elements.iter().cloned());
