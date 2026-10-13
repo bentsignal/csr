@@ -217,6 +217,12 @@ struct Mover<'a, W: TraceWorld + ?Sized> {
     world: &'a W,
     dt: f32,
     max_speed: f32,
+    /// Ground-run cap from stamina observed before this command's recovery.
+    /// Air wish speed and the jump policies still use full weapon speed.
+    ground_speed_limit: f32,
+    /// The observed landing stamina target uses incoming command-state VZ.
+    /// Contact impact/event velocity remains separate solver bookkeeping.
+    pre_step_fall_speed: f32,
     drop_scaffold: bool,
     /// First airborne contact with walkable ground this tick, before its
     /// velocity projection. This is transient solver state, not replicated.
@@ -268,10 +274,12 @@ impl<W: TraceWorld + ?Sized> Mover<'_, W> {
         if add <= 0.0 {
             return;
         }
-        // Walking and crouching accelerate as if at full weapon speed, so
-        // reaching the slower cap takes the same time as running.
+        // Legacy's observed first partial forward command still accelerates
+        // from full weapon speed. Preserve the wish-speed option when off.
+        // Preserve the pre-existing climbable stance policy; only grounded
+        // acceleration has the new measured full-weapon base.
         let slowed = input.buttons & (buttons::WALK | buttons::DUCK) != 0 || self.pm.ducked;
-        let base = if self.cfg.accelerate_use_weapon_speed && slowed {
+        let base = if self.cfg.accelerate_use_weapon_speed && (self.pm.on_ground || slowed) {
             self.max_speed.max(wish_speed)
         } else {
             wish_speed
@@ -300,7 +308,7 @@ impl<W: TraceWorld + ?Sized> Mover<'_, W> {
         let wish_vel = forward * input.forward_move + right * input.side_move;
         let mut wish_speed = wish_vel.length();
         let wish_dir = if wish_speed > 0.0 { wish_vel / wish_speed } else { Vec3::ZERO };
-        let mut cap = self.max_speed;
+        let mut cap = if self.pm.on_ground { self.ground_speed_limit } else { self.max_speed };
         if self.pm.ducked || (self.pm.on_ground && self.pm.duck_amount > 0.5) {
             cap *= self.cfg.duck_speed_modifier;
         } else if input.buttons & buttons::WALK != 0 {
@@ -486,22 +494,14 @@ impl<W: TraceWorld + ?Sized> Mover<'_, W> {
     }
 
     fn walk_move(&mut self, input: &MoveInput) {
-        // Stamina slows you down for a moment after jumps and landings.
-        if self.pm.stamina > 0.0 {
-            let ratio = ((self.cfg.stamina_max - self.pm.stamina) / self.cfg.stamina_max).clamp(0.0, 1.0);
-            let ratio = ratio.powf(self.dt / (1.0 / 70.0));
-            self.pm.velocity.x *= ratio;
-            self.pm.velocity.y *= ratio;
-        }
-
         let (wish_dir, wish_speed) = self.wish(input);
         self.pm.velocity.z = 0.0;
         self.accelerate(wish_dir, wish_speed, self.cfg.accelerate, input);
         self.pm.velocity.z = 0.0;
 
         let speed = self.pm.velocity.length();
-        if speed > self.max_speed {
-            self.pm.velocity *= self.max_speed / speed;
+        if speed > self.ground_speed_limit {
+            self.pm.velocity *= self.ground_speed_limit / speed;
         }
         if self.pm.velocity.length() < 1.0 {
             self.pm.velocity = Vec3::ZERO;
@@ -613,15 +613,17 @@ impl<W: TraceWorld + ?Sized> Mover<'_, W> {
             return;
         }
         self.pm.on_ground = true;
-        // Snap down onto the ground when close.
-        if !tr.start_solid {
+        // Both measured rates publish a first supported post still above its
+        // later settled floor. Preserve that first height; grounded travel or
+        // the next supported classification performs the ordinary snap.
+        if was_on_ground && !tr.start_solid {
             self.pm.origin = tr.end;
         }
         if !was_on_ground {
             events.landed = Some(fall_speed.max(0.0));
             self.pm.last_fall_speed = fall_speed.max(0.0);
             if fall_speed > 0.0 {
-                self.pm.stamina = (self.cfg.stamina_land_cost * fall_speed).min(self.cfg.stamina_max);
+                self.pm.stamina = (self.cfg.stamina_land_cost * self.pre_step_fall_speed).min(self.cfg.stamina_max);
             }
         }
     }
@@ -683,6 +685,11 @@ pub fn player_move<W: TraceWorld + ?Sized>(
     } else {
         250.0f32.min(cfg.max_speed)
     };
+    // Recorded 64/128 standing ground runs fit a pre-recovery speed cap,
+    // not repeated velocity damping: W * (1 - stamina / 100)^2. This does
+    // not establish crouched/fatigued jumping or general surfing parity.
+    let ground_speed_limit = max_speed * (1.0 - pm.stamina / 100.0).clamp(0.0, 1.0).powi(2);
+    let pre_step_fall_speed = (-pm.velocity.z).max(0.0);
     let mut events = MoveEvents::default();
     let mut m = Mover {
         pm,
@@ -690,6 +697,8 @@ pub fn player_move<W: TraceWorld + ?Sized>(
         world,
         dt,
         max_speed,
+        ground_speed_limit,
+        pre_step_fall_speed,
         drop_scaffold:input.buttons&(buttons::DUCK|buttons::WALK)!=0,
         landing_speed: None,
         contact_repair_left: collision::DIST_EPSILON,
@@ -741,3 +750,5 @@ pub fn player_move<W: TraceWorld + ?Sized>(
 mod tests;
 #[cfg(test)]
 mod fidelity_tests;
+#[cfg(test)]
+mod measured_landing_tests;

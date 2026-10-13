@@ -177,7 +177,7 @@ fn floor_impact_keeps_incoming_downward_speed_after_slide_clipping() {
         );
         assert!((pm.last_fall_speed - incoming).abs() < 1e-3);
         assert!(
-            (pm.stamina - (cfg.stamina_land_cost * incoming).min(cfg.stamina_max)).abs() < 1e-3
+            (pm.stamina - (cfg.stamina_land_cost * 400.).min(cfg.stamina_max)).abs() < 1e-3
         );
         assert_eq!(pm.velocity.z, 0.);
         assert!(player_move(&mut pm, &input(0), &cfg, &floor(), dt)
@@ -484,6 +484,8 @@ fn repeated_plane_repair_cannot_separate_through_an_adjacent_solid() {
         world: &w,
         dt: 1. / 128.,
         max_speed: 250.,
+        ground_speed_limit: 250.,
+        pre_step_fall_speed: 0.,
         drop_scaffold: false,
         landing_speed: None,
         contact_repair_left: collision::DIST_EPSILON,
@@ -526,6 +528,8 @@ fn genuine_corner_followed_by_repeated_plane_keeps_all_constraints() {
                         world: &observed,
                         dt: 1. / rate as f32,
                         max_speed: 250.,
+                        ground_speed_limit: 250.,
+                        pre_step_fall_speed: 0.,
                         drop_scaffold: false,
                         landing_speed: None,
                         contact_repair_left: collision::DIST_EPSILON,
