@@ -107,6 +107,8 @@ pub fn process(
             }
             GameEvent::DecoyShot {pos,..} => {sounds.play_decoy(&mut commands,fs,&mut sources,pos);}
             GameEvent::UtilityThrown { player,kind,pos } => {
+                // The installed grenade view models expose ACT_VM_THROW.
+                effects.attack(player, kind.name().to_string(), "ACT_VM_THROW", now);
                 let sound=match kind {sim::utility::Kind::Molotov=>"Molotov.Throw",sim::utility::Kind::Incendiary=>"IncGrenade.Throw",_=>"HEGrenade.Throw"};
                 sounds.play(&mut commands,fs,&mut sources,sound,if player==local.view_target(){None}else{Some(pos)});
             }

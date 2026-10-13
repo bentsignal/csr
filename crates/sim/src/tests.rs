@@ -205,6 +205,41 @@ fn rules() -> RulesConfig {
 }
 
 #[test]
+fn grenade_practice_survives_snapshot_and_respawn_without_changing_competitive() {
+    let mut w = world();
+    let mut c = catalog();
+    for (name, index) in [("weapon_flashbang",43), ("weapon_hegrenade",44),
+        ("weapon_smokegrenade",45), ("weapon_molotov",46),
+        ("weapon_decoy",47), ("weapon_incgrenade",48)] {
+        c.weapons.push(def(name,index,WeaponClass::Grenade,Side::Both,200,1));
+    }
+    w.catalog = Arc::new(c);
+    w.rules.grenade_practice = true;
+    let human = w.add_player("tester", Team::Terrorist);
+    let bot = w.add_bot("bot", Team::CounterTerrorist);
+    w.respawn(human);
+    w.respawn(bot);
+    assert_eq!(w.player(human).unwrap().weapons.iter().filter(|g| g.def.class == WeaponClass::Grenade).count(), 6);
+    assert!(!w.player(bot).unwrap().has("weapon_hegrenade"));
+    let state: state::WorldState = w.decode(&w.encode_state()).unwrap();
+    w.restore(state);
+    for _ in 0..2 {
+        let p = w.player_mut(human).unwrap();
+        p.active = p.weapons.iter().position(|g| g.def.class_name == "weapon_hegrenade").unwrap();
+        let i = w.players.iter().position(|p| p.id == human).unwrap();
+        w.throw_grenade(i);
+        assert!(w.player(human).unwrap().has("weapon_hegrenade"));
+    }
+    assert_eq!(w.projectiles.len(), 2);
+    assert!(w.player(human).unwrap().active_weapon().unwrap().next_attack > w.time());
+    w.respawn(human);
+    assert!(w.player(human).unwrap().has("weapon_decoy"));
+    w.set_mode(GameMode::Competitive, RulesConfig { grenade_practice: true, ..rules() });
+    w.step(&[]);
+    assert!(!w.player(human).unwrap().has("weapon_hegrenade"));
+}
+
+#[test]
 fn grenade_buy_limits_and_team_economy() {
     let (mut w,t,_)=duel();
     w.step(&[]);

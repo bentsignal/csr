@@ -114,6 +114,8 @@ pub struct ClientOptions {
     pub terrorist: bool,
     /// Deathmatch (respawns, fixed loadout) instead of competitive rounds.
     pub deathmatch: bool,
+    /// Offline utility sandbox: full grenade inventory on every respawn.
+    pub grenade_practice: bool,
     pub direct: bool,
 }
 
@@ -130,6 +132,7 @@ impl Default for ClientOptions {
             bots: 5,
             terrorist: false,
             deathmatch: false,
+            grenade_practice: false,
             direct: false,
         }
     }
@@ -505,6 +508,11 @@ fn spawn_level(
     }
     if !remote && !opts.deathmatch {
         world.set_mode(sim::GameMode::Competitive, competitive_rules(&level));
+    }
+    if !remote && opts.grenade_practice {
+        let rules = sim::RulesConfig { grenade_practice: true, ..Default::default() };
+        world.set_mode(sim::GameMode::Deathmatch, rules);
+        world.respawn(id);
     }
     // Deterministic visual checks only; interactive sessions ignore these controls.
     if !remote && opts.screenshot.is_some() {

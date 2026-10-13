@@ -2,9 +2,9 @@
 use serde::{Deserialize, Serialize};
 use sim::{GameEvent, PlayerId, Snapshot, Team, TickInput};
 
-// Collision ordering affects prediction, so peers must use the same physics.
-pub const VERSION: u32 = 9;
-pub const PROTOCOL_ID: u64 = 0x4353_5257_0000_0009;
+// RulesConfig carries the authoritative grenade-practice setting.
+pub const VERSION: u32 = 10;
+pub const PROTOCOL_ID: u64 = 0x4353_5257_0000_000a;
 pub const CONTROL: u8 = 0;
 pub const INPUT: u8 = 1;
 pub const SNAPSHOT: u8 = 2;
