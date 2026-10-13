@@ -8,7 +8,7 @@ use std::{error::Error, io::Read, path::Path};
 const MAX_BYTES: u64 = 2 * 1024 * 1024;
 const MAX_COMMANDS: usize = 4096;
 const FIELDS: &[&str] = &[
-    "schema", "map", "map_sha1", "catalog_sha1", "tick_rate", "config", "weapon",
+    "schema", "map", "map_sha1", "catalog_sha1", "tick_rate", "config", "weapon", "weapon_zoom", "weapon_speed",
     "initial_movement", "commands",
 ];
 
@@ -50,6 +50,24 @@ fn validate_config(value: &Value) -> Result<MoveConfig, Box<dyn Error>> {
     Ok(config)
 }
 
+fn exact_fields(value: &Value, expected: &Value) -> Result<(), Box<dyn Error>> {
+    let fields = value.as_object().ok_or("serialized state/input must be an object")?;
+    let expected = expected.as_object().ok_or("expected shape must be an object")?;
+    if fields.len() != expected.len() || fields.keys().any(|key| !expected.contains_key(key)) {
+        return Err("serialized state/input fields must be complete and exact".into());
+    }
+    Ok(())
+}
+
+fn held_weapon(world: &World, actor: sim::PlayerId) -> Result<Option<Value>, Box<dyn Error>> {
+    let Some(weapon) = world.player(actor).and_then(|p| p.active_weapon()) else { return Ok(None) };
+    if !weapon.max_speed().is_finite() || weapon.max_speed() <= 0. || weapon.zoom_level != 0 {
+        return Err("replay requires a finite unscoped held-weapon speed".into());
+    }
+    Ok(Some(json!({"class_name":weapon.def.class_name,"def_index":weapon.def.def_index,
+        "zoom_level":weapon.zoom_level,"max_speed":weapon.max_speed()})))
+}
+
 fn validate_movement(state: &PlayerMove, cfg: &MoveConfig) -> Result<(), Box<dyn Error>> {
     if !state.origin.is_finite() || !state.velocity.is_finite()
         || state.origin.abs().max_element() > 1_000_000.
@@ -77,6 +95,7 @@ fn validate_input(input: &TickInput) -> Result<(), Box<dyn Error>> {
 }
 
 fn replay(world: &mut World, actor: sim::PlayerId, inputs: &[TickInput]) -> Result<Vec<Value>, Box<dyn Error>> {
+    let expected_weapon = held_weapon(world, actor)?;
     let mut samples = Vec::with_capacity(inputs.len());
     for (ordinal, input) in inputs.iter().enumerate() {
         validate_input(input)?;
@@ -85,9 +104,11 @@ fn replay(world: &mut World, actor: sim::PlayerId, inputs: &[TickInput]) -> Resu
         let player = world.player(actor).ok_or("replay actor disappeared")?;
         if !player.alive { return Err("actor died; movement-only segment is invalid".into()); }
         validate_movement(&player.movement, &world.config)?;
+        let actual_weapon = held_weapon(world, actor)?;
+        if actual_weapon != expected_weapon { return Err("held weapon identity/speed changed during replay".into()); }
         samples.push(json!({"ordinal": ordinal, "producer_tick": producer_tick,
             "published_tick": world.tick, "movement": player.movement,
-            "movement_events": player.last_events}));
+            "movement_events": player.last_events,"held_weapon":actual_weapon}));
     }
     Ok(samples)
 }
@@ -99,10 +120,12 @@ fn run() -> Result<(), Box<dyn Error>> {
     let map = fixture["map"].as_str().ok_or("map must be a string")?;
     if !packs::valid_bsp_name(map) { return Err("invalid map name".into()); }
     // Never trigger a Workshop fetch as a side effect of reference replay.
-    let (_, fs) = level::mount_game(None)?;
+    let (game_dir, fs) = level::mount_game(None)?;
     if !fs.exists(&format!("maps/{map}.bsp")) { return Err("map is not already installed/mounted".into()); }
-    drop(fs);
-    let level = level::Level::load(map, None)?;
+    // Retain the mounted VFS: the direct reader cannot fetch an old archive.
+    // A validated name gets the same ContentId as the normal name loader,
+    // including installed surf maps that the competitive menu does not list.
+    let level = level::Level::load_from_vfs(format!("csgo_map_{map}").parse()?,map,game_dir,fs)?;
     let actual_hash: String = level.bsp_sha1().iter().map(|byte| format!("{byte:02x}")).collect();
     if fixture["map_sha1"].as_str() != Some(actual_hash.as_str()) {
         return Err("loaded BSP digest differs from fixture identity".into());
@@ -115,13 +138,22 @@ fn run() -> Result<(), Box<dyn Error>> {
     let rate = fixture["tick_rate"].as_u64().ok_or("tick_rate must be an integer")?;
     if !matches!(rate, 64 | 128) { return Err("reference replay requires explicit 64 or 128 tick".into()); }
     let config = validate_config(&fixture["config"])?;
+    exact_fields(&fixture["initial_movement"],&serde_json::to_value(PlayerMove::default())?)?;
     let initial: PlayerMove = serde_json::from_value(fixture["initial_movement"].clone())?;
     validate_movement(&initial, &config)?;
+    let raw_commands = fixture["commands"].as_array().ok_or("commands must be an array")?;
+    if raw_commands.is_empty() || raw_commands.len() > MAX_COMMANDS { return Err("commands must contain 1..4096 entries".into()); }
+    let input_shape = serde_json::to_value(TickInput::default())?;
+    for input in raw_commands { exact_fields(input,&input_shape)?; }
     let commands: Vec<TickInput> = serde_json::from_value(fixture["commands"].clone())?;
-    if commands.is_empty() || commands.len() > MAX_COMMANDS { return Err("commands must contain 1..4096 entries".into()); }
     for input in &commands { validate_input(input)?; }
     let weapon = fixture["weapon"].as_str().ok_or("weapon must be a string")?;
     let definition = level.catalog.get(weapon).ok_or("fixture weapon is not in selected catalog")?.clone();
+    if fixture["weapon_zoom"].as_u64() != Some(0) { return Err("only explicitly unscoped idle segments are supported".into()); }
+    let speed = fixture["weapon_speed"].as_f64().ok_or("weapon_speed must be numeric")?;
+    if !speed.is_finite() || speed <= 0. || speed > 1_000_000. || speed as f32 != definition.max_player_speed {
+        return Err("observed unscoped weapon speed differs from selected definition".into());
+    }
     let mut world = World::with_catalog(level.collision.clone(), level.catalog.clone());
     world.set_tick_rate(rate as u32);
     world.config = config;
@@ -134,7 +166,8 @@ fn run() -> Result<(), Box<dyn Error>> {
     player.last_active = 0;
     let samples = replay(&mut world, actor, &commands)?;
     println!("{}", serde_json::to_string(&json!({"schema":1,"map":map,"map_sha1":actual_hash,
-        "catalog_sha1":catalog_hash,"tick_rate":rate,"weapon":weapon,"config":world.config,"initial_movement":initial,
+        "catalog_sha1":catalog_hash,"tick_rate":rate,"weapon":weapon,"weapon_zoom":0,"weapon_speed":speed,
+        "config":world.config,"initial_movement":initial,
         "scope":"movement-only sim replay; native phase, hull, surface, triggers and2015 parity unverified",
         "samples":samples}))?);
     Ok(())
@@ -160,6 +193,12 @@ mod tests {
         let mut cfg = serde_json::to_value(MoveConfig::default()).unwrap();
         cfg["gravity"] = json!(-1.);
         assert!(validate_config(&cfg).is_err());
+        let mut input = serde_json::to_value(TickInput::default()).unwrap();
+        input.as_object_mut().unwrap().remove("tracked");
+        assert!(exact_fields(&input,&serde_json::to_value(TickInput::default()).unwrap()).is_err());
+        let mut state = serde_json::to_value(PlayerMove::default()).unwrap();
+        state["native_stamnia"] = json!(0.);
+        assert!(exact_fields(&state,&serde_json::to_value(PlayerMove::default()).unwrap()).is_err());
     }
     #[test]
     fn sim_replay_records_producing_tick_and_actual_grounded_jump_at_both_rates() {

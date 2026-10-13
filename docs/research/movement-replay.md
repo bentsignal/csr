@@ -19,6 +19,7 @@ Schema 1 requires exactly these fields:
 | `tick_rate` | 64 or 128 |
 | `config` | Complete serialized `movement::MoveConfig`; no omitted defaults |
 | `weapon` | Definition in that catalog; supplies held-weapon movement speed |
+| `weapon_zoom`, `weapon_speed` | Explicit unscoped level 0 and observed held-weapon speed matching that definition |
 | `initial_movement` | Complete serialized `movement::PlayerMove` |
 | `commands` | 1–4096 complete serialized `sim::TickInput` values |
 
@@ -28,6 +29,13 @@ All physics fields must be finite and nonnegative; the harness bounds numeric
 configuration and position/velocity magnitudes at one million. These are
 receipt admission limits, not asserted native cvar ranges. An actor dying
 invalidates this movement-only segment.
+
+The tool supports explicitly proven unscoped idle segments. A native callback's
+weapon integer is a requested selection, not an actual held definition: capture
+the held class/definition, scope and speed separately. Every Rust receipt records
+its actual held identity and rejects changes during replay, including a knife
+replacement by the normal loadout system. Serialized input/state fields must be
+complete and exact, including explicit null optional fields; unknown keys reject.
 
 Each receipt records the pre-step producing tick, successor published tick,
 actual movement state and movement events. A command list runs through the
@@ -42,7 +50,9 @@ BSP identity uses the loader's retained digest, before pakfile mounting; catalog
 identity uses the exact input successfully parsed afterward. Keep the native
 capture's stronger private provenance alongside the fixture. Equal map names
 alone do not admit a comparison, and a missing catalog identity rejects replay.
-The example refuses to fetch an absent map as a side effect.
+The example retains its mounted VFS and calls the direct reader, which has no
+fetch path. Validated installed surf map names are supported even though the
+competitive menu's current map catalog filters for de_/cs_ names.
 
 Current source preparation includes rejected-command checks and actual
 first-command jumping through `World::step` at both rates. Compilation,
