@@ -243,6 +243,11 @@ thing is uncanny. Fidelity is measured, never eyeballed:
       feel of movement, recoil, animation and hit registration.
       Dated recoil data and the unverified procedure:
       [RECOIL_REFERENCE.md](RECOIL_REFERENCE.md).
+- [x] Authored static-prop lighting metadata foundation: retained model and
+      hardware/source-vertex identities, bounded opaque VHV parsing and
+      instance-scoped checksum/count validation against installed Dust II.
+      Record order, color interpretation and full VHV lighting remain open.
+      [Foundation evidence](research/static-prop-vhv.md).
 - [ ] Match jumping and **surfing** with native traces: supported input,
       ramp/crease/seam contact, speed retention and landing impact at recorded
       server settings and tick rates. Synthetic correctness tests and native

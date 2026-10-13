@@ -8,3 +8,7 @@ authors.workspace = true
 
 [dependencies]
 glam.workspace = true
+content.workspace = true
+
+[dev-dependencies]
+vfs.workspace = true

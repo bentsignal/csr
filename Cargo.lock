@@ -3960,7 +3960,9 @@ dependencies = [
 name = "mdl"
 version = "0.3.0"
 dependencies = [
+ "content",
  "glam",
+ "vfs",
 ]
 
 [[package]]
