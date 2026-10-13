@@ -58,3 +58,23 @@ Count, per-file and aggregate byte bounds and a schedule-checked elapsed
 bound are explicit. Existing VFS reads are whole-file operations; these
 post-read admission limits are not an OS I/O watchdog. The example exports
 no assets and neither proves vertex order nor decodes lighting.
+
+## Validation checkpoint
+
+Runtime source `6e836d4f14b22ed2ca77b2c66e7b29c7a761b3f6` passed CI
+with 637 workspace tests, zero failures and six ignored tests. The unchanged
+MDL library also passed 34 focused tests. The installed Rust comparator
+verified 1,258 raw / 1,257 canonical model groups, all 3,158 scoped instances,
+3,749 mesh spans and 5,903,895 opaque records without checksum, scope or
+count failures. Release Dust II probe and simulation reported zero failures;
+all 1,425 weapon sounds decoded, and the play launcher build succeeded.
+
+One matched default-off `upper_tunnel` capture at 1600x900 exited naturally
+with no critical shader/device errors and was independently inspected. Its
+PNG was byte-identical to the frozen pre-foundation `86e6885` baseline
+(SHA256 `3EAA2E1244204FB44721C9EA9747473DD7516BFB766695F732AB6EF0610FF986`).
+This verifies one static scene's unchanged image, not interactive performance,
+native lighting fidelity, VHV color interpretation or individual record order.
+Private receipts are retained in `vhv-foundation-6e836d4`, including
+`root-ci-review.json` and `root-render-review.json`. The final documentation
+commit does not change the runtime source or its artifact identity.
