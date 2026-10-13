@@ -218,6 +218,9 @@ struct Mover<'a, W: TraceWorld + ?Sized> {
     dt: f32,
     max_speed: f32,
     drop_scaffold: bool,
+    /// First airborne contact with walkable ground this tick, before its
+    /// velocity projection. This is transient solver state, not replicated.
+    landing_speed: Option<f32>,
 }
 
 impl<W: TraceWorld + ?Sized> Mover<'_, W> {
@@ -344,6 +347,9 @@ impl<W: TraceWorld + ?Sized> Mover<'_, W> {
                 break;
             }
             blocked = true;
+            if !self.pm.on_ground && !tr.start_solid && tr.normal.z >= MIN_GROUND_NORMAL {
+                self.landing_speed.get_or_insert((-self.pm.velocity.z).max(0.0));
+            }
             time_left -= time_left * tr.fraction;
             if num_planes >= planes.len() {
                 self.pm.velocity = Vec3::ZERO;
@@ -542,7 +548,7 @@ impl<W: TraceWorld + ?Sized> Mover<'_, W> {
 
     fn categorize(&mut self, events: &mut MoveEvents) {
         let was_on_ground = self.pm.on_ground;
-        let fall_speed = -self.pm.velocity.z;
+        let fall_speed = self.landing_speed.take().unwrap_or(-self.pm.velocity.z);
         if self.pm.velocity.z > NON_JUMP_VELOCITY {
             self.pm.on_ground = false;
             return;
@@ -632,9 +638,13 @@ pub fn player_move<W: TraceWorld + ?Sized>(
         dt,
         max_speed,
         drop_scaffold:input.buttons&(buttons::DUCK|buttons::WALK)!=0,
+        landing_speed: None,
     };
 
     m.pm.stamina = (m.pm.stamina - cfg.stamina_recovery_rate * dt).max(0.0);
+    // Placement/restoration can begin with an unset or stale grounded flag.
+    // Classify current support before choosing ground/air duck and jump paths.
+    m.categorize(&mut events);
     m.duck(input);
     let (mins,maxs)=m.pm.hull();
     let climb=world.climbable(m.pm.origin,mins,maxs);

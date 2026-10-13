@@ -1,6 +1,19 @@
 //! Geometric/command regressions, not proof of native or historical parity.
 use super::*;
 use collision::{CollisionWorld, Convex, Plane};
+use std::cell::RefCell;
+
+struct ObservedTrace<'a> {
+    world: &'a CollisionWorld,
+    calls: RefCell<Vec<(Vec3, Vec3, Trace)>>,
+}
+impl TraceWorld for ObservedTrace<'_> {
+    fn trace_hull(&self, start: Vec3, end: Vec3, mins: Vec3, maxs: Vec3, mask: i32) -> Trace {
+        let trace = self.world.trace_box(start, end, mins, maxs, mask);
+        self.calls.borrow_mut().push((start, end, trace));
+        trace
+    }
+}
 
 fn bounds(mins: Vec3, maxs: Vec3) -> Convex {
     Convex {
@@ -244,15 +257,20 @@ fn coplanar_triangle_seam_does_not_snag_surf_motion_and_replays_exactly() {
     w.add_triangle([a, c, d], contents::SOLID, 0);
     w.finalize();
     for rate in [64, 128] {
+        let observed = ObservedTrace {
+            world: &w,
+            calls: RefCell::default(),
+        };
         let mut pm = PlayerMove::spawn_at(Vec3::new(0., -64., 16. * (4. / 3.) + 0.0625));
         pm.velocity = Vec3::new(0., 500., -40.);
         let mut replay = pm;
         for _ in 0..rate / 4 {
+            observed.calls.borrow_mut().clear();
             let events = player_move(
                 &mut pm,
                 &input(0),
                 &MoveConfig::default(),
-                &w,
+                &observed,
                 1. / rate as f32,
             );
             let reproduced = player_move(
@@ -268,7 +286,8 @@ fn coplanar_triangle_seam_does_not_snag_surf_motion_and_replays_exactly() {
             assert!(events.landed.is_none());
             assert!(
                 (pm.velocity.y - 500.).abs() < 1e-3,
-                "seam snag at {rate}Hz: {pm:?}"
+                "seam snag at {rate}Hz: {pm:?}, traces: {:?}",
+                observed.calls.borrow()
             );
         }
         assert!(pm.origin.y > 0.);
