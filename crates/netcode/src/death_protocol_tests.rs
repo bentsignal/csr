@@ -125,7 +125,7 @@ fn tracked_receipt_must_already_satisfy_existing_admission_limits() {
 }
 
 #[test]
-fn older_physics_versions_cannot_admit_a_peer_to_collision_ordering_v9() {
+fn older_protocol_versions_cannot_admit_a_peer_to_grenade_practice_v10() {
     assert_eq!(VERSION, 10);
     assert_eq!(PROTOCOL_ID, 0x4353_5257_0000_000a);
     let content = ContentManifest {

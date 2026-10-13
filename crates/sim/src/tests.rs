@@ -223,13 +223,16 @@ fn grenade_practice_survives_snapshot_and_respawn_without_changing_competitive()
     assert!(!w.player(bot).unwrap().has("weapon_hegrenade"));
     let state: state::WorldState = w.decode(&w.encode_state()).unwrap();
     w.restore(state);
+    w.step(&[(human, TickInput { utility: 44, ..Default::default() })]);
+    let mut throws = 0;
     for _ in 0..2 {
-        let p = w.player_mut(human).unwrap();
-        p.active = p.weapons.iter().position(|g| g.def.class_name == "weapon_hegrenade").unwrap();
-        let i = w.players.iter().position(|p| p.id == human).unwrap();
-        w.throw_grenade(i);
+        // Let deployment/the prior throw cooldown expire with attack released.
+        for _ in 0..w.tick_rate { w.step(&[]); }
+        w.step(&[(human, TickInput { buttons: buttons::ATTACK, ..Default::default() })]);
+        throws += w.events.iter().filter(|e| matches!(e, GameEvent::UtilityThrown { player, .. } if *player == human)).count();
         assert!(w.player(human).unwrap().has("weapon_hegrenade"));
     }
+    assert_eq!(throws, 2);
     assert_eq!(w.projectiles.len(), 2);
     assert!(w.player(human).unwrap().active_weapon().unwrap().next_attack > w.time());
     w.respawn(human);
