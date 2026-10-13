@@ -264,7 +264,7 @@ struct Playing {
 /// Opt-in diagnostic of a deferred playback request. A sink observed in a
 /// later Update proves only that Bevy created it, never the shot tick or PCM onset.
 #[derive(Component)]
-struct SoundTrace {
+pub(crate) struct SoundTrace {
     requested_at: Instant,
     request_clock: f64,
     sink_observed: bool,
