@@ -38,6 +38,7 @@ pub mod utility_fx;
 pub mod buymenu;
 pub mod items;
 pub mod interpolation;
+mod input_latency;
 pub mod characters;
 pub mod player_anim;
 pub mod skinning;
@@ -274,7 +275,7 @@ pub fn run(opts: ClientOptions) -> i32 {
     let load_request = menu::LoadRequest::default();
     let mut app = App::new();
     app.add_plugins(
-        DefaultPlugins
+        input_latency::desktop_plugins()
             .set(WindowPlugin {
                 close_when_requested: false,
                 primary_window: Some(Window {
@@ -286,6 +287,7 @@ pub fn run(opts: ClientOptions) -> i32 {
                         Ok("fifo") => PresentMode::Fifo,
                         _ => PresentMode::AutoNoVsync,
                     },
+                    desired_maximum_frame_latency: input_latency::surface_frame_latency(),
                     ..default()
                 }),
                 ..default()

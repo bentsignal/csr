@@ -464,7 +464,13 @@ pub fn update_camera(
     let eye = if local.noclip { local.prev_eye.lerp(local.curr_eye, alpha) } else { target.map_or(local.curr_eye, |p| p.eye) };
     let mut angles = if local.spectating.is_some() && !local.noclip {
         target.map_or(glam::Vec3::ZERO, |p| p.angles)
-    } else { glam::Vec3::new(local.pitch, local.yaw, 0.0) };
+    } else {
+        // Mouse look is sampled once per render frame before fixed ticks.
+        // Keep local aiming current even when no tick runs; only the body/eye
+        // and simulated recoil use the interpolated pose. TickInput remains
+        // the sole way these view angles reach authoritative gameplay.
+        glam::Vec3::new(local.pitch, local.yaw, 0.0)
+    };
     if !local.noclip {
         if let Some(p) = target { angles.x += p.punch.x; angles.y += p.punch.y; }
     }
@@ -529,6 +535,35 @@ mod remote_input_tests {
         }));
         app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::KeyW);
         app
+    }
+
+    #[test]
+    fn mouse_aim_reaches_both_cameras_without_a_sim_tick_or_pose_interpolation() {
+        let mut app = capture_app();
+        app.init_resource::<crate::interpolation::RenderPoses>()
+            .add_systems(Update, update_camera.after(sample_after_capture));
+        for viewmodel in [false, true] {
+            let entity = app.world_mut().spawn((PlayerCamera, Transform::default(),
+                Projection::Perspective(PerspectiveProjection::default()))).id();
+            if viewmodel { app.world_mut().entity_mut(entity).insert(ViewModelCamera); }
+        }
+        app.world_mut().query::<&mut CursorOptions>().single_mut(app.world_mut()).unwrap().grab_mode = CursorGrabMode::Locked;
+        let before = app.world().resource::<SimWorld>().0.snapshot();
+        let old_angles = app.world().resource::<SimWorld>().0.player(1).unwrap().view_angles;
+        app.world_mut().resource_mut::<AccumulatedMouseMotion>().delta = Vec2::new(20., 10.);
+        // Run just the production input/camera systems with alpha zero and
+        // no sim step; the previous pose must not delay the latest look.
+        app.world_mut().run_schedule(Update);
+        let expected = glam::Vec3::new(0.44, 359.12, 0.);
+        let local = app.world().resource::<LocalPlayer>();
+        assert!((local.render_angles - expected).abs().max_element() < 0.0001);
+        assert_eq!(app.world().resource::<Sampled>().0.view_angles, local.render_angles);
+        let fwd = view_forward(local.render_angles.x, local.render_angles.y);
+        for transform in app.world_mut().query_filtered::<&Transform, With<PlayerCamera>>().iter(app.world()) {
+            assert!((transform.forward().as_vec3() - fwd).length() < 0.0001);
+        }
+        assert_eq!(app.world().resource::<SimWorld>().0.player(1).unwrap().view_angles, old_angles);
+        assert_eq!(app.world().resource::<SimWorld>().0.snapshot(), before);
     }
 
     #[test]
