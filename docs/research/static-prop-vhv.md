@@ -35,10 +35,23 @@ scope mismatches, actual VFS mount shadowing, multiple hardware strip groups
 and fixup-resolved indices. Installed read-only comparison data stays private.
 Private provenance is `dust2-vhv-audit-20261013/FINDINGS.md` SHA256
 `E404FA55FD07D24D3AC9CE80D029C9554111B3B5B62FF406C245BE3651C3DA4C`.
-Dedicated public Valve format pages returned access errors during this audit;
-no SDK, leaked or decompiled implementation was consulted. This foundation
-uses the repository's existing public-format readers and installed metadata.
+Official [VHV format declarations](https://github.com/ValveSoftware/source-sdk-2013/blob/be57e3d01ac7d7aa6a2cacbfef187c0b46616db0/src/public/materialsystem/hardwareverts.h)
+independently confirm version 2, header/table sizes, checksum and mesh fields.
+Only public declarations/comments were consulted, never accessor or engine
+implementations. The header explicitly distinguishes record byte size from
+its color representation; 12 bytes alone cannot establish the encoding.
+The pinned Git blob is `c7a08fe9136aea548ae386ef4520b704a2dbe64e`.
 
 No renderer consumes this API. VHV vertex order and lighting basis still need
 independent justification before replacing the ambient-cube approximation.
 No color, Sun, exposure or native/historical lighting fidelity claim follows.
+
+The developer example `cargo run -p launcher --example vhv_metadata` uses the
+actual Level, MDL and VHV readers against the exact admitted Dust2 digest.
+It loads each referenced model once, retaining only that model's geometry at
+a time, and requires all 3,158 lighting files from the selected BSP's `map`
+mount. It checks model-file checksums and every candidate mesh/count span.
+Count, per-file and aggregate byte bounds and a schedule-checked elapsed
+bound are explicit. Existing VFS reads are whole-file operations; these
+post-read admission limits are not an OS I/O watchdog. The example exports
+no assets and neither proves vertex order nor decodes lighting.
