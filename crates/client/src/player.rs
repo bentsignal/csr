@@ -354,7 +354,7 @@ pub fn tick(
     settings: Res<crate::settings::Settings>,
     block: Res<InputBlockFrames>,
     mut poses: ResMut<crate::interpolation::RenderPoses>,
-    probe: Res<crate::sound_probe::SoundProbe>,
+    mut probe: ResMut<crate::sound_probe::SoundProbe>,
     remote: Option<Res<crate::remote::RemoteClient>>,
 ) {
     if remote.is_some() || front.open() {return;}
@@ -400,7 +400,9 @@ pub fn tick(
         ));
     }
     let id = local.id;
+    let producer_tick = world.0.tick;
     world.0.step(&inputs);
+    probe.observe_step(&world.0, id, producer_tick);
     poses.capture(&world.0);
     pending.0.extend(world.0.events.iter().cloned());
     if local.noclip {
