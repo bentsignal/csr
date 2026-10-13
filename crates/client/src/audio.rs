@@ -259,6 +259,8 @@ struct Playing {
     owner: u32,
     channel: u8,
     entry: String,
+    request_clock: f64,
+    player_observed: bool,
 }
 
 /// Opt-in diagnostic of a deferred playback request. A sink observed in a
@@ -663,7 +665,8 @@ impl SoundLibrary {
                 self.master_volume, emit.at.is_some());
         }
         if let Some(owner) = emit.owner {
-            self.playing.push(Playing { entity, owner, channel: entry.channel, entry: key });
+            self.playing.push(Playing { entity, owner, channel: entry.channel, entry: key,
+                request_clock: self.clock, player_observed: false });
         }
     }
 
@@ -792,7 +795,17 @@ pub fn update(
     active: Query<(), With<AudioPlayer>>,
     mut traces: Query<(Entity, &mut SoundTrace, Has<AudioSink>, Has<SpatialAudioSink>)>,
 ) {
-    sounds.playing.retain(|p| active.contains(p.entity));
+    let trace_enabled = sounds.trace;
+    let prune_clock = sounds.clock;
+    sounds.playing.retain_mut(|p| {
+        let present = active.contains(p.entity);
+        if trace_enabled && !present {
+            info!("audio_trace prune_missing_player entity {:?} clock {prune_clock:.6} request_clock {:.6} entry {:?} owner {} channel {} player_previously_observed {}",
+                p.entity, p.request_clock, p.entry, p.owner, p.channel, p.player_observed);
+        }
+        p.player_observed |= present;
+        present
+    });
     sounds.clock += time.delta_secs_f64();
     if let Some(ear) = ears.iter().next() {
         listener.0 = ear.translation();
@@ -864,6 +877,37 @@ mod tests {
         app.world_mut().entity_mut(entity).remove::<AudioSink>();
         app.update();
         assert!(app.world().get::<SoundTrace>(entity).unwrap().sink_observed);
+    }
+
+    #[test]
+    fn pending_commands_and_removed_player_are_distinct_prune_cases() {
+        use super::*;
+        #[derive(Resource, Default)]
+        struct Requested(Option<Entity>);
+        fn request(mut commands: Commands, mut sounds: ResMut<SoundLibrary>, mut requested: ResMut<Requested>) {
+            if requested.0.is_some() { return; }
+            let entity = commands.spawn(AudioPlayer::<AudioSource>(Handle::default())).id();
+            sounds.playing.push(Playing { entity, owner: 7, channel: 6, entry: "synthetic".into(), request_clock: 0.0, player_observed: false });
+            requested.0 = Some(entity);
+        }
+        let mut app = App::new();
+        app.init_resource::<Time<Real>>().init_resource::<SoundLibrary>()
+            .init_resource::<Listener>().init_resource::<Requested>();
+        // Deliberately withhold the automatic command flush between request
+        // and update. This isolates the pending case, not a production schedule claim.
+        app.add_systems(Update, (request, update).chain_ignore_deferred());
+        app.update();
+        let entity = app.world().resource::<Requested>().0.unwrap();
+        assert!(app.world().get::<AudioPlayer<AudioSource>>(entity).is_some());
+        assert!(app.world().resource::<SoundLibrary>().playing.is_empty(), "Pending request was pruned before its spawn flush");
+        app.world_mut().resource_mut::<SoundLibrary>().playing.push(Playing {
+            entity, owner: 7, channel: 6, entry: "synthetic".into(), request_clock: 0.0, player_observed: false,
+        });
+        app.update();
+        assert!(app.world().resource::<SoundLibrary>().playing[0].player_observed);
+        app.world_mut().despawn(entity);
+        app.update();
+        assert!(app.world().resource::<SoundLibrary>().playing.is_empty());
     }
     #[test]
     fn movie_wave_paths_resolve_doubled_separators() {

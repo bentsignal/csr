@@ -63,6 +63,13 @@ monotonic diagnostic interval. Neither request nor sink observation is a shot
 tick or audible PCM onset. No numeric mixing policy changes accompany this
 instrumentation.
 
+The trace also reports a tracked voice missing AudioPlayer at prune time and
+whether a prior Update observed that player component. An unobserved missing
+component alone does not prove a pending spawn; the hardware-free regression
+deliberately withholds a command flush to isolate that case, then separately
+removes an observed voice. It does not establish the production schedule order
+between the independent effects/audio chains or change pruning policy.
+
 The causal tests distinguish a queued player from an actual sink without an
 audio device, and coalesce each request's first sink observation. Compilation
 and integrated verification are pending the serialized build slot.
