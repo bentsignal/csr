@@ -247,6 +247,10 @@ thing is uncanny. Fidelity is measured, never eyeballed:
       ramp/crease/seam contact, speed retention and landing impact at recorded
       server settings and tick rates. Synthetic correctness tests and native
       2023 behavior must remain distinct from demonstrated 2015 parity.
+- [x] Bounded developer movement replay through `sim::World::step`, with
+      explicit complete state/input, retained map/catalog identities and
+      held-weapon checks. Installed Dust II synthetic runs passed at 64/128;
+      native comparison remains open. [Replay contract](research/movement-replay.md).
 
 - [ ] Grenades: HE, flash, smoke, molotov/incendiary, decoy.
 - [ ] Wall penetration (surface properties) and hit groups from the models'

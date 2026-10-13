@@ -71,8 +71,13 @@ removes an observed voice. It does not establish the production schedule order
 between the independent effects/audio chains or change pruning policy.
 
 The causal tests distinguish a queued player from an actual sink without an
-audio device, and coalesce each request's first sink observation. Compilation
-and integrated verification are pending the serialized build slot.
+audio device, and coalesce each request's first sink observation. Combined
+verification source `c241d64bb52a1ce18872a43f2392d246e30e157c` contains the exact
+trace and counted-shot leaves plus movement master `aa183c1`: 609 workspace
+tests passed, six ignored; release Dust II probe and ten-round simulation had
+zero failures; soundcheck decoded 1425 sounds with zero unsupported/crashing.
+Both published leaf heads passed CI before merging as PR69 and PR71. These
+checks do not establish actual game PCM onset or historical mixing parity.
 
 ## Reference capture preparation and limits
 
@@ -87,13 +92,42 @@ process-loopback PCM, not a hardware output or raw engine-source tap.
 and [packet timestamp contract](https://learn.microsoft.com/en-us/windows/win32/api/audioclient/nf-audioclient-iaudiocaptureclient-getbuffer)
 describe the public API used.
 
-A private `-game` fixture mounts only its copied dated declarative scripts and
-the player's actual Legacy content. Its first load gate produced a black
-window and no netconsole within the bound; it was shut down and exact native
-preferences were restored. Installed loose configuration stayed unchanged.
-No shots or native mix acceptance were established. Even a successful future
-fixture measures the 2023 engine interpreting dated declarations, not a 2015
-executable. Native sound/PCM comparison remains pending.
+The initial sparse private `-game` fixtures failed to reach netconsole within
+the bound. A fresh fixture with explicit private-first MOD and installed
+Legacy MOD fallback loaded successfully while keeping DEFAULT_WRITE_PATH
+private. Its loose historical files did not produce historical mixer values.
+A separate private VPK containing exactly the same three historical files,
+byte-for-byte, did: FirstWeapons volume/level/DSP 0.31/1/0 and DistWeapons
+2.8/1/0, with no matching Weapons1 query output. This proves those effective
+mixer declarations; it does not prove the weapon cue or operator graph.
+
+The VPK gate's complete startup condebug log contains 76 operator KeyValues
+parse errors and an unable-to-load warning before netconsole connected, plus
+`Weapon_AK47.Single` precache failure (no such sound-script entry). An explicit
+operator flush later repeats 76 parse errors. The netconsole-only pre-flush
+log had zero errors because it omitted startup; it cannot support a successful
+startup interpretation. `snd_sos_print_operators` lists available operator
+types, not proof that an imported weapon stack was accepted. The historical
+cue/graph admission gate therefore failed despite mixer acceptance.
+
+Private startup-log SHA256 is
+`40a9c00f54f7da1d285e4d83930d3a0761023d3871f78dd1b4b3ea3cc2df4c82`;
+netconsole-log SHA256 is
+`dd571691195dfa110666b7c371b581ed54ae37df548447bbf50060803289b1f7`.
+The VPK SHA256 is
+`a217525c43be63198f55e7dba15261e881d086ff1e32010523dd91adb358f213`;
+its three extracted entry hashes match the historical inputs above. Raw
+scripts, container and logs remain private. No dated numeric/schema fields
+were changed to force loading. Text grammar validation by our own parser is
+not equivalence with the native engine's declaration loader.
+
+The native VPK session exited 0, restored all twelve preference targets,
+kept installed loose configuration unchanged and removed 185 new known
+byproducts. Team 3, health 100 and zero velocity were observed, but the exposed
+VScript player binding lacked GetActiveWeapon; active weapon/ammo identity
+remains unproven. No firing or game PCM capture occurred. Native2023 reading
+dated2015 data is not a2015 executable; actual mix comparison remains pending
+effective cue/graph acceptance, shooter identity and controlled captures.
 
 The intended comparison uses quiet baseline, one/three/five acknowledged shots,
 exact wave fingerprints and full tails, then compares PCM onset, stereo identity,
