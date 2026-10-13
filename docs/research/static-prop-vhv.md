@@ -6,8 +6,11 @@ Installed Legacy Dust2 (BSP SHA1
 All model checksums match the selected map-pak or Legacy VPK MDL. All 3,749
 mesh spans match the existing reader's LOD0 mesh vertex-count sequences.
 Those counts do not establish the order or meaning of individual records.
-All 1,410 used model meshes have shuffled VTX-to-VVD source identities;
+All 1,410 canonical model meshes have shuffled VTX-to-VVD source identities;
 350 reused model names have different lighting files between instances.
+The dictionary uses 1,258 raw model names and 1,257 canonical VFS names;
+one case alias resolves to the same installed file. The comparator keeps
+every raw group and its checksum checks, while reporting both counts.
 
 `mdl::Model.checksum` retains the exact unsigned header checksum.
 `mdl::Mesh.hardware` retains body-part/submodel/mesh/LOD identity, while

@@ -2,7 +2,7 @@
 //! export, color decoding or claim of individual record-to-vertex order.
 use mdl::vhv::{InstanceKey, ScopedFile};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     error::Error,
     time::{Duration, Instant},
 };
@@ -102,13 +102,32 @@ fn main() -> Result<(), Box<dyn Error>> {
             vertices += u64::from(file.file().vertex_count);
         }
     }
-    if instances != 3158 || spans != 3749 || by_model.len() != 1257 {
-        return Err("installed count sequence differs from admitted reference".into());
+    // Preserve every raw group's checksum checks. Canonical names describe
+    // VFS aliases; they must never suppress verification of a raw group.
+    let canonical_names: BTreeSet<_> = by_model.keys().map(|name| vpk::normalize(name)).collect();
+    println!(
+        "vhv_metadata aggregate raw_model_groups={} canonical_model_groups={} scoped_instances={instances} mesh_spans={spans} opaque_records={vertices} admitted_read_bytes={read_bytes}",
+        by_model.len(),
+        canonical_names.len()
+    );
+    for canonical in &canonical_names {
+        let aliases: Vec<_> = by_model
+            .keys()
+            .filter(|name| vpk::normalize(name) == *canonical)
+            .collect();
+        if aliases.len() > 1 {
+            println!("vhv_metadata alias canonical={canonical} raw_names={aliases:?}");
+        }
+    }
+    if instances != 3158 || spans != 3749 || by_model.len() != 1258 || canonical_names.len() != 1257
+    {
+        return Err(format!("installed count sequence differs from admitted reference: raw_models={} canonical_models={} instances={instances} spans={spans}", by_model.len(), canonical_names.len()).into());
     }
     println!(
-        "map={} bsp_sha1=d905c6f7dd694a0dace9380a8558ca8a177cbd91 models={} scoped_instances={instances} mesh_spans={spans} opaque_records={vertices} admitted_read_bytes={read_bytes} checksum_scope_count_failures=0 payload_semantics=OPAQUE vertex_order=NOT_PROVEN failures: 0",
+        "map={} bsp_sha1=d905c6f7dd694a0dace9380a8558ca8a177cbd91 raw_models={} canonical_models={} scoped_instances={instances} mesh_spans={spans} opaque_records={vertices} admitted_read_bytes={read_bytes} checksum_scope_count_failures=0 payload_semantics=OPAQUE vertex_order=NOT_PROVEN failures: 0",
         level.id,
-        by_model.len()
+        by_model.len(),
+        canonical_names.len()
     );
     Ok(())
 }
