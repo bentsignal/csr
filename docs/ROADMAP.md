@@ -18,7 +18,7 @@ unfinished.
 
 | Area | State | Call |
 |---|---|---|
-| Format readers (kv, vpk, vfs, bsp, vtf, vmt, mdl), collision, movement | Solid; cite public docs; tested | **Keep** |
+| Format readers (kv, vpk, vfs, bsp, vtf, vmt, mdl), collision, movement | Working base; exact movement and surfing parity unverified | **Keep, measure** |
 | `sim`: Bevy-free, fixed tick (128 default, runtime setting), per-player `TickInput`, seeded RNG | Right shape for netcode; owns bots and loadouts since Track A | **Keep, extend** |
 | Rendering, animation, viewmodels, sounds | Dust II validated; other maps unverified | **Keep** |
 | Gameplay glue in `client` (bots, loadouts, skins, overworld rules run in Bevy systems, not `sim`) | Moved into `sim` (Track A) | **Done** |
@@ -243,6 +243,10 @@ thing is uncanny. Fidelity is measured, never eyeballed:
       feel of movement, recoil, animation and hit registration.
       Dated recoil data and the unverified procedure:
       [RECOIL_REFERENCE.md](RECOIL_REFERENCE.md).
+- [ ] Match jumping and **surfing** with native traces: supported input,
+      ramp/crease/seam contact, speed retention and landing impact at recorded
+      server settings and tick rates. Synthetic correctness tests and native
+      2023 behavior must remain distinct from demonstrated 2015 parity.
 
 - [ ] Grenades: HE, flash, smoke, molotov/incendiary, decoy.
 - [ ] Wall penetration (surface properties) and hit groups from the models'
@@ -252,7 +256,8 @@ thing is uncanny. Fidelity is measured, never eyeballed:
       1,425-file decode audit, and spatial-panning/downmix regression checks.
       [PR #11](https://github.com/bentsignal/global-offensive/pull/11).
 - [ ] Close remaining audio fidelity gaps: deployment/first-step timing,
-      exact gain curves, DSP/occlusion, ricochets/near misses, map soundscapes
+      dated weapon mixer inputs and overlapping-shot tone, exact gain curves,
+      DSP/occlusion, ricochets/near misses, map soundscapes
       and music. Evidence and limits: [FIDELITY.md](FIDELITY.md).
 - [ ] Ragdolls/death animations; burst, suppressor and revolver modes.
       Installed death-pose/PHY and classic kill-feed metadata, authority

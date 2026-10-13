@@ -79,3 +79,32 @@ penalty; they do not calibrate this rewrite's behavior or establish 2015 parity.
 Exact spray, other historical sounds, original HUD/death presentation and
 lighting remain open. The default installed Dust II is the later remake;
 an official compatibility archive's date alone does not prove 2015 fidelity.
+
+## Owner follow-up on the desktop checkpoint
+
+The owner tested the updated CT/M4, T/AK and menu shortcuts. The broken hand
+after respawn did not recur, and fullscreen menu fidelity was visibly better.
+The M4 firing sound seemed correct. The AK has the right underlying sound,
+but its tone and overlapping shots still differ from the original. Neither
+waveform identity nor a subjective positive M4 impression closes mixing/DSP
+fidelity. The owner could not find suitable comparison clips; research must
+continue without requiring one.
+
+The sustained spray still climbs incorrectly and does not match the original
+pattern. Held-fire recovery is a correctness fix, not a finished pattern.
+Jumping/movement also still feel wrong. The target is measured 1:1 behavior
+in Rust/Bevy, including CS:GO surfing, rather than a plausible approximation.
+
+- [ ] Verify 2015 weapon mix/operator inputs, voice lifetime/overlap, pitch,
+      speaker routing and DSP with controlled single-shot and burst recordings.
+      Keep native 2023 observations distinct from historical configuration.
+- [ ] Check grounding before jump/duck and preserve actual impact velocity
+      through collision clipping; validate defects before changing behavior.
+- [ ] Measure surf ramps, plane intersections, seams and speed retention at
+      64/128 tick with explicitly recorded native server cvars and map identity.
+      Keep physics in the shared simulation and preserve network/prediction
+      compatibility for any changed state or mechanics profile.
+
+The leaked/decompiled CS:GO implementation remains outside the project's
+clean-room boundary. Public format documentation, dated declarative game data
+and observed native execution remain available for exact reconstruction.
