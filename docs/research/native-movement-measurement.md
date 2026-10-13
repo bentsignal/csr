@@ -108,12 +108,80 @@ used as 128 evidence. Neutral preflight failures remain preserved.
 
 This scoped observable transition comparison does not upgrade the raw
 observer's internal physics-phase flag or admit an entire installed-map replay.
-Crouched jumps, positive-stamina takeoff, running speed, effective surface
-friction and full surfing remain separate measurements. The crouched branch
-is unchanged. The first supported landing post also remained above its later
-settled floor position; support/snap and landing slowdown are still open.
+Crouched jumps, positive-stamina takeoff, effective surface friction and full
+surfing remain separate measurements. The crouched branch is unchanged. The
+subsequent standing-running measurements below qualify the first supported
+height and ground recovery for that narrower case.
 
-## Next comparison
+## Standing running jump, landing and coast
+
+Separate controlled P2000 trials retain all 512 native command pairs at each
+actual rate, with exact post-to-next-pre continuity, TickBase advancement,
+unchanged typed weapon/scope and all 43 configuration values. Standing hull
+routes were qualified by three independent native placement/neutral/query
+windows before running. The captures have zero lifecycle events, frozen
+flags, mouse deltas or angle drift. Ordinary forward and jump input remained
+held through landing and at least 32 supported recovery commands, then released
+for at least 32 coast commands. Host pacing does not establish command counts.
+The measured first forward wish was 225, followed by 450; the inputs remain
+unchanged. The installed P2000 declaration and measured plateau establish its
+240 speed; the observed player max-speed property of 260 is not substituted.
+
+| Actual rate | First forward speed | First supported height above settled floor | Landing stamina | Next supported speed |
+| --- | --- | --- | --- | --- |
+| 64 | 20.625001907 | 1.464447022 | 13.962831497 | 177.657485961 |
+| 128 | 10.312500953 | 1.478576661 | 14.431581497 | 175.726898193 |
+
+For this standing ground run, observed transitions fit a wish and horizontal
+speed cap `W*(1-pre_stamina/100)^2`, with full weapon speed `W=240` supplying
+the ground acceleration base even on the initial 225 wish. Stamina then
+recovers at 60 per second. Friction uses the recorded 5.2 and stop speed 80.
+The relation fits 465 supported-to-supported command transitions at 64 and
+417 at 128, with maximum speed residual below 0.000022. Entire coast windows
+fit nominal friction within 0.000008. These are observed black-box relations,
+not claims about an engine body or effective friction on other surfaces.
+
+First supported stamina matches `0.05*abs(pre_command_vz)` at both rates.
+That pre-state VZ differs from the mover's existing half-gravity contact
+impact bookkeeping. The stamina correction keeps impact events and
+`last_fall_speed` separate. The first supported post remains above the settled
+floor; the next supported step snaps. Earlier Rust snapped immediately,
+charged the extra half-gravity to stamina and repeatedly damped horizontal
+velocity. Its private synthetic-floor baseline reached 127.140732 after eight
+recovery commands where native 64 reached 205.792755.
+
+The ground mover now uses these scoped cap, acceleration and stamina targets.
+Private per-command caches preserve the serialized state shape. Existing
+stance multipliers, air acceleration, crouched jump and bunnyhop laws remain;
+native proof here is standing running only. Numeric regressions replay the
+actual 512-input timelines on an analytic floor and check runup, plateau,
+takeoff, first support, all 32 held recovery commands and 32 coast commands at
+both rates. Protocol 8 rejects version 7 and older prediction semantics.
+
+The original gate's constant-wish host rejection remains preserved. A separate
+host analyzer accepts exactly the observed initial 225 or 450 forward edge,
+then requires all subsequent held wishes to be 450 and released wishes zero.
+Malformed later wishes, side/up input, duplicate intervals and wrong edges
+remain refusals; no raw data was rewritten. Negative spawn, drift, lifecycle
+and query receipts remain retained as well.
+
+Private proof identifiers are
+`controlled-running-quiet-held-64-20261013-123714-93b26a0b` and
+`controlled-running-quiet-held-128-20261013-130607-a52e30da`. The same frozen
+observer source/SMX above and quiet fixture gate were used at both rates. Each
+native process exited zero, restored twelve Steam preference targets and the
+89-file configuration snapshot, disabled private loaders and preserved all
+raw copies. The fixture ended warmup once with the recognized ordinary
+`mp_warmup_end` command and waited for recorded freezetime before strict
+nonfrozen qualification. This is a documented fixture rule, not default-server
+parity. Requested mouse-isolation launch flags do not prove flag consumption;
+actual zero mouse/angle fields qualify these windows.
+
+This synthetic-floor comparison does not admit an installed-map
+`sim::World` replay, an internal physics callback phase, 2015 behavior, slopes,
+surfing, moving surfaces, crouch or fatigued takeoff. Those remain open.
+
+## Route qualification and remaining comparison
 
 An initial untouched-spawn forward-route preflight was rejected before moving
 input. The private helper performed one standing/jump-height envelope sweep
@@ -126,14 +194,39 @@ authored displacement offsets beneath another candidate's flat NAV heights.
 The next fixture uses separately recorded placement and actual native terrain
 qualification rather than treating those navigation heights as collision proof.
 
-Stable neutral state is a prerequisite, not movement parity. Next collect
-forward-running jumps, separating continued input
-from airborne release/coasting. Observe clearance, actual input transitions,
-held speed and scope, takeoff, first supported post-state and subsequent speed
-decay. A first supported snapshot is not automatically the exact physical
-impact time or a causal attribution to friction/stamina.
+Stable neutral state is a prerequisite, not movement parity. The controlled
+trials above now retain running, continued input, recovery and coast separately.
+A first supported snapshot is not automatically the exact physical impact time
+or a causal attribution to friction/stamina.
 
-Only moving-state evidence can qualify native pre/post correspondence with
+Moving-state evidence alone does not qualify native pre/post correspondence with
 the existing [simulation replay](movement-replay.md). Match actual map/catalog
-identities, initial state, configuration and inputs before correcting Rust.
+identities, initial state, configuration and inputs before admitting that replay.
 Repeated-crouch fatigue remains a later measurement task.
+
+## Ground correction validation checkpoint
+
+On 2026-10-13, production leaf `c85b621` passed 31 movement and 85 netcode
+tests, including protocol-7 refusal. An isolated copy of our old `220b2b3`
+mover failed four independent measured regressions: partial-input runup,
+landing cost, first supported height and the following ground recovery cap.
+The disabled weapon-speed acceleration option passed against both versions.
+The public implementation was never temporarily replaced for that RED run.
+
+Separate private binaries replayed all 512 actual inputs at each rate using
+the corrected mover. Every raw command/state/reference pair remained unchanged
+in the outputs. All supported/airborne states matched. Maximum horizontal
+velocity residual was 0.00001526 (one `f32` ULP during runup); entire position
+trajectories matched within 0.000000001 and stamina within 0.000000000493,
+consistent with nine-decimal CSV serialization. All 32 supported recovery and
+complete coast speeds matched within 0.000000001. Both unobserved Rust-counter
+variants remained equal. Independent review verified source, executable,
+input/output hashes and all raw pairs. These error bounds apply to the scoped
+analytic-floor comparison and do not broaden its admission.
+
+The complete workspace passed 619 tests with six existing ignored tests,
+including a tightened 0.0001 first-support height tolerance. Required release
+`probe de_dust2` and `sim de_dust2` each reported zero failures. The sound
+decoder check retained 1,425 decodable sounds and zero failures; the asset
+guard passed. Actual process exit codes and private before/after logs remain
+retained alongside the comparison provenance.
