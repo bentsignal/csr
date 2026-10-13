@@ -1,7 +1,12 @@
 // Developer diagnostic shadow depth. This is the first32-byte prefix of
 // WorldParams, not Bevy's StandardMaterial layout. CPU serialization tests
 // protect color/flags/alpha_ref offsets; no lighting/composition policy here.
-#import bevy_pbr::prepass_io::{VertexOutput, FragmentOutput}
+#import bevy_pbr::prepass_io::VertexOutput
+// Bevy defines this output only when color prepass outputs or unclipped-depth
+// emulation are required. Native depth-only shadow passes instead return void.
+#ifdef PREPASS_FRAGMENT
+#import bevy_pbr::prepass_io::FragmentOutput
+#endif
 
 struct ShadowParams {
     color: vec4<f32>,
@@ -19,7 +24,11 @@ struct ShadowParams {
 @group(#{MATERIAL_BIND_GROUP}) @binding(8) var mod_samp: sampler;
 
 @fragment
-fn fragment(in: VertexOutput) -> FragmentOutput {
+fn fragment(in: VertexOutput)
+#ifdef PREPASS_FRAGMENT
+    -> FragmentOutput
+#endif
+{
 #ifdef VERTEX_UVS_A
     let uv = in.uv;
 #else
@@ -42,9 +51,11 @@ fn fragment(in: VertexOutput) -> FragmentOutput {
     }
     alpha *= params.color.a;
     if (params.flags & 1u) != 0u && alpha < params.alpha_ref { discard; }
+#ifdef PREPASS_FRAGMENT
     var out: FragmentOutput;
 #ifdef UNCLIPPED_DEPTH_ORTHO_EMULATION
     out.frag_depth = in.unclipped_depth;
 #endif
     return out;
+#endif // PREPASS_FRAGMENT
 }
