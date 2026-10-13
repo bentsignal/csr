@@ -39,6 +39,9 @@ impl KillFeedEntry {
 
 #[derive(Resource, Default)]
 pub struct Effects {
+    /// Presentation consumes this every frame, before kill-feed trimming can
+    /// discard simultaneous deaths. No receipt becomes simulation state.
+    pub(crate) deaths: Vec<sim::death::DeathReceipt>,
     pub feedback: Vec<GameEvent>,
     pub kill_feed: Vec<KillFeedEntry>,
     /// Time of the local player's last hit on someone (hit marker).
@@ -165,6 +168,7 @@ pub fn process(
                 }
             }
             GameEvent::Kill { attacker, weapon, headshot, death, .. } => {
+                if effects.deaths.len() < 128 { effects.deaths.push(death.clone()); }
                 effects.kill_feed.push(KillFeedEntry::new(attacker, &weapon, headshot, death, local.id, now));
                 if effects.kill_feed.len() > 6 {
                     effects.kill_feed.remove(0);
@@ -242,6 +246,7 @@ pub fn process(
                 effects.banner = Some(("Halftime - switching sides".into(), Color::WHITE, now));
             }
             GameEvent::RoundStart { .. } => {
+                effects.deaths.clear();
                 effects.banner = None;
             }
             GameEvent::FreezeEnd => {

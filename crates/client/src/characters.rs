@@ -17,6 +17,9 @@ use collision::contents;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+#[path = "death_bodies.rs"]
+mod death_bodies;
+
 pub const T_MODEL: &str = "models/player/custom_player/legacy/tm_phoenix.mdl";
 pub const CT_MODEL: &str = "models/player/custom_player/legacy/ctm_sas.mdl";
 
@@ -48,7 +51,7 @@ struct Character {
 }
 
 #[derive(Resource, Default)]
-pub struct Characters(HashMap<sim::PlayerId, Character>);
+pub struct Characters(HashMap<sim::PlayerId, Character>, death_bodies::DeathBodies);
 
 fn load_model(fs: &vfs::Vfs, path: &str) -> Option<mdl::Model> {
     let base = path.trim_end_matches(".mdl");
@@ -182,7 +185,7 @@ pub fn sync(
     mut muzzles: ResMut<crate::tracers::Muzzles>,
     mut materials: ResMut<Assets<WorldMaterial>>,
     level: Res<LoadedLevel>,
-    effects: Res<crate::effects::Effects>,
+    mut effects: ResMut<crate::effects::Effects>,
     time: Res<Time>,
     fixed: Res<Time<Fixed>>,
     poses: Res<crate::interpolation::RenderPoses>,
@@ -195,6 +198,10 @@ pub fn sync(
     let now = time.elapsed_secs();
     let sim_now = world.0.time();
     let sun = models.sun;
+
+    death_bodies::update(&mut commands, &mut chars.1, std::mem::take(&mut effects.deaths),
+        world.0.round.round, now, &mut models, &mut materials, &level.0,
+        &mat_query, &mut transforms, &mut visibility);
 
     // Drop characters whose players left.
     let gone: Vec<sim::PlayerId> = chars.0.keys().copied().filter(|id| world.0.player(*id).is_none()).collect();

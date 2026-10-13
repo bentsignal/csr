@@ -104,12 +104,23 @@ impl PlayerAnimSet {
             for action in ["fire", "fire_crouch", "reload", "reload_crouch"] { names.insert(format!("@{prefix}_{action}")); }
         }
         names.extend(["a_jump_onspot", "a_jump_onspot_crouch", "a_fall"].map(str::to_string));
+        names.insert("@deathpose_lowviolence".to_string());
         for name in names { set.clip(&name); }
         Some(set)
     }
 
     pub fn bones(&self) -> &[Bone] {
         &self.bones
+    }
+
+    /// Installed full-body death sequence, played once and held at its end.
+    /// This is the model's low-violence animation, not a ragdoll simulation.
+    pub fn death_pose(&mut self, seconds: f32) -> Option<Vec<glam::Mat4>> {
+        let clip = self.clip("@deathpose_lowviolence")?;
+        if clip.delta || clip.looping || clip.frames.len() < 2 { return None; }
+        let mut pose = skeleton::rest_pose(&self.bones);
+        clip.sample(seconds.clamp(0., clip.duration()), &mut pose);
+        Some(skeleton::model_space(&self.bones, &pose))
     }
 
     /// Original Panorama loadout idle, using real time independently of a paused match.
@@ -290,4 +301,23 @@ impl PlayerAnimSet {
 
 fn blend(a: &Pose, b: &Pose, t: f32) -> Pose {
     a.iter().zip(b).map(|(x, y)| (x.0.lerp(y.0, t), x.1.slerp(y.1, t))).collect()
+}
+
+#[cfg(test)]
+mod death_tests {
+    use super::*;
+    #[test]
+    fn death_clip_finishes_once_and_preserves_its_final_pose() {
+        let bone=Bone {name:"root".into(),parent:-1,pos:glam::Vec3::ZERO,quat:glam::Quat::IDENTITY,
+            rot:glam::Vec3::ZERO,pos_scale:glam::Vec3::ONE,rot_scale:glam::Vec3::ONE,
+            pose_to_bone:glam::Mat4::IDENTITY,flags:0};
+        let clip=Clip {name:"@deathpose_lowviolence".into(),fps:1.,looping:false,delta:false,
+            frames:vec![vec![(glam::Vec3::ZERO,glam::Quat::IDENTITY)],vec![(glam::Vec3::X,glam::Quat::IDENTITY)]],animated:vec![true]};
+        let mut anims=PlayerAnimSet {bones:vec![bone],upper:vec![true],source:Arc::new(mdl::Model::default()),
+            clips:HashMap::from([("@deathpose_lowviolence".into(),Some(Arc::new(clip)))]),grids:HashMap::new(),menu_idle:None};
+        assert_eq!(anims.death_pose(0.).unwrap()[0].w_axis.x,0.);
+        assert_eq!(anims.death_pose(0.5).unwrap()[0].w_axis.x,0.5);
+        assert_eq!(anims.death_pose(1.).unwrap(),anims.death_pose(20.).unwrap());
+        assert_eq!(anims.death_pose(20.).unwrap()[0].w_axis.x,1.);
+    }
 }
