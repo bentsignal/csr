@@ -125,9 +125,9 @@ fn tracked_receipt_must_already_satisfy_existing_admission_limits() {
 }
 
 #[test]
-fn wire_v4_cannot_admit_a_peer_to_receipt_v5() {
-    assert_eq!(VERSION, 5);
-    assert_eq!(PROTOCOL_ID, 0x4353_5257_0000_0005);
+fn wire_v4_and_v5_cannot_admit_a_peer_to_current_movement_v6() {
+    assert_eq!(VERSION, 6);
+    assert_eq!(PROTOCOL_ID, 0x4353_5257_0000_0006);
     let content = ContentManifest {
         map_id: "csgo_map_test".into(),
         map_name: "test".into(),
@@ -139,15 +139,19 @@ fn wire_v4_cannot_admit_a_peer_to_receipt_v5() {
         content.clone(),
     )
     .unwrap();
-    let reply = session.join(
-        1,
-        ClientControl::Hello {
-            version: 4,
-            name: "old".into(),
-            team: Team::CounterTerrorist,
-            content,
-        },
-    );
-    assert!(matches!(reply, ServerControl::Rejected { .. }));
-    assert!(session.world().players.is_empty());
+    let before = session.world().state();
+    for version in [4, 5] {
+        let reply = session.join(
+            version as u64,
+            ClientControl::Hello {
+                version,
+                name: "old".into(),
+                team: Team::CounterTerrorist,
+                content: content.clone(),
+            },
+        );
+        assert!(matches!(reply, ServerControl::Rejected { .. }));
+        assert!(session.world().players.is_empty());
+        assert_eq!(session.world().state(), before);
+    }
 }

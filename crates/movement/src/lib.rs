@@ -218,6 +218,12 @@ struct Mover<'a, W: TraceWorld + ?Sized> {
     dt: f32,
     max_speed: f32,
     drop_scaffold: bool,
+    /// First airborne contact with walkable ground this tick, before its
+    /// velocity projection. This is transient solver state, not replicated.
+    landing_speed: Option<f32>,
+    /// Total numerical contact separation allowed across this entire tick,
+    /// including both step candidates. Never a gameplay velocity impulse.
+    contact_repair_left: f32,
 }
 
 impl<W: TraceWorld + ?Sized> Mover<'_, W> {
@@ -316,6 +322,39 @@ impl<W: TraceWorld + ?Sized> Mover<'_, W> {
         out
     }
 
+    fn repair_repeated_contact(&mut self, tr: &Trace) {
+        if tr.fraction != 0.0 || tr.start_solid || tr.all_solid {
+            return;
+        }
+        let (mins, maxs) = self.pm.hull();
+        // Collision reports the expanded plane for the hull CENTER, not
+        // feet. Restore only its existing epsilon gap lost to float rounding.
+        let center = self.pm.origin + (mins + maxs) * 0.5;
+        let target = (tr.plane_dist + collision::DIST_EPSILON).next_up();
+        let gap = target - tr.normal.dot(center);
+        let length_squared = tr.normal.length_squared();
+        if !gap.is_finite() || gap <= 0.0 || length_squared <= 0.0 {
+            return;
+        }
+        let candidate = self.pm.origin + tr.normal * (gap / length_squared);
+        let distance = (candidate - self.pm.origin).length();
+        if !candidate.is_finite() || distance <= 0.0 || distance > self.contact_repair_left {
+            return;
+        }
+        // A different solid can block even this tiny correction. Neither
+        // the correction nor the remaining ordinary travel bypasses a trace.
+        let sweep = self.trace(self.pm.origin, candidate);
+        if sweep.fraction != 1.0 || sweep.start_solid || sweep.all_solid {
+            return;
+        }
+        let at = self.trace(candidate, candidate);
+        if at.start_solid || at.all_solid {
+            return;
+        }
+        self.pm.origin = candidate;
+        self.contact_repair_left -= distance;
+    }
+
     /// Slide move with up to four bumps; returns whether anything was hit.
     fn try_player_move(&mut self) -> bool {
         let primal = self.pm.velocity;
@@ -344,14 +383,24 @@ impl<W: TraceWorld + ?Sized> Mover<'_, W> {
                 break;
             }
             blocked = true;
-            time_left -= time_left * tr.fraction;
-            if num_planes >= planes.len() {
-                self.pm.velocity = Vec3::ZERO;
-                break;
+            if !self.pm.on_ground && !tr.start_solid && tr.normal.z >= MIN_GROUND_NORMAL {
+                self.landing_speed.get_or_insert((-self.pm.velocity.z).max(0.0));
             }
-            planes[num_planes] = tr.normal;
-            num_planes += 1;
-
+            time_left -= time_left * tr.fraction;
+            // A repeated contact with the exact same plane adds no new
+            // constraint. In particular it cannot define a two-plane crease.
+            if planes[..num_planes].contains(&tr.normal) {
+                self.repair_repeated_contact(&tr);
+            } else {
+                if num_planes >= planes.len() {
+                    self.pm.velocity = Vec3::ZERO;
+                    break;
+                }
+                planes[num_planes] = tr.normal;
+                num_planes += 1;
+            }
+            // A repeated plane still obeys every previous genuine constraint
+            // and the same anti-reversal check as any new contact.
             if num_planes == 1 && !self.pm.on_ground {
                 self.pm.velocity = Self::clip_velocity(original, planes[0], 1.0);
                 original = self.pm.velocity;
@@ -542,7 +591,7 @@ impl<W: TraceWorld + ?Sized> Mover<'_, W> {
 
     fn categorize(&mut self, events: &mut MoveEvents) {
         let was_on_ground = self.pm.on_ground;
-        let fall_speed = -self.pm.velocity.z;
+        let fall_speed = self.landing_speed.take().unwrap_or(-self.pm.velocity.z);
         if self.pm.velocity.z > NON_JUMP_VELOCITY {
             self.pm.on_ground = false;
             return;
@@ -632,9 +681,14 @@ pub fn player_move<W: TraceWorld + ?Sized>(
         dt,
         max_speed,
         drop_scaffold:input.buttons&(buttons::DUCK|buttons::WALK)!=0,
+        landing_speed: None,
+        contact_repair_left: collision::DIST_EPSILON,
     };
 
     m.pm.stamina = (m.pm.stamina - cfg.stamina_recovery_rate * dt).max(0.0);
+    // Placement/restoration can begin with an unset or stale grounded flag.
+    // Classify current support before choosing ground/air duck and jump paths.
+    m.categorize(&mut events);
     m.duck(input);
     let (mins,maxs)=m.pm.hull();
     let climb=world.climbable(m.pm.origin,mins,maxs);
@@ -675,3 +729,5 @@ pub fn player_move<W: TraceWorld + ?Sized>(
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod fidelity_tests;
