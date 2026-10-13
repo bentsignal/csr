@@ -227,7 +227,7 @@ fn grenade_practice_survives_snapshot_and_respawn_without_changing_competitive()
     let mut throws = 0;
     for _ in 0..2 {
         // Let deployment/the prior throw cooldown expire with attack released.
-        for _ in 0..w.tick_rate { w.step(&[]); }
+        for _ in 0..w.tick_rate { w.step(&[(human, TickInput::default())]); }
         w.step(&[(human, TickInput { buttons: buttons::ATTACK, ..Default::default() })]);
         throws += w.events.iter().filter(|e| matches!(e, GameEvent::UtilityThrown { player, .. } if *player == human)).count();
         assert!(w.player(human).unwrap().has("weapon_hegrenade"));
