@@ -32,6 +32,7 @@ mod tests {
         collision.finalize();
         let mut world = sim::World::with_catalog(Arc::new(collision), Arc::new(catalog));
         world.set_tick_rate(rate);
+        world.set_mode(sim::GameMode::Deathmatch, sim::RulesConfig::default());
         let id = world.add_player("counted probe", sim::Team::CounterTerrorist);
         (world, id)
     }
@@ -142,6 +143,7 @@ impl SoundProbe {
             "Unknown CSR_SOUND_PROBE"
         );
         if self.counted.is_some() {
+            assert_eq!(world.mode, sim::GameMode::Deathmatch, "Counted sound probes require --deathmatch");
             assert!(!world.players.iter().any(|p| p.is_bot), "Counted sound probes require --bots 0");
         }
         let weapons = ["weapon_ak47", "weapon_hkp2000", "weapon_knife"].map(|name| {

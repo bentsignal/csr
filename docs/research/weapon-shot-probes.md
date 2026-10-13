@@ -1,10 +1,13 @@
 # Exact-count screenshot audio probes
 
 `CSR_SOUND_PROBE=ak47_single|ak47_three|ak47_five` is enabled only when the
-existing screenshot-run gate is active. Run with `--bots 0`, without a noclip
+existing screenshot-run gate is active. Run with `--deathmatch --bots 0`, without a noclip
 `--camera` override. The existing sound-probe spawn position is retained and
 the ordinary TickInput aims upward. This is a test fixture, not a gameplay or
 live audio scheduling change.
+
+Counted preparation rejects other modes. In Competitive a bot-free opponentless
+round can freeze, end or restart, so `--bots 0` alone cannot establish this fixture.
 
 The fixture holds ATTACK beginning at simulation time1.5 until the requested
 number of actual local `GameEvent::Fire` events has been observed immediately
