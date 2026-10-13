@@ -444,3 +444,65 @@ fn repeated_plane_repair_cannot_separate_through_an_adjacent_solid() {
     assert_eq!(mover.pm.origin, before);
     assert_eq!(mover.contact_repair_left, collision::DIST_EPSILON);
 }
+
+#[test]
+fn genuine_corner_followed_by_repeated_plane_keeps_all_constraints() {
+    let a = Vec3::new(-0.8, 0., 0.6);
+    let cfg = MoveConfig {
+        gravity: 0.,
+        ..Default::default()
+    };
+    let mut witnessed = false;
+    for rate in [64, 128] {
+        for tilt in [0.003, 0.006, 0.01, 0.1] {
+            let b = Vec3::new(0.8, tilt, 0.6).normalize();
+            let mut w = CollisionWorld::new();
+            w.add_convex(ramp(a));
+            w.add_convex(ramp(b));
+            w.finalize();
+            let observed = ObservedTrace {
+                world: &w,
+                calls: RefCell::default(),
+            };
+            for gap in [0.001, 0.01, 0.02, 0.0312] {
+                let mut pm = PlayerMove::spawn_at(Vec3::new(0., 16., (16. * 0.8 + gap) / 0.6));
+                pm.velocity = Vec3::new(100., 200., -400.);
+                for _ in 0..8 {
+                    observed.calls.borrow_mut().clear();
+                    let previous = pm.velocity;
+                    player_move(&mut pm, &input(0), &cfg, &observed, 1. / rate as f32);
+                    let calls = observed.calls.borrow();
+                    let contacts: Vec<_> = calls
+                        .iter()
+                        .filter_map(|(_, _, tr)| {
+                            (tr.fraction < 1. && !tr.start_solid).then_some(tr.normal)
+                        })
+                        .collect();
+                    witnessed |= contacts
+                        .windows(3)
+                        .any(|n| n[0] != n[1] && (n[2] == n[0] || n[2] == n[1]));
+                    // Bound arithmetic roundoff only, not a permitted inward
+                    // gameplay speed: each dot/projection uses a few f32 ops.
+                    let rounding = pm.velocity.length() * f32::EPSILON * 8.;
+                    assert!(
+                        pm.velocity.dot(a) >= -rounding,
+                        "inward a: {pm:?}, contacts:{contacts:?}"
+                    );
+                    assert!(
+                        pm.velocity.dot(b) >= -rounding,
+                        "inward b: {pm:?}, contacts:{contacts:?}"
+                    );
+                    assert!(pm.velocity.dot(previous) >= 0., "reversal: {pm:?}");
+                    assert!(
+                        !w.trace_box(pm.origin, pm.origin, STAND_MINS, STAND_MAXS, MASK)
+                            .start_solid
+                    );
+                }
+            }
+        }
+    }
+    assert!(
+        witnessed,
+        "fixture must exercise a genuine corner then a repeated plane"
+    );
+}
