@@ -31,7 +31,7 @@ validated, including rejection of host paths. The front end must resolve
 the id against its supported registry and perform a cancellable load before
 reconnecting. Receiving the manifest does not mount or download anything.
 
-Control, inputs and events use postcard. Wire v5 retains the bounded lossless
+Control, inputs and events use postcard. Wire v6 retains the bounded lossless
 full/patch state envelope introduced in v4, carrying exact postcard WorldState
 bytes. Channels are:
 
@@ -42,7 +42,9 @@ bytes. Channels are:
 | State | Unreliable, fragmented | Full or lossless baseline delta with last applied input sequence |
 | Events | Reliable, ordered | Tick-stamped `GameEvent` batches |
 
-Protocol version 5 rejects older peers and retains replicated spawn epochs and
+Protocol version 6 rejects v5 and older peers: corrected first-command grounding
+and landing semantics would diverge in an old predictor, even though the
+replicated movement fields are unchanged. It retains replicated spawn epochs and
 server-derived hitscan rewind ticks. See [LAGCOMP.md](LAGCOMP.md) for server timing/lifecycle
 bounds and the remaining hitbox fidelity scope.
 
