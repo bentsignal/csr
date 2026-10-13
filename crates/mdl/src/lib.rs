@@ -15,6 +15,7 @@
 pub mod anim;
 pub mod phy;
 pub mod skeleton;
+pub mod vhv;
 
 use glam::{Vec2, Vec3};
 use std::io;
@@ -73,11 +74,27 @@ pub struct Vertex {
     pub bone_count: u8,
 }
 
+/// Identity of one hardware mesh traversal in the source model. This is not
+/// a lighting-record ordering guarantee.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct HardwareMesh {
+    pub body_part: u32,
+    pub sub_model: u32,
+    pub mesh: u32,
+    pub lod: u32,
+}
+
 /// Triangles that share one material slot.
 #[derive(Clone, Debug, Default)]
 pub struct Mesh {
     /// Index into the model's skin table columns (`skin_ref`).
     pub material: usize,
+    /// Present for meshes emitted by the MDL/VTX reader; absent on synthetic
+    /// or derived meshes unless their creator explicitly retains provenance.
+    pub hardware: Option<HardwareMesh>,
+    /// Indices into the LOD0, fixup-resolved VVD vector, parallel to vertices.
+    /// Keeping these does not establish the order of opaque VHV records.
+    pub source_vertex_indices: Vec<u32>,
     pub vertices: Vec<Vertex>,
     pub indices: Vec<u32>,
 }
@@ -86,6 +103,8 @@ pub struct Mesh {
 pub struct Model {
     pub name: String,
     pub version: i32,
+    /// Exact unsigned MDL header checksum; not a cryptographic content hash.
+    pub checksum: u32,
     /// Authored model-space eye-position metadata. Not the gameplay camera or
     /// a calibrated headset pivot; consumers must establish that binding.
     pub eye_position: Vec3,
@@ -197,6 +216,7 @@ impl Model {
         let mut model = Model {
             name: m.cstr(12)?.chars().take(64).collect(),
             version: m.i32(4)?,
+            checksum: m.i32(8)? as u32,
             hull_min: m.vec3(104)?,
             hull_max: m.vec3(116)?,
             flags: m.i32(152)?,
@@ -282,6 +302,7 @@ impl Model {
         let mut model = Model {
             name: m.cstr(12)?.chars().take(64).collect(),
             version,
+            checksum: m.i32(8)? as u32,
             hull_min: m.vec3(104)?,
             hull_max: m.vec3(116)?,
             view_min: m.vec3(128)?,
@@ -369,6 +390,12 @@ impl Model {
                 let sg_base = vm + vt.i32(vm + 4)?.max(0) as usize;
                 let mut out = Mesh {
                     material,
+                    hardware: Some(HardwareMesh {
+                        body_part: bp as u32,
+                        sub_model: choice as u32,
+                        mesh: mi as u32,
+                        lod: 0,
+                    }),
                     ..Default::default()
                 };
                 for sg in 0..num_sg {
@@ -381,6 +408,8 @@ impl Model {
                     for v in 0..num_verts {
                         let orig = vt.u16(vert_ofs + v * 9 + 4)? as usize;
                         let idx = model_vertex_start + mesh_vertex_offset + orig;
+                        out.source_vertex_indices.push(u32::try_from(idx)
+                            .map_err(|_| invalid("VVD source vertex index exceeds u32"))?);
                         out.vertices.push(verts.get(idx).copied().ok_or_else(|| {
                             invalid(format!("vertex {idx} out of range ({})", verts.len()))
                         })?);
@@ -553,3 +582,6 @@ mod tests {
         assert!(read_vvd(&data).unwrap().iter().all(|v| v.tangent.is_none()));
     }
 }
+
+#[cfg(test)]
+mod identity_tests;
