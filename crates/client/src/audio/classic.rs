@@ -269,6 +269,99 @@ mod tests {
     }
 
     #[test]
+    fn decoy_playback_selects_verified_pair_and_preserves_disabled_or_failed_fallback() {
+        use bevy::{
+            audio::{AudioPlayer, AudioSource, PlaybackSettings},
+            ecs::world::CommandQueue,
+            prelude::*,
+        };
+        let old_near = wav(1000);
+        let old_far = wav(-2000);
+        let current_near = wav(3000);
+        let current_far = wav(-4000);
+        let near_hash = format!("{:x}", Sha256::digest(&old_near));
+        let far_hash = format!("{:x}", Sha256::digest(&old_far));
+        for (era, corrupt_far) in [
+            (SoundEra::Classic2015, false),
+            (SoundEra::InstalledLegacy, false),
+            (SoundEra::Classic2015, true),
+        ] {
+            let mut fs = fs(
+                old_near.clone(),
+                if corrupt_far {
+                    wav(-1999)
+                } else {
+                    old_far.clone()
+                },
+            );
+            fs.push_back(
+                "synthetic current",
+                vfs::Mount::Memory(BTreeMap::from([
+                    (
+                        "sound/weapons/test/current.wav".into(),
+                        Arc::from(current_near.clone()),
+                    ),
+                    (
+                        "sound/weapons/test/current_distant.wav".into(),
+                        Arc::from(current_far.clone()),
+                    ),
+                ])),
+            );
+            let mut entries = entries();
+            let near = entries.remove("test.single").unwrap();
+            entries.insert("weapon_ak47.single".into(), near);
+            let mut profile = if era == SoundEra::InstalledLegacy {
+                Profile::load(&fs, &mut entries, era)
+            } else {
+                Profile::default()
+            };
+            if era == SoundEra::Classic2015 {
+                let mut spec = spec(&near_hash, &far_hash);
+                spec.binding = "Weapon_AK47.Single";
+                let installed = profile.install(&fs, &mut entries, &spec);
+                assert_eq!(installed.is_ok(), !corrupt_far);
+            }
+            let mut sounds = super::super::SoundLibrary {
+                entries,
+                classic: profile,
+                ..Default::default()
+            };
+            let mut world = World::new();
+            let mut queue = CommandQueue::default();
+            let mut sources = Assets::<AudioSource>::default();
+            let pos = glam::Vec3::new(100.0, 200.0, 300.0);
+            {
+                let mut commands = Commands::new(&mut queue, &world);
+                sounds.play_decoy(&mut commands, &fs, &mut sources, pos);
+            }
+            queue.apply(&mut world);
+            let mut played = Vec::new();
+            for (player, emitter, settings) in world
+                .query::<(
+                    &AudioPlayer<AudioSource>,
+                    &super::super::Emitter,
+                    &PlaybackSettings,
+                )>()
+                .iter(&world)
+            {
+                played.push(sources.get(&player.0).unwrap().bytes.to_vec());
+                assert_eq!(emitter.pos, crate::coords::to_bevy(pos));
+                assert!(settings.spatial);
+            }
+            let mut expected = if era == SoundEra::Classic2015 && !corrupt_far {
+                vec![old_near.clone(), old_far.clone()]
+            } else {
+                vec![current_near.clone(), current_far.clone()]
+            };
+            played.sort();
+            expected.sort();
+            assert_eq!(played, expected, "era {era:?}, corrupt far {corrupt_far}");
+            // A decoy is world audio, not a voice owned by its thrower.
+            assert!(sounds.playing.is_empty());
+        }
+    }
+
+    #[test]
     fn verified_pair_preserves_original_entries_and_only_selects_exact_stock_identity() {
         let near = wav(1000);
         let distant = wav(-2000);
