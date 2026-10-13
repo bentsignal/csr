@@ -1731,7 +1731,7 @@ mod tests {
         let mut bridge = Bridge {
             data,
             actions: actions.clone(),
-            seen: HashSet::new(),
+            seen: HashMap::new(),
             roots: HashMap::new(),
             requested: HashSet::new(),
             options: crate::frontend_options::Scene::default(),

@@ -75,7 +75,7 @@ pub(super) fn update(
             body.materials=own_materials(&body.instance,mat_query);
             let (cube,sun_dir,sun_color)=lighting_at(level,sun,body.death.pose.origin+glam::Vec3::Z*32.);
             for handle in &body.materials {
-                if let Some(m)=materials.get_mut(handle) {m.params.ambient_cube=cube;m.params.sun_dir=sun_dir;m.params.sun_color=sun_color;}
+                if let Some(mut m)=materials.get_mut(handle) {m.params.ambient_cube=cube;m.params.sun_dir=sun_dir;m.params.sun_color=sun_color;}
             }
         }
         for e in &body.instance.meshes {
