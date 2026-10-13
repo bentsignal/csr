@@ -89,7 +89,7 @@ file copying and no reading.
 - Mods follow the same low-friction rule as sideloading: one file, dropped
   in, done, and shared automatically between friends on a server.
 
-### 7. Look and feel: early CS:GO, ideally pixel-perfect
+### 7. Look and feel: early CS:GO, measured 1:1
 
 - The menu is the **classic Scaleform UI**: the Flash-based menu CS:GO used
   from 2012 until August 2018, shown in the owner's screenshots. It is not
@@ -147,6 +147,17 @@ silenced M4A1-S sound. Keep the supplied classic Scaleform menu references.
 Later quality-of-life additions follow a faithful base. Installed 2023 Legacy
 data is a development reference, not proof that a sound or mechanic matches
 2015; historical content still follows the runtime-only content rules.
+
+The follow-up playtest reinforced that a generally plausible CS:GO imitation
+is insufficient. Reproduce the original movement, jumping, gun behavior and
+audio mixing in Rust/Bevy, while preserving the shared-engine connection layer.
+**Surfing must match CS:GO too:** ramp contact, air control, sliding, corners,
+seams and speed retention need measured regression coverage at the relevant
+tick rate and recorded server movement settings. Surf servers' settings can
+differ from competitive defaults; an undocumented "surf feel" preset is not
+proof of parity. Correct waveforms alone do not establish original sound tone,
+EQ, voice overlap, speaker routing or DSP. The owner need not supply clips
+before this research proceeds.
 
 ### 8. VR cross-play (later, but designed for now)
 
