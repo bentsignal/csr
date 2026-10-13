@@ -49,6 +49,7 @@ pub mod ui_assets;
 pub mod hud_art;
 pub mod localize;
 pub mod material;
+pub mod shadow_diagnostic;
 pub mod player;
 pub mod remote;
 pub mod remote_map;
@@ -253,6 +254,7 @@ impl Plugin for CsgoPlugin {
             .add_systems(Update, hud::menu_visibility.run_if(in_state(AppState::Match)).after(remote_join::update))
             .add_systems(Update, foley::update.run_if(remote_join::ready).run_if(resource_exists::<remote::RemoteClient>).after(remote_join::update));
         if let Err(error) = remote_render_gate::install(app) { error!("Remote render preparation unavailable: {error:?}"); }
+        shadow_diagnostic::install(app);
     }
 }
 

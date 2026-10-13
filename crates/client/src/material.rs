@@ -35,6 +35,8 @@ pub mod flags {
     pub const NORMAL2: u32 = 1 << 10;
     pub const SSBUMP: u32 = 1 << 11;
     pub const SSBUMP_MATHFIX: u32 = 1 << 12;
+    /// Developer-only factor visualization on an owned material variant.
+    pub const SHADOW_DIAGNOSTIC: u32 = 1 << 13;
 }
 
 #[derive(Clone, Copy, Debug, ShaderType)]
@@ -98,6 +100,7 @@ impl Default for WorldParams {
 pub struct WorldMaterialKey {
     pub cull: bool,
     pub depth_write: bool,
+    pub shadow_diagnostic: bool,
 }
 
 #[derive(Asset, TypePath, AsBindGroup, Debug, Clone)]
@@ -144,6 +147,7 @@ impl From<&WorldMaterial> for WorldMaterialKey {
         Self {
             cull: m.cull,
             depth_write: !matches!(m.alpha_mode, AlphaMode::Blend | AlphaMode::Add | AlphaMode::Premultiplied),
+            shadow_diagnostic: crate::shadow_diagnostic::enabled(),
         }
     }
 }
@@ -162,7 +166,15 @@ impl Material for WorldMaterial {
     }
 
     fn enable_shadows() -> bool {
-        false
+        crate::shadow_diagnostic::enabled()
+    }
+
+    fn prepass_fragment_shader() -> ShaderRef {
+        if crate::shadow_diagnostic::enabled() {
+            crate::shadow_diagnostic::SHADOW_SHADER.into()
+        } else {
+            ShaderRef::Default
+        }
     }
 
     fn specialize(
@@ -172,6 +184,11 @@ impl Material for WorldMaterial {
         key: MaterialPipelineKey<Self>,
     ) -> Result<(), SpecializedMeshPipelineError> {
         descriptor.primitive.cull_mode = if key.bind_group_data.cull { Some(Face::Back) } else { None };
+        if key.bind_group_data.shadow_diagnostic {
+            if let Some(fragment) = descriptor.fragment.as_mut() {
+                fragment.shader_defs.push("CSR_SHADOW_DIAGNOSTIC".into());
+            }
+        }
         if let Some(ds) = descriptor.depth_stencil.as_mut() {
             ds.depth_write_enabled = Some(key.bind_group_data.depth_write);
         }
