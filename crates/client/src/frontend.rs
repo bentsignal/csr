@@ -49,7 +49,7 @@ enum Action {
 struct Bridge {
     data: Arc<Mutex<Data>>,
     actions: Arc<Mutex<Vec<Action>>>,
-    seen: HashSet<(String, String)>,
+    seen: HashMap<String, HashSet<String>>,
     roots: HashMap<String, String>,
     requested: HashSet<String>,
     options: crate::frontend_options::Scene,
@@ -151,7 +151,14 @@ impl Engine for Bridge {
     ) -> Option<Value> {
         let seen_object = if object.starts_with("OwnedLobby") { "OwnedLobby" }
             else if object.starts_with("OwnedPicker") { "OwnedPicker" } else { object };
-        if self.seen.insert((seen_object.into(), method.into()))
+        // Repeated native getters are the common path. Borrow their existing
+        // names instead of allocating two Strings only to discard them when
+        // the diagnostic pair was already seen. This does not cache results.
+        let first = self.seen.get(seen_object).is_none_or(|methods| !methods.contains(method));
+        if first {
+            self.seen.entry(seen_object.to_owned()).or_default().insert(method.to_owned());
+        }
+        if first
             || matches!(
                 method,
                 "BasePanelRunCommand" | "OnUpdateValue" | "SendUIEvent"
@@ -1037,7 +1044,7 @@ pub(crate) fn update(
             Box::new(Bridge {
                 data: front.data.clone(),
                 actions: front.actions.clone(),
-                seen: HashSet::new(),
+                seen: HashMap::new(),
                 roots: HashMap::new(),
                 requested: HashSet::new(),
                 options: Default::default(),
