@@ -2,14 +2,24 @@
 
 `CSR_SOUND_PROBE=ak47_single|ak47_three|ak47_five` is enabled only when the
 existing screenshot-run gate is active. Run with `--deathmatch --bots 0`, without a noclip
-`--camera` override. The existing sound-probe spawn position is retained and
-the ordinary TickInput aims upward. This is a test fixture, not a gameplay or
+`--camera` override. Counted probes use the recorded outdoor t_spawn eye
+viewpoint; old sound probes retain their garage position. The ordinary TickInput
+aims upward. This is a test fixture, not a gameplay or
 live audio scheduling change.
 
 Counted preparation rejects other modes. In Competitive a bot-free opponentless
 round can freeze, end or restart, so `--bots 0` alone cannot establish this fixture.
 
-The fixture holds ATTACK beginning at simulation time1.5 until the requested
+The viewpoint is an eye coordinate, not a measured foot origin. Preparation
+subtracts the actual CSR movement eye offset. Before ATTACK, the observer records
+the actual settled origin, eye, hull and zero velocity with on_ground true,
+and traces the upward ray against the selected collision source. Non-sky
+geometry rejects the fixture. Any actual local Impact or involved Damage event
+also rejects it; pitch alone is not an impact-free proof. Native reference
+capture needs its own measured origin/ground/clear-sky gate.
+
+The fixture holds ATTACK beginning at simulation time1.5, once the grounded
+clear-sky gate has passed, until the requested
 number of actual local `GameEvent::Fire` events has been observed immediately
 after authoritative `World::step`. It then releases ATTACK on the next tick,
 including subsequent render-frame catch-up ticks. The total6.5sec fixture

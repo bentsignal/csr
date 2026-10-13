@@ -26,8 +26,8 @@ mod tests {
         let mut collision = collision::CollisionWorld::new();
         let s = 4096.0;
         for triangle in [
-            [glam::Vec3::new(-s, -s, -110.0), glam::Vec3::new(s, -s, -110.0), glam::Vec3::new(s, s, -110.0)],
-            [glam::Vec3::new(-s, -s, -110.0), glam::Vec3::new(s, s, -110.0), glam::Vec3::new(-s, s, -110.0)],
+            [glam::Vec3::new(-s, -s, 155.0), glam::Vec3::new(s, -s, 155.0), glam::Vec3::new(s, s, 155.0)],
+            [glam::Vec3::new(-s, -s, 155.0), glam::Vec3::new(s, s, 155.0), glam::Vec3::new(-s, s, 155.0)],
         ] { collision.add_triangle(triangle, collision::contents::SOLID, 0); }
         collision.finalize();
         let mut world = sim::World::with_catalog(Arc::new(collision), Arc::new(catalog));
@@ -63,6 +63,7 @@ mod tests {
                 }
                 let counted = probe.counted.as_ref().unwrap();
                 assert!(counted.finished);
+                assert!(counted.ready);
                 assert_eq!(actual.len(), requested);
                 assert_eq!(counted.observed.iter().map(|(tick, _)| *tick).collect::<Vec<_>>(), actual);
                 assert_eq!(counted.observed.iter().map(|(_, clip)| *clip).collect::<Vec<_>>(),
@@ -83,6 +84,38 @@ mod tests {
         assert!(probe.input(2.0).is_none());
         assert!(probe.counted.is_none());
     }
+
+    #[test]
+    #[should_panic(expected = "sky ray hit non-sky geometry")]
+    fn a_real_roof_rejects_the_scene_before_any_shot() {
+        let (mut world, id) = world(64);
+        let collision = Arc::get_mut(&mut world.collision).unwrap();
+        let s = 4096.0;
+        collision.add_triangle([
+            glam::Vec3::new(-s, -s, 229.0), glam::Vec3::new(s, s, 229.0), glam::Vec3::new(s, -s, 229.0),
+        ], collision::contents::SOLID, 0);
+        collision.add_triangle([
+            glam::Vec3::new(-s, -s, 229.0), glam::Vec3::new(-s, s, 229.0), glam::Vec3::new(s, s, 229.0),
+        ], collision::contents::SOLID, 0);
+        collision.finalize();
+        let mut probe = SoundProbe::named(Some("ak47_single".into()));
+        probe.prepare(&mut world, id);
+        for _ in 0..64 {
+            let tick = world.tick;
+            world.step(&[(id, probe.input(world.time()).unwrap())]);
+            assert!(!world.events.iter().any(|e| matches!(e, sim::GameEvent::Fire { .. })));
+            probe.observe_step(&world, id, tick);
+        }
+        panic!("Roof was not rejected");
+    }
+
+    #[test]
+    #[should_panic(expected = "Counted sound probes require --deathmatch")]
+    fn opponentless_competitive_round_is_not_a_counted_probe() {
+        let (mut world, id) = world(64);
+        world.set_mode(sim::GameMode::Competitive, sim::RulesConfig::default());
+        SoundProbe::named(Some("ak47_three".into())).prepare(&mut world, id);
+    }
 }
 
 #[derive(Default)]
@@ -91,6 +124,7 @@ struct CountedShots {
     observed: Vec<(u64, i32)>,
     last_tick: Option<u64>,
     finished: bool,
+    ready: bool,
 }
 
 fn target(name: Option<&str>) -> Option<usize> {
@@ -158,7 +192,11 @@ impl SoundProbe {
         let p = world.player_mut(id).unwrap();
         p.weapons = weapons.into();
         p.active = 0;
-        p.movement.origin = glam::Vec3::new(382.0, 2102.0, -109.0);
+        p.movement.origin = if self.counted.is_some() {
+            // Recorded t_spawn is an eye viewpoint, not a measured foot origin.
+            // Use the actual CSR eye offset, then observe where its hull settles.
+            glam::Vec3::new(-697.0, -833.0, 220.0) - glam::Vec3::Z * p.movement.view_offset()
+        } else { glam::Vec3::new(382.0, 2102.0, -109.0) };
         p.movement.velocity = glam::Vec3::ZERO;
         p.view_angles = glam::Vec3::new(if self.counted.is_some() { -89.0 } else { 0.0 }, 180.0, 0.0);
     }
@@ -171,7 +209,23 @@ impl SoundProbe {
         if counted.last_tick == Some(producer_tick) { return; }
         assert!(counted.last_tick.is_none_or(|last| producer_tick > last), "Counted probe observed an older step");
         counted.last_tick = Some(producer_tick);
+        let p = world.player(id).expect("counted probe player present");
+        assert!(p.alive, "Counted probe player must remain alive");
+        if !counted.ready && p.movement.on_ground && p.movement.velocity == glam::Vec3::ZERO {
+            let eye = p.movement.eye_position();
+            let (direction, _, _) = movement::angle_vectors(glam::Vec3::new(-89.0, 180.0, 0.0));
+            let range = p.active_weapon().expect("counted probe equipped").def.range.max(1.0);
+            let sky = world.collision.trace_ray(eye, eye + direction * range, collision::contents::MASK_SHOT);
+            assert!(sky.fraction >= 1.0 || world.collision.is_sky(sky.surface), "Counted probe sky ray hit non-sky geometry");
+            counted.ready = true;
+            info!("sound_probe grounded_clear_sky owner {id} producer_tick {producer_tick} origin {:?} eye {eye:?} velocity {:?} hull {:?} sky_fraction {} sky_surface {}",
+                p.movement.origin, p.movement.velocity, p.movement.hull(), sky.fraction, sky.surface);
+        }
         for event in &world.events {
+            assert!(!matches!(event,
+                sim::GameEvent::Impact { player, .. } if *player == id), "Counted probe produced a local impact");
+            assert!(!matches!(event,
+                sim::GameEvent::Damage { attacker, victim, .. } if *attacker == id || *victim == id), "Counted probe damage contaminated the scene");
             if let sim::GameEvent::Fire { player, weapon, .. } = event {
                 if *player != id { continue; }
                 assert_eq!(weapon, "weapon_ak47", "Unexpected counted probe weapon");
@@ -198,7 +252,7 @@ impl SoundProbe {
         let during = |start, end| (start..end).contains(&time);
         if let Some(counted) = &self.counted {
             input.view_angles.x = -89.0;
-            if time >= 1.5 && time < self.duration() && counted.observed.len() < counted.target {
+            if time >= 1.5 && time < self.duration() && counted.ready && counted.observed.len() < counted.target {
                 input.buttons |= buttons::ATTACK;
             }
             return Some(input);
