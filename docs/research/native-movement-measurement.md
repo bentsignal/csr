@@ -333,3 +333,39 @@ downward hull queries at the edge, rather than attributing the constant
 height to faulty ramp physics. Private raw evidence is
 `movement-reference-contract/ramp-back64-exploratory-only-64-20261013-195523-33943187`;
 its actual-map replay remains a separate prepared, uncompiled fixture.
+
+### First ramp-contact collision correction
+
+The subsequent 256-command, 64 Hz observation used an unchanged unscoped
+SSG 08, definition 40/catalog speed 230. Replaying every recorded command
+through the installed map matched reconstructed positions and velocities
+for the first 183 posts. The first discrepancy was command 667: a rounded
+plane-distance ordering produced a false zero-fraction contact and invoked
+our repeated-contact repair. Evaluating the same stored plane and sweep
+operands in higher precision showed both endpoints outside and moving away.
+
+The collision correction rechecks only positive, near-plane distances whose
+ordinary ordering would create a zero-fraction entry. A separating plane
+rejects that convex alone; intervening solids still participate. Fractions,
+contact epsilon and legitimate repeated-contact handling are unchanged.
+Regression witnesses preserve inward contacts, all-solid behavior and an
+interior blocking wall in either convex order. Protocol 9 excludes older
+physics peers, including protocol 8, from prediction and authority sessions.
+
+Six separate native standing-hull queries at our recorded sweep endpoints
+confirm the disputed command-667 slide is clear, and the genuinely inward
+requests contact the same observed normal. These are public hull queries,
+not observations of the native mover's internal sweep sequence or arithmetic.
+The private corrected replay matches command 667 exactly; its first remaining
+discrepancy is command 668. This is a scoped collision correction, not complete
+surfing parity. The full 256-command maximum position difference remains
+0.000489 units, with remaining velocity differences below 0.0251 units/s.
+
+Private evidence is retained in `ramp-back256-map-replay1`,
+`ramp-cmd667-trace-diagnostic1`, `ramp-convex-ordering-candidate1` and
+`movement-reference-contract/ramp-response-recording-only-64-20261013-214534-957e9ddb`.
+The six-query raw trace SHA256 is
+`2fee552a623b7e01d49f706de1a84e06e68a20eaea67e16ed19bafff6964ef22`.
+The geometry observer preserved before/after player and entity inventory
+state. Broader routes, dynamic trigger effects, 128 Hz ramp contact and
+historical 2015 parity remain unverified.
