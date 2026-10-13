@@ -105,3 +105,27 @@ This documentation checkpoint changes no compiled source or Cargo inputs.
 Matched process-loopback PCM and native historical mix admission remain
 separate. The owner's reported AK tone/overlap mismatch is not declared fully
 fixed by a tracking correction.
+
+## Process output control and bot render smoke
+
+Private process-loopback single-shot controls recorded the baseline and fixed
+executables at 44.1 kHz, stereo PCM16. Both recorders were ready before the
+actual Fire; packet receipts reported zero discontinuities and timestamp
+errors. Both game/recorder pairs exited zero, with exact preference preservation.
+
+After whole-window alignment, A/B coherence was 0.9999999834 and normalized
+RMS difference was about 0.00002157 (0.707 PCM16 least-significant bits).
+Single-shot output is effectively unchanged by this tracking correction.
+These are whole process recordings: suit/landing and possible ambient
+contributions remain in the signals. No cleaned waveform, calibrated gain or
+native historical mixer parity follows. Matched burst output analysis remains
+open; command-time voice stealing is not a measured audible cutoff.
+
+The corrected executable also completed a separate stationary Dust II bot
+render smoke at 1600x900 with 2400 rendered frames. The CLI bot option 3
+schedules three opponents and two teammates. Its 2280 samples after the
+declared 120-frame warmup averaged 6.28 ms (159.1 internal frames/s), with
+p95 7.87 ms, p99 11.09 ms and maximum 15.39 ms. The saved screenshot was
+inspected for scene, AK/hands, HUD and a rendered teammate. This is a render
+check with diagnostic audio logging; interactive input latency, an authoritative
+actor census and native performance equivalence were not measured.

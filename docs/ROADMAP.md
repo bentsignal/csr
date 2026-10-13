@@ -255,6 +255,10 @@ thing is uncanny. Fidelity is measured, never eyeballed:
       slowdown against native Legacy: matched command phase, initial state,
       tick rate, server settings and horizontal-speed traces through impact
       and recovery. Retain version-specific evidence before tuning constants.
+- [x] Admit stable native Legacy neutral command/context windows at actual
+      64/128 tick, preserving typed scope, missing properties and rejected
+      lifecycle transitions. Moving-state phase and landing comparison remain
+      open. [Measurement checkpoints](research/native-movement-measurement.md).
 - [ ] Match repeated-crouch fatigue/cooldown after the current jump, landing
       and audio work; measure the original rather than invent a debounce.
 
