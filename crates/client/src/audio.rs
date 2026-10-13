@@ -19,6 +19,7 @@ use bevy::audio::{AudioPlayer, AudioSink, AudioSinkPlayback, AudioSource, Playba
 use bevy::prelude::*;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Instant;
 
 mod classic;
 pub use classic::SoundEra;
@@ -260,6 +261,23 @@ struct Playing {
     entry: String,
 }
 
+/// Opt-in diagnostic of a deferred playback request. A sink observed in a
+/// later Update proves only that Bevy created it, never the shot tick or PCM onset.
+#[derive(Component)]
+struct SoundTrace {
+    requested_at: Instant,
+    request_clock: f64,
+    sink_observed: bool,
+}
+
+impl SoundTrace {
+    fn observe_sink(&mut self, present: bool) -> bool {
+        if !present || self.sink_observed { return false; }
+        self.sink_observed = true;
+        true
+    }
+}
+
 #[derive(Resource, Default)]
 pub struct SoundLibrary {
     entries: HashMap<String, Entry>,
@@ -272,6 +290,7 @@ pub struct SoundLibrary {
     /// `CSR_SOUND_LOG=1`: log every sound start (compare with the real
     /// game's `snd_showstart`, see docs/FIDELITY.md).
     log: bool,
+    trace: bool,
     pub master_volume: f32,
 }
 
@@ -447,6 +466,7 @@ impl SoundLibrary {
             master_volume: 0.5,
             rng: 0x9E37_79B9_7F4A_7C15,
             log: std::env::var_os("CSR_SOUND_LOG").is_some(),
+            trace: std::env::var_os("CSR_AUDIO_TRACE").is_some(),
             ..Default::default()
         };
         let mut files: Vec<String> = Vec::new();
@@ -595,6 +615,7 @@ impl SoundLibrary {
                 self.clock, entry.waves[pick], emit.owner, entry.category, speed * 100.0
             );
         }
+        let initial_gain;
         let entity = match emit.at {
             Some(pos) => {
                 let emitter = Emitter {
@@ -605,6 +626,7 @@ impl SoundLibrary {
                     gunfire: (entry.category == Category::Weapon && (entry.distant.is_some() || entry.distant_layer)).then_some(entry.distant_layer),
                 };
                 let gain = emitter.gain(emitter.pos.distance(self.listener));
+                initial_gain = gain * self.master_volume;
                 commands
                     .spawn((
                         AudioPlayer(handle),
@@ -622,6 +644,7 @@ impl SoundLibrary {
             None => {
                 // Measured gains top out at lvol 20 (1.07 of the AK shot).
                 let gain = (volume * entry.category.near(emit.local)).min(1.07);
+                initial_gain = gain * self.master_volume;
                 commands
                     .spawn((
                         AudioPlayer(handle),
@@ -631,6 +654,14 @@ impl SoundLibrary {
                     .id()
             }
         };
+        if self.trace {
+            commands.entity(entity).insert(SoundTrace {
+                requested_at: Instant::now(), request_clock: self.clock, sink_observed: false,
+            });
+            info!("audio_trace request entity {entity:?} clock {:.6} entry {key:?} wave {:?} owner {:?} channel {} pitch {:.3} cue_volume {volume:.6} master {:.6} initial_gain {initial_gain:.6} spatial {}",
+                self.clock, entry.waves[pick], emit.owner, entry.channel, speed * 100.0,
+                self.master_volume, emit.at.is_some());
+        }
         if let Some(owner) = emit.owner {
             self.playing.push(Playing { entity, owner, channel: entry.channel, entry: key });
         }
@@ -659,6 +690,10 @@ impl SoundLibrary {
         stop.sort_unstable();
         for i in stop.into_iter().rev() {
             let p = self.playing.remove(i);
+            if self.trace {
+                info!("audio_trace steal_command entity {:?} clock {:.6} entry {:?} owner {} channel {} replacement {key:?}",
+                    p.entity, self.clock, p.entry, p.owner, p.channel);
+            }
             commands.entity(p.entity).try_despawn();
         }
     }
@@ -755,6 +790,7 @@ pub fn update(
     mut spatial: Query<(&Emitter, Option<&Fade>, &mut SpatialAudioSink)>,
     mut faded: Query<(Entity, &SoundGain, &Fade, Option<&mut AudioSink>, Has<Emitter>)>,
     active: Query<(), With<AudioPlayer>>,
+    mut traces: Query<(Entity, &mut SoundTrace, Has<AudioSink>, Has<SpatialAudioSink>)>,
 ) {
     sounds.playing.retain(|p| active.contains(p.entity));
     sounds.clock += time.delta_secs_f64();
@@ -764,6 +800,12 @@ pub fn update(
     sounds.listener = listener.0;
     let master = sounds.master_volume;
     let clock = sounds.clock;
+    for (entity, mut trace, ordinary, spatial) in &mut traces {
+        if trace.observe_sink(ordinary || spatial) {
+            info!("audio_trace sink_first_observed entity {entity:?} clock {clock:.6} request_clock {:.6} request_elapsed_ms {:.3} spatial {spatial}",
+                trace.request_clock, trace.requested_at.elapsed().as_secs_f64() * 1000.0);
+        }
+    }
     for (emitter, fade, mut sink) in &mut spatial {
         let gain = emitter.gain(emitter.pos.distance(listener.0)) * fade.map_or(1.0, |f| f.value(clock));
         sink.set_volume(Volume::Linear(gain * master));
@@ -781,6 +823,48 @@ pub fn update(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn sink_observation_requires_an_actual_sink_and_is_reported_once() {
+        let mut trace = super::SoundTrace {
+            requested_at: std::time::Instant::now(), request_clock: 3.25, sink_observed: false,
+        };
+        // A queued AudioPlayer alone cannot establish a sink or audible onset.
+        assert!(!trace.observe_sink(false));
+        assert!(!trace.sink_observed);
+        assert!(trace.observe_sink(true));
+        assert!(!trace.observe_sink(true));
+        assert!(!trace.observe_sink(false));
+        // A new request has its own independent observation lifecycle.
+        let mut next = super::SoundTrace {
+            requested_at: std::time::Instant::now(), request_clock: 3.5, sink_observed: false,
+        };
+        assert!(next.observe_sink(true));
+        assert_eq!(trace.request_clock, 3.25);
+    }
+
+    #[test]
+    fn queued_player_is_not_reported_as_an_observed_sink() {
+        use super::*;
+        let mut app = App::new();
+        app.init_resource::<Time<Real>>()
+            .init_resource::<SoundLibrary>()
+            .init_resource::<Listener>()
+            .add_systems(Update, update);
+        let entity = app.world_mut().spawn((
+            AudioPlayer::<AudioSource>(Handle::default()),
+            SoundTrace { requested_at: Instant::now(), request_clock: 1.0, sink_observed: false },
+        )).id();
+        app.update();
+        assert!(!app.world().get::<SoundTrace>(entity).unwrap().sink_observed);
+        // A rodio queue is sufficient; this test never opens an audio device.
+        let (player, _queue) = rodio::Player::new();
+        app.world_mut().entity_mut(entity).insert(AudioSink::new(player));
+        app.update();
+        assert!(app.world().get::<SoundTrace>(entity).unwrap().sink_observed);
+        app.world_mut().entity_mut(entity).remove::<AudioSink>();
+        app.update();
+        assert!(app.world().get::<SoundTrace>(entity).unwrap().sink_observed);
+    }
     #[test]
     fn movie_wave_paths_resolve_doubled_separators() {
         assert_eq!(super::strip_flags(r"UI\\buttonrollover.wav"), "sound/ui/buttonrollover.wav");
