@@ -54,7 +54,19 @@ The example retains its mounted VFS and calls the direct reader, which has no
 fetch path. Validated installed surf map names are supported even though the
 competitive menu's current map catalog filters for de_/cs_ names.
 
-Current source preparation includes rejected-command checks and actual
-first-command jumping through `World::step` at both rates. Compilation,
-installed-data execution and native paired trajectory comparison are pending.
-No exact-movement or full surfing claim follows from synthetic replay alone.
+Verification passed 609 workspace tests (six ignored) and the two focused
+example tests, including first-command jumping through `World::step` at both
+rates. CI runs the focused example tests explicitly because workspace testing
+compiles examples without running their unit tests.
+Release Dust II probe and ten-round simulation each reported zero failures;
+the sound audit decoded 1425 entries with no unsupported or crashing sounds.
+
+Private installed Dust II fixtures also executed at 64 and 128 ticks: 24
+commands retained the actual knife identity and emitted a jump at ordinal 8.
+A repeat of the 64-tick run produced byte-identical receipts. The first fixture
+started above the floor and correctly did not jump; a separate 96-command
+neutral replay established each grounded Rust initial state before the jump
+fixture. These inputs and states are synthetic current-Rust observations,
+not native observations. Map and parsed catalog digests were checked by the
+tool. Native paired trajectory comparison remains pending; no exact-movement
+or full surfing claim follows from synthetic replay alone.
