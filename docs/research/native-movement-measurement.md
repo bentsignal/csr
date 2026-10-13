@@ -230,3 +230,106 @@ including a tightened 0.0001 first-support height tolerance. Required release
 decoder check retained 1,425 decodable sounds and zero failures; the asset
 guard passed. Actual process exit codes and private before/after logs remain
 retained alongside the comparison provenance.
+
+## Surf-map geometry and entry fall checkpoint
+
+The installed `surf_ski_3_nova_kg_v6` map is the next measured fixture,
+not an assumed surf preset. Its BSP SHA1 is
+`d53036167dc30ac976ee4144d0faf8ef7a08b417`. A private read-only helper
+queried 36 fixed standing-player hull sweeps, excluding only the observed
+player. Whole-query before/after context and entity inventories matched.
+The admitted native run used Legacy 1.38.8.1 at 64 Hz and retained all
+command, lifecycle, module, configuration and preference receipts.
+
+An independent private executable used the current `Level` and
+`CollisionWorld` against that exact installed map, with the same endpoints,
+standing hull and player-solid mask. All 36 hit/start-solid/all-solid flags
+matched. Maximum endpoint residual was 0.00006104 units, normal residual
+0.000000000966 and fraction residual 0.000000007952. After reconstructing
+`f32` values from native nine-decimal text, endpoint differences were at
+most two ULPs, normal differences zero and fraction differences one ULP.
+This checks those sampled traces; it does not prove a continuous route,
+authored brush identity, trigger effects or moving-player physics.
+
+A separate ordinary placement recorded the inherited incoming velocity,
+then qualified a fresh 64-command stationary entry window. Actual feet
+settled at `(3496.5, 0, 1226.03125)`, with zero velocity, base velocity,
+stamina, duck and input throughout. The held weapon was an unscoped AWP,
+definition 9. It must not be reported as a P2000 entry or assigned the
+observed `player_maxspeed` property as its weapon speed.
+
+Replaying the preceding 62 zero-input fall commands through the current
+Rust mover and actual map collision matched all recorded post positions,
+velocities and stamina exactly at the retained text precision. Initial
+feet were `(3496.5, 0, 1240)` and incoming VZ was -37.5. First support
+occurred at command 358, height 1226.81640625 and stamina 6.875; the next command
+settled at 1226.03125. The private helper resolved AWP speed from the
+installed item catalog and used the actual relevant movement cvars.
+All 62 ground classifications matched the available ground-handle
+interpretation. Raw flags contained a stale ground bit while that handle
+was -1; the interpretation remains explicit rather than a claimed native
+internal phase. No production movement tuning followed this comparison.
+
+Private evidence is retained in
+`movement-reference-contract/ramp-geometry-source3/serialization1-review`,
+`surf-trace-comparator-preparation`,
+`movement-reference-contract/ramp-entry-diagnostic-only-64-20261013-183239-5661635a`
+and `ramp-entry-fall-replay`. The fall fixture SHA256 is
+`32e4305a072263a35645aab213f518d19e5d7c89fa139cddbbd099f12fe1afbe`;
+its Rust output SHA256 is
+`f5b41ccfa60e9b326c148867c930b262b30d38cbc41ee9c7a07faa09f494e0e2`.
+Native lifecycle and preservation checks passed; the private corrected
+build and replay both exited zero. These results do not establish general
+surfing, ramp ingress or recovery, 128 Hz, raw-bit equality or 2015 parity.
+
+The first bounded backward trial subsequently qualified three complete
+64-command diagnostic/support/moving windows with an unchanged, unscoped
+FAMAS, definition 10, and an explicitly resolved catalog speed of 220.
+Actual input was 27 backward commands: first wish -225, then -450, followed
+by release and coast. Feet moved from X3496.5 to X3408.230957031, retaining
+Y0 and Z1226.03125; all callbacks remained supported and final velocity was
+zero. All 43 cvars matched between windows. The game exited zero and
+preserved twelve preference targets, installed configuration and raw copies.
+The short pulse did not reach a ramp and must not be described as surfing.
+
+Earlier selector-only and give/use fixtures retained AUG and M4A1 respectively
+and were rejected before movement input; their causes remain unestablished.
+The accepted successor sends no weapon selector or provision commands. It
+requires the same observed typed class/definition and unscoped state across
+every complete window, with an explicit speed from the installed catalog.
+It never substitutes `player_maxspeed` or a default weapon speed. Private
+evidence is
+`movement-reference-contract/ramp-back64-exploratory-only-64-20261013-193921-a3147fba`.
+
+The independent private `ramp-back64-map-replay1` then replayed all 64
+commands through the current mover and actual map collision. It resolved
+the same FAMAS definition/speed through the repository's weapon catalog and
+retained every wish, including the initial -225. Source's directional
+`IN_BACK` bit maps through the wish vector; it is not copied into Rust's
+unrelated button flags. Maximum post-position residual was 0.000000000875,
+velocity residual 0.000000000993 and stamina residual zero. All reconstructed
+`f32` values and ground-handle classifications matched, independently
+recomputed against the original raw CSV. No physics or collision change
+was justified. The short hold reached speed 207.089569091, not a measured
+220 plateau; release and complete coast remained separate observations.
+
+The qualified private build and runtime exited zero, with clean source
+identity captured before that build. An earlier wrapper's unavailable exit
+code remains preserved as unqualified evidence. Fixture SHA256 is
+`7C492C84035D6DD69FC95FE5B898EFC0703648D7E71213B8C4BDB7B75A5B3481`;
+Rust output SHA256 is
+`4718C8D0D209C3B4647134ADF396D867FFD67B075D3B5BFD78E4121B2E6BFC75`.
+This is a movement replay of the scoped ground sequence, not full simulation,
+native internal-phase proof, ramp contact, a complete route or surfing parity.
+
+A separately qualified 128-command moving window at the same 64 Hz used a
+stable unscoped AUG, definition 8/catalog speed 220. Its 88 actual held
+commands and coast ended at `(3196.900390625, 0, 1226.03125)` with zero
+velocity. Every post remained supported; this extended observation also
+did not reach a ramp. The installed BSP explains the result: adjacent
+world deck faces continue to X3186.5, and the standing hull still overlaps
+that deck at the final center. Further ingress work starts with actual
+downward hull queries at the edge, rather than attributing the constant
+height to faulty ramp physics. Private raw evidence is
+`movement-reference-contract/ramp-back64-exploratory-only-64-20261013-195523-33943187`;
+its actual-map replay remains a separate prepared, uncompiled fixture.
