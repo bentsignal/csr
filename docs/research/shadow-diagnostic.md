@@ -93,6 +93,49 @@ PNG saving and acknowledgment must succeed before the owned app exits zero.
 Failures retain the screenshot when available and exit nonzero. A3,600-frame
 and30-second schedule bound covers preparation and capture; these bounds are
 evaluated when the main-world schedule advances, not an external process
-watchdog. The paired images still need independent visual inspection. No
+watchdog. The paired images were independently inspected in the validation below. No
 native, historical lighting, normal-game performance or default-map output
 claim follows from this fixture alone.
+
+## Verified diagnostic scope
+
+Production source `86e6885d8ba7b0a16e5dc711edc9cd70298a7f50` passed 626
+workspace tests with six ignored, release Dust2 probe and simulation with zero
+failures, and soundcheck with 1,425 decodable sounds, zero skipped and zero
+that would crash. The play launcher and fixture builds also exited zero.
+
+Owned synthetic on/off runs saved 960x640 PNGs and exited naturally with code
+zero. Independent image and pixel review confirmed opaque, front-facing mask,
+reversed two-sided mask and off-view shadows. RenderGate was Ready before the
+screenshot acknowledgment. Each receiver region contained 7,104 pixels;
+all four had zero magenta pixels:
+
+| Receiver region | Dark | White |
+| --- | ---: | ---: |
+| Opaque | 6,992 | 112 |
+| Front-facing checker mask | 3,076 | 3,255 |
+| Reversed two-sided checker mask | 2,997 | 3,392 |
+| Off-view opaque | 7,104 | 0 |
+
+The disabled run had 7,104 white pixels in every region. The separate
+missing-diagnostic case produced the same disabled PNG and correctly failed
+the gate's enabled-diagnostic admission; its app exit was zero. These are
+synthetic pipeline proofs, not CS:GO screenshots.
+
+Six installed Dust2 captures paired off/diagnostic at the documented
+`upper_tunnel`, `ct_garage` and `ct_spawn_mid` cameras, all at 1600x900.
+All exited zero, had no shader/device errors and were independently inspected.
+The enabled scopes reported respectively 111/64, 200/105 and 188/99
+casters/material variants. The disabled upper-tunnel image differed from the
+verified pre-diagnostic `333ce1a` image at the same camera/resolution in one
+pixel: mean absolute RGB difference 0.0000449074, maximum component difference
+74. This one regression comparison establishes neither byte equality nor
+normal interactive performance.
+
+Private receipts `root-86e6885-independent-review.json` and
+`root-86e6885-dust2-review.json` retain source, artifact and PNG identities,
+recomputed pixels and inspection results; no game assets are published.
+These captures prove the opt-in diagnostic path operates on an installed
+scene. They do not establish native shadow filtering, a baked/direct lighting
+composition law, or 2015/2018 lighting fidelity. Normal rendering remains on
+its existing lighting path.
