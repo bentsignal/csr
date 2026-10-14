@@ -154,6 +154,12 @@ pub enum Input {
     Call { path: String, function: String, args: Vec<Value> },
     Set { path: String, property: String, value: Value },
     RequestElement(String),
+    /// One display transition. No movie tick or frame publication can split
+    /// these commands; resulting frames carry this presentation revision.
+    Present { commands: Vec<Command>, revision: u64 },
+    /// Passive owned visibility bookkeeping. It observes the latest pointer
+    /// state; unlike an authored call it does not create a motion boundary.
+    ObservePauseSurface { args: Vec<Value> },
     /// Read-only names/types of a runtime object's public properties.
     Inspect(String),
     /// Advance the movies only while visible (saves CPU in a match).
@@ -168,7 +174,7 @@ pub enum MouseButton {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) enum Command {
+pub enum Command {
     Call { path: String, function: String, args: Vec<Value> },
     Set { path: String, property: String, value: Value },
     RequestElement(String),
@@ -181,6 +187,8 @@ pub struct Frame {
     pub rgba: Vec<u8>,
     /// Increments with every new frame.
     pub serial: u64,
+    /// Most recent completed display transition (zero before any transition).
+    pub presentation_revision: u64,
 }
 
 /// Notifications from the menu thread.
@@ -260,7 +268,8 @@ impl Menu {
 // Only the immediately adjacent motion run is replaceable. Every other input
 // forms a FIFO barrier, including release, focus and engine lifecycle commands.
 struct InputQueue {
-    pending: VecDeque<Input>,
+    pending: VecDeque<(Input, Instant)>,
+    trace_remaining: usize,
     sender_alive: bool,
     receiver_alive: bool,
 }
@@ -274,6 +283,7 @@ impl InputReceiver {
 fn input_queue() -> (InputSender, InputReceiver) {
     let shared = Arc::new(Mutex::new(InputQueue {
         pending: VecDeque::new(),
+        trace_remaining: if std::env::var("CSR_UI_WORKER_TRACE").as_deref() == Ok("1") { WORKER_TRACE_LIMIT } else { 0 },
         sender_alive: true,
         receiver_alive: true,
     }));
@@ -285,13 +295,23 @@ impl InputSender {
         if !queue.receiver_alive {
             return;
         }
-        if matches!(input, Input::MouseMove { .. })
-            && matches!(queue.pending.back(), Some(Input::MouseMove { .. }))
-        {
-            *queue.pending.back_mut().unwrap() = input;
-        } else {
-            queue.pending.push_back(input);
+        if matches!(input, Input::MouseMove { .. }) {
+            // Only our passive visibility sampler may sit between replaceable
+            // positions. A click, key, focus, lifecycle or authored call still
+            // freezes the preceding position and remains strictly FIFO.
+            for (pending, queued) in queue.pending.iter_mut().rev() {
+                match pending {
+                    Input::ObservePauseSurface { .. } => continue,
+                    Input::MouseMove { .. } => {
+                        *pending = input;
+                        *queued = Instant::now();
+                        return;
+                    }
+                    _ => break,
+                }
+            }
         }
+        queue.pending.push_back((input, Instant::now()));
     }
 }
 impl Drop for InputSender {
@@ -315,7 +335,8 @@ trait InputSource<T> {
 impl InputSource<Input> for InputReceiver {
     fn try_input(&self) -> Result<Input, TryRecvError> {
         let mut queue = self.0.lock().unwrap();
-        if let Some(input) = queue.pending.pop_front() {
+        if let Some((input, queued)) = queue.pending.pop_front() {
+            queue.trace_motion(&input, queued);
             return Ok(input);
         }
         Err(if queue.sender_alive {
@@ -327,8 +348,8 @@ impl InputSource<Input> for InputReceiver {
     fn take_boundary(&self, remaining: usize) -> Vec<Input> {
         let mut queue = self.0.lock().unwrap();
         let count = match queue.pending.front() {
-            Some(Input::MouseMove { .. }) => match queue.pending.get(1) {
-                Some(input) if !matches!(input, Input::MouseMove { .. }) => 2,
+            Some((Input::MouseMove { .. }, _)) => match queue.pending.get(1) {
+                Some((input, _)) if !matches!(input, Input::MouseMove { .. }) => 2,
                 _ => return Vec::new(),
             },
             Some(_) => 1,
@@ -337,7 +358,20 @@ impl InputSource<Input> for InputReceiver {
         if count > remaining { return Vec::new(); }
         // Snapshot under one lock before running callbacks. Producer work
         // appended while these events execute cannot extend this completion.
-        queue.pending.drain(..count).collect()
+        let entries: Vec<_> = queue.pending.drain(..count).collect();
+        entries.into_iter().map(|(input, queued)| {
+            queue.trace_motion(&input, queued);
+            input
+        }).collect()
+    }
+}
+impl InputQueue {
+    fn trace_motion(&mut self, input: &Input, queued: Instant) {
+        if self.trace_remaining == 0 { return; }
+        if let Input::MouseMove { x, y } = input {
+            self.trace_remaining -= 1;
+            tracing::info!(target: "scaleform::queue", age_ms = queued.elapsed().as_secs_f64() * 1000., pending = self.pending.len(), x, y, "UI pointer consumed");
+        }
     }
 }
 impl<T> InputSource<T> for Receiver<T> {
@@ -456,6 +490,7 @@ fn run(
     trace.event("host_end", true, 0, 0, false);
     let mut active = true;
     let mut serial = 0u64;
+    let mut presentation_revision = 0u64;
     let mut requested = false;
     let mut last = Instant::now();
     loop {
@@ -497,6 +532,17 @@ fn run(
                             host.run_command(Command::RequestElement(element));
                             trace.event("request_end", active, serial, 0, false);
                         }
+                        Input::Present { commands, revision } => {
+                            for command in commands {
+                                host.run_command(command);
+                            }
+                            presentation_revision = revision;
+                        }
+                        Input::ObservePauseSurface { args } => host.run_command(Command::Call {
+                            path: "_global.csrBindings".into(),
+                            function: "samplePauseSurface".into(),
+                            args,
+                        }),
                         other => host.input(other),
                     },
                     InputTurn::Progress {
@@ -546,6 +592,7 @@ fn run(
                                         height,
                                         rgba,
                                         serial,
+                                        presentation_revision,
                                     });
                                 }
                             }
@@ -575,6 +622,28 @@ fn run(
 mod worker_tests {
     use super::{INPUT_TURN_BUDGET, Input, InputSource, InputTurn, MouseButton, Value, input_queue, service_input_turn_until};
     use std::sync::mpsc::channel;
+
+    #[test]
+    fn passive_surface_sample_keeps_latest_pointer_but_never_crosses_click_or_call() {
+        let (sender, receiver) = input_queue();
+        sender.send(motion(1));
+        sender.send(Input::ObservePauseSurface { args: vec!["first".into()] });
+        sender.send(motion(2));
+        sender.send(Input::MouseDown { x: 2., y: -2., button: MouseButton::Left });
+        sender.send(motion(3));
+        sender.send(Input::ObservePauseSurface { args: vec!["second".into()] });
+        sender.send(motion(4));
+        sender.send(Input::Call { path: "button".into(), function: "activate".into(), args: vec![] });
+        sender.send(motion(5));
+        assert!(matches!(receiver.try_input(), Ok(Input::MouseMove { x: 2., .. })));
+        assert!(matches!(receiver.try_input(), Ok(Input::ObservePauseSurface { .. })));
+        assert!(matches!(receiver.try_input(), Ok(Input::MouseDown { x: 2., .. })));
+        assert!(matches!(receiver.try_input(), Ok(Input::MouseMove { x: 4., .. })));
+        assert!(matches!(receiver.try_input(), Ok(Input::ObservePauseSurface { .. })));
+        assert!(matches!(receiver.try_input(), Ok(Input::Call { .. })));
+        assert!(matches!(receiver.try_input(), Ok(Input::MouseMove { x: 5., .. })));
+        assert!(matches!(receiver.try_input(), Err(std::sync::mpsc::TryRecvError::Empty)));
+    }
 
     #[test]
     fn excess_input_stays_fifo_and_progress_runs_after_budget() {
