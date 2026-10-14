@@ -36,6 +36,7 @@ struct PlayerFoley {
     weapon: String,
     reloading: bool,
     shell_stage: Option<Option<i32>>,
+    grenade_pull: Option<u64>,
     moving: bool,
     step_timer: f32,
     left: bool,
@@ -198,6 +199,15 @@ pub fn update(
         // as the viewmodel plays it; shotguns per stage.
         let st = foley.players.get_mut(&p.id).unwrap();
         let w = p.active_weapon();
+        let pull=w.and_then(|w|w.grenade_throw).map(|s|s.pull_started_tick);
+        let new_pull=pull.is_some() && pull!=st.grenade_pull;
+        st.grenade_pull=pull;
+        if new_pull {
+            if let Some((duration,events))=views.activity_sounds(&weapon,"ACT_VM_PULLPIN") {
+                foley.schedule(p.id,&weapon,pull.unwrap() as f32*world.0.dt(),duration,&events,false);
+            }
+        }
+        let st = foley.players.get_mut(&p.id).unwrap();
         let reloading = w.is_some_and(|w| w.reload_end.is_some());
         let shell = w.and_then(|w| w.shell_reload()).is_some();
         let stage = w.and_then(|w| w.shell_stage(now)).map(|s| s.0);

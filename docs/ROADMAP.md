@@ -531,6 +531,12 @@ parity and the gameplay gaps listed above remain unfinished.
   competitive inventories are unchanged. This exposes existing grenade
   simulation/effects for testing; throw timing, trajectories and particle
   fidelity are still unfinished.
+
+- [x] Tick-authoritative grenade pin-pull, hold and release, with installed
+  viewmodel events, secondary underhand and combined-button control. Offline
+  practice redraws a replenished grenade after the release clip. Numeric
+  strengths and inherited velocity remain provisional; trajectories, native
+  command timing and particle fidelity are still unfinished.
 - [x] Retain bounded death bodies using the installed full death animation;
   verified with a lethal simulation shot and rendered pose. Authentic ragdoll
   physics, impulse response and airborne settling remain unfinished.
