@@ -13,14 +13,18 @@ struct Flying {
     instance: crate::skinning::SkinnedInstance,
     pose: Vec<glam::Mat4>,
     base: Mat4,
+    rotation: Quat,
+    last_time: f32,
 }
 #[derive(Resource)]
 pub struct AssetsFx {
-    sphere: Handle<Mesh>,
-    smoke: Handle<StandardMaterial>,
-    fire: Vec<Handle<StandardMaterial>>,
-    fields: HashMap<u32, Vec<Entity>>,
+    smoke: Vec<crate::utility_particles::Layer>,
+    fire: Vec<crate::utility_particles::Layer>,
+    he: Vec<crate::utility_particles::Layer>,
+    fields: HashMap<u32, crate::utility_particles::Emitter>,
+    explosions: Vec<crate::utility_particles::Emitter>,
     projectiles: HashMap<u32, Flying>,
+    last_time: f32,
 }
 pub fn setup(
     mut commands: Commands,
@@ -29,52 +33,61 @@ pub fn setup(
     mut images: ResMut<Assets<Image>>,
     level: Res<crate::LoadedLevel>,
 ) {
-    use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
-    let smoke_texture = level
-        .0
-        .vfs
-        .read("materials/particle/particle_smokegrenade.vtf")
-        .and_then(|b| vtf::Vtf::parse(&b).ok())
-        .and_then(|v| {
-            Some(images.add(Image::new(
-                Extent3d {
-                    width: v.width as u32,
-                    height: v.height as u32,
-                    depth_or_array_layers: 1,
-                },
-                TextureDimension::D2,
-                v.rgba8(0, 0, 0)?,
-                TextureFormat::Rgba8UnormSrgb,
-                bevy::asset::RenderAssetUsages::RENDER_WORLD,
-            )))
-        });
-    // This installed fire sheet is a horizontal strip of square sprite frames.
-    let fire_frames=level.0.vfs.read("materials/particle/fire_particle_4/fire_particle_4.vtf")
-        .and_then(|b|vtf::Vtf::parse(&b).ok()).and_then(|v| {
-            let pixels=v.rgba8(0,0,0)?;let size=v.height as usize;let width=v.width as usize;
-            if size==0 || width%size!=0 {return None}
-            let mut frames=Vec::new();
-            for frame in 0..width/size {
-                let mut rgba=Vec::with_capacity(size*size*4);
-                for row in 0..size {let start=(row*width+frame*size)*4;rgba.extend_from_slice(&pixels[start..start+size*4]);}
-                let image=images.add(Image::new(Extent3d{width:size as u32,height:size as u32,depth_or_array_layers:1},TextureDimension::D2,rgba,TextureFormat::Rgba8UnormSrgb,bevy::asset::RenderAssetUsages::RENDER_WORLD));
-                frames.push(mats.add(StandardMaterial{base_color:Color::srgba(1.0,0.8,0.6,0.75),base_color_texture:Some(image),unlit:true,alpha_mode:AlphaMode::Add,cull_mode:None,..default()}));
-            }
-            Some(frames)
-        }).unwrap_or_else(|| {warn!("Original fire sprite sheet missing");vec![mats.add(StandardMaterial{base_color:Color::srgb(1.0,0.4,0.05),unlit:true,..default()})]});
+    let fs = &level.0.vfs;
+    let smoke = crate::utility_particles::load(
+        fs,
+        "particles/explosions_fx.pcf",
+        &[
+            "explosion_child_smoke03d_ring",
+            "explosion_child_smoke_bottom",
+            "explosion_child_smoke07b",
+            "explosion_child_smoke03e",
+        ],
+        &mut mats,
+        &mut images,
+    );
+    let fire = crate::utility_particles::load(
+        fs,
+        "particles/inferno_fx.pcf",
+        &[
+            "molotov_groundfire_child_base",
+            "molotov_groundfire_main_center",
+            "molotov_groundfire_main_fancy",
+            "molotov_child_flame01a",
+        ],
+        &mut mats,
+        &mut images,
+    );
+    let he = crate::utility_particles::load(
+        fs,
+        "particles/explosions_fx.pcf",
+        &[
+            "explosion_child_core04b",
+            "explosion_child_dust06a",
+            "explosion_child_dust10a",
+        ],
+        &mut mats,
+        &mut images,
+    );
+    // Prewarm each material without a visible particle, so a first short HE
+    // flash does not expire while its pipeline compiles.
+    for layer in smoke.iter().chain(&fire).chain(&he) {
+        let mesh = meshes.add(Rectangle::new(0.001, 0.001));
+        commands.spawn((
+            Mesh3d(mesh),
+            MeshMaterial3d(layer.material.clone()),
+            Transform::from_translation(Vec3::Y * -10000.0),
+            bevy::camera::visibility::NoFrustumCulling,
+        ));
+    }
     commands.insert_resource(AssetsFx {
-        sphere: meshes.add(Rectangle::new(2.0, 2.0)),
-        smoke: mats.add(StandardMaterial {
-            base_color: Color::srgba(0.62, 0.60, 0.55, 0.95),
-            base_color_texture: smoke_texture,
-            alpha_mode: AlphaMode::Blend,
-            unlit: true,
-            cull_mode: None,
-            ..default()
-        }),
-        fire: fire_frames,
+        smoke,
+        fire,
+        he,
         fields: HashMap::new(),
+        explosions: Vec::new(),
         projectiles: HashMap::new(),
+        last_time: 0.0,
     });
     commands.spawn((
         Node {
@@ -97,23 +110,39 @@ pub fn update(
     characters: Res<crate::characters::CharacterModels>,
     mut mats: ResMut<Assets<crate::material::WorldMaterial>>,
     mut transforms: Query<&mut Transform>,
-    mut sprite_materials: Query<&mut MeshMaterial3d<StandardMaterial>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut effects: ResMut<crate::effects::Effects>,
+    level: Res<crate::LoadedLevel>,
     mut overlay: Query<&mut BackgroundColor, With<FlashOverlay>>,
     fixed: Res<Time<Fixed>>,
 ) {
     let w = &world.0;
     let time = w.time();
-    let gone: Vec<_> = fx
-        .fields
-        .keys()
-        .filter(|id| !w.utility_fields.iter().any(|f| f.id == **id))
-        .copied()
+    let reset = time < fx.last_time;
+    fx.last_time = time;
+    let AssetsFx {
+        smoke,
+        fire,
+        he,
+        fields,
+        explosions,
+        ..
+    } = &mut *fx;
+    let gone: Vec<_> = fields
+        .iter()
+        .filter(|(id, emitter)| {
+            reset || (!w.utility_fields.iter().any(|f| f.id == **id) && !emitter.alive(time))
+        })
+        .map(|(id, _)| *id)
         .collect();
     for id in gone {
-        if let Some(entities) = fx.fields.remove(&id) {
-            for e in entities {
-                commands.entity(e).despawn();
-            }
+        if let Some(emitter) = fields.remove(&id) {
+            emitter.despawn(&mut commands, &mut meshes);
+        }
+    }
+    if reset {
+        for emitter in explosions.drain(..) {
+            emitter.despawn(&mut commands, &mut meshes);
         }
     }
     for field in w
@@ -121,52 +150,59 @@ pub fn update(
         .iter()
         .filter(|f| f.kind == Kind::Smoke || f.kind.fire())
     {
-        if !fx.fields.contains_key(&field.id) {
-            let material = if field.kind == Kind::Smoke {
-                fx.smoke.clone()
-            } else {
-                fx.fire[0].clone()
-            };
-            let entities = (0..18)
-                .map(|_| {
-                    commands
-                        .spawn((
-                            Mesh3d(fx.sphere.clone()),
-                            MeshMaterial3d(material.clone()),
-                            Transform::default(),
-                        ))
-                        .id()
-                })
-                .collect();
-            fx.fields.insert(field.id, entities);
+        if !fields.contains_key(&field.id) && fields.len() < 16 {
+            let layers = if field.kind.fire() { &*fire } else { &*smoke };
+            fields.insert(
+                field.id,
+                crate::utility_particles::Emitter::spawn(
+                    &mut commands,
+                    &mut meshes,
+                    layers,
+                    field.pos,
+                    field.born,
+                    field.until,
+                    field.id,
+                    field.kind.fire(),
+                ),
+            );
         }
-        let growth = ((time - field.born) / 0.6).clamp(0.02, 1.0)
-            * ((field.until - time) / 1.0).clamp(0.02, 1.0);
-        for (i, e) in fx.fields[&field.id].iter().enumerate() {
-            let a = i as f32 * std::f32::consts::TAU / 8.0;
-            let offset = if i % 9 == 8 {
-                Vec3::ZERO
-            } else {
-                Vec3::new(a.cos(), 0.0, a.sin()) * 65.0
-            };
-            let offset = Vec3::new(offset.x, if i > 8 { 22.0 } else { -15.0 }, offset.z);
-            let smoke = field.kind == Kind::Smoke;
-            let pos = to_bevy(field.pos)
-                + Vec3::new(offset.x, if smoke { offset.y } else { 0.0 }, offset.z) * growth
-                + Vec3::Y * if smoke { 55.0 } else { 30.0 };
-            if !smoke {if let Ok(mut mat)=sprite_materials.get_mut(*e) {mat.0=fx.fire[((time*18.0) as usize+i*3)%fx.fire.len()].clone();}}
-            let pulse = 1.0 + 0.1 * (time * 7.0 + i as f32).sin();
-            if let Ok(mut tr) = transforms.get_mut(*e) {
-                tr.translation = pos;
-                tr.rotation = Transform::from_translation(pos)
-                    .looking_at(to_bevy(local.render_eye), Vec3::Y)
-                    .rotation;
-                tr.scale = if smoke {
-                    Vec3::splat(100.0 * growth)
-                } else {
-                    Vec3::new(38.0, 45.0 * pulse, 1.0) * growth
-                };
-            }
+    }
+    let eye = to_bevy(local.render_eye);
+    for (id, emitter) in fields.iter_mut() {
+        if !w.utility_fields.iter().any(|f| f.id == *id) {
+            emitter.until = emitter.until.min(time);
+        }
+        emitter.update(
+            time,
+            eye,
+            if emitter.fire { fire } else { smoke },
+            &mut meshes,
+            &level.0.collision,
+        );
+    }
+    for (kind, pos) in effects.utility_detonations.drain(..) {
+        if kind == Kind::He && explosions.len() < 16 {
+            explosions.push(crate::utility_particles::Emitter::spawn(
+                &mut commands,
+                &mut meshes,
+                he,
+                pos,
+                time,
+                time + 0.5,
+                w.tick as u32,
+                false,
+            ));
+        }
+    }
+    for emitter in &mut *explosions {
+        emitter.update(time, eye, he, &mut meshes, &level.0.collision);
+    }
+    let mut i = 0;
+    while i < explosions.len() {
+        if !explosions[i].alive(time) {
+            explosions.remove(i).despawn(&mut commands, &mut meshes);
+        } else {
+            i += 1;
         }
     }
     let gone: Vec<_> = fx
@@ -187,12 +223,39 @@ pub fn update(
             continue;
         };
         let pos = p.pos + p.velocity * (fixed.overstep_fraction() * world.0.dt());
-        let spin = Mat4::from_rotation_translation(
-            Quat::from_rotation_y((time - p.born) * 4.0),
-            to_bevy(pos),
-        );
+        let position = to_bevy(pos);
+        let rotation = if let Some(flying) = fx.projectiles.get_mut(&p.id) {
+            let dt = (time - flying.last_time).clamp(0.0, 0.1);
+            flying.last_time = time;
+            if p.velocity.length_squared() > 1.0 {
+                // Presentation only: the old yaw-only spin left every grenade
+                // upright. Carry a stable two-axis tumble through each bounce;
+                // stop rotating when authoritative translation comes to rest.
+                let direction = to_bevy(p.velocity).normalize_or_zero();
+                let axis = Vec3::Y.cross(direction).normalize_or(Vec3::X);
+                flying.rotation = (Quat::from_axis_angle(axis, dt * 6.0)
+                    * Quat::from_rotation_y(dt * 2.0)
+                    * flying.rotation)
+                    .normalize();
+            }
+            flying.rotation
+        } else {
+            Quat::from_rotation_z((time - p.born) * 6.0)
+        };
+        let spin = Mat4::from_rotation_translation(rotation, position);
         if !fx.projectiles.contains_key(&p.id) {
-            let base = crate::items::ground_transform(&asset.model, glam::Vec3::ZERO, 0.0, false);
+            let mut base =
+                crate::items::ground_transform(&asset.model, glam::Vec3::ZERO, 0.0, false);
+            let (mut lo, mut hi) = (Vec3::splat(f32::INFINITY), Vec3::splat(f32::NEG_INFINITY));
+            for vertex in asset.model.meshes.iter().flat_map(|m| &m.vertices) {
+                let p = base.transform_point3(to_bevy(vertex.position));
+                lo = lo.min(p);
+                hi = hi.max(p);
+            }
+            if lo.is_finite() {
+                base = Mat4::from_translation(-(lo + hi) * 0.5) * base;
+            }
+
             let pose = mdl::skeleton::model_space(
                 &asset.model.bones,
                 &mdl::skeleton::rest_pose(&asset.model.bones),
@@ -205,6 +268,8 @@ pub fn update(
                     instance,
                     pose,
                     base,
+                    rotation,
+                    last_time: time,
                 },
             );
         } else {
@@ -218,16 +283,23 @@ pub fn update(
         }
     }
     let flash = w.flash_amount(local.view_target());
-    let smoke = w.utility_fields.iter().any(|f| {
-        f.kind == Kind::Smoke
-            && local.curr_eye.distance(f.pos + glam::Vec3::Z * 55.0) < 130.0
-            && time - f.born > 0.3
-    });
+    let smoke = w
+        .utility_fields
+        .iter()
+        .filter(|f| f.kind == Kind::Smoke)
+        .map(|f| {
+            let distance = local.render_eye.distance(f.pos + glam::Vec3::Z * 55.0);
+            let edge = ((140.0 - distance) / 30.0).clamp(0.0, 1.0);
+            let life =
+                ((time - f.born) / 0.6).clamp(0.0, 1.0) * ((f.until - time) / 3.0).clamp(0.0, 1.0);
+            edge * edge * (3.0 - 2.0 * edge) * life
+        })
+        .fold(0.0, f32::max);
     for mut color in &mut overlay {
         *color = BackgroundColor(if flash > 0.0 {
             Color::srgba(1.0, 1.0, 1.0, flash)
-        } else if smoke {
-            Color::srgba(0.46, 0.44, 0.40, 1.0)
+        } else if smoke > 0.0 {
+            Color::srgba(0.46, 0.44, 0.40, smoke)
         } else {
             Color::NONE
         });

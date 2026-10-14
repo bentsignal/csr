@@ -35,6 +35,8 @@ pub mod settings;
 pub mod menu;
 pub mod feedback;
 pub mod utility_fx;
+mod particle_data;
+mod utility_particles;
 pub mod buymenu;
 pub mod items;
 pub mod interpolation;
