@@ -742,6 +742,14 @@ fn smoke_test(
             else {w.0.utility_fields.push(sim::utility::Field{id:999999,owner:l.id,kind:if kind=="fire"{sim::utility::Kind::Molotov}else{sim::utility::Kind::Smoke},pos,born:now-1.0,until:now+20.0});}
         }
     }
+    if *frame == capture_frame {
+        if let (Some(w),Some(l))=(world.as_ref(),local.as_ref()) {
+            info!("capture authority: time={:.5} weapon={:?} grenade={:?} projectiles={} fields={}",
+                w.0.time(),w.0.player(l.id).and_then(|p|p.active_weapon()).map(|g|g.def.class_name.as_str()),
+                w.0.player(l.id).and_then(|p|p.active_weapon()).and_then(|g|g.grenade_throw),
+                w.0.projectiles.len(),w.0.utility_fields.len());
+        }
+    }
     // CSR_WATCH_BOT=n: park the camera 120 units in front of bot n, facing it.
     if let (Some(world), Some(mut local), Ok(n)) = (world, local, std::env::var("CSR_WATCH_BOT").map(|v| v.parse::<usize>().unwrap_or(0))) {
         if let Some(bot) = world.0.players.iter().filter(|p| p.is_bot && p.alive).nth(n) {
@@ -758,12 +766,6 @@ fn smoke_test(
         }
     }
     if *frame == capture_frame {
-        if let (Some(w),Some(l))=(world.as_ref(),local.as_ref()) {
-            info!("capture authority: time={:.5} weapon={:?} grenade={:?} projectiles={} fields={}",
-                w.0.time(),w.0.player(l.id).and_then(|p|p.active_weapon()).map(|g|g.def.class_name.as_str()),
-                w.0.player(l.id).and_then(|p|p.active_weapon()).and_then(|g|g.grenade_throw),
-                w.0.projectiles.len(),w.0.utility_fields.len());
-        }
         let fps = diagnostics
             .get(&FrameTimeDiagnosticsPlugin::FPS)
             .and_then(|d| d.average())
