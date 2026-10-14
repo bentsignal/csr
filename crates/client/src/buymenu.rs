@@ -338,7 +338,7 @@ mod tests {
         world.buy(other, Purchase::Kevlar).unwrap();
         deliver(&mut world, &mut menu, local, true);
         assert!(!menu.begin_input() && menu.open, "another player's success must not close it");
-        world.player_mut(local).unwrap().money = 1000;
+        world.player_mut(local).unwrap().money = sim::rules::KEVLAR_PRICE + sim::rules::DEFUSE_KIT_PRICE;
         world.buy(local, Purchase::Kevlar).unwrap();
         deliver(&mut world, &mut menu, local, false);
         assert!(!menu.begin_input() && menu.open, "No must preserve the open menu");
