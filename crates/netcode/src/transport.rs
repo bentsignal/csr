@@ -25,6 +25,7 @@ fn now() -> Duration {
 }
 
 pub struct Server {
+    lan: Option<crate::lan::Announcer>,
     connection: RenetServer,
     transport: NetcodeServerTransport,
     session: Session,
@@ -57,6 +58,10 @@ impl Server {
         }
         let socket = UdpSocket::bind(address).map_err(|e| e.to_string())?;
         let actual = socket.local_addr().map_err(|e| e.to_string())?;
+        let lan = match crate::lan::Announcer::new(actual) {
+            Ok(lan) => lan,
+            Err(error) => { eprintln!("LAN advertisement unavailable: {error}; direct connections remain available"); None }
+        };
         let transport = NetcodeServerTransport::new(
             ServerConfig {
                 current_time: now(),
@@ -70,6 +75,7 @@ impl Server {
         .map_err(|e| e.to_string())?;
         let rate = session.world().tick_rate;
         Ok(Self {
+            lan,
             connection: RenetServer::new(channels()),
             transport,
             session,
@@ -334,9 +340,19 @@ impl Server {
             }
         }
         self.transport.send_packets(&mut self.connection);
+        if preparing.is_none() {
+            if let Some(lan) = &mut self.lan {
+                if let Err(error) = lan.update(self.elapsed) {
+                    // A failed optional advertisement must never stop authority.
+                    eprintln!("LAN advertisement stopped: {error}; direct connections remain available");
+                    self.lan = None;
+                }
+            }
+        }
         Ok(ticks)
     }
     pub fn shutdown(&mut self) {
+        self.lan = None;
         self.transport.disconnect_all(&mut self.connection);
     }
 }
