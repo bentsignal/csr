@@ -193,8 +193,10 @@ pub fn update(
             st.shell_stage = None;
             st.suppressor_transition = None;
             foley.queue.retain(|q| q.player != p.id);
-            if let Some((duration, events)) = views.activity_sounds(&weapon, p.active_weapon().map_or("ACT_VM_DRAW", |w| w.draw_activity())) {
-                foley.schedule(p.id, &weapon, now, duration, &events, false);
+            if p.active_weapon().is_none_or(|w| w.suppressor_transition.is_none()) {
+                if let Some((duration, events)) = views.activity_sounds(&weapon, p.active_weapon().map_or("ACT_VM_DRAW", |w| w.draw_activity())) {
+                    foley.schedule(p.id, &weapon, now, duration, &events, false);
+                }
             }
         }
 
