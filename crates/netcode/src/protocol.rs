@@ -2,7 +2,7 @@
 use serde::{Deserialize, Serialize};
 use sim::{GameEvent, PlayerId, Snapshot, Team, TickInput};
 
-// Directional inventory commands; v15 adds replicated suppressor modes.
+// v17 replicates projectile rest state; v16 adds directional inventory commands.
 pub const VERSION: u32 = 17;
 pub const PROTOCOL_ID: u64 = 0x4353_5257_0000_0011;
 pub const CONTROL: u8 = 0;

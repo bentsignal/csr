@@ -82,7 +82,8 @@ impl MapRequest {
     pub(crate) fn label(&self) -> String {
         self.pack.as_ref().and_then(|(_, entry, id)| entry.manifest().maps.iter().find(|map| map.id == id.to_string()))
             .map(|map| crate::pack_flow::caption(&map.name))
-            .unwrap_or_else(|| self.options.map.clone())
+            .unwrap_or_else(|| workshop::find(&self.options.map)
+                .map(|map| map.title.to_owned()).unwrap_or_else(|| self.options.map.clone()))
     }
 }
 #[derive(Resource, Clone, Default)]
@@ -114,27 +115,11 @@ pub(crate) fn setup(
     level: Res<crate::GameData>,
     mut clock: ResMut<Time<Virtual>>,
 ) {
-    let mut maps: Vec<String> = std::fs::read_dir(level.game_dir.join("maps"))
+    let mut maps: Vec<String> = level::maps::list(&level.game_dir, &level.vfs)
         .into_iter()
-        .flatten()
-        .filter_map(Result::ok)
-        .filter_map(|e| e.path().file_name()?.to_str().map(str::to_string))
-        .filter_map(|n| n.strip_suffix(".bsp").map(str::to_string))
+        .filter(|map| map.old.is_none() || map.name == crate::frontend_game::CLASSIC_DUST2)
+        .map(|map| map.name)
         .collect();
-    maps.extend(
-        level
-            .vfs
-            .archive_paths_with_prefix("maps/")
-            .iter()
-            .filter_map(|p| {
-                p.strip_prefix("maps/")?
-                    .strip_suffix(".bsp")
-                    .map(str::to_string)
-            }),
-    );
-    maps.retain(|p| !p.contains('/') && (p.starts_with("de_") || p.starts_with("cs_")));
-    maps.sort();
-    maps.dedup();
     if maps.is_empty() {
         maps.push(opts.0.map.clone());
     }

@@ -1,7 +1,8 @@
 //! Installed maps and experimental archives from Valve's Workshop snapshots
 //! (`workshop` crate), listed by `csr maps`. Archives load with
-//! [`crate::Level::load`], which fetches them on first use. They are not
-//! offered in the match menu until navigation and fidelity are validated.
+//! [`crate::Level::load`], which fetches them on first use. The match menu
+//! explicitly offers the pre-rework Dust II pilot; other archives remain
+//! development/fidelity selections until their dependencies are validated.
 
 use std::path::Path;
 

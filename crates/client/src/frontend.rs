@@ -683,6 +683,7 @@ pub struct Frontend {
     requested: HashSet<String>,
     loaded: HashSet<String>,
     scene: Option<AppState>,
+    loading_text: String,
     lobby: Arc<Mutex<crate::frontend_lobby::Scene>>,
     notice: Entity,
     notice_text: Entity,
@@ -876,6 +877,7 @@ pub(crate) fn setup(
         requested: HashSet::new(),
         loaded: HashSet::new(),
         scene: None,
+        loading_text: String::new(),
         lobby,
         notice,
         notice_text,
@@ -1191,6 +1193,16 @@ pub(crate) fn update(
         front.scene = Some(scene);
     }
     let loading = scene == AppState::Loading;
+    if loading && front.loading_text != loader.status {
+        front.send(Input::Call {
+            path: "_level1000".into(),
+            function: "setLoadingText".into(),
+            args: vec![loader.status.clone().into()],
+        });
+        front.loading_text = loader.status.clone();
+    } else if !loading {
+        front.loading_text.clear();
+    }
     let owned_lobby_notice = scene == AppState::Menu && front.lobby.lock().unwrap().active();
     if let Ok(mut node) = nodes.get_mut(front.notice) {
         // The installed lobby/picker owns its footer controls. The clear margin
@@ -1359,12 +1371,14 @@ pub(crate) fn cancel_loading(
     interactions: Query<&Interaction>,
     mut next: ResMut<NextState<AppState>>,
     mut menu: ResMut<crate::menu::Menu>,
+    mut loader: ResMut<crate::session::Loader>,
     remote: Option<Res<crate::remote::RemoteClient>>,
 ) {
     if (*state.get() == AppState::Loading || crate::remote_join::loading(remote.as_deref()))
         && (keys.just_pressed(KeyCode::Escape)
             || interactions.get(front.cancel) == Ok(&Interaction::Pressed))
     {
+        loader.invalidate();
         menu.status.clear();
         next.set(AppState::Menu);
     }

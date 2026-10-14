@@ -215,6 +215,10 @@ byte-identical to 2018.
       screen. Resolve the four material dependencies and measure fidelity
       against the archived maps before calling them ready. Archive years
       do not establish August 2018 parity. Results: [OLD-MAPS.md](OLD-MAPS.md).
+      Dust II (2017), the pre-rework archive, now has an experimental native
+      card and generation-owned download/progress/cancellation path. Its one
+      small prop material fallback remains documented; other archives and
+      native visual parity are still open.
 - [ ] Optional: a 2018 build via `download_depot` with the owner's own
       account, if Steam still serves old manifests (unverified). Only adds
       a few changed models and the old HE explosion sound.
@@ -543,6 +547,10 @@ parity and the gameplay gaps listed above remain unfinished.
   practice redraws a replenished grenade after the release clip. Numeric
   strengths and inherited velocity remain provisional; trajectories, native
   command timing and particle fidelity are still unfinished.
+- [ ] Render installed low/mid/high `throwcharge` hand poses while holding
+  grenades. Narrow source implementation retains authored grid/masks and
+  discrete hold modes; compiled/rendered and native blend references pending.
+  [Scope](research/grenade-throw-state.md#authored-hold-hand-poses).
 - [x] Timed decoy expiry emits a separate positional near/distant cue from
   installed soundscripts, matching observed terminal sound requests. Round
   cleanup is silent. Cadence/lifetime stay provisional; damage and visual
