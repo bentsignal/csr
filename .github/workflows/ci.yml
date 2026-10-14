@@ -14,7 +14,7 @@ env:
   CARGO_TERM_COLOR: always
   # Desktop links hold several GiB each; leave room for the owner's apps and
   # local development builds on the shared self-hosted machine.
-  CARGO_BUILD_JOBS: 4
+  CARGO_BUILD_JOBS: 1
   # Persistent build cache on the self-hosted runner (outside the checkout,
   # which is cleaned between runs).
   CARGO_TARGET_DIR: D:\tools\csr-actions-runner\cargo-target

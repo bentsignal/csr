@@ -14,10 +14,15 @@ fn main() {
         println!("cargo:rustc-link-arg-bin=csr={}", res.display());
         // Package debug=0 removes our own symbols, but linked dependencies
         // still carry debug information. Their combined PDB can exceed MSVC's
-        // LNK1140 limit. Suppress only the examples' final PDB, preserving
-        // dependency artifacts and normal executable/test debug behavior.
+        // LNK1140 limit. Desktop test/binary links also exhaust memory while
+        // merging these symbols. Preserve dependency artifacts and the small
+        // crates' debuggers; suppress desktop final PDBs in the dev/test profile.
         // /PDB:NONE names a shared file on current MSVC; /DEBUG:NONE actually
         // disables PDB generation for concurrently linked examples.
-        println!("cargo:rustc-link-arg-examples=/DEBUG:NONE");
+        if std::env::var("PROFILE").is_ok_and(|p| p == "debug") {
+            println!("cargo:rustc-link-arg=/DEBUG:NONE");
+        } else {
+            println!("cargo:rustc-link-arg-examples=/DEBUG:NONE");
+        }
     }
 }
