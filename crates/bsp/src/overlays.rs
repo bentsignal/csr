@@ -161,10 +161,15 @@ fn clip(mut poly: Vec<OverlayVertex>) -> Vec<OverlayVertex> {
             let db = (b.uv[axis] - bound) * sign;
             if (da >= 0.0) != (db >= 0.0) {
                 let t = da / (da - db);
+                let mut uv = a.uv.lerp(b.uv, t);
+                // The intersection lies exactly on this clipping plane. f32
+                // lerp cancellation can otherwise leave it just outside the
+                // unit quad (observed -5.9604645e-8 at the zero boundary).
+                uv[axis] = bound;
                 out.push(OverlayVertex {
                     position: a.position.lerp(b.position, t),
                     normal: a.normal.lerp(b.normal, t).normalize_or_zero(),
-                    uv: a.uv.lerp(b.uv, t),
+                    uv,
                     luxel: a.luxel.lerp(b.luxel, t),
                     face: a.face,
                 });
@@ -362,7 +367,10 @@ mod tests {
         let poly = clip(vec![make(-1., -1.), make(3., -1.), make(-1., 3.)]);
         assert_eq!(poly.len(), 4);
         for v in poly {
-            assert!((0. ..=1.).contains(&v.uv.x) && (0. ..=1.).contains(&v.uv.y));
+            assert!(
+                (0. ..=1.).contains(&v.uv.x) && (0. ..=1.).contains(&v.uv.y),
+                "clipped vertex: {v:?}"
+            );
             assert!((v.position.z - v.position.x - v.position.y).abs() < 1e-5);
             assert!((v.luxel - Vec2::new(v.uv.x * 4., v.uv.y * 7.)).length() < 1e-5);
         }
