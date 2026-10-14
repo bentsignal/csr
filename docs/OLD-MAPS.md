@@ -143,3 +143,16 @@ dependency resolution and matched reference captures. The archive year does
 not establish 2015 parity; the existing material and lighting gaps remain.
 Content packs remain separate Track E work; this archive loader does not
 complete `.csrpack`, file associations, drag-and-drop or server-driven downloads.
+
+The 2026-10-14 menu pilot was rendered through the original pointer controls,
+both with a cached BSP and with an initially empty private archive store.
+Both reached classic Dust II with its archived radar and bots; a ten-round
+simulation again reported zero failures. The current stricter geometry probe
+reports **10 failures**, rather than the historical one in the table above:
+the known `greygrid` dependency plus nine `EmptyTopology` primitive faces
+(2034, 2379, 2380, 3224, 6073, 7702, 8061, 9028 and 11133). Inspection of
+their stored indices and vertices found every explicit triangle has zero
+area through repeated positions. The renderer does not invent replacement
+fans, and the probe remains strict. LoadingScreen also requests four
+`undefined` map-art resources; these remain a presentation gap even though
+the match loads successfully. These checks do not establish visual parity.
