@@ -110,4 +110,3 @@ contributes no light. Other ADDSELF materials retain the prior approximation.
 This addresses one known blend mismatch, not complete SpriteCard parity:
 power-function remapping, ramps, depth blending and the remaining ADDSELF
 semantics are still unresolved. Rendered brightness must be checked again.
-
