@@ -9,6 +9,7 @@ use std::time::Duration;
 
 fn map_world(source: &World) -> World {
     let mut world = World::with_catalog(source.collision.clone(), source.catalog.clone());
+    world.set_character_profiles(source.character_profiles());
     world.spawns = source.spawns.clone();
     world.objectives = source.objectives.clone();
     world

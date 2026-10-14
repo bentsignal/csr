@@ -166,6 +166,7 @@ fn run(options: Options) -> Result<(), String> {
         catalog_hash: hash(catalog_sha1),
     };
     let mut world = World::with_catalog(level.collision.clone(), level.catalog.clone());
+    world.set_character_profiles(level.character_profiles.clone());
     world.set_tick_rate(options.tick_rate);
     let overview = level.overview();
     world.load_map(&level.bsp, overview.as_deref());
@@ -294,6 +295,7 @@ fn netcheck(session: Session, catalog: Arc<weapons::Catalog>) -> Result<(), Stri
                     let source = server.session().world();
                     let mut map_world =
                         World::with_catalog(source.collision.clone(), source.catalog.clone());
+                    map_world.set_character_profiles(source.character_profiles());
                     map_world.spawns = source.spawns.clone();
                     map_world.objectives = source.objectives.clone();
                     starting[n] = Some(Predictor::new(

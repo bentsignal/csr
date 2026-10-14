@@ -98,3 +98,18 @@ instant-throw fixtures. Additional tests cover both tick rates, every button
 mode, indefinite holding, exact once-only release, tap windup, cancellation,
 and snapshot restoration. Native ballistic calibration and rendered phase
 captures remain integration checks; public metadata is not engine behavior.
+
+
+### Held-pose comparison checkpoint (2026-10-14)
+
+Rendered smoke primary/both/secondary holds and repeated throw cleanup passed.
+A single owned Legacy 1.38.8.1 session on Inferno CT matched the rewrite's SAS
+arms, 1600x900 viewport, viewmodel FOV 60, offsets 1/1/-1 and right-handed view.
+All three captures show velocity 0.00 and unchanged position/angles. Their
+qualitative primary/high, both/mid and secondary/low ordering matches the
+rewrite's authored endpoint selection. This does not establish pixel-perfect
+lighting, blend-in timing or trajectories. Native `getang` and `cl_mouseenable`
+commands were unsupported; `getpos` and the visible position/velocity overlay
+provide the actual camera/stationarity observations. Preferences were restored
+byte-for-byte after the owned process exited. Captures and raw identifiers
+remain private under `csr-fidelity/grenade-hold-native-20261014/held-smoke-20261014-122708`.

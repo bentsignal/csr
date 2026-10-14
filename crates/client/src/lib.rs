@@ -517,6 +517,7 @@ fn spawn_level(
         admission.world.as_ref().expect("prepared remote world").clone()
     } else {
         let mut world = sim::World::with_catalog(level.collision.clone(), level.catalog.clone());
+        world.set_character_profiles(level.character_profiles.clone());
         world.load_map(&level.bsp, level.overview().as_deref());
         world
     };

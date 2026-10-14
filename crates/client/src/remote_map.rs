@@ -208,6 +208,7 @@ impl LocalMapRequest {
 /// Construct one replay-safe map world from the retained parsed level.
 pub(crate) fn map_world_for_level(level: &level::Level) -> sim::World {
     let mut world = sim::World::with_catalog(level.collision.clone(), level.catalog.clone());
+    world.set_character_profiles(level.character_profiles.clone());
     world.load_map(&level.bsp, level.overview().as_deref());
     world
 }

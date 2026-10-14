@@ -1,21 +1,35 @@
 //! Server-only historical player hulls. No live entity is moved for a query.
 use crate::{Player, PlayerId, Team, World};
 use glam::Vec3;
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::sync::Arc;
+use mdl::hitbox::PosedHitbox;
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub(crate) struct Hull {
     pub mins: Vec3,
     pub maxs: Vec3,
     pub yaw: f32,
+    pub movement_mins: Vec3,
+    pub movement_maxs: Vec3,
+    pub hitboxes: Option<Arc<[PosedHitbox]>>,
 }
 impl Hull {
-    fn current(player: &Player) -> Self {
-        let (mins, maxs) = player.bounds();
+    fn current(player: &Player, hitboxes: Option<Arc<[PosedHitbox]>>) -> Self {
+        let (movement_mins, movement_maxs) = player.bounds();
+        let (mut mins, mut maxs) = (movement_mins, movement_maxs);
+        if let Some(shapes) = &hitboxes {
+            mins = Vec3::splat(f32::INFINITY);
+            maxs = Vec3::splat(f32::NEG_INFINITY);
+            for shape in shapes.iter() { let (lo, hi) = shape.bounds(); mins = mins.min(lo); maxs = maxs.max(hi); }
+        }
         Self {
             mins,
             maxs,
             yaw: player.view_angles.y,
+            movement_mins,
+            movement_maxs,
+            hitboxes,
         }
     }
 }
@@ -66,7 +80,7 @@ impl History {
     pub fn oldest_tick(&self) -> Option<u64> {
         self.frames.front().map(|f| f.tick)
     }
-    pub fn capture(&mut self, tick: u64, round: u32, players: &[Player]) {
+    pub fn capture(&mut self, tick: u64, round: u32, players: &[Player], shapes: &HashMap<PlayerId, crate::model_pose::CachedHitboxes>) {
         if self.round != Some(round) || self.frames.back().is_some_and(|f| tick < f.tick) {
             self.clear();
         }
@@ -78,7 +92,7 @@ impl History {
         let previous = self.frames.back();
         let mut records = BTreeMap::new();
         for player in players.iter().take(64) {
-            let hull = Hull::current(player);
+            let hull = Hull::current(player, shapes.get(&player.id).map(|cached| cached.shapes.clone()));
             if !hull.mins.is_finite() || !hull.maxs.is_finite() || !hull.yaw.is_finite() {
                 continue;
             }
@@ -141,7 +155,7 @@ impl History {
         {
             return None;
         }
-        Some(old.hull)
+        Some(old.hull.clone())
     }
 }
 
@@ -196,6 +210,6 @@ impl World {
     }
     pub(crate) fn target_hull(&self, player: &Player, tick: Option<u64>) -> Hull {
         tick.and_then(|tick| self.rewind.as_ref()?.query(player, self.round.round, tick))
-            .unwrap_or_else(|| Hull::current(player))
+            .unwrap_or_else(|| Hull::current(player, self.character_hitboxes.get(&player.id).map(|cached| cached.shapes.clone())))
     }
 }

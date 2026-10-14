@@ -102,6 +102,7 @@ impl World {
         self.next_id = s.next_id;
         self.next_item = s.next_item;
         self.rewind = None;
+        self.character_hitboxes.clear();
     }
 
     /// The state after the last step plus that step's events.

@@ -3821,6 +3821,7 @@ name = "level"
 version = "0.3.0"
 dependencies = [
  "bsp",
+ "character-pose",
  "collision",
  "content",
  "glam 0.32.1",
@@ -3829,6 +3830,7 @@ dependencies = [
  "nav",
  "packs",
  "sha1",
+ "sim",
  "vfs",
  "weapons",
  "workshop",
@@ -5979,10 +5981,12 @@ name = "sim"
 version = "0.3.0"
 dependencies = [
  "bsp",
+ "character-pose",
  "collision",
  "content",
  "glam 0.32.1",
  "kv",
+ "mdl",
  "movement",
  "nav",
  "postcard",

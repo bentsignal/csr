@@ -7,6 +7,8 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
+character-pose = { path = "../character-pose" }
+sim.workspace = true
 content.workspace = true
 kv.workspace = true
 glam.workspace = true

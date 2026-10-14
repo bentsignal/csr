@@ -2,9 +2,9 @@
 use serde::{Deserialize, Serialize};
 use sim::{GameEvent, PlayerId, Snapshot, Team, TickInput};
 
-// v17 replicates projectile rest state; v16 adds directional inventory commands.
-pub const VERSION: u32 = 17;
-pub const PROTOCOL_ID: u64 = 0x4353_5257_0000_0011;
+// v18 replicates tick-owned character animation clocks for model hit registration.
+pub const VERSION: u32 = 18;
+pub const PROTOCOL_ID: u64 = 0x4353_5257_0000_0012;
 pub const CONTROL: u8 = 0;
 pub const INPUT: u8 = 1;
 pub const SNAPSHOT: u8 = 2;
@@ -421,9 +421,14 @@ pub(crate) fn validate_state(
                 actor.movement.last_fall_speed,
                 actor.respawn_at,
                 actor.flash_until,
+                actor.animation.move_cycle,
+                actor.animation.air_time,
             ]
             .iter()
             .any(|n| !n.is_finite())
+            || !(0.0..1.0).contains(&actor.animation.move_cycle)
+            || !(0.0..=60.0).contains(&actor.animation.air_time)
+            || actor.animation.last_fire_tick.is_some_and(|tick| tick > world.tick)
             || actor.weapons.len() > 64
             || (!actor.weapons.is_empty() && actor.active >= actor.weapons.len())
         {

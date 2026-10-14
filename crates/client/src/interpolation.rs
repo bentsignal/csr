@@ -23,7 +23,7 @@ pub struct Pose {
 impl Pose {
     /// Compatibility for callers without a clock; capture paths use player_at.
     pub fn player(p: &sim::Player) -> Self {
-        Self::player_at(p, 0, sim::TICK_RATE)
+        Self::player_at(p, 0, sim::DEFAULT_TICK_RATE)
     }
     pub fn player_at(p: &sim::Player, tick: u64, rate: u32) -> Self {
         Self { velocity: p.movement.velocity, on_ground: p.movement.on_ground, origin: p.movement.origin, eye: p.eye(), angles: p.view_angles, punch: p.view_punch().into(), alive: p.alive, life:Some(p.life_epoch),tracked:p.tracked,aim:p.aim,
@@ -161,7 +161,7 @@ impl RenderPoses {
     }
     /// Compatibility for callers without a clock; sampled pairs retain theirs.
     pub fn sample(&self, player: &sim::Player, alpha: f32) -> Pose {
-        self.sample_at(player,alpha,0,sim::TICK_RATE)
+        self.sample_at(player,alpha,0,sim::DEFAULT_TICK_RATE)
     }
     /// Provide the real clock for an actor not yet present in the render history.
     pub fn sample_at(&self, player: &sim::Player, alpha: f32, tick: u64, rate: u32) -> Pose {

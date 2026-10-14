@@ -260,7 +260,7 @@ pub fn drive(
     let predicted = client.session.predicted_world().unwrap();
     frame.local = predicted
         .player(id)
-        .map(|actor| poses.capture_prediction(actor, predicted.tick, predicted.dt()));
+        .map(|actor| poses.capture_prediction_at(actor, predicted.tick, predicted.tick_rate));
     if let Some(actor) = predicted.player(id) {
         frame.local_tracked = actor.tracked;
         frame.local_aim = actor.aim;

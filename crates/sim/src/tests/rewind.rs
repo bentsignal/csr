@@ -23,7 +23,7 @@ fn capture(w: &mut World, tick: u64) {
     w.rewind
         .as_mut()
         .unwrap()
-        .capture(tick, w.round.round, &w.players);
+        .capture(tick, w.round.round, &w.players, &w.character_hitboxes);
 }
 
 #[test]

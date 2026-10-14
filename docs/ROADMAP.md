@@ -547,9 +547,10 @@ parity and the gameplay gaps listed above remain unfinished.
   practice redraws a replenished grenade after the release clip. Numeric
   strengths and inherited velocity remain provisional; trajectories, native
   command timing and particle fidelity are still unfinished.
-- [ ] Render installed low/mid/high `throwcharge` hand poses while holding
-  grenades. Narrow source implementation retains authored grid/masks and
-  discrete hold modes; compiled/rendered and native blend references pending.
+- [x] Render installed low/mid/high `throwcharge` hand poses while holding
+  grenades. Authored grids/masks and repeated throws passed rendered checks.
+  A stationary Legacy SAS-arm comparison confirms the three endpoint modes;
+  native blend timing and ballistic calibration remain open.
   [Scope](research/grenade-throw-state.md#authored-hold-hand-poses).
 - [x] Timed decoy expiry emits a separate positional near/distant cue from
   installed soundscripts, matching observed terminal sound requests. Round

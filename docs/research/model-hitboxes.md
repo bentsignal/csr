@@ -84,3 +84,40 @@ crate tests, including a real installed-data check that loads both character
 headers and poses all 19 hitboxes from each complete authored set. The bounded
 run exited zero without triggering its memory guard. Full workspace and client
 integration checks remain with the orchestrator; no native-render parity is claimed.
+
+
+## Authoritative integration
+
+The shared Bevy-free `character-pose` crate retains the existing animation
+controller. The simulation owns its locomotion phase, air time and last-shot
+tick; snapshots replicate those clocks. Rendering samples them on the same
+offline/remote timeline as actor transforms. Visibility and render frame rate
+no longer advance character animation. This establishes correspondence with
+our controller, not native animation-state fidelity.
+
+Runtime level loading reads the two currently drawn SAS/Phoenix character
+headers and consumed animation include through the selected VFS. Character
+ContentIds identify the profiles, and their consumed bytes extend content
+compatibility digests. Missing character assets retain the existing coarse
+fallback for self-contained packs. Present malformed profiles reject loading.
+No assets enter the repository or release.
+
+Hitscan uses authored capsule/rotated-box bounds for broad phase and nearest
+shape intersection for narrow phase; exposed limbs can extend beyond the
+movement hull. Immutable posed shapes are retained in bounded server rewind
+history, with existing round/life/team/teleport guards. A pose-input cache
+reuses unchanged geometry. The separate VR aim ray and its wall admission are
+unchanged; tracked-head/hand hitboxes are still open.
+
+Known authored groups 1 through 7 select existing damage groups. Valve's
+[May 2018 notes](https://blog.counter-strike.net/2018/05/20414/) describe neck
+penetration into the head counting as a headshot. The current query admits
+that ordering when the next non-neck shape is the head and the world trace
+allows it. **Neck-only damage/armor behavior is unmeasured**; those hits retain
+the previous coarse height classification, using historical movement bounds
+for rewound queries. This is an explicit fidelity gap, not an asserted native
+neck damage model. Player penetration and exact native animation remain open.
+
+Protocol 18 rejects older peers before exposing the new pose clocks. Actual
+native registration, physical input latency and native movement/surf parity
+are separate checks.
