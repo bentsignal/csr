@@ -66,6 +66,7 @@ angular velocity is a presentation approximation, not measured rigid-body spin.
 Validation and private rendered proof are recorded on the PR after build.
 
 
+
 ## Held Molotov wick presentation
 
 The installed `v_eq_molotov.mdl` contains one mesh bodygroup, authored lighter
@@ -92,3 +93,20 @@ claim the exact native ignition moment inside the animation. Existing lighter
 geometry and clips remain unchanged. SpriteCard crop/frame-blending/depth
 operators retain the renderer subset limits above; visual verification is
 required before claiming the displayed wick correct.
+
+## Explicit additive-over composition
+
+The installed ground-fire material `fire_explosion_1_oriented.vmt` documents
+`$ADDOVERBLEND 1` with the blend factors `ONE:INVSRCALPHA`. This flag takes
+precedence over its simultaneous `$ADDSELF 1`. Plain Bevy Add instead computes
+`src.rgb * src.a + dst.rgb`, discarding destination attenuation; overlapping
+cards can therefore accumulate into an excessively bright mass.
+
+The bounded particle material honors that explicit flag with premultiplied
+composition. Its shader retains the prior source contribution, including the
+authored overbright factor and all texture/particle/lifetime opacity, while
+preserving source alpha for destination attenuation. A zero-opacity particle
+contributes no light. Other ADDSELF materials retain the prior approximation.
+This addresses one known blend mismatch, not complete SpriteCard parity:
+power-function remapping, ramps, depth blending and the remaining ADDSELF
+semantics are still unresolved. Rendered brightness must be checked again.

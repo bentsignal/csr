@@ -36,6 +36,7 @@ pub mod menu;
 pub mod feedback;
 pub mod utility_fx;
 mod particle_data;
+mod particle_material;
 mod utility_particles;
 pub mod buymenu;
 pub mod items;
@@ -178,8 +179,10 @@ pub struct CsgoPlugin;
 impl Plugin for CsgoPlugin {
     fn build(&self, app: &mut App) {
         embedded_asset!(app, "shaders/world.wgsl");
+        embedded_asset!(app, "shaders/particle.wgsl");
         app.add_plugins(menu_blur::PostProcessPlugin)
             .add_plugins(MaterialPlugin::<WorldMaterial>::default())
+            .add_plugins(MaterialPlugin::<particle_material::ParticleMaterial>::default())
             .init_state::<AppState>()
             .init_resource::<session::Loader>()
             .init_resource::<remote_join::JoinRequest>()
