@@ -120,6 +120,10 @@ pub fn process(
                 let sound=match kind {sim::utility::Kind::Molotov=>"Molotov.Throw",sim::utility::Kind::Incendiary=>"IncGrenade.Throw",_=>"HEGrenade.Throw"};
                 sounds.play(&mut commands,fs,&mut sources,sound,if player==local.view_target(){None}else{Some(pos)});
             }
+            GameEvent::DecoyExpired { pos, .. } => {
+                // Audio only: no inferred HE damage or detonation particles.
+                sounds.play_decoy_expiry(&mut commands, fs, &mut sources, pos);
+            }
             GameEvent::UtilityBounced { kind, pos, .. } => {
                 sounds.play_grenade_bounce(&mut commands, fs, &mut sources, kind, pos);
             }

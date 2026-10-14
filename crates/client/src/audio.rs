@@ -642,6 +642,14 @@ impl SoundLibrary {
         self.play(commands, fs, sources, &entry, Some(pos));
     }
 
+    /// Decoy expiry shares the observed installed HE-style near/distant cue.
+    pub fn play_decoy_expiry(
+        &mut self, commands: &mut Commands, fs: &vfs::Vfs,
+        sources: &mut Assets<AudioSource>, pos: glam::Vec3,
+    ) {
+        self.play(commands, fs, sources, &utility::decoy_expiry_id().to_string(), Some(pos));
+    }
+
     /// Contact audio is spatial even for a grenade thrown by the listener.
     /// Imported entries retain authored gain, pitch and soundlevel unchanged.
     pub fn play_grenade_bounce(

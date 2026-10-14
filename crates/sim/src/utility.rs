@@ -303,6 +303,11 @@ impl World {
             .filter(|f| f.kind == Kind::Smoke && f.until > time)
             .map(|f| f.pos)
             .collect();
+        // Only timed decoy expiry emits this cue. Round cleanup clears fields
+        // independently, and must never sound like a live decoy has expired.
+        for f in self.utility_fields.iter().filter(|f| f.kind == Kind::Decoy && f.until <= time) {
+            self.events.push(GameEvent::DecoyExpired { player: f.owner, pos: f.pos });
+        }
         self.utility_fields.retain(|f| {
             f.until > time && !(f.kind.fire() && smokes.iter().any(|s| s.distance(f.pos) < 180.0))
         });
@@ -374,6 +379,43 @@ impl World {
 mod tests {
     use super::*;
     use crate::Team;
+
+    #[test]
+    fn decoy_expiry_is_once_at_deadline_and_never_round_cleanup() {
+        for rate in [64, 128] {
+            let mut world = arena();
+            world.set_tick_rate(rate);
+            let pos = Vec3::new(100., 20., 2.);
+            let decoy = Field { id: 1, owner: 7, kind: Kind::Decoy, pos,
+                born: 0., until: 15., decoy_weapon: None };
+            world.utility_fields = vec![decoy.clone(), Field { id: 2, kind: Kind::Smoke, ..decoy.clone() }];
+            world.tick = 15 * rate as u64 - 1;
+            world.step_utility();
+            assert!(world.events.is_empty());
+            assert_eq!(world.utility_fields.len(), 2);
+            // The deadline remains deterministic after restoring network state.
+            let mut restored = world.clone();
+            restored.restore(world.decode(&world.encode_state()).unwrap());
+            for w in [&mut world, &mut restored] {
+                w.tick += 1;
+                w.step_utility();
+                assert_eq!(w.events, vec![GameEvent::DecoyExpired { player: 7, pos }]);
+                assert!(w.utility_fields.is_empty());
+                w.events.clear();
+                for _ in 0..rate {
+                    w.tick += 1;
+                    w.step_utility();
+                    assert!(w.events.is_empty(), "removed decoy cannot expire repeatedly");
+                }
+                // Round cleanup must remain silent even for an overdue field.
+                w.utility_fields.push(decoy.clone());
+                w.start_round(false);
+                w.step_utility();
+                assert!(!w.events.iter().any(|e| matches!(e, GameEvent::DecoyExpired { .. })));
+                assert!(w.utility_fields.is_empty());
+            }
+        }
+    }
 
     #[test]
     fn contacts_emit_once_while_moving_but_not_at_rest_or_fire_detonation() {
