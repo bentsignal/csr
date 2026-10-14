@@ -251,7 +251,7 @@ pub fn update(
                 he,
                 pos,
                 time,
-                time + 0.5,
+                time + crate::utility_particles::burst_duration(he),
                 w.tick as u32,
                 false,
             ));

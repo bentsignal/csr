@@ -48,6 +48,29 @@ pub struct Layer {
     ground: bool,
 }
 
+/// Last possible particle death for these instantaneous layers. The enclosing
+/// emitter must outlive each layer's authored delay and lifetime; an unrelated
+/// flash timeout would erase dust before its fade-in can develop.
+pub fn burst_duration(layers: &[Layer]) -> f32 {
+    layers
+        .iter()
+        .filter(|l| l.burst > 0)
+        .map(|l| {
+            let life = if l.life_fps > 0.0 {
+                l.sheets
+                    .iter()
+                    .filter(|(id, _)| **id >= l.sequence[0] && **id <= l.sequence[1])
+                    .map(|(_, sheet)| sheet.frames.len() as f32 / l.life_fps)
+                    .reduce(f32::max)
+                    .unwrap_or(1.0)
+            } else {
+                l.life[0].max(l.life[1])
+            };
+            l.start + life.max(0.01)
+        })
+        .fold(0.01, f32::max)
+}
+
 fn op<'a>(ops: &[&'a Element], name: &str) -> Option<&'a Element> {
     ops.iter().copied().find(|e| {
         e.text("functionName").eq_ignore_ascii_case(name) || e.name.eq_ignore_ascii_case(name)
