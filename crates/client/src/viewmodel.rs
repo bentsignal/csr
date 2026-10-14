@@ -630,7 +630,11 @@ pub fn update(
     if let Some(transition) = suppressor { state.activity = transition.activity().into(); }
     let inspect_requested=state.inspect_seen!=request.0;state.inspect_seen=request.0;
     let reloading = w.is_some_and(|w| w.reload_end.is_some());
-    let attack = effects.consume_attack(p.id, &name, &mut state.last_attack_seen);
+    // Consume reliable shot serials even while a newer suppressor transition
+    // owns the pose. A delayed earlier shot must neither replace its clip nor
+    // replay after the transition ends.
+    let attack = effects.consume_attack(p.id, &name, &mut state.last_attack_seen)
+        .filter(|_| suppressor.is_none());
     // Shotguns that load shell by shell follow the simulation's stage:
     // the start, then one insert per shell, then (below) the finish.
     let sim_now = world.0.time() + fixed.overstep_fraction() * world.0.dt();
