@@ -416,6 +416,28 @@ Stage.addProperty("visibleRect", function() {
 // Scaleform's load left the clip visible. Emulate that for avatar loads only.
 var csrLoadClip = MovieClipLoader.prototype.loadClip;
 MovieClipLoader.prototype.loadClip = function(url, target) {
+    // Opt-in public loader observation for the existing menu probe only.
+    if (_global.csrDiagnostics.loadingTraceBudget > 0 &&
+        (String(url).indexOf("_loading.jpg") >= 0 || String(url).indexOf("_radar") >= 0)) {
+        _global.csrDiagnostics.loadingTraceBudget -= 1;
+        csrEI.call("csr.LoadingArtRequest", String(url), String(target));
+        var observer = new Object();
+        observer.loader = this;
+        observer.url = String(url);
+        observer.requested = String(target);
+        observer.onLoadComplete = function(mc) {
+            csrEI.call("csr.LoadingArtComplete", this.url, this.requested, String(mc), mc._width, mc._height);
+        };
+        observer.onLoadInit = function(mc) {
+            csrEI.call("csr.LoadingArtInit", this.url, this.requested, String(mc), mc._width, mc._height);
+            this.loader.removeListener(this);
+        };
+        observer.onLoadError = function(mc, error) {
+            csrEI.call("csr.LoadingArtError", this.url, this.requested, String(mc), String(error));
+            this.loader.removeListener(this);
+        };
+        this.addListener(observer);
+    }
     if (String(url).indexOf("img://avatar_") == 0) {
         var shower = new Object();
         shower.onLoadInit = function(mc) {
