@@ -241,8 +241,14 @@ fn parse_play(map: &str, args: &[String]) -> Result<client::ClientOptions, Strin
                 i += 1;
             }
             "--size" => {
-                opts.width = num(args.get(i + 1), "--size")? as u32;
-                opts.height = num(args.get(i + 2), "--size")? as u32;
+                let dimension = |value: Option<&String>| {
+                    value
+                        .and_then(|value| value.parse::<u32>().ok())
+                        .filter(|value| *value > 0)
+                        .ok_or_else(|| "--size needs two positive integer dimensions".to_owned())
+                };
+                opts.width = dimension(args.get(i + 1))?;
+                opts.height = dimension(args.get(i + 2))?;
                 opts.size_explicit = true;
                 i += 2;
             }
@@ -257,4 +263,24 @@ fn parse_play(map: &str, args: &[String]) -> Result<client::ClientOptions, Strin
         i += 1;
     }
     Ok(opts)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_play;
+
+    #[test]
+    fn size_override_tracks_presence_and_requires_positive_integer_dimensions() {
+        let ordinary = parse_play("de_dust2", &[]).unwrap();
+        assert!(!ordinary.size_explicit);
+        let explicit = parse_play("de_dust2", &["--size".into(), "1600".into(), "900".into()]).unwrap();
+        assert!(explicit.size_explicit);
+        assert_eq!((explicit.width, explicit.height), (1600, 900));
+        for bad in ["0", "-1", "1.5", "NaN", "inf", "4294967296"] {
+            for values in [[bad, "900"], ["1600", bad]] {
+                assert!(parse_play("de_dust2", &["--size".into(), values[0].into(), values[1].into()]).is_err(), "{values:?}");
+            }
+        }
+        assert!(parse_play("de_dust2", &["--size".into(), "1600".into()]).is_err());
+    }
 }
