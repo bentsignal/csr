@@ -91,6 +91,8 @@ pub fn process(
     level: Res<LoadedLevel>,
     time: Res<Time>,
     props: Res<crate::surfaces::SurfaceProps>,
+    settings: Res<crate::settings::Settings>,
+    mut buy_menu: ResMut<crate::buymenu::BuyMenu>,
 ) {
     let now = time.elapsed_secs();
     // Own sounds play at the listener; everyone else's in the world.
@@ -189,8 +191,11 @@ pub fn process(
                     effects.kill_feed.remove(0);
                 }
             }
-            GameEvent::Purchase { player, .. } if player == local.id => {
-                sounds.play(&mut commands, fs, &mut sources, "uipanorama.buymenu_purchase", None);
+            GameEvent::Purchase { player, .. } => {
+                buy_menu.confirmed_purchase(player, local.id, settings.close_on_buy);
+                if player == local.id {
+                    sounds.play(&mut commands, fs, &mut sources, "uipanorama.buymenu_purchase", None);
+                }
             }
             GameEvent::Jump { player } => {
                 if let Some(p) = world.0.player(player) {

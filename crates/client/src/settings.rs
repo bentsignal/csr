@@ -79,6 +79,7 @@ pub struct Settings {
     pub cross_dot: bool,
     pub radar_scale: f32,
     pub radar_rotate: bool,
+    pub close_on_buy: bool,
     pub binds: [KeyCode; 13],
 }
 pub const RESOLUTIONS: [(u32, u32); 4] = [(1280, 720), (1600, 900), (1920, 1080), (2560, 1440)];
@@ -104,6 +105,8 @@ impl Default for Settings {
             // Installed game_options sliderhome and ordinary rotating radar.
             radar_scale: 0.5,
             radar_rotate: true,
+            // Preserve the existing stay-open behavior; native default unmeasured.
+            close_on_buy: false,
             binds: [
                 KeyCode::KeyW,
                 KeyCode::KeyS,
@@ -182,6 +185,9 @@ impl Settings {
                     if let Some(v) = v { s.radar_scale = v.clamp(0.4, 1.0); }
                 }
                 "radar_rotate" => s.radar_rotate = value == "true",
+                "closeonbuy" => {
+                    if let Ok(number) = value.parse::<f64>() { s.set_convar_number(key, number); }
+                }
                 "resolution" => {
                     if let Some(v) = v {
                         s.resolution = (v as usize).min(3);
@@ -230,6 +236,7 @@ impl Settings {
         );
         text.push_str(&format!("menu_blur={}\n", self.menu_blur));
         text.push_str(&format!("radar_scale={}\nradar_rotate={}\n", self.radar_scale, self.radar_rotate));
+        text.push_str(&format!("closeonbuy={}\n", u8::from(self.close_on_buy)));
         for (i, key) in self.binds.iter().enumerate() {
             text.push_str(&format!("bind{i}={key:?}\n"));
         }
@@ -271,6 +278,7 @@ impl Settings {
             "cl_crosshaircolor" => [1., 3., 2., 4., 0.][self.cross_color.min(4)],
             "cl_radar_scale" => self.radar_scale as f64,
             "cl_radar_rotate" => u8::from(self.radar_rotate) as f64,
+            "closeonbuy" => u8::from(self.close_on_buy) as f64,
             _ => return None,
         })
     }
@@ -286,6 +294,7 @@ impl Settings {
             }
             "cl_radar_scale" => self.radar_scale = number.clamp(0.4, 1.0) as f32,
             "cl_radar_rotate" if number == 0.0 || number == 1.0 => self.radar_rotate = number == 1.0,
+            "closeonbuy" if number == 0.0 || number == 1.0 => self.close_on_buy = number == 1.0,
             _ => return false,
         }
         true
@@ -310,6 +319,7 @@ mod tests {
         s.menu_blur = false;
         s.radar_scale = 0.8;
         s.radar_rotate = false;
+        s.close_on_buy = true;
         assert_eq!(s.binds[1], KeyCode::KeyW);
         assert_eq!(Settings::parse(&s.encode()), s);
     }
@@ -330,6 +340,25 @@ mod tests {
         assert_eq!(s.radar_scale, 1.0);
         assert!(!s.set_convar_number("cl_radar_scale", f64::NAN));
     }
+    #[test]
+    fn close_on_buy_accepts_only_schema_boolean_ids_and_persists_them() {
+        let mut settings = Settings::default();
+        assert!(!settings.close_on_buy);
+        for number in [1.0, 0.0, 1.0] {
+            assert!(settings.set_convar_number("closeonbuy", number));
+            assert_eq!(settings.convar_number("closeonbuy"), Some(number));
+            assert_eq!(Settings::parse(&settings.encode()), settings);
+        }
+        for number in [-1.0, 0.5, 2.0, f64::NAN, f64::INFINITY] {
+            assert!(!settings.set_convar_number("closeonbuy", number));
+            assert!(settings.close_on_buy);
+        }
+        for value in ["true", "false", "NaN", "2", "0.5", "1.000000001"] {
+            assert!(!Settings::parse(&format!("closeonbuy={value}\n")).close_on_buy);
+        }
+        assert!(!Settings::parse("volume=0.7\n").close_on_buy);
+    }
+
     #[test]
     fn invalid_config_is_bounded() {
         let s = Settings::parse(

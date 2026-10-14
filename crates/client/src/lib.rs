@@ -715,8 +715,12 @@ fn smoke_test(
     if *frame == capture_frame.saturating_sub(90) && std::env::var_os("CSR_INSPECT").is_some(){inspect.0+=1;}
     // CSR_BUY_MENU=n: show the buy menu on category n (0 = none picked).
     if let Ok(cat) = std::env::var("CSR_BUY_MENU").map(|v| v.parse::<usize>().unwrap_or(0)) {
-        menu.open = true;
-        menu.category = cat.checked_sub(1);
+        // The close-on-buy proof must leave subsequent state to the real
+        // purchase receipt and input consumer instead of reopening each frame.
+        if std::env::var("CSR_TEST_SWITCH").as_deref() != Ok("buy-close") || *frame == 1 {
+            menu.open = true;
+            menu.category = cat.checked_sub(1);
+        }
     }
     let mut local = local;
     // Explicit screenshot-only fixture, never enabled in interactive play.
@@ -774,6 +778,11 @@ fn smoke_test(
                     info!("capture projectile: id={} kind={:?} pos={:?} velocity={:?} settled={}",
                         projectile.id, projectile.kind, projectile.pos, projectile.velocity, projectile.settled);
                 }
+            }
+            if std::env::var("CSR_TEST_SWITCH").as_deref() == Ok("buy-close") {
+                let player = w.0.player(l.id);
+                info!("buy-close capture: menu_open={} just_closed={} money={:?} armor={:?}",
+                    menu.open, menu.just_closed, player.map(|p| p.money), player.map(|p| p.armor));
             }
         }
     }

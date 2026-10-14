@@ -400,6 +400,16 @@ pub fn tick(
                     weapon.map(|w| w.def.class_name.as_str()), weapon.map(|w| w.suppressor_attached),
                     weapon.and_then(|w| w.suppressor_transition), weapon.map(|w| w.next_attack));
             }
+        } else if std::env::var("CSR_TEST_SWITCH").as_deref() == Ok("buy-close") {
+            // Screenshot-only purchase through normal simulation validation.
+            // Competitive spawn money, armor and buy-zone checks stay intact.
+            if world.0.tick == world.0.ticks(0.5) {
+                input.buy = Purchase::Kevlar;
+                let player = world.0.player(local.id);
+                info!("buy-close fixture: tick={} time={:.5} buy={:?} menu_open={} money={:?} armor={:?} buy_zone={:?}",
+                    world.0.tick, world.0.time(), input.buy, menu.open,
+                    player.map(|p| p.money), player.map(|p| p.armor), player.map(|p| p.in_buy_zone));
+            }
         } else if std::env::var("CSR_TEST_SWITCH").as_deref() == Ok("inventory-previous") {
             // Keep the ordinary practice inventory intact. Select Flash by its
             // installed item id, then ask authority for the previous weapon.
