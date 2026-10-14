@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use sim::{GameEvent, PlayerId, Snapshot, Team, TickInput};
 
 // v19 includes authoritative roster counts in inspected server metadata.
-pub const VERSION: u32 = 19;
+pub const VERSION: u32 = 20;
 pub const PROTOCOL_ID: u64 = 0x4353_5257_0000_0013;
 pub const CONTROL: u8 = 0;
 pub const INPUT: u8 = 1;
@@ -502,6 +502,16 @@ fn valid_decoy_weapon(kind: sim::utility::Kind, weapon: Option<&str>) -> bool {
 }
 
 fn validate_weapon(weapon: &sim::weapon::WeaponState, tick:u64) -> Result<(), String> {
+    if weapon.burst_mode && weapon.burst_profile().is_none() {
+        return Err("weapon has no valid burst profile".into());
+    }
+    if let Some(burst) = weapon.burst {
+        if !weapon.burst_mode || weapon.burst_profile().is_none() || weapon.reload_end.is_some()
+            || !(1..=2).contains(&burst.remaining) || i32::from(burst.remaining) > weapon.clip
+            || !burst.next_shot.is_finite() || burst.next_shot < 0. || burst.next_shot > weapon.next_attack {
+            return Err("invalid snapshot burst state".into());
+        }
+    }
     if weapon.suppressor_attached && !weapon.def.attr_f32("has silencer").is_some_and(|v| v > 0.) {
         return Err("weapon has no suppressor".into());
     }
@@ -571,6 +581,41 @@ mod death_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn burst_snapshot_roundtrips_and_rejects_impossible_pending_bullets() {
+        let catalog = weapons::Catalog::from_items_game(r##"
+            items_game {
+                prefabs { burst_gun { item_class weapon_pack_burst item_type_name "#CSGO_Type_Rifle"
+                    attributes { "primary clip size" 20 "has burst mode" 1
+                        "cycletime when in burst mode" 0.5 "time between burst shots" 0.05 } } }
+                items { 900 { name weapon_pack_burst prefab burst_gun baseitem 1 } }
+            }
+        "##).unwrap();
+        let mut world = sim::World::with_catalog(std::sync::Arc::new(collision::CollisionWorld::new()), std::sync::Arc::new(catalog));
+        world.add_player("burst", sim::Team::CounterTerrorist);
+        let mut gun = sim::weapon::WeaponState::new(std::sync::Arc::new(world.catalog.get("weapon_pack_burst").unwrap().clone()));
+        gun.burst_mode = true;
+        gun.clip = 19;
+        gun.next_attack = 0.5;
+        gun.burst = Some(sim::weapon::BurstState { remaining: 2, next_shot: 0.05 });
+        assert!(validate_weapon(&gun, 0).is_ok());
+        world.players[0].weapons = vec![gun.clone()];
+        let snapshot = world.snapshot();
+        assert_eq!(world.decode::<sim::Snapshot>(&sim::state::encode(&snapshot)).unwrap(), snapshot);
+        for case in 0..7 {
+            let mut invalid = gun.clone();
+            match case {
+                0 => invalid.burst_mode = false,
+                1 => invalid.burst.as_mut().unwrap().remaining = 0,
+                2 => invalid.burst.as_mut().unwrap().remaining = 3,
+                3 => invalid.burst.as_mut().unwrap().next_shot = f32::NAN,
+                4 => invalid.clip = 1,
+                5 => invalid.reload_end = Some(0.3),
+                _ => invalid.next_attack = 0.01,
+            }
+            assert!(validate_weapon(&invalid, 0).is_err(), "case {case}");
+        }
+    }
     #[test]
     fn decoy_expiry_roundtrip_and_admission_keep_authoritative_position() {
         let pos = glam::Vec3::new(-100., 20., 2.);
