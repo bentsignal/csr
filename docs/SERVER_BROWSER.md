@@ -27,3 +27,78 @@ read-only against `csgo/pak01_dir.vpk` / `pak01_203.vpk`, member
 `203a3d4dc559bb6e44d03e86532ef00fd0c1f6ce327a5dced8898992de919f81`.
 
 For an offscreen private render, `cargo run -p client --example server_browser -- <private-capture-directory>` mounts the installed resources and supplies local system font files at runtime. It renders an explicitly synthetic localhost favorite with unknown metadata and types an address through the actual leaf keyboard path. It opens no window and performs no network requests. Captures must stay outside the repository.
+
+## LAN discovery
+
+The installed `ServerBrowser_LanTab` token supplies the LAN tab's label. Its
+refresh collects local endpoint hints, verifies them with the existing Inspect
+exchange, and offers the existing generation-checked Connect flow. A hint
+contains no host address, map, player count, content manifest or invite. The
+packet's source IPv4 address and declared nonzero game port identify a candidate;
+only a successful Inspect supplies metadata and a connectable row. This is
+discovery over the rewrite's existing unauthenticated transport, not server
+identity authentication. Direct addresses and Favorites remain separate.
+
+Running authorities send a 14-byte, exact-version hint once per second to
+`239.255.73.82:42690`, with multicast TTL 1. Preparing hosts do not advertise.
+The authority owns a separate ephemeral UDP socket; it never shares reads with
+the game's netcode socket or starts an advertisement thread. Send failure
+disables this optional advertisement without stopping the game. Shutdown/drop
+releases the socket. No firewall rules, administrator prompts, external service
+or game-install writes are involved.
+
+The browser's one retained worker opens a multicast receiver with reuse enabled
+before binding, so multiple local browsers can listen to the same group/port.
+Multiple hosts advertise their actual game ports. Collection ends after 2.5
+seconds, 256 received datagrams or 32 distinct candidate endpoints; malformed,
+oversized and incompatible packets are ignored. The existing bounded Inspect
+batch then checks candidates with at most eight concurrent probes. Cancel/Close
+invalidates the generation immediately; the worker observes cancellation and
+drops its socket. Refresh replaces LAN membership with fresh verified results;
+it does not save discoveries as favorites or admit gameplay players.
+
+Wildcard authorities and browser collection explicitly use the IPv4 interface
+selected by an ephemeral UDP socket's broadcast-route lookup. That socket binds
+to `0.0.0.0:0`, enables broadcast, connects to `255.255.255.255:9`, reads its
+local address and is dropped **without sending**. Unspecified/loopback results
+disable optional LAN discovery; direct addresses and Favorites remain available.
+An authority bound to a specific IPv4 address uses that interface instead.
+
+The previous implicit multicast-interface selection was observed on this PC
+delivering actual Rust authority hints from `127.0.0.1` despite a non-loopback
+Ethernet route being selected. This local observation does not establish what
+another machine received. Explicit `IP_MULTICAST_IF` and matching receiver
+membership correct the interface choice without changing system routes. The
+[Rust UDP connect API](https://doc.rust-lang.org/std/net/struct.UdpSocket.html#method.connect)
+sets the socket's remote address; the lookup makes no send call.
+[Microsoft documents `IP_MULTICAST_IF`](https://learn.microsoft.com/windows/win32/winsock/ip-multicast-2)
+as the multicast-interface selection option.
+
+This initial scope uses one OS-selected IPv4 LAN interface. IPv6,
+multi-interface enumeration, routed discovery and exact native tab sizing are
+not implemented. Multicast filtering, a VPN/default-route choice or a blocked
+port may hide a server; an empty list is not proof that no host exists. The UI
+keeps direct address/Favorites access available. The socket ownership/reuse
+follows [Microsoft's multicast reuse documentation](https://learn.microsoft.com/windows/win32/winsock/using-so-reuseaddr-and-so-exclusiveaddruse)
+and the [socket2 API](https://docs.rs/socket2/0.6.3/socket2/struct.Socket.html).
+Focused netcode tests pass, including two simultaneous loopback multicast
+receivers seeing both server ports, socket release, rate limits and malformed
+hint rejection. Browser compilation/integration and rendered joining remain
+pending central verification; no completed cross-machine LAN or UI fidelity
+claim is made.
+An opt-in ignored test checks wildcard advertisement source and matching
+membership on an active non-loopback interface, using an isolated ephemeral
+destination port; the interface-selection change still awaits that runtime check.
+
+The existing browser engine proof has an optional LAN path: retain
+`CSR_TEST_BROWSER=localhost:<owned-port>` and set
+`CSR_TEST_BROWSER_LAN=<owned-authority-IPv4>:<same-port>` in isolated userdata.
+An independently owned headless authority must already be running and
+advertising. The proof clicks the real LAN tab, waits for that exact endpoint's
+successful discovery, selects its row and clicks Connect. It checks Ready,
+content identity and advancing authoritative ticks, then returns Home and
+checks teardown. Three fresh ScreenshotCaptured saves are required:
+`browser-lan.png`, `browser-ready.png` and `browser-home.png`. It does not inject
+rows, enter addresses or bypass the join flow. Without the optional variable,
+the existing seven-capture Favorites proof is unchanged. These are engine
+input fixtures, not operating-system mouse input or cross-machine evidence.

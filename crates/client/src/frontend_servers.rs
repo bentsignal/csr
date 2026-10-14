@@ -242,13 +242,14 @@ pub fn spawn(
         for (index, (tab, token)) in [
             (Tab::Internet, "ServerBrowser_InternetTab"),
             (Tab::Favorites, "ServerBrowser_FavoritesTab"),
+            (Tab::Lan, "ServerBrowser_LanTab"),
         ]
         .iter()
         .enumerate()
         {
             let r = Rect {
-                x: index as f32 * tabs.rect.width / 2.0,
-                width: tabs.rect.width / 2.0,
+                x: index as f32 * tabs.rect.width / 3.0,
+                width: tabs.rect.width / 3.0,
                 height: page.rect.y,
                 ..default()
             };
