@@ -12,5 +12,12 @@ fn main() {
         let res = std::path::PathBuf::from(std::env::var("OUT_DIR").unwrap()).join("csgo-rewrite-icon.res");
         std::fs::write(&res, art::icon_res()).expect("write icon resource");
         println!("cargo:rustc-link-arg-bin=csr={}", res.display());
+        // Package debug=0 removes our own symbols, but linked dependencies
+        // still carry debug information. Their combined PDB can exceed MSVC's
+        // LNK1140 limit. Suppress only the examples' final PDB, preserving
+        // dependency artifacts and normal executable/test debug behavior.
+        // /PDB:NONE names a shared file on current MSVC; /DEBUG:NONE actually
+        // disables PDB generation for concurrently linked examples.
+        println!("cargo:rustc-link-arg-examples=/DEBUG:NONE");
     }
 }
