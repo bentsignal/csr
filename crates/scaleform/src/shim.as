@@ -333,11 +333,13 @@ csrEI.addCallback("csrInspect", null, function(path) {
     var o = _global.csrResolve(path);
     var entries = [];
     if (typeof o == "movieclip") {
-        var bounds = o.getBounds(o._parent);
+        var localBounds = o.getBounds(o);
+        var bounds = o._parent == undefined ? localBounds : o.getBounds(o._parent);
         entries.push("_x:number=" + o._x, "_y:number=" + o._y,
             "_width:number=" + o._width, "_height:number=" + o._height,
             "_xscale:number=" + o._xscale, "_yscale:number=" + o._yscale,
-            "boundsInParent:string=" + [bounds.xMin, bounds.yMin, bounds.xMax, bounds.yMax].join(","));
+            "boundsInParent:string=" + [bounds.xMin, bounds.yMin, bounds.xMax, bounds.yMax].join(","),
+            "boundsLocal:string=" + [localBounds.xMin, localBounds.yMin, localBounds.xMax, localBounds.yMax].join(","));
     }
     for (var key in o) {
         var t = typeof o[key];
