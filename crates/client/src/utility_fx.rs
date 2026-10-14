@@ -72,7 +72,9 @@ pub fn setup(
     // Prewarm each material without a visible particle, so a first short HE
     // flash does not expire while its pipeline compiles.
     for layer in smoke.iter().chain(&fire).chain(&he) {
-        let mesh = meshes.add(Rectangle::new(0.001, 0.001));
+        let mut mesh = Mesh::from(Rectangle::new(0.001, 0.001));
+        mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, vec![[1.0_f32; 4]; 4]);
+        let mesh = meshes.add(mesh);
         commands.spawn((
             Mesh3d(mesh),
             MeshMaterial3d(layer.material.clone()),

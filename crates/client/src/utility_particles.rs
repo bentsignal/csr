@@ -77,7 +77,10 @@ pub fn load(
     let mut layers = Vec::new();
     let mut textures: HashMap<String, (Handle<Image>, HashMap<usize, Sheet>)> = HashMap::new();
     for name in names {
-        let Some(e) = elements.iter().find(|e| e.name == *name) else {
+        let Some(e) = elements
+            .iter()
+            .find(|e| e.kind == "DmeParticleSystemDefinition" && e.name == *name)
+        else {
             continue;
         };
         let path = format!(
@@ -491,8 +494,8 @@ impl Emitter {
                 } else if self.fire {
                     (Vec3::new(p.yaw.cos(), 0.0, p.yaw.sin()), Vec3::Y)
                 } else {
-                    let normal = (eye - self.origin - center).normalize_or_zero();
-                    let right = Vec3::Y.cross(normal).normalize_or_zero();
+                    let normal = (eye - self.origin - center).normalize_or(Vec3::Z);
+                    let right = Vec3::Y.cross(normal).normalize_or(Vec3::X);
                     (right, normal.cross(right).normalize_or_zero())
                 };
                 let roll = p.roll + l.spin * age;
@@ -516,7 +519,7 @@ impl Emitter {
                 }
                 indices.extend([base, base + 1, base + 2, base, base + 2, base + 3]);
             }
-            if let Some(mesh) = meshes.get_mut(&b.mesh) {
+            if let Some(mut mesh) = meshes.get_mut(&b.mesh) {
                 mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
                 mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
                 mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);

@@ -14,6 +14,7 @@ pub enum Value {
 }
 #[derive(Debug, Default)]
 pub struct Element {
+    pub kind: String,
     pub name: String,
     pub attrs: HashMap<String, Value>,
 }
@@ -153,10 +154,11 @@ pub fn pcf(data: &[u8]) -> Option<Vec<Element>> {
     let count = r.count(100_000)?;
     let mut elements = Vec::with_capacity(count);
     for _ in 0..count {
-        r.indexed(&strings)?;
+        let kind = r.indexed(&strings)?;
         let name = r.indexed(&strings)?;
         r.take(16)?;
         elements.push(Element {
+            kind,
             name,
             attrs: HashMap::new(),
         });
