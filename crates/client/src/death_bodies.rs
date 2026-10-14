@@ -1,6 +1,7 @@
 //! Bounded presentation of immutable authoritative deaths using installed models.
-//! The authored low-violence death clip is not CS:GO ragdoll physics.
+//! Physical bodies use runtime model data; missing rigs retain the authored fallback.
 use bevy::prelude::*;
+use bevy::tasks::{AsyncComputeTaskPool, Task, block_on, poll_once};
 use super::{CharacterModels, own_materials, despawn_instance, lighting_at};
 use crate::{coords::{rotation_to_bevy,to_bevy}, material::WorldMaterial, skinning::{self,SkinnedInstance}};
 use sim::death::{DeathReceipt,DeathKey};
@@ -14,6 +15,10 @@ struct Body {
     born: f32,
     instance: SkinnedInstance,
     materials: Vec<Handle<WorldMaterial>>,
+    corpse: Option<ragdoll::Corpse>,
+    pending: Option<Task<Option<ragdoll::Corpse>>>,
+    captured_pose: Vec<glam::Mat4>,
+    last_time: f32,
 }
 
 #[derive(Default)]
@@ -30,7 +35,7 @@ fn admitted(death: &DeathReceipt, round: u32) -> bool {
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn update(
-    commands: &mut Commands, state: &mut DeathBodies, deaths: Vec<DeathReceipt>,
+    commands: &mut Commands, state: &mut DeathBodies, deaths: Vec<(DeathReceipt, Option<Vec<glam::Mat4>>)>,
     round: u32, now: f32, models: &mut CharacterModels,
     materials: &mut Assets<WorldMaterial>, level: &level::Level,
     mat_query: &Query<&MeshMaterial3d<WorldMaterial>>,
@@ -44,7 +49,7 @@ pub(super) fn update(
     while state.bodies.front().is_some_and(|b| now-b.born >= BODY_LIFETIME) {
         despawn_instance(commands,&state.bodies.pop_front().unwrap().instance);
     }
-    for death in deaths {
+    for (death, captured_pose) in deaths {
         if !admitted(&death,round) || state.seen.contains(&death.key) { continue; }
         state.seen.push_back(death.key);
         if state.seen.len()>128 { state.seen.pop_front(); }
@@ -60,16 +65,39 @@ pub(super) fn update(
         }
         for e in &instance.meshes {commands.entity(*e).insert(Visibility::Hidden);}
         if state.bodies.len()==MAX_BODIES {despawn_instance(commands,&state.bodies.pop_front().unwrap().instance);}
-        state.bodies.push_back(Body {death,born:now,instance,materials:Vec::new()});
+        let pose = captured_pose.unwrap_or_else(|| mdl::skeleton::model_space(
+            &model.asset.model.bones, &mdl::skeleton::rest_pose(&model.asset.model.bones)));
+        // Cooking nearby prop/brush geometry can span several frames. Keep it
+        // off the render thread; the bounded body owns and cancels its task.
+        let pending = model.ragdoll.as_ref().map(|rig| {
+            let rig=rig.clone(); let collision=level.collision.clone(); let pose=pose.clone(); let death=death.clone();
+            AsyncComputeTaskPool::get().spawn(async move {
+                ragdoll::Corpse::new(rig, &collision, &pose, death.pose.origin, death.pose.view_angles.y,
+                    death.pose.velocity, death.hit.map(|hit| (hit.position, hit.direction)))
+            })
+        });
+        state.bodies.push_back(Body {death,born:now,instance,materials:Vec::new(),corpse:None,pending,captured_pose:pose,last_time:now});
     }
     for body in &mut state.bodies {
         let model=match body.death.victim_team {sim::Team::Terrorist=>models.terrorist.as_mut(),_=>models.counter_terrorist.as_mut()};
         let Some(model)=model else {continue};
-        let Some(pose)=model.anims.death_pose(now-body.born) else {continue};
+        if let Some(result) = body.pending.as_mut().and_then(|task| block_on(poll_once(task))) {
+            body.corpse=result; body.pending=None;
+        }
+        let (pose, world) = if let Some(corpse) = &mut body.corpse {
+            corpse.advance((now-body.last_time).max(0.));
+            body.last_time=now;
+            (corpse.bone_matrices(), Mat4::IDENTITY)
+        } else if body.pending.is_some() {
+            let rotation=rotation_to_bevy(mdl::angles_to_mat3(glam::Vec3::new(0.,body.death.pose.view_angles.y,0.)));
+            (body.captured_pose.clone(),Mat4::from_rotation_translation(rotation,to_bevy(body.death.pose.origin)))
+        } else {
+            let Some(pose)=model.anims.death_pose(now-body.born) else {continue};
+            let rotation=rotation_to_bevy(mdl::angles_to_mat3(glam::Vec3::new(0.,body.death.pose.view_angles.y,0.)));
+            (pose,Mat4::from_rotation_translation(rotation,to_bevy(body.death.pose.origin)))
+        };
         // Deferred entities stay hidden until their actual pose can be written.
         if body.instance.joints.iter().any(|e| transforms.get(*e).is_err()) {continue;}
-        let rotation=rotation_to_bevy(mdl::angles_to_mat3(glam::Vec3::new(0.,body.death.pose.view_angles.y,0.)));
-        let world=Mat4::from_rotation_translation(rotation,to_bevy(body.death.pose.origin));
         skinning::apply_pose(&body.instance,world,&pose,transforms);
         if body.materials.is_empty() {
             body.materials=own_materials(&body.instance,mat_query);

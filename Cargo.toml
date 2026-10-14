@@ -19,6 +19,7 @@ members = [
     "crates/level",
     "crates/scaleform",
     "crates/client",
+    "crates/ragdoll",
     "crates/launcher",
     "crates/workshop",
     "crates/packs",

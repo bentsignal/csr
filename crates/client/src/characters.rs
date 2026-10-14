@@ -26,6 +26,7 @@ pub const CT_MODEL: &str = "models/player/custom_player/legacy/ctm_sas.mdl";
 pub struct TeamModel {
     pub asset: SkinnedAsset,
     pub anims: PlayerAnimSet,
+    pub ragdoll: Option<Arc<ragdoll::Rig>>,
 }
 
 /// Everything needed to draw players.
@@ -48,6 +49,8 @@ struct Character {
     light_timer: f32,
     light_target: Option<([Vec4;6],Vec4,Vec4)>,
     light_current: Option<([Vec4;6],Vec4,Vec4)>,
+    last_pose: Vec<glam::Mat4>,
+    pose_life: u64,
 }
 
 #[derive(Resource, Default)]
@@ -83,7 +86,11 @@ pub fn load(
         let model = Arc::new(load_model(fs, path)?);
         let anims = PlayerAnimSet::load(&model, fs)?;
         let asset = skinning::build_asset(model, fs, meshes, materials, images, textures, shared, bindposes, exposure, true);
-        Some(TeamModel { asset, anims })
+        let ragdoll = fs.read(path).and_then(|mdl_bytes| {
+            let phy_bytes = fs.read(&path.replace(".mdl", ".phy"))?;
+            ragdoll::Rig::load(&asset.model, &mdl_bytes, &phy_bytes).map(Arc::new)
+        });
+        Some(TeamModel { asset, anims, ragdoll })
     };
     let terrorist = team(T_MODEL);
     let counter_terrorist = team(CT_MODEL);
@@ -199,8 +206,14 @@ pub fn sync(
     let sim_now = world.0.time();
     let sun = models.sun;
 
-    death_bodies::update(&mut commands, &mut chars.1, std::mem::take(&mut effects.deaths),
-        world.0.round.round, now, &mut models, &mut materials, &level.0,
+    let deaths = std::mem::take(&mut effects.deaths).into_iter().map(|death| {
+        let pose = chars.0.get(&death.key.victim)
+            .filter(|c| c.pose_life == death.key.life_epoch && c.team == death.victim_team)
+            .map(|c| c.last_pose.clone()).filter(|p| !p.is_empty());
+        (death, pose)
+    }).collect();
+    death_bodies::update(&mut commands, &mut chars.1, deaths,
+        world.0.round.round, sim_now, &mut models, &mut materials, &level.0,
         &mat_query, &mut transforms, &mut visibility);
 
     // Drop characters whose players left.
@@ -242,6 +255,8 @@ pub fn sync(
                     light_timer: (p.id % 10) as f32 * 0.015,
                     light_target: None,
                     light_current: None,
+                    last_pose: Vec::new(),
+                    pose_life: 0,
                 },
             );
             // Materials become queryable next frame.
@@ -311,6 +326,8 @@ pub fn sync(
         };
         let Some(anims) = anims else { continue };
         let pose = anims.evaluate(&mut c.anim, &input, dt);
+        c.last_pose.clone_from(&pose);
+        c.pose_life = p.life_epoch;
         let world_from_model = Mat4::from_rotation_translation(
             rotation_to_bevy(mdl::angles_to_mat3(glam::Vec3::new(0.0, render.angles.y, 0.0))),
             to_bevy(render.origin),
