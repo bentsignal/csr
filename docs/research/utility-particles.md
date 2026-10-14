@@ -39,8 +39,9 @@ never rotated. Fire ground cards and upright cards remain fixed in world
 orientation. Ending a field fades alpha instead of dragging positions and
 scales back into its center. Fire particle bases trace to actual ground. The authored emission scaling
 uses a temporary 19-point rendering cover of the current circular field;
-these are not native spread cells. Authored distance-based alpha remaps keep
-the denser layers from becoming an additive white mass.
+these are not native spread cells. Authored distance-based alpha remaps are
+applied; the denser fire remains visibly too bright with the current material
+subset.
 
 Grenade presentation now tumbles around its mesh center on multiple axes,
 retains orientation across bounces, and stops when authoritative velocity rests.
@@ -64,6 +65,23 @@ angular velocity is a presentation approximation, not measured rigid-body spin.
 2015 parity is not established by installed 2023 data.
 
 Validation and private rendered proof are recorded on the PR after build.
+
+## HE flash and dust have separate authored lifetimes
+
+The installed `explosion_child_core04b` flash lasts 0.25–0.30 seconds, while
+`explosion_child_dust10a` lasts 0.30 seconds and
+`explosion_child_dust06a` lasts 3–5 seconds with a 1–1.2 second fade-in. The
+old enclosing 0.5-second emitter timeout erased every layer together, before
+the slower dust could develop. The burst owner now survives the latest
+authored particle death, including any emission start delay. Each particle
+still expires and fades according to its own layer; the white flash is not
+extended to the dust's lifetime.
+
+This is presentation only: detonation, damage, fuse timing and gameplay
+fields are unchanged. The existing 16-burst bound remains. It does not repair
+the ignored HE `$mod2x` material mode or establish its unknown SpriteCard
+opacity/gain law, nor does it solve fire's excessive brightness.
+
 
 
 ## Held Molotov wick presentation
@@ -92,3 +110,20 @@ claim the exact native ignition moment inside the animation. Existing lighter
 geometry and clips remain unchanged. SpriteCard crop/frame-blending/depth
 operators retain the renderer subset limits above; visual verification is
 required before claiming the displayed wick correct.
+
+## Explicit additive-over composition
+
+The installed ground-fire material `fire_explosion_1_oriented.vmt` documents
+`$ADDOVERBLEND 1` with the blend factors `ONE:INVSRCALPHA`. This flag takes
+precedence over its simultaneous `$ADDSELF 1`. Plain Bevy Add instead computes
+`src.rgb * src.a + dst.rgb`, discarding destination attenuation; overlapping
+cards can therefore accumulate into an excessively bright mass.
+
+The bounded particle material honors that explicit flag with premultiplied
+composition. Its shader retains the prior source contribution, including the
+authored overbright factor and all texture/particle/lifetime opacity, while
+preserving source alpha for destination attenuation. A zero-opacity particle
+contributes no light. Other ADDSELF materials retain the prior approximation.
+This addresses one known blend mismatch, not complete SpriteCard parity:
+power-function remapping, ramps, depth blending and the remaining ADDSELF
+semantics are still unresolved. Rendered brightness must be checked again.

@@ -31,7 +31,7 @@ pub struct AssetsFx {
 pub fn setup(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut mats: ResMut<Assets<StandardMaterial>>,
+    mut mats: ResMut<Assets<crate::particle_material::ParticleMaterial>>,
     mut images: ResMut<Assets<Image>>,
     level: Res<crate::LoadedLevel>,
 ) {
@@ -251,7 +251,7 @@ pub fn update(
                 he,
                 pos,
                 time,
-                time + 0.5,
+                time + crate::utility_particles::burst_duration(he),
                 w.tick as u32,
                 false,
             ));
