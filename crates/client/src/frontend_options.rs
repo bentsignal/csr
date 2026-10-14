@@ -408,8 +408,11 @@ impl Scene {
                     );
                 }
                 Kind::Dropdown { choices, selected } => {
-                    let (current, caption) =
-                        dropdown_presentation(choices, settings.convar_number(&widget.convar));
+                    let (current, caption) = dropdown_presentation(
+                        &widget.convar,
+                        choices,
+                        settings.convar_number(&widget.convar),
+                    );
                     *selected = current;
                     let native_index = selected.map_or(-1.0, |index| index as f64);
                     calls.call(
@@ -443,6 +446,7 @@ impl Scene {
 }
 
 fn dropdown_presentation(
+    convar: &str,
     choices: &[(String, f64)],
     current: Option<f64>,
 ) -> (Option<usize>, String) {
@@ -451,11 +455,14 @@ fn dropdown_presentation(
         .position(|(_, value)| current.is_some_and(|current| (current - value).abs() < 1e-7));
     let caption = index
         .map(|index| choices[index].0.clone())
-        .unwrap_or_else(|| {
-            current.map_or_else(
-                || "Unavailable".into(),
-                |value| format!("Saved value: {value}"),
-            )
+        .unwrap_or_else(|| match (convar, current) {
+            (_, None) => "Unavailable".into(),
+            ("cl_crosshaircolor", Some(0.0)) => "Red".into(),
+            ("cl_crosshaircolor", Some(1.0)) => "Green".into(),
+            ("cl_crosshaircolor", Some(2.0)) => "Yellow".into(),
+            ("cl_crosshaircolor", Some(3.0)) => "Blue".into(),
+            ("cl_crosshaircolor", Some(4.0)) => "Light Blue".into(),
+            (_, Some(_)) => "Custom".into(),
         });
     (index, caption)
 }
@@ -469,8 +476,20 @@ mod tests {
         let mut settings = Settings::default();
         settings.cross_color = 4; // Source ID0 is absent from this schema.
         assert_eq!(
-            dropdown_presentation(&choices, settings.convar_number("cl_crosshaircolor")),
-            (None, "Saved value: 0".into())
+            dropdown_presentation(
+                "cl_crosshaircolor",
+                &choices,
+                settings.convar_number("cl_crosshaircolor")
+            ),
+            (None, "Red".into())
+        );
+        assert_eq!(
+            dropdown_presentation("cl_crosshaircolor", &choices, Some(13.0)),
+            (None, "Custom".into())
+        );
+        assert_eq!(
+            dropdown_presentation("cl_crosshaircolor", &choices, None),
+            (None, "Unavailable".into())
         );
         let mut scene = Scene {
             revision: 9,
