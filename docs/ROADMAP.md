@@ -582,3 +582,9 @@ parity and the gameplay gaps listed above remain unfinished.
   smoothness and physical input latency remain open. Audio Settings/Back and
   Pause/reopen flow work; Game Settings routing now opens its original scene,
   whose controls are still being connected. [PR #87](https://github.com/bentsignal/global-offensive/pull/87), [PR #93](https://github.com/bentsignal/global-offensive/pull/93).
+
+- [x] Replicate the grenade solver's existing soft-floor rest decision so a
+  settled projectile stops cosmetic tumbling through gravity/contact cycles.
+  A support query wakes the visual mark if a dynamic world removes its floor;
+  translation, bounces, gravity, fuses and authored appearance are unchanged.
+  Exact original angular motion and native grenade physics remain unmeasured.
