@@ -9,7 +9,10 @@ use glam::{Vec2, Vec3};
 use std::io;
 
 const RECORD_SIZE: usize = 352;
-const MAX_OVERLAYS: usize = 512;
+// Reader allocation budget, not a Source-branch format limit. Installed CS:GO
+// Legacy Inferno has 787 valid records, exceeding the old 512-record assumption.
+// This allows at most 1,441,792 encoded bytes and 262,144 receiver references.
+const MAX_OVERLAY_RECORDS: usize = 4096;
 const MAX_RECEIVER_TRIANGLES: usize = 65_536;
 const MAX_OUTPUT_VERTICES: usize = 65_536;
 
@@ -33,7 +36,7 @@ pub struct Overlay {
 pub(crate) fn parse(bytes: &[u8], fades: &[u8]) -> io::Result<Vec<Overlay>> {
     let invalid = || io::Error::new(io::ErrorKind::InvalidData, "invalid BSP overlay lump");
     if bytes.len() % RECORD_SIZE != 0
-        || bytes.len() / RECORD_SIZE > MAX_OVERLAYS
+        || bytes.len() / RECORD_SIZE > MAX_OVERLAY_RECORDS
         || (!fades.is_empty() && fades.len() != bytes.len() / RECORD_SIZE * 8)
     {
         return Err(invalid());
@@ -327,6 +330,32 @@ impl Bsp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn inferno_sized_overlay_lump_preserves_records_and_validation_budgets() {
+        // Installed Legacy Inferno has 787 records and exactly 787 fade pairs.
+        // Reproduce its size with original synthetic records, without assets.
+        let count = 787;
+        let mut bytes = vec![0; count * RECORD_SIZE];
+        for (i, record) in bytes.chunks_exact_mut(RECORD_SIZE).enumerate() {
+            record[..4].copy_from_slice(&(i as i32).to_le_bytes());
+            record[6..8].copy_from_slice(&1u16.to_le_bytes());
+            record[8..12].copy_from_slice(&7i32.to_le_bytes());
+        }
+        let mut fades = vec![0; count * 8];
+        for pair in fades.chunks_exact_mut(8) {
+            pair[..4].copy_from_slice(&(-1f32).to_le_bytes());
+        }
+        let overlays = parse(&bytes, &fades).unwrap();
+        assert_eq!(overlays.len(), count);
+        assert_eq!(overlays[count - 1].id, 786);
+        assert_eq!(overlays[count - 1].faces, [7]);
+        assert_eq!(overlays[count - 1].fade_squared, [-1., 0.]);
+        assert!(parse(&bytes, &fades[..fades.len() - 8]).is_err());
+        bytes[(count - 1) * RECORD_SIZE + 340..][..4].copy_from_slice(&f32::INFINITY.to_le_bytes());
+        assert!(parse(&bytes, &fades).is_err());
+        assert!(parse(&vec![0; (MAX_OVERLAY_RECORDS + 1) * RECORD_SIZE], &[]).is_err());
+    }
 
     #[test]
     fn packed_record_decodes_basis_face_order_and_uv_bounds_and_rejects_overrun() {

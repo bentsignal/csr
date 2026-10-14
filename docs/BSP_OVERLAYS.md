@@ -21,7 +21,9 @@ The two authored render-order bits are retained in material specialization and
 transparent sort bias. This does not replace the renderer's broader unresolved
 translucent-surface sorting behavior.
 
-Limits are 512 records (the documented BSP overlay limit), 64 receiver faces per
+The reader allocation budget is 4,096 records, rather than the earlier
+512-record assumption that rejected valid CS:GO Legacy Inferno. This is an
+implementation budget, not a claimed format limit. The other limits are 64 receiver faces per
 record, 65,536 receiver triangles and output vertices per overlay, and 524,288
 output vertices per world/sky build. Partial records, malformed face counts,
 non-finite metadata and unsupported lump versions fail parsing. Invalid receiver
@@ -47,6 +49,17 @@ and are intentionally skipped. 49 records have distance fade ranges, whose
 native interpolation is not yet reproduced. Neither this metadata audit nor a
 synthetic geometry check establishes visual parity; installed rendered captures
 are still required before shipping the feature.
+
+## Installed Legacy Inferno count regression
+
+Installed Inferno contains 787 version-0 overlay records: 277,024 bytes,
+exactly divisible by 352. Its fade lump is 6,296 bytes, exactly 787 pairs.
+All face counts fit 64 and metadata is finite. The old 512-record reader cap
+was the failing condition; the map did not contain a malformed overlay lump.
+The larger allocation budget preserves every record and all existing record,
+fade-pair, face-count and finite-metadata validation. Per-overlay geometry and
+world/sky output budgets remain unchanged. A synthetic 787-record regression
+also checks mismatched fades, non-finite metadata and over-budget rejection.
 
 ## Clean-room references
 
