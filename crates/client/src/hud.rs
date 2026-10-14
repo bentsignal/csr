@@ -47,6 +47,64 @@ const CT_BLUE: Color = Color::srgb(0.45, 0.65, 1.0);
 const T_GOLD: Color = Color::srgb(0.95, 0.75, 0.3);
 const BOMB_RED: Color = Color::srgb(1.0, 0.25, 0.2);
 
+type BurstIdentity = (sim::PlayerId, u64, Team, usize, content::ContentId);
+type BurstSample<'a> = ((sim::PlayerId, u64, Team, usize, &'a content::ContentId), bool, bool);
+
+/// Reuses the existing center notification's approximate placement and lifetime;
+/// neither is measured native burst-message parity. No authored toggle clip is known.
+#[derive(Default)]
+pub struct BurstNotice {
+    baseline: Option<(BurstIdentity, bool)>,
+    message: Option<(&'static str, f32)>,
+    sim_time: f32,
+}
+
+impl BurstNotice {
+    fn observe(&mut self, me: Option<&sim::Player>, hidden: bool, now: f32, sim_time: f32) {
+        let sample = me.filter(|p| p.alive && !hidden).and_then(|p| {
+            let weapon = p.active_weapon()?;
+            weapon.burst_profile()?;
+            Some(((p.id, p.life_epoch, p.team, p.active, &weapon.def.id), weapon.burst_mode, weapon.def.full_auto))
+        });
+        self.observe_mode(sample, now, sim_time);
+    }
+
+    fn observe_mode(
+        &mut self,
+        sample: Option<BurstSample<'_>>,
+        now: f32,
+        sim_time: f32,
+    ) {
+        if sim_time < self.sim_time { self.baseline = None; self.message = None; }
+        self.sim_time = sim_time;
+        // Expire while a round banner is visible, rather than queueing behind it.
+        if self.message.is_some_and(|(_, started)| now - started >= 7.0) { self.message = None; }
+        let Some(((id, life, team, slot, weapon), mode, full_auto)) = sample else {
+            self.baseline = None;
+            self.message = None;
+            return;
+        };
+        let same_equip = self.baseline.as_ref().is_some_and(|((old_id, old_life, old_team, old_slot, old_weapon), _)| {
+            (*old_id, *old_life, *old_team, *old_slot, old_weapon) == (id, life, team, slot, weapon)
+        });
+        if same_equip {
+            let (_, previous) = self.baseline.as_mut().unwrap();
+            if *previous != mode {
+                let token = if mode { "Cstrike_TitlesTXT_Switch_To_BurstFire" }
+                    else if full_auto { "Cstrike_TitlesTXT_Switch_To_FullAuto" }
+                    else { "Cstrike_TitlesTXT_Switch_To_SemiAuto" };
+                self.message = Some((token, now));
+                *previous = mode;
+            }
+        } else {
+            // Equip/respawn establishes a quiet baseline. The protocol has no
+            // instance ID for an unobserved same-class, same-slot replacement.
+            self.baseline = Some(((id, life, team, slot, weapon.clone()), mode));
+            self.message = None;
+        }
+    }
+}
+
 fn text(commands: &mut Commands, kind: HudText, size: f32, color: Color, node: Node) -> Entity {
     commands
         .spawn((
@@ -323,9 +381,10 @@ pub fn update(
     time: Res<Time>,
     diagnostics: Res<DiagnosticsStore>,
     level_name: Res<crate::LevelInfo>,
-    _loc: Res<Localization>,
+    loc: Res<Localization>,
     keys: Res<ButtonInput<KeyCode>>,
     mut debug: Local<bool>,
+    mut burst_notice: Local<BurstNotice>,
     mut texts: Query<(&mut Text, &mut TextColor, &HudText)>,
     mut markers: Query<&mut Visibility, (With<HitMarker>, Without<ProgressBar>)>,
     mut bar: Query<&mut Visibility, (With<ProgressBar>, Without<HitMarker>)>,
@@ -339,9 +398,11 @@ pub fn update(
         .and_then(|d| d.smoothed())
         .unwrap_or(0.0);
     let w = &world.0;
-    let Some(me) = w.player(local.id) else { return };
     let now = time.elapsed_secs();
     let sim_now = w.time();
+    let me = w.player(local.id);
+    burst_notice.observe(me, local.noclip || local.spectating.is_some(), now, sim_now);
+    let Some(me) = me else { return };
     // The player whose HUD we show (a spectated teammate's while dead).
     let p = local.spectating.and_then(|s| w.player(s)).unwrap_or(me);
     let competitive = w.competitive();
@@ -403,6 +464,11 @@ pub fn update(
                 } else if !me.alive && !local.noclip && !competitive {
                     color.0 = Color::srgb(1.0, 0.35, 0.3);
                     format!("YOU DIED - respawning in {:.1}s", (me.respawn_at - sim_now).max(0.0))
+                } else if let Some((token, _)) = burst_notice.message {
+                    color.0 = Color::WHITE;
+                    // Missing installed localization suppresses the notice;
+                    // do not synthesize or translate the game's wording.
+                    loc.get(token).unwrap_or_default().to_owned()
                 } else {
                     String::new()
                 }
@@ -484,4 +550,48 @@ pub fn mark_roots(mut commands:Commands,roots:Query<Entity,(With<Node>,Without<C
 pub fn menu_visibility(menu:Res<crate::menu::Menu>,remote:Option<Res<crate::remote::RemoteClient>>,mut roots:Query<&mut Node,With<GameHud>>) {
     let display=if menu.open() || crate::remote_join::loading(remote.as_deref()){Display::None}else{Display::Flex};
     for mut node in &mut roots {if node.display!=display {node.display=display;}}
+}
+
+#[cfg(test)]
+mod burst_notice_tests {
+    use super::*;
+
+    #[test]
+    fn mode_feedback_is_quiet_on_equip_and_life_changes() {
+        let glock = content::ContentId::csgo(content::ContentKind::Weapon, "glock");
+        let famas = content::ContentId::csgo(content::ContentKind::Weapon, "famas");
+        let mut notice = BurstNotice::default();
+        let sample = |weapon, life, mode, full_auto| Some(((1, life, Team::Terrorist, 0, weapon), mode, full_auto));
+        notice.observe_mode(sample(&glock, 1, false, false), 0., 0.);
+        assert!(notice.message.is_none());
+        notice.observe_mode(sample(&glock, 1, true, false), 1., 1.);
+        assert_eq!(notice.message.unwrap().0, "Cstrike_TitlesTXT_Switch_To_BurstFire");
+        notice.observe_mode(sample(&glock, 1, false, false), 2., 2.);
+        assert_eq!(notice.message.unwrap().0, "Cstrike_TitlesTXT_Switch_To_SemiAuto");
+        notice.observe_mode(sample(&glock, 2, true, false), 3., 3.);
+        assert!(notice.message.is_none(), "respawn is a baseline, not a toggle");
+        notice.observe_mode(sample(&famas, 2, true, true), 4., 4.);
+        assert!(notice.message.is_none(), "equipping a weapon is quiet");
+        notice.observe_mode(sample(&famas, 2, false, true), 5., 5.);
+        assert_eq!(notice.message.unwrap().0, "Cstrike_TitlesTXT_Switch_To_FullAuto");
+    }
+
+    #[test]
+    fn hidden_notices_expire_and_ineligible_or_restarted_sessions_baseline_quietly() {
+        let glock = content::ContentId::csgo(content::ContentKind::Weapon, "glock");
+        let sample = |mode| Some(((1, 1, Team::Terrorist, 0, &glock), mode, false));
+        let mut notice = BurstNotice::default();
+        notice.observe_mode(sample(false), 0., 0.);
+        notice.observe_mode(sample(true), 1., 1.);
+        // No Center-node rendering is necessary for expiration behind a banner.
+        notice.observe_mode(sample(true), 8., 8.);
+        assert!(notice.message.is_none());
+        notice.observe_mode(None, 9., 9.);
+        notice.observe_mode(sample(false), 10., 10.);
+        assert!(notice.message.is_none(), "holster/death/spectating resets the baseline");
+        notice.observe_mode(sample(true), 11., 11.);
+        assert!(notice.message.is_some());
+        notice.observe_mode(sample(false), 12., 0.);
+        assert!(notice.message.is_none(), "restarted world does not emit a stale transition");
+    }
 }
