@@ -8,7 +8,7 @@ use std::borrow::Cow;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
-use std::sync::mpsc::Sender as EventSender;
+use std::sync::mpsc::{self, Receiver as MapReceiver, Sender as EventSender, TryRecvError};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -26,6 +26,7 @@ use ruffle_core::{FloatDuration, Player, PlayerBuilder, StageAlign, StageScaleMo
 use ruffle_render_wgpu::backend::{WgpuRenderBackend, create_wgpu_instance, request_adapter_and_device};
 use ruffle_render_wgpu::descriptors::Descriptors;
 use ruffle_render_wgpu::target::TextureTarget;
+use ruffle_render_wgpu::utils::BufferDimensions;
 use ruffle_render_wgpu::wgpu;
 use url::Url;
 
@@ -283,12 +284,42 @@ fn to_ext(v: Value) -> ExtValue {
     }
 }
 
+struct PendingReadback {
+    buffer: wgpu::Buffer,
+    device: wgpu::Device,
+    dimensions: BufferDimensions,
+    width: u32,
+    height: u32,
+    presentation_revision: u64,
+    viewport_generation: u64,
+    completion: MapReceiver<Result<(), wgpu::BufferAsyncError>>,
+    started: Option<Instant>,
+    submitted: Instant,
+}
+
+impl Drop for PendingReadback {
+    fn drop(&mut self) {
+        // Also cancels a still-pending mapping on shutdown or failure. Mapped
+        // views live only inside poll_render and are dropped before this guard.
+        self.buffer.unmap();
+    }
+}
+
+pub(crate) struct CapturedFrame {
+    pub width: u32,
+    pub height: u32,
+    pub rgba: Vec<u8>,
+    pub presentation_revision: u64,
+}
+
 pub(crate) struct Host {
     player: Arc<Mutex<Player>>,
     dispatcher: Rc<RefCell<Dispatcher>>,
     executor: NullExecutor,
     mouse: (f64, f64),
     render_trace_remaining: usize,
+    pending_readback: Option<PendingReadback>,
+    viewport_generation: u64,
 }
 
 impl Host {
@@ -359,6 +390,7 @@ impl Host {
             Box::new(|_| {}),
         );
         Ok(Self { player, dispatcher, executor, mouse: (0.0, 0.0),
+            pending_readback: None, viewport_generation: 0,
             render_trace_remaining: if std::env::var("CSR_UI_RENDER_TRACE").as_deref() == Ok("1") { 1024 } else { 0 },
         })
     }
@@ -513,6 +545,8 @@ impl Host {
     }
 
     pub fn resize(&mut self, width: u32, height: u32) {
+        self.viewport_generation = self.viewport_generation.checked_add(1)
+            .expect("menu viewport generation limit");
         let mut player = self.player.lock().unwrap();
         player.set_viewport_dimensions(ViewportDimensions { width: width.max(1), height: height.max(1), scale_factor: 1.0 });
     }
@@ -521,39 +555,90 @@ impl Host {
         self.player.lock().unwrap().needs_render()
     }
 
-    pub fn render(&mut self) -> Result<(u32, u32, Vec<u8>), Error> {
-        let started = (self.render_trace_remaining != 0).then(Instant::now);
-        let mut player = self.player.lock().unwrap();
-        player.render();
-        let submitted = started.map(|_| Instant::now());
-        let renderer = <dyn Any>::downcast_mut::<WgpuRenderBackend<TextureTarget>>(player.renderer_mut())
-            .ok_or("unexpected renderer")?;
-        let target = renderer.target();
-        let (width, height) = (target.size.width, target.size.height);
-        let transfer = target.buffer.as_ref().ok_or("no frame captured")?;
-        let (buffer, dimensions) = transfer.buffer.inner();
-        let (rgba, wait_ms, copy_ms, alpha_ms) = ruffle_render_wgpu::utils::capture_image(
-            renderer.device(), buffer, dimensions, None,
-            |mapped, stride| {
-                let mapped_at = started.map(|_| Instant::now());
-                let mut rgba = crate::capture::copy_rows(mapped, width, height, stride as usize)?;
-                let copied_at = started.map(|_| Instant::now());
-                crate::capture::straight_alpha(&mut rgba);
-                let wait_ms = mapped_at.zip(submitted).map_or(0., |(end, begin)| end.duration_since(begin).as_secs_f64() * 1000.);
-                let copy_ms = copied_at.zip(mapped_at).map_or(0., |(end, begin)| end.duration_since(begin).as_secs_f64() * 1000.);
-                let alpha_ms = copied_at.map_or(0., |begin| begin.elapsed().as_secs_f64() * 1000.);
-                Ok::<_, &'static str>((rgba, wait_ms, copy_ms, alpha_ms))
-            },
-        )?;
-        if let (Some(started), Some(submitted)) = (started, submitted) {
-            self.render_trace_remaining -= 1;
-            tracing::info!(target: "scaleform::render_timing", width, height,
-                submit_ms = submitted.duration_since(started).as_secs_f64() * 1000.,
-                capture_ms = submitted.elapsed().as_secs_f64() * 1000.,
-                wait_ms, copy_ms, alpha_ms,
-                "UI render timing");
+    pub fn readback_pending(&self) -> bool {
+        self.pending_readback.is_some()
+    }
+
+    /// TextureTarget writes the same transfer buffer on every render. Never
+    /// render again until its pending mapping has been completed and unmapped.
+    pub fn begin_render(&mut self, presentation_revision: u64) -> Result<(), Error> {
+        if self.pending_readback.is_some() {
+            return Err("menu render attempted during pending readback".into());
         }
-        Ok((width, height, rgba))
+        let started = (self.render_trace_remaining != 0).then(Instant::now);
+        let (buffer, dimensions, device, width, height) = {
+            let mut player = self.player.lock().unwrap();
+            player.render();
+            let renderer = <dyn Any>::downcast_mut::<WgpuRenderBackend<TextureTarget>>(player.renderer_mut())
+                .ok_or("unexpected renderer")?;
+            let target = renderer.target();
+            let transfer = target.buffer.as_ref().ok_or("no frame captured")?;
+            let (buffer, dimensions) = transfer.buffer.inner();
+            (buffer.clone(), dimensions.clone(), renderer.device().clone(), target.size.width, target.size.height)
+        };
+        let (completion, receiver) = mpsc::sync_channel(1);
+        self.pending_readback = Some(PendingReadback {
+            buffer, device, dimensions, width, height, presentation_revision,
+            viewport_generation: self.viewport_generation, completion: receiver,
+            started, submitted: Instant::now(),
+        });
+        if started.is_some() {
+            self.render_trace_remaining -= 1;
+        }
+        // Install the cleanup guard before requesting the map. The callback
+        // only posts one result and tolerates receiver teardown; it never
+        // touches the player, pixels, frontend or Pause readiness.
+        self.pending_readback.as_ref().unwrap().buffer.slice(..)
+            .map_async(wgpu::MapMode::Read, move |result| { let _ = completion.try_send(result); });
+        Ok(())
+    }
+
+    /// Poll once without waiting for the GPU. This also runs while the movie is
+    /// inactive so completed/obsolete mappings do not retain the transfer buffer.
+    pub fn poll_render(&mut self) -> Result<Option<CapturedFrame>, Error> {
+        let Some(pending) = self.pending_readback.as_ref() else { return Ok(None); };
+        let poll_started = pending.started.map(|_| Instant::now());
+        if let Err(error) = pending.device.poll(wgpu::PollType::Poll) {
+            self.pending_readback.take();
+            return Err(format!("menu readback poll failed: {error}"));
+        }
+        match pending.completion.try_recv() {
+            Err(TryRecvError::Empty) => return Ok(None),
+            Err(TryRecvError::Disconnected) => {
+                self.pending_readback.take();
+                return Err("menu readback callback disconnected".into());
+            }
+            Ok(Err(error)) => {
+                self.pending_readback.take();
+                return Err(format!("menu readback mapping failed: {error}"));
+            }
+            Ok(Ok(())) => (),
+        }
+        let pending = self.pending_readback.take().unwrap();
+        if pending.viewport_generation != self.viewport_generation {
+            return Ok(None); // Guard unmaps the obsolete target, without copying it.
+        }
+        let mapped_at = pending.started.map(|_| Instant::now());
+        let mut rgba = {
+            let mapped = pending.buffer.slice(..).get_mapped_range()
+                .map_err(|error| format!("menu readback range failed: {error}"))?;
+            crate::capture::copy_rows(&mapped, pending.width, pending.height,
+                pending.dimensions.padded_bytes_per_row as usize)
+                .map_err(str::to_owned)?
+        }; // Drop the mapped view before PendingReadback unmaps, including errors.
+        let copied_at = pending.started.map(|_| Instant::now());
+        crate::capture::straight_alpha(&mut rgba);
+        if let Some(started) = pending.started {
+            tracing::info!(target: "scaleform::render_timing", width = pending.width, height = pending.height,
+                submit_ms = pending.submitted.duration_since(started).as_secs_f64() * 1000.,
+                completion_age_ms = pending.submitted.elapsed().as_secs_f64() * 1000.,
+                poll_ms = poll_started.zip(mapped_at).map_or(0., |(begin, end)| end.duration_since(begin).as_secs_f64() * 1000.),
+                copy_ms = mapped_at.zip(copied_at).map_or(0., |(begin, end)| end.duration_since(begin).as_secs_f64() * 1000.),
+                alpha_ms = copied_at.map_or(0., |begin| begin.elapsed().as_secs_f64() * 1000.),
+                "UI readback completed (age includes intervening input and movie work)");
+        }
+        Ok(Some(CapturedFrame { width: pending.width, height: pending.height, rgba,
+            presentation_revision: pending.presentation_revision }))
     }
 }
 
@@ -651,6 +736,68 @@ fn compile_shim() -> Result<Vec<u8>, Error> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    #[ignore = "requires a GPU and installed CS:GO Legacy; does not launch the native game"]
+    fn readback_preserves_revision_discards_resize_and_unmaps_on_drop() {
+        use super::*;
+
+        struct Offline;
+        impl Engine for Offline {
+            fn call(&mut self, _: &str, _: &str, _: &[Value], _: &mut Calls) -> Option<Value> { None }
+        }
+        fn finish(host: &mut Host) -> Option<CapturedFrame> {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while host.readback_pending() {
+                if let Some(frame) = host.poll_render().unwrap() { return Some(frame); }
+                assert!(Instant::now() < deadline, "GPU readback did not complete");
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            None
+        }
+
+        let config = Config {
+            game_dir: vfs::find_csgo_dir().expect("installed CS:GO Legacy required"),
+            width: 64, height: 48, language: "english".into(), elements: vec![],
+        };
+        let (events, _receiver) = mpsc::channel();
+        let mut host = Host::new(&config, Box::new(Offline), events).unwrap();
+        host.begin_render(11).unwrap();
+        assert!(host.begin_render(12).is_err(), "must not reuse a pending target");
+        let frame = finish(&mut host).expect("original capture should complete");
+        assert_eq!((frame.width, frame.height, frame.presentation_revision), (64, 48, 11));
+
+        host.begin_render(12).unwrap();
+        host.resize(80, 60);
+        assert!(finish(&mut host).is_none(), "old viewport must not be published");
+        host.begin_render(13).unwrap();
+        let frame = finish(&mut host).expect("resized capture should complete");
+        assert_eq!((frame.width, frame.height, frame.presentation_revision), (80, 60, 13));
+        assert_eq!(frame.rgba.len(), 80 * 60 * 4);
+
+        host.begin_render(14).unwrap();
+        let pending = host.pending_readback.as_ref().unwrap();
+        let (buffer, device) = (pending.buffer.clone(), pending.device.clone());
+        drop(host);
+        // A new map on the retained buffer proves teardown canceled/unmapped
+        // the old request, even if its callback had not run before shutdown.
+        let (completion, receiver) = mpsc::sync_channel(1);
+        buffer.slice(..).map_async(wgpu::MapMode::Read, move |result| {
+            let _ = completion.try_send(result);
+        });
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            device.poll(wgpu::PollType::Poll).unwrap();
+            match receiver.try_recv() {
+                Ok(result) => { result.unwrap(); break; }
+                Err(TryRecvError::Empty) => (),
+                Err(error) => panic!("remap callback disconnected: {error}"),
+            }
+            assert!(Instant::now() < deadline, "retained buffer remap did not complete");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        buffer.unmap();
+    }
+
     #[test]
     fn fetched_loader_identity_is_absolute_and_content_stays_local() {
         use super::*;
