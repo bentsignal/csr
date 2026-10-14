@@ -255,6 +255,15 @@ _global.csrProbeRecord = function(value, path, depth) {
 // Explicit probe-only observation of absent runtime member lookups. Existing
 // resolvers are preserved, and absent members still resolve to undefined.
 _global.csrDiagnostics = new Object();
+_global.csrDiagnostics.observeRecord = function(path) {
+    var split = path.lastIndexOf(".");
+    var parent = _global.csrResolve(path.substr(0, split));
+    var key = path.substr(split + 1);
+    if (parent == undefined || typeof parent[key] != "object" || parent[key] == null) { return false; }
+    _global.csrProbeBudget = 128;
+    parent[key] = _global.csrProbeRecord(parent[key], path, 0);
+    return true;
+};
 _global.csrDiagnostics.observeGlobal = function() {
     var previousResolver = _global.__resolve;
     _global.csrProbeBudget = 128;
