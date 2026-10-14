@@ -270,7 +270,7 @@ pub(crate) fn validate_input(mut input: TickInput) -> Result<TickInput, String> 
     input.view_angles.y = (input.view_angles.y + 180.).rem_euclid(360.) - 180.;
     input.view_angles.z = 0.;
     input.buttons &= 0x7f;
-    if input.weapon_slot > 5 && input.weapon_slot != sim::SLOT_LAST {
+    if input.weapon_slot > 5 && !matches!(input.weapon_slot, sim::SLOT_LAST | sim::SLOT_NEXT | sim::SLOT_PREVIOUS) {
         return Err("invalid weapon slot".into());
     }
     if let Some(tracked) = &mut input.tracked {

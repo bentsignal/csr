@@ -274,14 +274,11 @@ pub fn look(
     if keys.just_pressed(settings.binds[10]) {
         local.pending_drop = true;
     }
-    if grabbed && scroll.delta.y != 0.0 {
-        if let Some(p) = me.filter(|p| !p.weapons.is_empty()) {
-            // Step through the inventory, by the slot of the next weapon.
-            let count = p.weapons.len() as i32;
-            let step = if scroll.delta.y > 0.0 { -1 } else { 1 };
-            let next = (p.active as i32 + step).rem_euclid(count) as usize;
-            local.pending_slot = sim::weapon::slot(&p.weapons[next].def);
-        }
+    if grabbed && scroll.delta.y != 0.0 && me.is_some_and(|p| !p.weapons.is_empty()) {
+        // Installed defaults bind MWHEELUP invprev and MWHEELDOWN invnext.
+        // Authority chooses the weapon; reducing this to a slot loses reverse
+        // direction among grenades and at slot boundaries.
+        local.pending_slot = if scroll.delta.y > 0.0 { sim::SLOT_PREVIOUS } else { sim::SLOT_NEXT };
     }
 }
 

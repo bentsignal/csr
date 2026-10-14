@@ -18,6 +18,12 @@ placeholder interface. Existing rounds, economy and bomb rules are retained.
 7. **Esc** opens the pause menu and pauses simulation. **Esc** or **RESUME**
    resumes; **MAIN MENU** leaves the match. **Alt+F4** or **QUIT** closes the game.
 
+Mouse wheel up selects the previous owned weapon; down selects the next,
+including individual grenades and wrapping across inventory ends. Number keys
+still select/cycle their slot, and **Q** still returns to the last weapon.
+Directional requests are resolved in the simulation from its current inventory
+(protocol 16), including when a drop or purchase changed that inventory.
+
 Useful feedback: the mode and team you chose, where on the map it happened,
 what you pressed, expected versus observed behaviour, and whether it repeats.
 

@@ -58,6 +58,10 @@ pub const MELEE_RANGE: f32 = 48.0;
 pub const WORLD: PlayerId = 0;
 /// `weapon_slot` value that switches to the previously used weapon.
 pub const SLOT_LAST: u8 = 10;
+/// One inventory step in the installed default `invnext` direction.
+pub const SLOT_NEXT: u8 = 11;
+/// One inventory step in the installed default `invprev` direction.
+pub const SLOT_PREVIOUS: u8 = 12;
 /// How close a defuser must be to the bomb, units.
 pub const DEFUSE_RANGE: f32 = 72.0;
 /// Pickup radius for items on the ground, units.
@@ -137,7 +141,8 @@ pub struct TickInput {
     pub buttons: u32,
     /// Inventory slot to switch to (1 primary, 2 pistol, 3 knife, 5 bomb;
     /// pressing the current slot again cycles within it), [`SLOT_LAST`] for
-    /// the previous weapon, 0 for none.
+    /// the previous weapon, [`SLOT_NEXT`]/[`SLOT_PREVIOUS`] for one inventory
+    /// step resolved against current authority, 0 for none.
     pub weapon_slot: u8,
     /// Something to buy this tick.
     pub buy: Purchase,
@@ -1410,6 +1415,16 @@ impl World {
                     let last = p.last_active;
                     if last != p.active {
                         p.select(last, time);
+                    }
+                } else if matches!(slot, SLOT_NEXT | SLOT_PREVIOUS) {
+                    // A wheel command carries direction, not a client-derived
+                    // inventory index or slot. Drops/buys above may have changed
+                    // the inventory since the input was sampled.
+                    if !p.weapons.is_empty() {
+                        let count = p.weapons.len();
+                        let target = if slot == SLOT_NEXT { (p.active + 1) % count }
+                            else { (p.active + count - 1) % count };
+                        if target != p.active { p.select(target, time); }
                     }
                 } else if slot >= 1 {
                     let in_slot: Vec<usize> = (0..p.weapons.len()).filter(|&w| weapon::slot(&p.weapons[w].def) == slot).collect();
