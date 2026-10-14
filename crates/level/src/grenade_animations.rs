@@ -79,3 +79,32 @@ pub(super) fn import(
     }
     Some(digest.finalize().into())
 }
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    #[ignore = "requires the player's installed CS:GO Legacy; no GPU"]
+    fn installed_six_grenades_import_complete_event_timing_profiles() {
+        let level = crate::Level::load("de_dust2", None).expect("installed Legacy");
+        for name in [
+            "weapon_hegrenade",
+            "weapon_flashbang",
+            "weapon_smokegrenade",
+            "weapon_molotov",
+            "weapon_incgrenade",
+            "weapon_decoy",
+        ] {
+            let definition = level.catalog.get(name).unwrap();
+            let profile = definition.grenade_animations.as_ref().expect(name);
+            assert!(profile.pull_pin_duration > 0.);
+            for release in [&profile.overhand, &profile.underhand] {
+                assert!(
+                    release.duration > 0.
+                        && (0. ..=release.duration).contains(&release.release_time)
+                );
+            }
+            println!("{name}: {profile:?}");
+        }
+        assert!(level.catalog_sha1().is_some());
+    }
+}
