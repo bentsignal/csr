@@ -108,7 +108,11 @@ pub fn process(
                     sounds.play_with(&mut commands, fs, &mut sources, &sound, emit(player, origin));
                 }
             }
-            GameEvent::DecoyShot {pos,..} => {sounds.play_decoy(&mut commands,fs,&mut sources,pos);}
+            GameEvent::DecoyShot {pos,weapon,..} => {
+                if let Some(def) = weapon.parse().ok().and_then(|id| world.0.catalog.by_id(&id)) {
+                    sounds.play_decoy(&mut commands,fs,&mut sources,def,pos);
+                }
+            }
             GameEvent::UtilityThrown { player,kind,pos } => {
                 // The installed grenade view models expose ACT_VM_THROW.
                 effects.attack(player, kind.name().to_string(), "ACT_VM_THROW", now);

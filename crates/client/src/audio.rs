@@ -625,22 +625,18 @@ impl SoundLibrary {
         self.play_with(commands, fs, sources, name, Emit { at, ..default() });
     }
 
-    /// Play the existing AK decoy cue with the same verified era selection as
-    /// a stock AK shot. Missing classic data and InstalledLegacy keep the
+    /// Play the decoy's captured weapon cue with the same verified era selection
+    /// as a normal shot. Missing classic data and InstalledLegacy keep the
     /// public cue; the decoy remains spatial and has no player voice owner.
     pub fn play_decoy(
         &mut self,
         commands: &mut Commands,
         fs: &vfs::Vfs,
         sources: &mut Assets<AudioSource>,
+        weapon: &weapons::WeaponDefinition,
         pos: glam::Vec3,
     ) {
-        let id = content::ContentId::csgo(content::ContentKind::Weapon, "ak47");
-        let entry = self
-            .classic
-            .select(&id, "Weapon_AK47.Single")
-            .unwrap_or("Weapon_AK47.Single")
-            .to_string();
+        let entry = self.weapon_shot_entry(weapon).to_string();
         self.play(commands, fs, sources, &entry, Some(pos));
     }
 

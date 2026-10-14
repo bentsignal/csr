@@ -2,9 +2,9 @@
 use serde::{Deserialize, Serialize};
 use sim::{GameEvent, PlayerId, Snapshot, Team, TickInput};
 
-// WeaponState carries tick-authoritative grenade pin/hold/release state.
-pub const VERSION: u32 = 11;
-pub const PROTOCOL_ID: u64 = 0x4353_5257_0000_000b;
+// Grenade projectiles/fields and DecoyShot carry throw-time weapon ContentIds.
+pub const VERSION: u32 = 12;
+pub const PROTOCOL_ID: u64 = 0x4353_5257_0000_000c;
 pub const CONTROL: u8 = 0;
 pub const INPUT: u8 = 1;
 pub const SNAPSHOT: u8 = 2;
@@ -69,8 +69,9 @@ pub(crate) fn validate_events(batch: &EventBatch) -> Result<(), String> {
             Land { player, speed } => *player != 0 && speed.is_finite() && *speed >= 0.,
             Pickup { player, item } => *player != 0 && text(item),
             Dropped { player, item, pos } => *player != 0 && text(item) && position(*pos),
-            DecoyShot { player, pos }
-            | UtilityThrown { player, pos, .. }
+            DecoyShot { player, pos, weapon } => *player != 0 && position(*pos)
+                && valid_decoy_weapon(sim::utility::Kind::Decoy, Some(weapon)),
+            UtilityThrown { player, pos, .. }
             | UtilityDetonated { player, pos, .. } => *player != 0 && position(*pos),
             BombPlanted { player, site, pos } => {
                 *player != 0 && site.is_ascii_uppercase() && position(*pos)
@@ -443,11 +444,13 @@ pub(crate) fn validate_state(
     if world
         .projectiles
         .iter()
-        .any(|p| !p.pos.is_finite() || !p.velocity.is_finite() || !p.born.is_finite())
+        .any(|p| !p.pos.is_finite() || !p.velocity.is_finite() || !p.born.is_finite()
+            || !valid_decoy_weapon(p.kind, p.decoy_weapon.as_deref()))
         || world
             .utility_fields
             .iter()
-            .any(|f| !f.pos.is_finite() || !f.born.is_finite() || !f.until.is_finite())
+            .any(|f| !f.pos.is_finite() || !f.born.is_finite() || !f.until.is_finite()
+                || !valid_decoy_weapon(f.kind, f.decoy_weapon.as_deref()))
     {
         return Err("invalid snapshot utility state".into());
     }
@@ -463,6 +466,11 @@ pub(crate) fn validate_state(
         return Err("snapshot omits assigned player".into());
     }
     Ok(())
+}
+
+fn valid_decoy_weapon(kind: sim::utility::Kind, weapon: Option<&str>) -> bool {
+    weapon.is_none_or(|weapon| kind == sim::utility::Kind::Decoy && weapon.len() <= 128
+        && weapon.parse::<content::ContentId>().is_ok_and(|id| id.kind == content::ContentKind::Weapon))
 }
 
 fn validate_weapon(weapon: &sim::weapon::WeaponState, tick:u64) -> Result<(), String> {
@@ -556,6 +564,8 @@ mod tests {
                 item: "x".repeat(129),
                 pos: Vec3::ZERO,
             },
+            GameEvent::DecoyShot { player: 1, pos: Vec3::ZERO, weapon: "csgo_map_de_dust2".into() },
+            GameEvent::DecoyShot { player: 1, pos: Vec3::ZERO, weapon: "../weapon_ak47".into() },
         ];
         for event in events {
             assert!(
