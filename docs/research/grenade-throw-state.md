@@ -35,7 +35,7 @@ through their regular TickInput producer. Switching cancels an uncommitted pin;
 switching/dropping is blocked during committed playback to avoid duplication.
 
 The viewmodel follows those authority ticks and holds the last pin-pull frame
-until release. Existing model-event sound playback schedules pin sounds from
+as its base pose until release. Existing model-event sound playback schedules pin sounds from
 the same producer tick. No render system creates a projectile, consumes a
 grenade or mutates authority.
 
@@ -50,7 +50,7 @@ jumping therefore influence the throw; crouching lowers the actual eye origin.
 The amount of each effect is not yet calibrated against native observations.
 
 Remaining fidelity: existing base projectile velocity, fuse, collision and bounce
-math are retained. Numeric underhand/combined launch strength, charge blend,
+math are retained. Numeric underhand/combined launch strength, continuous charge blending,
 native minimum windup, native inventory-consumption phase, grenade deploy
 cooldown, cancellation and airborne/VR release laws need independent observed
 targets. No response constants were fit to a residual. Retained grenade state
@@ -62,7 +62,32 @@ Practice replenishes on release-clip completion, clears the old throw state,
 and draws a fresh grenade. Presentation clears the bone pose when changing
 grenade phases so a masked smoke/pin clip cannot leave the old hand pose in
 the next throw. Phase clips are decoded as non-looping; Holding clamps the
-final pull-pin pose without cloning the animation every render frame.
+final pull-pin base pose without cloning the animation every render frame.
+
+## Authored hold-hand poses
+
+All six installed grenade MDLs also declare the blank-activity sequence
+`throwcharge_blend`: a 3-by-1 grid on the `throwcharge` pose parameter (0 to 1).
+Its three single-frame animations are `throwcharge_low`, `throwcharge_mid`
+and `throwcharge_high`. Explicit sequence weights select 18 left forearm,
+hand and finger bones, or 27 bones for Molotov. This was previously discarded
+because the viewmodel loader retained only activity-bearing sequences.
+
+The renderer now retains this narrowly validated grid and applies its authored
+mask after the base clip during authoritative `Holding` only. Right-button
+underhand selects low, both-button combined selects mid, and left-button
+overhand selects high. This discrete presentation mapping is provisional;
+the model data does not establish native button-to-pose interpolation or
+blend-in timing. No easing, ballistic-strength mapping or simulation changes
+are introduced. Pull-pin and release clips keep ownership outside Holding.
+Unsupported/malformed grids retain their prior base-pose behavior. The poses
+are read through the same runtime model/VFS path, including content packs;
+dedicated include-model hold grids are not yet supported.
+
+Source validation: one focused case checks the three hold modes, preservation
+of unmasked bones, and no override during pin-pull/release or absent throw.
+Compilation, rendered repeated throws, and native held-mode comparison remain
+pending; this is not a native blending or trajectory parity claim.
 
 Protocol11 admits the new serialized WeaponState field and rejects older
 peers. Snapshot admission checks producer ticks and phase invariants before

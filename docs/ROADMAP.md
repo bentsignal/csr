@@ -543,6 +543,10 @@ parity and the gameplay gaps listed above remain unfinished.
   practice redraws a replenished grenade after the release clip. Numeric
   strengths and inherited velocity remain provisional; trajectories, native
   command timing and particle fidelity are still unfinished.
+- [ ] Render installed low/mid/high `throwcharge` hand poses while holding
+  grenades. Narrow source implementation retains authored grid/masks and
+  discrete hold modes; compiled/rendered and native blend references pending.
+  [Scope](research/grenade-throw-state.md#authored-hold-hand-poses).
 - [x] Timed decoy expiry emits a separate positional near/distant cue from
   installed soundscripts, matching observed terminal sound requests. Round
   cleanup is silent. Cadence/lifetime stay provisional; damage and visual

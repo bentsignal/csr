@@ -20,6 +20,8 @@ use mdl::anim::Clip;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+mod grenade_hold;
+
 pub const VIEWMODEL_LAYER: usize = 2;
 /// CS:GO `viewmodel_fov` default (horizontal degrees at 4:3).
 pub const VIEWMODEL_FOV: f32 = 60.0;
@@ -236,6 +238,7 @@ struct WeaponView {
     asset: SkinnedAsset,
     /// Activity → sequences (decoded once).
     clips: HashMap<String, Vec<SeqClip>>,
+    grenade_hold: Option<grenade_hold::HoldPoses>,
 }
 
 #[derive(Resource, Default)]
@@ -284,7 +287,7 @@ mod asset_ownership_tests {
     fn preparation_owners_include_weapon_cosmetics_gloves_and_both_arms() {
         let models = ViewModels {
             weapons: HashMap::from([("fixture".into(), WeaponView {
-                scope_center: None, scope_rear: None, asset: asset("weapon"), clips: HashMap::new(),
+                scope_center: None, scope_rear: None, asset: asset("weapon"), clips: HashMap::new(), grenade_hold: None,
             })]),
             decorations: HashMap::from([("fixture".into(), asset("decoration"))]),
             gloves: HashMap::from([("fixture".into(), asset("glove"))]),
@@ -372,6 +375,7 @@ pub fn load(
         }
         let Some(model) = load_model(fs, &def.view_model) else { continue };
         let mut clips: HashMap<String, Vec<SeqClip>> = HashMap::new();
+        let mut grenade_hold = None;
         // Sequences live in the model itself or in its include models
         // (knives), in which case they are retargeted by bone name.
         let mut sources: Vec<mdl::Model> = Vec::new();
@@ -383,6 +387,9 @@ pub fn load(
         let own = std::iter::once(&model).chain(sources.iter());
         for src in own {
             let ani = (!src.anim_block_file.is_empty()).then(|| fs.read(&src.anim_block_file)).flatten();
+            if def.class == weapons::WeaponClass::Grenade && std::ptr::eq(src, &model) {
+                grenade_hold = grenade_hold::HoldPoses::load(src, ani.as_deref());
+            }
             for seq in &src.sequences {
                 if seq.activity.is_empty() && seq.name != "lookat01" && seq.name != "inspect" {
                     continue;
@@ -456,7 +463,7 @@ pub fn load(
             }
             (count > 0).then(|| center / count as f32)
         } else { None };
-        out.weapons.insert(def.class_name.clone(), WeaponView { asset: build(model), clips, scope_center, scope_rear });
+        out.weapons.insert(def.class_name.clone(), WeaponView { asset: build(model), clips, scope_center, scope_rear, grenade_hold });
     }
     for (name,path,_) in crate::cosmetic_catalog::model_items(fs) {
         if let Some(model)=load_model(fs,&path){for (side,arms) in [("Terrorist",T_ARMS),("CounterTerrorist",CT_ARMS)]{
@@ -732,6 +739,7 @@ pub fn update(
     }
     let weights = seq.weights.clone();
     clip.sample_layered(t, &mut state.pose, |b| weights.get(b).copied().unwrap_or(1.0));
+    if let Some(hold) = &view.grenade_hold { hold.apply(grenade, &mut state.pose); }
     let pose = mdl::skeleton::model_space(&model.bones, &state.pose);
 
     // Keep the model rigidly attached to this frame's camera when looking.
