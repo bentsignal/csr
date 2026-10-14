@@ -370,6 +370,8 @@ fn spawn_level(
     let atlas = world_mesh::LightmapAtlas::build(&level.bsp);
     let main = world_mesh::build(&level.bsp, &atlas, &|f| !sky_faces.contains(&f));
     let skybox = world_mesh::build(&level.bsp, &atlas, &|f| sky_faces.contains(&f));
+    let main_overlays = world_mesh::build_overlays(&level.bsp, &atlas, &|f| !sky_faces.contains(&f));
+    let sky_overlays = world_mesh::build_overlays(&level.bsp, &atlas, &|f| sky_faces.contains(&f));
     let lightmap = images.add(atlas.to_image());
     drop(atlas);
     let world_shared = world_mesh::SharedHandles {
@@ -398,6 +400,25 @@ fn spawn_level(
             world_draws += 1;
         }
     }
+    let mut overlay_materials: std::collections::HashMap<(String, u8), Option<Handle<WorldMaterial>>> = Default::default();
+    let mut overlay_draws = 0;
+    for (in_sky, build) in [(false, &main_overlays), (true, &sky_overlays)] {
+        for (name, order, mesh) in &build.meshes {
+            let mat = overlay_materials.entry((name.clone(), *order)).or_insert_with(|| {
+                let material = world_mesh::overlay_material(name, *order, &level.vfs, &mut textures, &mut images, &world_shared, opts.exposure);
+                if material.is_none() { warn!("overlay material unavailable/unsupported: {name}"); }
+                material.map(|m| materials.add(m))
+            }).clone();
+            let Some(mat) = mat else { continue };
+            let mut e = commands.spawn((Mesh3d(meshes.add(mesh.clone())), MeshMaterial3d(mat)));
+            match (in_sky, sky) {
+                (true, Some(s)) => { e.insert((sky::sky_transform(&s), sky::sky_layer())); }
+                _ => { e.insert((Transform::IDENTITY, visibility::MapClusters::mesh(&level.bsp, mesh))); }
+            }
+            overlay_draws += 1;
+        }
+    }
+    info!("overlays: {overlay_draws} draws, {} triangles, {} main-world records skipped (non-affine/invalid/unsupported receivers)", main_overlays.triangles + sky_overlays.triangles, main_overlays.skipped);
     let t_world = t.elapsed().as_secs_f32();
 
     let sun = props::Sun::from_bsp(&level.bsp);

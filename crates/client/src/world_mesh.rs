@@ -204,6 +204,66 @@ pub struct WorldBuild {
     pub triangles: usize,
 }
 
+pub struct OverlayBuild {
+    pub meshes: Vec<(String, u8, Mesh)>,
+    pub triangles: usize,
+    pub skipped: usize,
+}
+
+/// Authored overlays stay separate from opaque world batches: their alpha,
+/// receiver lightmaps, and coplanar render order must survive material reuse.
+pub fn build_overlays(bsp: &Bsp, atlas: &LightmapAtlas, include: &dyn Fn(usize) -> bool) -> OverlayBuild {
+    let mut out = OverlayBuild { meshes: Vec::new(), triangles: 0, skipped: 0 };
+    let Some(world) = bsp.models.first() else { return out };
+    let Ok(first) = usize::try_from(world.first_face) else { return out };
+    let Ok(count) = usize::try_from(world.num_faces) else { return out };
+    let Some(end) = first.checked_add(count) else { return out };
+    let mut vertices = 0;
+    for overlay in &bsp.overlays {
+        if !overlay.faces.iter().any(|&i| i >= 0 && include(i as usize)) { continue; }
+        let Some(name) = usize::try_from(overlay.texinfo).ok().and_then(|i| bsp.texinfo_material(i)) else { out.skipped += 1; continue };
+        // Moving brush overlays need entity transforms, which are not supported
+        // by this initial static-world implementation.
+        if overlay.faces.iter().any(|&i| i < 0 || !(first..end).contains(&(i as usize))) {
+            out.skipped += 1; continue;
+        }
+        let receiver = |i| include(i) && bsp.faces.get(i)
+            .and_then(|f| usize::try_from(f.texinfo).ok())
+            .and_then(|t| bsp.texinfo.get(t))
+            .is_some_and(|t| t.flags & SKIP_SURF == 0);
+        let projected = match bsp.overlay_mesh(overlay, &receiver) {
+            Ok(mesh) => mesh,
+            Err(error) => { warn!("overlay {} skipped: {error:?}", overlay.id); out.skipped += 1; continue; }
+        };
+        if projected.indices.is_empty() { continue; }
+        vertices += projected.vertices.len();
+        if vertices > 524_288 {
+            warn!("overlay map vertex budget reached");
+            out.skipped += 1; break;
+        }
+        let mut mb = MeshBuilder::default();
+        for v in projected.vertices {
+            mb.push(v.position, v.normal, v.uv.to_array(), atlas.uv(v.face, v.luxel.x, v.luxel.y), 1.0);
+        }
+        out.triangles += projected.indices.len() / 3;
+        mb.indices = projected.indices;
+        out.meshes.push((name.to_ascii_lowercase(), overlay.render_order, mb.into_mesh()));
+    }
+    out
+}
+
+/// Overlay content goes through the same mounted VFS and texture cache as the
+/// map, including private packs and the BSP's embedded ZIP. Missing or unsupported
+/// materials are skipped instead of drawing replacement art over the receiver.
+pub fn overlay_material(name: &str, order: u8, fs: &vfs::Vfs, textures: &mut TextureCache, images: &mut Assets<Image>, shared: &SharedHandles, exposure: f32) -> Option<WorldMaterial> {
+    let mat = vmt::Material::load(name, &|p| fs.read_string(p))?;
+    if !matches!(mat.shader.as_str(), "lightmappedgeneric" | "unlitgeneric") { return None; }
+    textures.load(fs, images, mat.base_texture()?, true)?;
+    let mut out = material_from_vmt(Some(&mat), fs, textures, images, shared, exposure, true);
+    out.params.flags |= flags::OVERLAY | (u32::from(order & 3) << flags::OVERLAY_ORDER_SHIFT);
+    Some(out)
+}
+
 /// Faces that belong to the 3D skybox area: faces listed by its leaves,
 /// displacements whose surface lies in it, and brush-entity faces whose
 /// model centre lies in it.
