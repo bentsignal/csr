@@ -66,6 +66,19 @@ impl Files {
         if let Some(data) = self.cache.borrow().get(&rel) {
             return Some(data.clone());
         }
+        if let Some(request) = crate::loading_image::Request::parse(&rel) {
+            let data = Rc::new(request.read(&self.vfs)?);
+            const MAX_LOADING_CACHE: usize = 64 * 1024 * 1024;
+            if data.len() <= MAX_LOADING_CACHE {
+                let mut cache = self.cache.borrow_mut();
+                let used: usize = cache.iter().filter(|(key, _)| crate::loading_image::Request::parse(key).is_some()).map(|(_, value)| value.len()).sum();
+                if used + data.len() > MAX_LOADING_CACHE {
+                    cache.retain(|key, _| crate::loading_image::Request::parse(key).is_none());
+                }
+                cache.insert(rel, data.clone());
+            }
+            return Some(data);
+        }
         // Steam avatars came from the engine's image cache; until the game
         // supplies pictures, every avatar is a neutral tile.
         if rel.starts_with("img://avatar_") {
