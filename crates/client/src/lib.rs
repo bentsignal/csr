@@ -518,6 +518,22 @@ fn spawn_level(
     }
     // Deterministic visual checks only; interactive sessions ignore these controls.
     if !remote && opts.screenshot.is_some() {
+        if std::env::var_os("CSR_TEST_DEATH_BODY").is_some() {
+            // Screenshot fixture only. Initialize a fragile target in front
+            // of the spawn; CSR_AUTOFIRE drives the ordinary TickInput/fire/
+            // damage/death path. Presentation receives a real death receipt.
+            let shooter = world.player(id).unwrap();
+            let angles = shooter.view_angles;
+            let (forward, _, _) = movement::angle_vectors(angles);
+            let origin = shooter.movement.origin + forward * 96.0;
+            let victim = world.add_player("Death preview", theirs);
+            let target = world.player_mut(victim).unwrap();
+            target.movement.origin = origin;
+            target.view_angles = glam::Vec3::new(0.0, angles.y + 180.0, 0.0);
+            target.health = 1;
+            target.armor = 0;
+            target.helmet = false;
+        }
         if let Ok(name) = std::env::var("CSR_TEST_WEAPON") {
             if let Some(def) = world.catalog.get(&name).cloned() {
                 let p = world.player_mut(id).unwrap();
