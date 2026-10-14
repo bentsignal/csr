@@ -65,6 +65,35 @@ angular velocity is a presentation approximation, not measured rigid-body spin.
 
 Validation and private rendered proof are recorded on the PR after build.
 
+
+
+## Held Molotov wick presentation
+
+The installed `v_eq_molotov.mdl` contains one mesh bodygroup, authored lighter
+flame geometry/material, and a `Wick` attachment on a bottle bone. PullPin has
+no animation events; Draw contains its sound and the two release sequences
+contain the throw event. There is no missing MDL particle event to replay.
+
+The additional burning-wick effect is the installed
+`weapon_molotov_fp_wick` definition in `particles/weapons/cs_weapon_fx.pcf`.
+It supplies its own view-model flag, texture/material, radius range, emission
+rate, sequence range, animation/lifetime FPS and fades. No hand-tuned flame
+position, size or invented light source is added.
+
+The viewmodel publishes the current posed attachment after sampling the
+current animation and camera transform. The bounded particle renderer follows
+that exact point on viewmodel layer 2, after `viewmodel::update`, with the
+bottle's dedicated FOV/depth pass. The presentation key includes player, life
+and pull-start identity. Death, switching, hidden viewmodels, noclip, release
+and a new life clear the sample/emitter rather than leaving a floating flame.
+
+Without an authored ignition event, the effect begins conservatively when
+simulation state reaches Holding after the pull animation. This does not
+claim the exact native ignition moment inside the animation. Existing lighter
+geometry and clips remain unchanged. SpriteCard crop/frame-blending/depth
+operators retain the renderer subset limits above; visual verification is
+required before claiming the displayed wick correct.
+
 ## Explicit additive-over composition
 
 The installed ground-fire material `fire_explosion_1_oriented.vmt` documents
@@ -81,3 +110,4 @@ contributes no light. Other ADDSELF materials retain the prior approximation.
 This addresses one known blend mismatch, not complete SpriteCard parity:
 power-function remapping, ramps, depth blending and the remaining ADDSELF
 semantics are still unresolved. Rendered brightness must be checked again.
+

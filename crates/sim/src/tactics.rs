@@ -161,6 +161,7 @@ impl Coordinator {
                 | GameEvent::DecoyShot {
                     player,
                     pos: origin,
+                    ..
                 } = e
                 {
                     let Some(shooter) = world.player(*player) else {

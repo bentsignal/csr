@@ -307,6 +307,28 @@ pub struct Emitter {
     pub fire: bool,
 }
 impl Emitter {
+    /// The same batched layer can render in a dedicated first-person pass.
+    pub fn render_layers(
+        &self,
+        commands: &mut Commands,
+        layers: bevy::camera::visibility::RenderLayers,
+    ) {
+        for batch in &self.batches {
+            commands.entity(batch.entity).insert(layers.clone());
+        }
+    }
+
+    /// Move the complete emitter to an attachment sampled in this frame.
+    /// Particle offsets stay local; mouse motion never trails a saved camera.
+    pub fn follow(&mut self, origin: Vec3, transforms: &mut Query<&mut Transform>) {
+        self.origin = origin;
+        for batch in &self.batches {
+            if let Ok(mut transform) = transforms.get_mut(batch.entity) {
+                transform.translation = origin;
+            }
+        }
+    }
+
     pub fn spawn(
         commands: &mut Commands,
         meshes: &mut Assets<Mesh>,
