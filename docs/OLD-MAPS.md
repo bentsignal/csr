@@ -14,8 +14,8 @@ and preparation before normal map loading. Escape or Cancel returns home;
 acquisition stops at the next callback and retains resumable download bytes.
 Only one map worker owns the archive until it exits, so immediately choosing
 GO again waits for cancellation rather than racing two downloads. Outstanding
-network I/O has connection/response/body deadlines; cancellation does not
-interrupt a blocking socket read. A failed acquisition reports a friendly
+network I/O has connection and response-header deadlines, but no total-body
+deadline. Cancellation does not interrupt a blocking socket read. A failed acquisition reports a friendly
 retry message and keeps the main menu usable.
 
 ## Runtime data
