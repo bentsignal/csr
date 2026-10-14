@@ -769,6 +769,12 @@ fn smoke_test(
                 w.0.time(), weapon.map(|g| g.def.class_name.as_str()), weapon.and_then(|g| g.grenade_throw),
                 weapon.map(|g| g.suppressor_attached), weapon.and_then(|g| g.suppressor_transition),
                 w.0.projectiles.len(),w.0.utility_fields.len());
+            if std::env::var_os("CSR_WEAPON_TRACE").is_some() {
+                for projectile in &w.0.projectiles {
+                    info!("capture projectile: id={} kind={:?} pos={:?} velocity={:?} settled={}",
+                        projectile.id, projectile.kind, projectile.pos, projectile.velocity, projectile.settled);
+                }
+            }
         }
     }
     // CSR_WATCH_BOT=n: park the camera 120 units in front of bot n, facing it.
