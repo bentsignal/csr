@@ -173,7 +173,7 @@ impl Scene {
         {
             return None;
         }
-        self.value(&args[2], selection, path, calls)
+        self.update_value(&args[2], selection, path, calls, true)
     }
     pub fn bounds(&self, name: &str) -> Option<(f64, f64)> {
         self.widgets
@@ -191,6 +191,17 @@ impl Scene {
         value: &Value,
         path: &str,
         calls: &mut Calls,
+    ) -> Option<(String, Value)> {
+        self.update_value(index, value, path, calls, false)
+    }
+
+    fn update_value(
+        &mut self,
+        index: &Value,
+        value: &Value,
+        path: &str,
+        calls: &mut Calls,
+        owned_dropdown: bool,
     ) -> Option<(String, Value)> {
         let (Value::Number(index), Value::Number(value)) = (index, value) else {
             return None;
@@ -233,6 +244,12 @@ impl Scene {
                 choices[*selected].1
             }
             Kind::Dropdown { choices, selected } => {
+                // The original notification still runs, but its unversioned
+                // engine callback cannot identify the current dropdown scene.
+                // Only dropdown_value admits a validated owned notification.
+                if !owned_dropdown {
+                    return None;
+                }
                 // The authored dropdown reports a list index, not a convar
                 // value. Preserve arbitrary ordering/noncontiguous schema IDs.
                 if *value < 0.0 || value.fract() != 0.0 || *value >= choices.len() as f64 {
@@ -563,6 +580,11 @@ mod tests {
             "cl_crosshaircolor".into(),
             0u32.into(),
         ];
+        assert!(
+            scene
+                .value(&0u32.into(), &0u32.into(), "_level21", &mut calls)
+                .is_none()
+        );
         let changed = scene.dropdown_value(&args, "_level21", &mut calls).unwrap();
         assert_eq!(changed.0, "cl_crosshaircolor");
         assert_eq!(changed.1.num(), 3.0); // First list item carries ID3, not0.
