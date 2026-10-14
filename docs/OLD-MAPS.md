@@ -12,11 +12,15 @@ Choose Dust II (2017) in the original map picker and press GO. The existing
 loading screen reports contacting Steam, download percentage, verification
 and preparation before normal map loading. Escape or Cancel returns home;
 acquisition stops at the next callback and retains resumable download bytes.
-Only one map worker owns the archive until it exits, so immediately choosing
-GO again waits for cancellation rather than racing two downloads. Outstanding
-network I/O has connection and response-header deadlines, but no total-body
-deadline. Cancellation does not interrupt a blocking socket read. A failed acquisition reports a friendly
-retry message and keeps the main menu usable.
+One retired archive worker retains ownership until it exits, so immediately
+choosing another classic map waits rather than racing two downloads. An
+installed map can load immediately alongside that cancelled acquisition;
+there is at most one ordinary active loader and one retired archive worker.
+Outstanding network I/O has connection and response-header deadlines, but
+no total-body deadline. Cancel returns to the menu immediately; it does not
+interrupt a blocking socket read. In the rare case of a stalled read, classic
+map retry waits for that read to return. A failed acquisition reports a
+friendly retry message and keeps the main menu usable.
 
 ## Runtime data
 
