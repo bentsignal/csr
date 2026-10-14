@@ -1513,6 +1513,7 @@ impl World {
 
             // Admit the tracked muzzle against current geometry and the current
             // post-movement eye. A nearby hand must not begin beyond a wall.
+            let mut muzzle_blocked = false;
             if let Some(aim) = &mut input.aim {
                 let p = &self.players[i];
                 let eye_offset = Vec3::Z * p.movement.view_offset();
@@ -1532,6 +1533,7 @@ impl World {
                     // Leaving a brush may be start-solid with fraction 1, so
                     // falling back to that eye alone cannot safely fire.
                     if trace.start_solid || trace.all_solid {
+                        muzzle_blocked = true;
                         input.buttons &= !(buttons::ATTACK | buttons::ATTACK2);
                     }
                 }
@@ -1559,7 +1561,7 @@ impl World {
                     }
                     if secondary_pressed { w.begin_suppressor(self.tick, dt); }
                     if secondary_pressed { w.switch_burst(time); }
-                    if frozen || busy { w.cancel_burst(); }
+                    if frozen || busy || muzzle_blocked { w.cancel_burst(); }
                     stab = secondary && w.is_melee();
                     let can_fire = w.def.class_name != C4 && w.def.class!=weapons::WeaponClass::Grenade;
                     // Pulling the trigger stops a shell-by-shell reload once

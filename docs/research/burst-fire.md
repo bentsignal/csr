@@ -18,7 +18,7 @@ and recoil inputs apply in burst mode. FAMAS normal mode remains automatic.
 Pending shots live in replicated simulation state, not render timers. Their
 deadlines advance from the scheduled interval rather than accumulating tick
 rounding; multiple due shots are bounded to the remaining two bullets.
-Holstering, dropping, death and objective/freeze interruptions cancel pending
+Holstering, dropping, death, blocked tracked muzzles and objective/freeze interruptions cancel pending
 shots. Reload input waits for an active burst to finish. Mode selection stays
 with the weapon when it changes owner. Protocol 20 rejects older peers before
 admission; pending counts, deadlines, ammo and supported profiles are validated.

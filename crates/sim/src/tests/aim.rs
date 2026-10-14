@@ -67,6 +67,26 @@ fn tracked_muzzle_beyond_wall_falls_back_and_cannot_damage() {
 }
 
 #[test]
+fn pending_burst_cannot_bypass_start_solid_tracked_muzzle_admission() {
+    let (mut world, shooter, _) = match_pair();
+    let def = Arc::make_mut(&mut world.players[0].weapons[0].def);
+    for (key, value) in [("has burst mode", "1"), ("cycletime when in burst mode", "0.5"),
+        ("time between burst shots", "0.05")] { def.attributes.insert(key.into(), value.into()); }
+    world.step(&[(shooter, TickInput { buttons: buttons::ATTACK2, ..Default::default() })]);
+    world.step(&[(shooter, TickInput { buttons: buttons::ATTACK, ..Default::default() })]);
+    assert_eq!(world.players[0].shots, 1);
+    assert!(world.players[0].weapons[0].burst.is_some());
+    let eye = world.players[0].eye();
+    brush(&mut world, eye - Vec3::splat(4.), eye + Vec3::splat(4.));
+    for _ in 0..32 {
+        world.step(&[(shooter, TickInput { buttons: 0, ..tracked(Vec3::new(20., 0., 64.), Vec3::X) })]);
+        assert!(!world.events.iter().any(|event| matches!(event, GameEvent::Fire { .. })));
+    }
+    assert_eq!(world.players[0].shots, 1);
+    assert!(world.players[0].weapons[0].burst.is_none());
+}
+
+#[test]
 fn adjacent_thin_brush_blocks_short_eye_muzzle_segment() {
     let (mut world, shooter, target) = match_pair();
     // The complete eye-muzzle segment is shorter than the collision epsilon.
