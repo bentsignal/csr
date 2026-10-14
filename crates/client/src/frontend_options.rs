@@ -69,7 +69,7 @@ impl Scene {
                     }
                     (
                         kind @ ("choice" | "dropdown"),
-                        "m_pitch" | "cl_radar_rotate" | "cl_crosshaircolor",
+                        "m_pitch" | "cl_radar_rotate" | "cl_crosshaircolor" | "closeonbuy",
                     ) => {
                         let choices = block
                             .block(if kind == "dropdown" {
@@ -414,6 +414,25 @@ fn dropdown_presentation(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn close_on_buy_choice_cycles_from_saved_no_and_reopens_with_saved_yes() {
+        let block = kv::parse("close { type choice convar closeonbuy priority 850 choices { Yes 1 No 0 } }").unwrap();
+        let mut scene = Scene::from_block(&block, 2, &Localization::default());
+        let mut calls = Calls::default();
+        let mut settings = Settings::default();
+        assert_eq!(scene.count(), 1);
+        scene.show("_level21", &settings, &mut calls);
+        scene.layout_ready("_level21", &settings, &mut calls);
+        let (convar, value) = scene.value(&0u32.into(), &1.0.into(), "_level21", &mut calls).unwrap();
+        assert_eq!(convar, "closeonbuy");
+        assert_eq!(value.num(), 1.0);
+        assert!(settings.set_convar_number(&convar, value.num()));
+        let settings = Settings::parse(&settings.encode());
+        scene.show("_level21", &settings, &mut calls);
+        scene.layout_ready("_level21", &settings, &mut calls);
+        assert_eq!(scene.value(&0u32.into(), &1.0.into(), "_level21", &mut calls).unwrap().1.num(), 0.0);
+    }
+
     #[test]
     fn unlisted_saved_color_is_preserved_until_an_explicit_schema_selection() {
         let choices = vec![("Green".into(), 1.0), ("Blue".into(), 3.0)];

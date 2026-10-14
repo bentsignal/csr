@@ -20,11 +20,29 @@ pub struct BuyMenu {
     pub open: bool,
     /// True for the frame the menu closed (to recapture the mouse).
     pub just_closed: bool,
+    close_after_purchase: bool,
     pub category: Option<usize>,
     signature: String,
     root: Option<Entity>,
     hovered: Option<usize>,
     wheels: std::collections::HashMap<(usize, Option<usize>), Handle<Image>>,
+}
+
+impl BuyMenu {
+    /// Only the successful authoritative purchase event can request this close.
+    pub(crate) fn confirmed_purchase(&mut self, player: sim::PlayerId, local: sim::PlayerId, enabled: bool) {
+        self.close_after_purchase |= self.open && enabled && player == local;
+    }
+
+    fn begin_input(&mut self) -> bool {
+        self.just_closed = false;
+        if std::mem::take(&mut self.close_after_purchase) && self.open {
+            self.open = false;
+            self.just_closed = true;
+            return true;
+        }
+        false
+    }
 }
 
 #[derive(Component, Clone, Copy)]
@@ -132,9 +150,11 @@ pub fn input(
     front: Res<crate::menu::Menu>,
     settings: Res<crate::settings::Settings>,
 ) {
-    menu.just_closed = false;
+    // Effects arrive after this frame's cursor handling. Consume the confirmed
+    // close here so just_closed survives until the following grab_cursor call.
+    let purchase_closed = menu.begin_input();
     if front.open() {menu.open=false;return;}
-    if !enabled.0 {
+    if !enabled.0 || purchase_closed {
         return;
     }
     let shop = can_shop(&world.0, local.id);
@@ -296,6 +316,61 @@ pub fn draw(mut commands: Commands, mut menu: ResMut<BuyMenu>, local: Res<LocalP
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bevy::window::CursorOptions;
+    #[test]
+    fn only_confirmed_local_purchase_closes_once_and_recaptures_cursor() {
+        fn deliver(world: &mut sim::World, menu: &mut BuyMenu, local: sim::PlayerId, enabled: bool) {
+            for event in world.events.drain(..) {
+                if let sim::GameEvent::Purchase { player, .. } = event {
+                    menu.confirmed_purchase(player, local, enabled);
+                }
+            }
+        }
+        let mut world = sim::World::new(std::sync::Arc::new(collision::CollisionWorld::new()));
+        world.mode = sim::GameMode::Special;
+        let local = world.add_player("Local", Team::CounterTerrorist);
+        let other = world.add_player("Other", Team::CounterTerrorist);
+        world.player_mut(other).unwrap().money = 1000;
+        let mut menu = BuyMenu { open: true, ..Default::default() };
+        assert_eq!(world.buy(local, Purchase::Kevlar), Err(BuyError::NotEnoughMoney));
+        deliver(&mut world, &mut menu, local, true);
+        assert!(!menu.begin_input() && menu.open, "rejected purchase must leave menu open");
+        world.buy(other, Purchase::Kevlar).unwrap();
+        deliver(&mut world, &mut menu, local, true);
+        assert!(!menu.begin_input() && menu.open, "another player's success must not close it");
+        world.player_mut(local).unwrap().money = 1000;
+        world.buy(local, Purchase::Kevlar).unwrap();
+        deliver(&mut world, &mut menu, local, false);
+        assert!(!menu.begin_input() && menu.open, "No must preserve the open menu");
+        world.buy(local, Purchase::DefuseKit).unwrap();
+        deliver(&mut world, &mut menu, local, true);
+        assert!(menu.open && !menu.just_closed, "event must defer closing until input");
+        assert!(menu.begin_input() && !menu.open && menu.just_closed);
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .insert_resource(menu)
+            .insert_resource(LocalPlayer::new(local, glam::Vec3::ZERO, 0.0))
+            .insert_resource(InputEnabled(true))
+            .init_resource::<ButtonInput<MouseButton>>()
+            .init_resource::<crate::menu::Menu>()
+            .add_systems(Update, crate::player::grab_cursor);
+        let cursor = app.world_mut().spawn((bevy::window::PrimaryWindow, CursorOptions {
+            grab_mode: bevy::window::CursorGrabMode::None, visible: true, ..Default::default()
+        })).id();
+        app.update();
+        let cursor_state = app.world().get::<CursorOptions>(cursor).unwrap();
+        assert_eq!(cursor_state.grab_mode, bevy::window::CursorGrabMode::Locked);
+        assert!(!cursor_state.visible);
+        let mut menu = app.world_mut().resource_mut::<BuyMenu>();
+        menu.open = true;
+        assert!(!menu.begin_input() && menu.open && !menu.just_closed, "close is one-shot across reopening");
+        menu.open = false;
+        menu.confirmed_purchase(local, local, true);
+        menu.open = true;
+        assert!(!menu.begin_input() && menu.open, "late receipt while closed must not arm next open");
+    }
+
     #[test]
     fn wheel_mouse_and_number_sectors_agree() {
         for count in [6,7,8,9] { for n in 0..count {
