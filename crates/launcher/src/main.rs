@@ -6,7 +6,7 @@
 //!     --frames <n>             frames to render before the screenshot (120)
 //!     --camera x y z pitch yaw start in noclip at a Source position
 //!     --exposure <f>           brightness multiplier (2.0)
-//!     --size <w> <h>           window size (1600 900)
+//!     --size <w> <h>           session windowed size override
 //!     --bots <n>               enemy bots, teammates get n-1 (5)
 //!     --team <t|ct>            side to play (ct)
 //!     --deathmatch             respawn deathmatch instead of competitive rounds
@@ -67,7 +67,7 @@ fn main() {
               --deathmatch            Respawns and a fixed loadout\n\
               --grenade-practice      Full reusable grenade set, offline respawns\n\
               --bots N                Enemy bots; N-1 teammates (default: 5)\n\
-              --size W H              Window resolution (default: 1600 900)\n\
+              --size W H              Windowed size override (otherwise saved; screenshots: 1600 900)\n\
               --exposure F            Brightness (default: 2)\n\
               --screenshot FILE.png   Render a screenshot and exit\n\
               --frames N              Screenshot frame (default: 120)\n\
@@ -243,6 +243,7 @@ fn parse_play(map: &str, args: &[String]) -> Result<client::ClientOptions, Strin
             "--size" => {
                 opts.width = num(args.get(i + 1), "--size")? as u32;
                 opts.height = num(args.get(i + 2), "--size")? as u32;
+                opts.size_explicit = true;
                 i += 2;
             }
             "--camera" => {
