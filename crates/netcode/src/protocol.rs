@@ -451,8 +451,11 @@ pub(crate) fn validate_state(
         {
             return Err("invalid snapshot player state".into());
         }
-        for weapon in &actor.weapons {
+        for (slot, weapon) in actor.weapons.iter().enumerate() {
             validate_weapon(weapon,world.tick)?;
+            if weapon.burst.is_some() && (!actor.alive || slot != actor.active) {
+                return Err("inactive weapon retains pending burst".into());
+            }
         }
         crate::session::validate_input(actor.last_input)?;
         let mut input = actor.last_input;
@@ -466,7 +469,7 @@ pub(crate) fn validate_state(
         }
         if let sim::GroundKind::Weapon(weapon) = &item.kind {
             validate_weapon(weapon,world.tick)?;
-            if weapon.grenade_throw.is_some() || weapon.suppressor_transition.is_some(){return Err("dropped weapon retains active animation state".into());}
+            if weapon.grenade_throw.is_some() || weapon.suppressor_transition.is_some() || weapon.burst.is_some(){return Err("dropped weapon retains active state".into());}
         }
     }
     if world
@@ -615,6 +618,30 @@ mod tests {
                 _ => { std::sync::Arc::make_mut(&mut invalid.def).attributes.insert("time between burst shots".into(), "NaN".into()); },
             }
             assert!(validate_weapon(&invalid, 0).is_err(), "case {case}");
+        }
+        let welcome = ServerControl::Welcome { version: VERSION, player: world.players[0].id,
+            tick_rate: world.tick_rate, server_tick: 0,
+            content: ContentManifest { map_id: "csgo_map_test".into(), map_name: "test".into(),
+                map_hash: "0".repeat(40), catalog_hash: "1".repeat(40) } };
+        let valid = StateUpdate { acknowledged_input: 0, snapshot };
+        assert!(validate_state(&valid, Some(&welcome), 0, 0).is_ok());
+        for case in 0..3 {
+            let mut invalid = valid.clone();
+            match case {
+                0 => invalid.snapshot.state.players[0].alive = false,
+                1 => {
+                    let mut other = gun.clone(); other.burst = None;
+                    invalid.snapshot.state.players[0].weapons.push(other);
+                    invalid.snapshot.state.players[0].active = 1;
+                }
+                _ => {
+                    invalid.snapshot.state.players[0].weapons.clear();
+                    invalid.snapshot.state.items.push(sim::GroundItem { id: 1,
+                        kind: sim::GroundKind::Weapon(gun.clone()), pos: glam::Vec3::ZERO,
+                        yaw: 0., dropped_by: world.players[0].id, pickup_after: 0. });
+                }
+            }
+            assert!(validate_state(&invalid, Some(&welcome), 0, 0).is_err(), "inactive case {case}");
         }
     }
     #[test]
