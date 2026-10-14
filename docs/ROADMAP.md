@@ -99,8 +99,10 @@ head/hands independently of the aim ray. Dust II UDP checks exercise this
 at 64 and 128 tick; full hitbox and animation fidelity remain open.
 A server-only bounded hull history now supports authoritative hitscan rewind
 without moving live actors. The server derives valid view ticks from its own
-RTT/caps and requires matching spawn epochs, teams and rounds. Coarse existing
-hit groups remain; MDL/VR hitboxes are open.
+RTT/caps and requires matching spawn epochs, teams and rounds. Installed
+SAS/Phoenix model hitboxes now share tick-owned animation clocks with rendering
+and retain posed shapes in that history. Native animation, neck-only damage
+and tracked VR hitboxes remain open; see [model hitboxes](research/model-hitboxes.md).
 A renderer-free owned remote session now combines bounded metadata discovery,
 verified installed-content admission, prediction, remote poses, authoritative
 events and idempotent cancellation. Its two-client Dust II lifecycle proof
@@ -119,7 +121,9 @@ and [REMOTE_JOIN.md](REMOTE_JOIN.md).
       remains transport-agnostic.
 - [x] Prediction/reconciliation through shared `World::step`, remote pose
       interpolation and server-authorized coarse hull rewind.
-- [ ] Full character-model and tracked VR hitboxes.
+- [x] Installed SAS/Phoenix animated capsules/boxes and damage groups, including
+      bounded authoritative pose history and sampled render timelines.
+- [ ] Full native character-animation/hitbox parity and tracked VR hitboxes.
 - [x] `csr-server <map>`: headless dedicated executable without Bevy
       rendering, configurable tick rate and server-owned bots.
 - [x] Listen server through the original Create Lobby, checked settings and Go
@@ -132,7 +136,11 @@ and [REMOTE_JOIN.md](REMOTE_JOIN.md).
       bots remain; [BOT_POPULATION.md](BOT_POPULATION.md) records measured
       2023 Legacy fill behavior separately from the 2018 target.
 - [x] Local address/favorites discovery and IP/hostname join backend.
-- [ ] LAN discovery and public server directory.
+- [x] Nearby LAN server discovery, verified inspection and browser joining.
+      A rendered same-PC physical-interface check reached a 128-tick match and
+      returned Home. Cross-machine discovery remains unverified; inherited
+      loading-screen artwork errors remain. See [SERVER_BROWSER.md](SERVER_BROWSER.md).
+- [ ] Public server directory.
 - [ ] Hosting needs map data (BSP, nav, `items_game.txt`). A home PC host
       already has CS:GO Legacy. For a Linux VPS, verify whether SteamCMD can
       fetch the files (app 740) without a full client install.
@@ -547,9 +555,10 @@ parity and the gameplay gaps listed above remain unfinished.
   practice redraws a replenished grenade after the release clip. Numeric
   strengths and inherited velocity remain provisional; trajectories, native
   command timing and particle fidelity are still unfinished.
-- [ ] Render installed low/mid/high `throwcharge` hand poses while holding
-  grenades. Narrow source implementation retains authored grid/masks and
-  discrete hold modes; compiled/rendered and native blend references pending.
+- [x] Render installed low/mid/high `throwcharge` hand poses while holding
+  grenades. Authored grids/masks and repeated throws passed rendered checks.
+  A stationary Legacy SAS-arm comparison confirms the three endpoint modes;
+  native blend timing and ballistic calibration remain open.
   [Scope](research/grenade-throw-state.md#authored-hold-hand-poses).
 - [x] Timed decoy expiry emits a separate positional near/distant cue from
   installed soundscripts, matching observed terminal sound requests. Round

@@ -249,7 +249,7 @@ pub fn update(
                 .anims
                 .menu_pose(time.elapsed_secs())
                 .unwrap_or_else(|| {
-                    model.anims.evaluate(
+                    model.anims.evaluate_prepared(
                         &mut preview.anim,
                         &AnimInput {
                             speed: 0.0,

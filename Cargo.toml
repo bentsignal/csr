@@ -10,6 +10,7 @@ members = [
     "crates/vtf",
     "crates/vmt",
     "crates/mdl",
+    "crates/character-pose",
     "crates/collision",
     "crates/movement",
     "crates/nav",
@@ -76,6 +77,7 @@ bsp = { path = "crates/bsp" }
 vtf = { path = "crates/vtf" }
 vmt = { path = "crates/vmt" }
 mdl = { path = "crates/mdl" }
+character-pose = { path = "crates/character-pose" }
 collision = { path = "crates/collision" }
 movement = { path = "crates/movement" }
 sim = { path = "crates/sim" }

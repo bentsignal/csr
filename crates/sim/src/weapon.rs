@@ -499,6 +499,14 @@ pub enum HitGroup {
 }
 
 impl HitGroup {
+    /// Known authored Source1 body groups. Unknown/neck-only behavior retains
+    /// the prior coarse classification until separately measured.
+    pub fn from_model(group: i32) -> Option<Self> {
+        Some(match group { 1 => Self::Head, 2 => Self::Chest, 3 => Self::Stomach,
+            4 => Self::LeftArm, 5 => Self::RightArm, 6 => Self::LeftLeg,
+            7 => Self::RightLeg, _ => return None })
+    }
+
     pub fn multiplier(self) -> f32 {
         match self {
             HitGroup::Head => 4.0,

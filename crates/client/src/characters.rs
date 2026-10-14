@@ -5,7 +5,7 @@
 use crate::coords::{rotation_to_bevy, to_bevy};
 use crate::material::WorldMaterial;
 use crate::player::{LocalPlayer, SimWorld};
-use crate::player_anim::{AnimInput, AnimState, PlayerAnimSet};
+use crate::player_anim::{AnimState, PlayerAnimSet};
 use crate::props::Sun;
 use crate::skinning::{self, SkinnedAsset, SkinnedInstance};
 use crate::textures::TextureCache;
@@ -25,7 +25,7 @@ pub const CT_MODEL: &str = "models/player/custom_player/legacy/ctm_sas.mdl";
 
 pub struct TeamModel {
     pub asset: SkinnedAsset,
-    pub anims: PlayerAnimSet,
+    pub anims: Arc<PlayerAnimSet>,
     pub ragdoll: Option<Arc<ragdoll::Rig>>,
 }
 
@@ -45,7 +45,6 @@ struct Character {
     materials: Vec<Handle<WorldMaterial>>,
     anim: AnimState,
     weapon: Option<(String, SkinnedInstance, Vec<Handle<WorldMaterial>>)>,
-    air_time: f32,
     light_timer: f32,
     light_target: Option<([Vec4;6],Vec4,Vec4)>,
     light_current: Option<([Vec4;6],Vec4,Vec4)>,
@@ -82,9 +81,14 @@ pub fn load(
     exposure: f32,
 ) -> CharacterModels {
     let fs = &level.vfs;
-    let mut team = |path: &str| -> Option<TeamModel> {
+    let mut team = |path: &str, admitted: Option<&Arc<PlayerAnimSet>>| -> Option<TeamModel> {
         let model = Arc::new(load_model(fs, path)?);
-        let anims = PlayerAnimSet::load(&model, fs)?;
+        // These exact team paths are admitted by this same level's VFS. Share
+        // its prepared clips; only profile-free content uses the old fallback.
+        let anims = match admitted {
+            Some(animations) => animations.clone(),
+            None => Arc::new(PlayerAnimSet::load(&model, fs)?),
+        };
         let asset = skinning::build_asset(model, fs, meshes, materials, images, textures, shared, bindposes, exposure, true);
         let ragdoll = fs.read(path).and_then(|mdl_bytes| {
             let phy_bytes = fs.read(&path.replace(".mdl", ".phy"))?;
@@ -92,8 +96,8 @@ pub fn load(
         });
         Some(TeamModel { asset, anims, ragdoll })
     };
-    let terrorist = team(T_MODEL);
-    let counter_terrorist = team(CT_MODEL);
+    let terrorist = team(T_MODEL, level.character_profiles.terrorist.as_ref().map(|p| &p.animations));
+    let counter_terrorist = team(CT_MODEL, level.character_profiles.counter_terrorist.as_ref().map(|p| &p.animations));
     let mut weapons = HashMap::new();
     for def in &level.catalog.weapons {
         if def.world_model.is_empty() || weapons.contains_key(&def.class_name) {
@@ -129,10 +133,6 @@ fn despawn_instance(commands: &mut Commands, i: &SkinnedInstance) {
     for e in i.meshes.iter().chain(&i.joints) {
         commands.entity(*e).despawn();
     }
-}
-
-fn angle_diff(a: f32, b: f32) -> f32 {
-    (a - b + 180.0).rem_euclid(360.0) - 180.0
 }
 
 /// Ambient cube + sun visibility at a point, in material form.
@@ -202,7 +202,6 @@ pub fn sync(
 ) {
     muzzles.world.clear();
     let dt = time.delta_secs();
-    let now = time.elapsed_secs();
     let sim_now = world.0.time();
     let sun = models.sun;
 
@@ -228,7 +227,7 @@ pub fn sync(
     }
 
     for p in &world.0.players {
-        let render = poses.sample(p, fixed.overstep_fraction());
+        let render = poses.sample_at(p, fixed.overstep_fraction(), world.0.tick, world.0.tick_rate);
         let team_model = match p.team {
             sim::Team::Terrorist => models.terrorist.as_ref(),
             _ => models.counter_terrorist.as_ref(),
@@ -251,7 +250,6 @@ pub fn sync(
                     materials: Vec::new(),
                     anim: AnimState::default(),
                     weapon: None,
-                    air_time: 0.0,
                     light_timer: (p.id % 10) as f32 * 0.015,
                     light_target: None,
                     light_current: None,
@@ -314,31 +312,17 @@ pub fn sync(
             }
         }
 
-        // Animation inputs from the simulation.
-        let v = render.velocity;
-        let speed = v.truncate().length();
-        let vel_yaw = v.y.atan2(v.x).to_degrees();
-        c.air_time = if p.movement.on_ground { 0.0 } else { c.air_time + dt };
-        let weapon = p.active_weapon();
-        let reload_progress = weapon.and_then(|w| w.reload_fraction(sim_now));
-        let input = AnimInput {
-            speed,
-            move_yaw: if speed > 1.0 { angle_diff(vel_yaw, render.angles.y) } else { 0.0 },
-            on_ground: p.movement.on_ground,
-            ducked: p.movement.ducked,
-            pitch: render.angles.x,
-            class: weapon.map_or(weapons::WeaponClass::Knife, |w| w.def.class),
-            time_since_fire: effects.last_fire.get(&p.id).map_or(10.0, |t| now - t),
-            reload_progress,
-            air_time: c.air_time,
-        };
+        // Sample the replicated tick clock rather than advancing animation from
+        // render dt, visibility or locally received sound/fire events.
+        let input = render.animation.input;
+        c.anim.move_cycle = render.animation.move_cycle;
         let CharacterModels { terrorist, counter_terrorist, weapons: weapon_assets, .. } = &mut *models;
         let anims = match p.team {
-            sim::Team::Terrorist => terrorist.as_mut().map(|m| &mut m.anims),
-            _ => counter_terrorist.as_mut().map(|m| &mut m.anims),
+            sim::Team::Terrorist => terrorist.as_ref().map(|m| &m.anims),
+            _ => counter_terrorist.as_ref().map(|m| &m.anims),
         };
         let Some(anims) = anims else { continue };
-        let pose = anims.evaluate(&mut c.anim, &input, dt);
+        let pose = anims.evaluate_prepared(&mut c.anim, &input, 0.);
         c.last_pose.clone_from(&pose);
         c.pose_life = p.life_epoch;
         let world_from_model = Mat4::from_rotation_translation(

@@ -206,7 +206,7 @@ fn lagged_hit_keeps_current_death_pose_instead_of_historical_hull() {
         w.rewind
             .as_mut()
             .unwrap()
-            .capture(0, w.round.round, &w.players);
+            .capture(0, w.round.round, &w.players, &w.character_hitboxes);
         w.tick = 1;
         w.players[1].movement.origin.y = 80.;
         w.players[1].movement.velocity = Vec3::Y * 200.;
@@ -214,7 +214,7 @@ fn lagged_hit_keeps_current_death_pose_instead_of_historical_hull() {
         w.rewind
             .as_mut()
             .unwrap()
-            .capture(1, w.round.round, &w.players);
+            .capture(1, w.round.round, &w.players, &w.character_hitboxes);
         w.fire(0, 1., Some(0));
         let death = receipt(&w, victim);
         assert_eq!(death.key.tick, 1);

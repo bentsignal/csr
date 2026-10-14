@@ -13,6 +13,7 @@
 //! Layouts follow public community documentation of the formats.
 
 pub mod anim;
+pub mod hitbox;
 pub mod phy;
 pub mod skeleton;
 pub mod vhv;
@@ -126,7 +127,9 @@ pub struct Model {
     pub bones: Vec<skeleton::Bone>,
     /// Named points relative to animated bones (muzzles, ejectors, cameras).
     pub attachments: Vec<Attachment>,
-    pub hitboxes: Vec<skeleton::Hitbox>,
+    /// First set, retained for existing readers. Use `hitbox_sets` to choose a set.
+    pub hitboxes: Vec<hitbox::Hitbox>,
+    pub hitbox_sets: Vec<hitbox::HitboxSet>,
     pub animations: Vec<anim::AnimDesc>,
     pub sequences: Vec<anim::Sequence>,
     /// Models whose animations this one includes (`$includemodel`).
@@ -233,8 +236,8 @@ impl Model {
         self.eye_position=eye_position;
         self.bones = skeleton::read_bones(&m, m.i32(156)?.max(0) as usize, m.i32(160)?.max(0) as usize)?;
         self.attachments = read_attachments(m, self.bones.len())?;
-        self.hitboxes = skeleton::read_hitboxes(&m, m.i32(172)?.max(0) as usize, m.i32(176)?.max(0) as usize)
-            .unwrap_or_default();
+        self.hitbox_sets = hitbox::read_sets(&m, self.version, self.bones.len())?;
+        self.hitboxes = self.hitbox_sets.first().map_or_else(Vec::new, |set| set.hitboxes.clone());
         self.animations = anim::read_anim_descs(&m, m.i32(180)?.max(0) as usize, m.i32(184)?.max(0) as usize)?;
         self.sequences = anim::read_sequences(&m, m.i32(188)?.max(0) as usize, m.i32(192)?.max(0) as usize, self.bones.len())?;
         let pp_count = m.i32(300)?.max(0) as usize;

@@ -1,6 +1,7 @@
 //! Map loading shared by the headless simulation and the renderer.
 
 pub mod maps;
+mod character_profiles;
 mod grenade_animations;
 mod suppressor_animations;
 
@@ -22,6 +23,7 @@ pub struct Level {
     pub catalog: Arc<weapons::Catalog>,
     /// Navigation mesh from `maps/<name>.nav`, if the map ships one.
     pub nav: Option<Arc<nav::NavMesh>>,
+    pub character_profiles: Arc<sim::model_pose::Profiles>,
     /// Private asset-map metadata never falls back to an installed map with
     /// the same basename. Recipe and built-in maps retain their own source.
     metadata_pack: Option<String>,
@@ -227,6 +229,9 @@ impl Level {
         let catalog_sha1=grenade_animations::import(&mut catalog,&fs,catalog_sha1);
         let catalog_sha1=suppressor_animations::import(&mut catalog,&fs,catalog_sha1);
         timings.push(("weapons", t.elapsed().as_secs_f32()));
+        let t = Instant::now();
+        let (character_profiles, catalog_sha1) = character_profiles::load(&fs, catalog_sha1)?;
+        timings.push(("character poses", t.elapsed().as_secs_f32()));
 
         let nav = scoped_map_resource(&fs, &id, name, "maps", "nav", metadata_pack.as_deref())
             .and_then(|bytes| nav::NavMesh::parse(&bytes).ok())
@@ -241,6 +246,7 @@ impl Level {
             collision: Arc::new(collision),
             catalog: Arc::new(catalog),
             nav,
+            character_profiles,
             metadata_pack,
             pack_archive_hash: None,
             bsp_sha1,

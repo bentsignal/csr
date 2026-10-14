@@ -10,6 +10,8 @@ pub struct Pose {
     pub eye: glam::Vec3,
     pub angles: glam::Vec3,
     pub punch: glam::Vec2,
+    /// Character animation sampled on the same timeline as this transform.
+    pub animation: sim::model_pose::Sample,
     /// Feet-relative offsets in Source world axes; already-sampled remote
     /// tracking is copied directly, never read back from raw authority.
     pub tracked: Option<sim::TrackedPose>,
@@ -19,13 +21,18 @@ pub struct Pose {
     life: Option<u64>,
 }
 impl Pose {
+    /// Compatibility for callers without a clock; capture paths use player_at.
     pub fn player(p: &sim::Player) -> Self {
-        Self { velocity: p.movement.velocity, on_ground: p.movement.on_ground, origin: p.movement.origin, eye: p.eye(), angles: p.view_angles, punch: p.view_punch().into(), alive: p.alive, life:Some(p.life_epoch),tracked:p.tracked,aim:p.aim }
+        Self::player_at(p, 0, sim::DEFAULT_TICK_RATE)
+    }
+    pub fn player_at(p: &sim::Player, tick: u64, rate: u32) -> Self {
+        Self { velocity: p.movement.velocity, on_ground: p.movement.on_ground, origin: p.movement.origin, eye: p.eye(), angles: p.view_angles, punch: p.view_punch().into(), alive: p.alive, life:Some(p.life_epoch),tracked:p.tracked,aim:p.aim,
+            animation:sim::model_pose::sample(p,tick,rate) }
     }
     pub fn remote(p: &netcode::remote_pose::RenderPose) -> Self {
         Self { origin: p.origin, velocity: p.velocity, on_ground: p.on_ground,
             eye: p.eye, angles: p.view_angles, punch: p.punch, alive: p.alive,
-            tracked:p.tracked,aim:p.aim,life:None }
+            tracked:p.tracked,aim:p.aim,life:None,animation:p.animation }
     }
     fn lerp(self, next: Self, alpha: f32) -> Self {
         let same_life=self.life==next.life && self.alive==next.alive;
@@ -34,6 +41,7 @@ impl Pose {
             origin: self.origin.lerp(next.origin, alpha), eye: self.eye.lerp(next.eye, alpha),
             angles: glam::Vec3::new(angle_lerp(self.angles.x, next.angles.x, alpha), angle_lerp(self.angles.y, next.angles.y, alpha), 0.0),
             punch: self.punch.lerp(next.punch, alpha), alive: next.alive,
+            animation: if same_life { self.animation.interpolate(next.animation,alpha) } else { next.animation },
             tracked:blend_tracked(self.tracked,next.tracked,alpha,same_life),
             aim:blend_aim(self.aim,next.aim,alpha,same_life),life:next.life,
         }
@@ -115,7 +123,12 @@ impl RenderPoses {
     /// Preserve the existing stair-eye easing for local prediction without
     /// capturing or changing any authoritative/remote actor state.
     pub fn capture_prediction(&mut self, player: &sim::Player, tick: u64, dt: f32) -> Pose {
-        let raw = Pose::player(player);
+        // Existing callers pass the predictor's fixed dt; recover its tick rate.
+        self.capture_prediction_at(player,tick,(1.0/dt).round() as u32)
+    }
+    pub fn capture_prediction_at(&mut self, player: &sim::Player, tick: u64, rate: u32) -> Pose {
+        let dt = 1.0 / rate as f32;
+        let raw = Pose::player_at(player,tick,rate);
         let mut stair = 0.;
         if let Some(previous) = &self.3 {
             let reset = previous.id != player.id || previous.life != player.life_epoch
@@ -137,7 +150,7 @@ impl RenderPoses {
         self.0.retain(|id, _| world.player(*id).is_some());
         self.1.retain(|id, _| world.player(*id).is_some());
         for p in &world.players {
-            let mut current = Pose::player(p);
+            let mut current = Pose::player_at(p,world.tick,world.tick_rate);
             let pair = self.0.entry(p.id).or_insert((current, current));
             let reset = round_start || pair.1.alive != current.alive || pair.1.origin.distance(current.origin) > 128.0;
             let offset = self.1.entry(p.id).or_default();
@@ -146,9 +159,14 @@ impl RenderPoses {
             *pair = (if reset { current } else { pair.1 }, current);
         }
     }
+    /// Compatibility for callers without a clock; sampled pairs retain theirs.
     pub fn sample(&self, player: &sim::Player, alpha: f32) -> Pose {
+        self.sample_at(player,alpha,0,sim::DEFAULT_TICK_RATE)
+    }
+    /// Provide the real clock for an actor not yet present in the render history.
+    pub fn sample_at(&self, player: &sim::Player, alpha: f32, tick: u64, rate: u32) -> Pose {
         if let Some(pose) = self.2.get(&player.id) { return *pose; }
-        let mut pose=self.0.get(&player.id).map_or_else(|| Pose::player(player), |&(a, b)| a.lerp(b, alpha.clamp(0.0, 1.0)));
+        let mut pose=self.0.get(&player.id).map_or_else(|| Pose::player_at(player,tick,rate), |&(a, b)| a.lerp(b, alpha.clamp(0.0, 1.0)));
         // Newly joined actors may be absent from the sampled timeline, and
         // cancellation may leave authority alive until scene teardown. Neither
         // gap permits raw tracking; only fresh capture restores that fallback.
@@ -196,6 +214,29 @@ mod tests {
         }
     }
     #[test]
+    fn offline_and_prediction_capture_animation_with_their_actual_fixed_clock() {
+        for rate in [64, 128] {
+            let mut world = sim::World::new(std::sync::Arc::new(collision::CollisionWorld::new()));
+            world.set_tick_rate(rate); let id = world.add_player("Clock", sim::Team::CounterTerrorist);
+            world.events.clear(); world.tick = rate as u64;
+            let actor = world.player_mut(id).unwrap(); actor.movement.on_ground = true;
+            actor.movement.velocity = glam::Vec3::X * 130.; actor.animation.move_cycle = 0.2;
+            actor.animation.last_fire_tick = Some(rate as u64 - rate as u64 / 8);
+            let mut poses = RenderPoses::default(); poses.capture(&world);
+            let first = poses.sample(world.player(id).unwrap(), 1.);
+            assert_eq!(first.animation.input.time_since_fire, 0.125);
+            world.tick += 1; world.player_mut(id).unwrap().animation.move_cycle = 0.3;
+            poses.capture(&world);
+            let before = world.state();
+            let middle = poses.sample(world.player(id).unwrap(), 0.5);
+            assert!((middle.animation.move_cycle - 0.25).abs() < 0.00001);
+            let predicted = poses.capture_prediction_at(world.player(id).unwrap(), world.tick, rate);
+            assert_eq!(predicted.animation, sim::model_pose::sample(world.player(id).unwrap(), world.tick, rate));
+            assert_eq!(world.state(), before);
+        }
+    }
+
+    #[test]
     fn stairs_ease_out_but_jumps_and_teleports_do_not_create_offsets() {
         for rate in [64, 128] {
             let dt = 1.0 / rate as f32;
@@ -216,7 +257,8 @@ mod tests {
     }
     #[test]
     fn frames_between_ticks_have_continuous_position_and_rotation() {
-        let a = Pose { velocity: glam::Vec3::ZERO, on_ground: true, origin: glam::Vec3::ZERO, eye: glam::Vec3::Z * 64.0, angles: glam::Vec3::ZERO, punch: glam::Vec2::ZERO, alive: true,life:Some(1),tracked:None,aim:None };
+        let a = Pose { velocity: glam::Vec3::ZERO, on_ground: true, origin: glam::Vec3::ZERO, eye: glam::Vec3::Z * 64.0, angles: glam::Vec3::ZERO, punch: glam::Vec2::ZERO, alive: true,life:Some(1),tracked:None,aim:None,
+            animation:sim::model_pose::Sample { input:character_pose::AnimInput { speed:0.,move_yaw:0.,on_ground:true,ducked:false,pitch:0.,class:weapons::WeaponClass::Knife,time_since_fire:10.,reload_progress:None,air_time:0. },move_cycle:0.,last_fire_tick:None } };
         let b = Pose { origin: glam::Vec3::X * 4.0, eye: a.eye + glam::Vec3::X * 4.0, angles: glam::Vec3::Y * 8.0, ..a };
         for i in 0..=4 {
             let p = a.lerp(b, i as f32 / 4.0);

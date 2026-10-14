@@ -22,6 +22,7 @@
 //! snapshot, and [`World::state_hash`] checks determinism.
 
 pub mod bots;
+pub mod model_pose;
 pub mod death;
 pub mod loadout;
 pub mod objectives;
@@ -185,6 +186,8 @@ pub struct Player {
     pub kills: u32,
     pub deaths: u32,
     pub shots: u64,
+    /// Authoritative animation clock, shared with model hit registration.
+    pub animation: model_pose::PoseState,
     pub in_buy_zone: bool,
     /// Sim time a bomb plant started, while planting.
     pub plant_start: Option<f32>,
@@ -439,6 +442,8 @@ pub struct World {
     pub bots: bots::Bots,
     /// Optional server-only hit hull history, never part of WorldState.
     rewind: Option<rewind::History>,
+    character_profiles: Arc<model_pose::Profiles>,
+    character_hitboxes: std::collections::HashMap<PlayerId, model_pose::CachedHitboxes>,
     next_id: PlayerId,
     next_item: u32,
 }
@@ -494,6 +499,8 @@ impl World {
             events: Vec::new(),
             bots: bots::Bots::default(),
             rewind: None,
+            character_profiles: Arc::default(),
+            character_hitboxes: Default::default(),
             next_id: 1,
             next_item: 1,
         }
@@ -519,6 +526,12 @@ impl World {
     pub fn set_tick_rate(&mut self, rate: u32) {
         let rate = rate.clamp(*TICK_RATE_RANGE.start(), *TICK_RATE_RANGE.end());
         let now = self.time() as f64;
+        let old_rate = self.tick_rate;
+        for player in &mut self.players {
+            player.animation.last_fire_tick = player.animation.last_fire_tick
+                .map(|tick| ((tick as f64 / old_rate as f64) * rate as f64).round() as u64);
+        }
+        self.character_hitboxes.clear();
         self.tick_rate = rate;
         self.tick = (now * rate as f64).round() as u64;
         self.rewind = None;
@@ -621,6 +634,7 @@ impl World {
             kills: 0,
             deaths: 0,
             shots: 0,
+            animation: model_pose::PoseState::default(),
             in_buy_zone: false,
             plant_start: None,
             last_input: TickInput::default(),
@@ -732,6 +746,7 @@ impl World {
             p.flash_until = 0.0;
             p.alive = true;
             p.life_epoch = p.life_epoch.saturating_add(1);
+            p.animation = model_pose::PoseState::default();
             p.plant_start = None;
         }
     }
@@ -1322,9 +1337,11 @@ impl World {
     }
 
     fn step_internal(&mut self, inputs: &[(PlayerId, TickInput)], think_bots: bool) {
+        self.character_hitboxes.retain(|id, _| self.players.iter().any(|p| p.id == *id));
+        for index in 0..self.players.len() { self.refresh_character_hitboxes(index); }
         if think_bots {
             if let Some(history) = &mut self.rewind {
-                history.capture(self.tick, self.round.round, &self.players);
+                history.capture(self.tick, self.round.round, &self.players, &self.character_hitboxes);
             }
         }
         // Bots decide first, from last tick's state and events (what they
@@ -1491,6 +1508,8 @@ impl World {
                 }
             }
 
+            self.refresh_character_hitboxes(i);
+
             // Admit the tracked muzzle against current geometry and the current
             // post-movement eye. A nearby hand must not begin beyond a wall.
             if let Some(aim) = &mut input.aim {
@@ -1567,6 +1586,7 @@ impl World {
                 }
             }
             if fire {
+                self.players[i].animation.last_fire_tick = Some(self.tick);
                 if self.players[i].active_weapon().is_some_and(|w| w.is_melee()) {
                     self.melee_attack(i, time, stab);
                 } else { self.fire(i, time, input.rewind_tick); }
@@ -1584,6 +1604,7 @@ impl World {
             self.check_elimination();
         }
         self.dress_weapons();
+        self.advance_character_clocks();
         self.tick += 1;
     }
 
@@ -1684,24 +1705,38 @@ impl World {
             let tr = self.collision.trace_ray(eye, end, contents::MASK_SHOT);
             let world_dist = tr.fraction * range;
 
-            // Nearest enemy (or anyone, with friendly fire off → enemies) hull.
-            let mut best: Option<(usize, f32)> = None;
+            // The movement hull is broad phase only when authored shapes exist.
+            let mut best: Option<(usize, f32, Option<HitGroup>)> = None;
             for (j, other) in self.players.iter().enumerate() {
-                if j == shooter || !other.alive || !team.enemy_of(other.team) {
-                    continue;
-                }
+                if j == shooter || !other.alive || !team.enemy_of(other.team) { continue; }
                 let hull = self.target_hull(other, rewind_tick);
-                let (mn, mx) = (hull.mins, hull.maxs);
-                if let Some(t) = ray_box(eye, dir, mn, mx) {
-                    if t <= world_dist && best.is_none_or(|(_, bt)| t < bt) {
-                        best = Some((j, t));
+                if ray_box(eye, dir, hull.mins, hull.maxs).is_none_or(|d| d > world_dist) { continue; }
+                let candidate = if let Some(shapes) = &hull.hitboxes {
+                    let mut intersections = shapes.iter().filter_map(|shape|
+                        shape.ray_intersection(eye, dir, world_dist).map(|d| (d, shape.group)))
+                        .collect::<Vec<_>>();
+                    intersections.sort_by(|a,b| a.0.total_cmp(&b.0));
+                    intersections.first().copied().map(|(distance, raw)| {
+                        // Valve's May 2018 notes explicitly admit neck -> head.
+                        // Do not invent neck-only damage or skip an intervening body part.
+                        if raw == 8 {
+                            if let Some(&(d, 1)) = intersections.iter().find(|(_,group)| *group != 8) {
+                                return (d, Some(HitGroup::Head));
+                            }
+                        }
+                        (distance, HitGroup::from_model(raw))
+                    })
+                } else { ray_box(eye, dir, hull.mins, hull.maxs).map(|d| (d,None)) };
+                if let Some((distance, group)) = candidate {
+                    if distance <= world_dist && best.is_none_or(|(_,d,_)| distance < d) {
+                        best = Some((j,distance,group));
                     }
                 }
             }
             if let Some(dynamic)=&self.collision.dynamic {
                 if let Some((key,fraction))=dynamic.hit_target(eye,tr.end) {
                     let distance=fraction*world_dist;
-                    if best.is_none_or(|(_,t)|distance<t) {
+                    if best.is_none_or(|(_,t,_)|distance<t) {
                         let hit=eye+dir*distance;
                         dynamic.damage_target_at(key,def.damage as f32 * def.range_modifier.powf(distance/500.0),eye,hit);
                         self.events.push(GameEvent::Tracer{player:id,start:eye,end:hit});
@@ -1710,17 +1745,17 @@ impl World {
                 }
             }
             match best {
-                Some((j, t)) => {
+                Some((j, t, authored_group)) => {
                     let hit = eye + dir * t;
                     self.events.push(GameEvent::Tracer { player: id, start: eye, end: hit });
                     let victim = &self.players[j];
                     let hull = self.target_hull(victim, rewind_tick);
-                    let (mn, mx) = (hull.mins, hull.maxs);
+                    let (mn, mx) = (hull.movement_mins, hull.movement_maxs);
                     let frac = ((hit.z - mn.z) / (mx.z - mn.z)).clamp(0.0, 1.0);
                     let (_, vright, _) = movement::angle_vectors(Vec3::new(0.0, hull.yaw, 0.0));
                     let center = (mn + mx) * 0.5;
                     let side = ((hit - center).dot(vright) / 16.0).clamp(-1.0, 1.0);
-                    let group = HitGroup::from_height(frac, side);
+                    let group = authored_group.unwrap_or_else(|| HitGroup::from_height(frac, side));
                     self.apply_damage(shooter, j, &def, t, group, hit, Some(dir));
                 }
                 None => {

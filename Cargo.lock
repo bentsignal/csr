@@ -1823,6 +1823,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "character-pose"
+version = "0.3.0"
+dependencies = [
+ "glam 0.32.1",
+ "mdl",
+ "postcard",
+ "serde",
+ "vfs",
+ "weapons",
+]
+
+[[package]]
 name = "chardetng"
 version = "0.1.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1903,6 +1915,7 @@ dependencies = [
  "bevy_mod_openxr",
  "bevy_mod_xr",
  "bsp",
+ "character-pose",
  "collision",
  "content",
  "glam 0.32.1",
@@ -3808,6 +3821,7 @@ name = "level"
 version = "0.3.0"
 dependencies = [
  "bsp",
+ "character-pose",
  "collision",
  "content",
  "glam 0.32.1",
@@ -3816,6 +3830,7 @@ dependencies = [
  "nav",
  "packs",
  "sha1",
+ "sim",
  "vfs",
  "weapons",
  "workshop",
@@ -5966,10 +5981,12 @@ name = "sim"
 version = "0.3.0"
 dependencies = [
  "bsp",
+ "character-pose",
  "collision",
  "content",
  "glam 0.32.1",
  "kv",
+ "mdl",
  "movement",
  "nav",
  "postcard",

@@ -31,6 +31,7 @@ pub fn run(map: &str, tick_rate: u32) -> i32 {
     println!("weapon catalog: {} weapons; {tick_rate} tick", level.catalog.weapons.len());
     let new_world = || {
         let mut w = World::with_catalog(level.collision.clone(), level.catalog.clone());
+        w.set_character_profiles(level.character_profiles.clone());
         w.set_tick_rate(tick_rate);
         w
     };

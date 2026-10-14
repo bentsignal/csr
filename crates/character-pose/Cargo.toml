@@ -1,0 +1,17 @@
+[package]
+name = "character-pose"
+description = "Bevy-free prepared character pose evaluation shared by simulation and presentation"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+glam.workspace = true
+mdl.workspace = true
+serde.workspace = true
+vfs.workspace = true
+weapons.workspace = true
+
+[dev-dependencies]
+postcard.workspace = true

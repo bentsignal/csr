@@ -863,3 +863,6 @@ mod movement_fidelity;
 
 #[path = "tests/suppressors.rs"]
 mod suppressors;
+
+#[path = "tests/model_hitboxes.rs"]
+mod model_hitboxes;

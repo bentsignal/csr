@@ -31,6 +31,7 @@ fn remote_sample_retains_interpolated_tracking_without_raw_or_double_interpolati
     for rate in [64, 128] {
         let (mut world, id) = fixture(rate);
         let actor = world.player_mut(id).unwrap();
+        actor.animation.move_cycle = 0.95;
         actor.tracked = Some(tracking(0., Quat::IDENTITY));
         actor.aim = Some(sim::AimRay {
             origin: Vec3::new(12., 0., 62.),
@@ -39,6 +40,7 @@ fn remote_sample_retains_interpolated_tracking_without_raw_or_double_interpolati
         let mut history = netcode::remote_pose::PoseHistory::new(rate, 8, 0, 128.).unwrap();
         history.push(&world.state()).unwrap();
         world.tick = u64::from(rate / 32);
+        world.player_mut(id).unwrap().animation.move_cycle = 0.05;
         world.player_mut(id).unwrap().tracked = Some(tracking(
             8.,
             Quat::from_rotation_z(std::f32::consts::FRAC_PI_2),
@@ -51,6 +53,8 @@ fn remote_sample_retains_interpolated_tracking_without_raw_or_double_interpolati
         poses.set_overrides([(id, pose)]);
         for alpha in [0., 0.5, 1.] {
             let rendered = poses.sample(world.player(id).unwrap(), alpha);
+            assert_eq!(rendered.animation, sample.pose.animation);
+            assert!(rendered.animation.move_cycle.min(1. - rendered.animation.move_cycle) < 0.00001);
             assert_eq!(rendered.tracked, sample.pose.tracked);
             assert_eq!(rendered.aim, sample.pose.aim);
             let head = rendered.tracked.unwrap().head;
