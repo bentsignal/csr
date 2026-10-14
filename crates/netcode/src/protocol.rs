@@ -2,7 +2,7 @@
 use serde::{Deserialize, Serialize};
 use sim::{GameEvent, PlayerId, Snapshot, Team, TickInput};
 
-// v19 includes authoritative roster counts in inspected server metadata.
+// v20 adds replicated burst mode and pending per-bullet timing.
 pub const VERSION: u32 = 20;
 pub const PROTOCOL_ID: u64 = 0x4353_5257_0000_0014;
 pub const CONTROL: u8 = 0;
@@ -602,7 +602,7 @@ mod tests {
         world.players[0].weapons = vec![gun.clone()];
         let snapshot = world.snapshot();
         assert_eq!(world.decode::<sim::Snapshot>(&sim::state::encode(&snapshot)).unwrap(), snapshot);
-        for case in 0..7 {
+        for case in 0..8 {
             let mut invalid = gun.clone();
             match case {
                 0 => invalid.burst_mode = false,
@@ -611,7 +611,8 @@ mod tests {
                 3 => invalid.burst.as_mut().unwrap().next_shot = f32::NAN,
                 4 => invalid.clip = 1,
                 5 => invalid.reload_end = Some(0.3),
-                _ => invalid.next_attack = 0.01,
+                6 => invalid.next_attack = 0.01,
+                _ => { std::sync::Arc::make_mut(&mut invalid.def).attributes.insert("time between burst shots".into(), "NaN".into()); },
             }
             assert!(validate_weapon(&invalid, 0).is_err(), "case {case}");
         }
