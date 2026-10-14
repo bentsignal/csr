@@ -82,8 +82,15 @@ rotated boxes, capsule side/cap/tangent intersections, nearest raw-group queries
 and rejection of scaled poses. `cargo test -p mdl --locked` passed all 39
 crate tests, including a real installed-data check that loads both character
 headers and poses all 19 hitboxes from each complete authored set. The bounded
-run exited zero without triggering its memory guard. Full workspace and client
-integration checks remain with the orchestrator; no native-render parity is claimed.
+run exited zero without triggering its memory guard.
+
+The combined implementation passed workspace tests, optimized client/server
+builds, release Dust II probe/simulation (zero failures), and decoding all 1425
+weapon/feedback/foley entries with no unsupported or crashing sounds. The
+installed-profile check posed both complete sets across 60 combat poses per
+model. Fresh 1920x1080 SAS and Phoenix renders exited zero without render errors
+and showed coherent bodies and limbs. Foot planting and native animation remain
+unverified; these captures do not establish native hit-registration parity.
 
 
 ## Authoritative integration
