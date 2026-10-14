@@ -2,9 +2,9 @@
 use serde::{Deserialize, Serialize};
 use sim::{GameEvent, PlayerId, Snapshot, Team, TickInput};
 
-// RulesConfig carries the authoritative grenade-practice setting.
-pub const VERSION: u32 = 10;
-pub const PROTOCOL_ID: u64 = 0x4353_5257_0000_000a;
+// WeaponState carries tick-authoritative grenade pin/hold/release state.
+pub const VERSION: u32 = 11;
+pub const PROTOCOL_ID: u64 = 0x4353_5257_0000_000b;
 pub const CONTROL: u8 = 0;
 pub const INPUT: u8 = 1;
 pub const SNAPSHOT: u8 = 2;
@@ -423,7 +423,7 @@ pub(crate) fn validate_state(
             return Err("invalid snapshot player state".into());
         }
         for weapon in &actor.weapons {
-            validate_weapon(weapon)?;
+            validate_weapon(weapon,world.tick)?;
         }
         crate::session::validate_input(actor.last_input)?;
         let mut input = actor.last_input;
@@ -436,7 +436,8 @@ pub(crate) fn validate_state(
             return Err("invalid dropped item state".into());
         }
         if let sim::GroundKind::Weapon(weapon) = &item.kind {
-            validate_weapon(weapon)?;
+            validate_weapon(weapon,world.tick)?;
+            if weapon.grenade_throw.is_some(){return Err("dropped grenade retains throw state".into());}
         }
     }
     if world
@@ -464,7 +465,22 @@ pub(crate) fn validate_state(
     Ok(())
 }
 
-fn validate_weapon(weapon: &sim::weapon::WeaponState) -> Result<(), String> {
+fn validate_weapon(weapon: &sim::weapon::WeaponState, tick:u64) -> Result<(), String> {
+    if let Some(state)=weapon.grenade_throw {
+        use sim::utility::ThrowPhase;
+        let Some(profile)=weapon.def.grenade_animations.as_ref() else {return Err("grenade timing profile missing".into());};
+        if weapon.def.class!=weapons::WeaponClass::Grenade || state.pull_started_tick>tick
+            || state.throw_started_tick.is_some_and(|start|start<state.pull_started_tick||start>tick)
+            || match state.phase {
+                ThrowPhase::Throwing=>state.throw_started_tick.is_none()||!state.release_requested,
+                _=>state.throw_started_tick.is_some()||state.spawned,
+            }
+            || [profile.pull_pin_duration,profile.overhand.duration,profile.underhand.duration]
+                .iter().any(|n|!n.is_finite()||*n<=0.||*n>30.)
+            || [&profile.overhand,&profile.underhand].iter().any(|a|
+                !a.release_time.is_finite()||a.release_time<0.||a.release_time>a.duration)
+        {return Err("invalid snapshot grenade throw phase".into());}
+    }
     if [
         weapon.next_attack,
         weapon.reload_start,

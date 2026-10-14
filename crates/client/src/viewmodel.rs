@@ -50,7 +50,7 @@ mod life_tests {
     fn a_new_life_clears_a_reload_pose_that_draw_does_not_animate() {
         let bones = bones();
         let mut state = ViewModelState::default();
-        assert!(state.begin_life(1, &bones, 1., 4, 5, glam::Vec2::ZERO));
+        assert!(state.begin_life(1, &bones, 1., 4, 5));
         let rest = state.pose.clone();
         let reload = Clip { name: "reload".into(), fps: 30., looping: false, delta: false,
             frames: vec![vec![(glam::Vec3::splat(90.), glam::Quat::from_rotation_x(1.)); 2]],
@@ -62,9 +62,9 @@ mod life_tests {
         state.planting = true;
         state.clip_index = 2;
         // Render frames within this life retain the layered animation.
-        assert!(!state.begin_life(1, &bones, 2., 8, 9, glam::Vec2::ONE));
+        assert!(!state.begin_life(1, &bones, 2., 8, 9));
         assert_ne!(state.pose, rest);
-        assert!(state.begin_life(2, &bones, 3., 10, 11, glam::Vec2::ONE));
+        assert!(state.begin_life(2, &bones, 3., 10, 11));
         let draw = Clip { name: "draw".into(), animated: vec![true, false], ..reload };
         draw.sample_layered(0., &mut state.pose, |_| 1.);
         assert_eq!(state.pose[1], rest[1], "unanimated hand cannot inherit the old reload");
@@ -232,9 +232,8 @@ pub struct ViewModelState {
     /// Last shell insert seen (for the debug trace).
     shell_seen: Option<i32>,
     planting: bool,
+    grenade_seen: Option<(u64, sim::utility::ThrowPhase)>,
     light_timer: f32,
-    sway: glam::Vec2,
-    last_angles: glam::Vec2,
     /// Persistent bone-local pose: sequences only overwrite the bones they
     /// animate (weighted), as the game layers masked viewmodel sequences.
     pose: Vec<(glam::Vec3, glam::Quat)>,
@@ -242,7 +241,7 @@ pub struct ViewModelState {
 
 impl ViewModelState {
     fn begin_life(&mut self, life: u64, bones: &[mdl::skeleton::Bone], now: f32,
-        attack_serial: u64, inspect_serial: u64, angles: glam::Vec2) -> bool {
+        attack_serial: u64, inspect_serial: u64) -> bool {
         if self.life == Some(life) { return false; }
         self.life = Some(life);
         self.activity = "ACT_VM_DRAW".into();
@@ -253,9 +252,8 @@ impl ViewModelState {
         self.reloading = false;
         self.shell_seen = None;
         self.planting = false;
+        self.grenade_seen = None;
         self.light_timer = 0.0;
-        self.sway = glam::Vec2::ZERO;
-        self.last_angles = angles;
         // Masked clips deliberately preserve untouched bones within one life.
         // They must never inherit the reload/inspect pose of a previous life.
         self.pose = mdl::skeleton::rest_pose(bones);
@@ -310,7 +308,7 @@ pub fn load(
                 match src.decode_animation(first as usize, ani.as_deref()) {
                     Ok(c) => {
                         let same = std::ptr::eq(src, &model);
-                        let (clip, weights) = if same {
+                        let (mut clip, weights) = if same {
                             (c, (0..model.bones.len()).map(|b| seq.weight(b)).collect())
                         } else {
                             (
@@ -318,6 +316,10 @@ pub fn load(
                                 mdl::anim::retarget_weights(seq, &src.bones, &model.bones),
                             )
                         };
+                        if def.class==weapons::WeaponClass::Grenade
+                            && matches!(seq.activity.to_ascii_uppercase().as_str(),"ACT_VM_PULLPIN"|"ACT_VM_THROW"|"ACT_VM_RELEASE") {
+                            clip.looping=false;
+                        }
                         clips.entry(if seq.name == "lookat01" || seq.name == "inspect" {"INSPECT".into()}else{seq.activity.to_ascii_uppercase()}).or_default().push(SeqClip {
                             clip: Arc::new(clip),
                             weights: Arc::new(weights),
@@ -476,14 +478,14 @@ pub fn update(
             state.owner = Some(p.id);
             state.life = None;
             state.begin_life(p.life_epoch, &view.asset.model.bones, now,
-                effects.attack_serial, request.0, local.render_angles.truncate());
+                effects.attack_serial, request.0);
             if std::env::var_os("CSR_WEAPON_TRACE").is_some() { info!("weapon activity: {} ACT_VM_DRAW", active); }
         }
         return;
     }
     if let Some(view) = models.weapons.get(&active) {
         if state.begin_life(p.life_epoch, &view.asset.model.bones, now,
-            effects.attack_serial, request.0, local.render_angles.truncate())
+            effects.attack_serial, request.0)
             && std::env::var_os("CSR_WEAPON_TRACE").is_some() {
             info!("weapon activity: {} ACT_VM_DRAW life {}", active, p.life_epoch);
         }
@@ -515,6 +517,17 @@ pub fn update(
 
     // Pick the activity from the weapon state.
     let w = p.active_weapon();
+    let grenade = w.and_then(|w|w.grenade_throw);
+    let grenade_key=grenade.map(|s|(s.pull_started_tick,s.phase));
+    if grenade_key!=state.grenade_seen {
+        // The smoke pull/throw clips animate different bone masks. A pin from
+        // the old release must not survive into the next sandbox Draw/throw.
+        state.pose=mdl::skeleton::rest_pose(&view.asset.model.bones);
+        if grenade_key.is_none() && state.grenade_seen.is_some() {
+            state.activity="ACT_VM_DRAW".into();state.started=now;state.clip_index=0;
+        }
+        state.grenade_seen=grenade_key;
+    }
     let inspect_requested=state.inspect_seen!=request.0;state.inspect_seen=request.0;
     let reloading = w.is_some_and(|w| w.reload_end.is_some());
     let attack = effects.consume_attack(p.id, &name, &mut state.last_attack_seen);
@@ -544,6 +557,10 @@ pub fn update(
     if state.activity=="INSPECT" && w.is_some_and(|w|w.zoom_level>0) {state.activity="ACT_VM_IDLE".into();state.started=now;}
     state.reloading = reloading;
     state.planting = p.plant_start.is_some();
+    if let Some(grenade)=grenade {
+        let activity=if grenade.phase==sim::utility::ThrowPhase::Throwing {grenade.mode.activity()}else{"ACT_VM_PULLPIN"};
+        state.activity=activity.into();state.clip_index=0;
+    }
     if let Some((stage, _)) = shell {
         if stage != state.shell_seen && stage.is_some() && std::env::var_os("CSR_WEAPON_TRACE").is_some() {
             info!("weapon activity: {} shell insert {}", name, stage.unwrap_or(0) + 1);
@@ -571,6 +588,11 @@ pub fn update(
     let mut seq = clips[state.clip_index % clips.len()].clone();
     let mut clip = seq.clip.clone();
     let mut t = now - state.started;
+    if let Some(grenade)=grenade {
+        let started=grenade.throw_started_tick.unwrap_or(grenade.pull_started_tick);
+        // Grenade phase clips are loaded non-looping: holding keeps the final pose.
+        t=(sim_now-started as f32*world.0.dt()).clamp(0.,clip.duration());
+    }
     if let (Some((_, frac)), "ACT_SHOTGUN_RELOAD_START" | "ACT_VM_RELOAD") = (shell, state.activity.as_str()) {
         // One pass of the start or insert clip per simulated stage.
         t = frac * clip.duration();
@@ -580,7 +602,7 @@ pub fn update(
             t = frac * clip.duration();
         }
     }
-    if state.activity != "ACT_VM_IDLE" && t > clip.duration() && !reloading {
+    if grenade.is_none() && state.activity != "ACT_VM_IDLE" && t > clip.duration() && !reloading {
         state.activity = "ACT_VM_IDLE".into();
         state.started = now;
         if let Some(idle) = view.clips.get("ACT_VM_IDLE").and_then(|c| c.first()) {
@@ -601,15 +623,10 @@ pub fn update(
     clip.sample_layered(t, &mut state.pose, |b| weights.get(b).copied().unwrap_or(1.0));
     let pose = mdl::skeleton::model_space(&model.bones, &state.pose);
 
-    // Sway: the gun lags slightly behind fast turns.
-    let angles = local.render_angles.truncate();
-    let delta = glam::Vec2::new(angles.x - state.last_angles.x, (angles.y - state.last_angles.y + 180.0).rem_euclid(360.0) - 180.0);
-    state.last_angles = angles;
-    state.sway = (state.sway + delta * 0.15).clamp(glam::Vec2::splat(-2.0), glam::Vec2::splat(2.0)) * (-dt * 8.0).exp();
-
-    let aiming = w.is_some_and(|w| w.zoom_level > 0);
-    let sway = if aiming { glam::Vec3::ZERO } else { glam::Vec3::new(state.sway.x, state.sway.y, 0.0) };
-    let view_angles = local.render_angles - sway;
+    // Keep the model rigidly attached to this frame's camera when looking.
+    // The authored idle/fire/reload clips still animate their own bones;
+    // mouse motion must not introduce an additional lagging weapon transform.
+    let view_angles = local.render_angles;
     let rot = mdl::angles_to_mat3(view_angles);
     let eye = local.render_eye;
     let (f, r, u) = movement::angle_vectors(view_angles);

@@ -1,6 +1,7 @@
 //! Map loading shared by the headless simulation and the renderer.
 
 pub mod maps;
+mod grenade_animations;
 
 use collision::{CollisionWorld, MapCollisionOptions};
 use content::{ContentId, ContentKind, GameOrigin};
@@ -152,7 +153,7 @@ impl Level {
     /// A later VFS lookup may resolve a different source with the same filename.
     pub fn bsp_sha1(&self) -> &[u8; 20] { &self.bsp_sha1 }
 
-    /// SHA-1 of the exact successfully parsed items_game input after the BSP
+    /// SHA-1 identity of parsed items_game plus selected grenade timing headers after the BSP
     /// pakfile mounts. Missing/malformed input uses the local default catalog
     /// and has no file identity suitable for matching network content.
     pub fn catalog_sha1(&self) -> Option<&[u8; 20]> { self.catalog_sha1.as_ref() }
@@ -214,7 +215,7 @@ impl Level {
         timings.push(("collision", t.elapsed().as_secs_f32()));
 
         let t = Instant::now();
-        let (catalog, catalog_sha1) = fs
+        let (mut catalog, catalog_sha1) = fs
             .read("scripts/items/items_game.txt")
             .and_then(|bytes| {
                 weapons::Catalog::from_items_game(&kv::decode_text(&bytes))
@@ -222,6 +223,7 @@ impl Level {
                     .map(|catalog| (catalog, Some(Sha1::digest(&bytes).into())))
             })
             .unwrap_or_default();
+        let catalog_sha1=grenade_animations::import(&mut catalog,&fs,catalog_sha1);
         timings.push(("weapons", t.elapsed().as_secs_f32()));
 
         let nav = scoped_map_resource(&fs, &id, name, "maps", "nav", metadata_pack.as_deref())

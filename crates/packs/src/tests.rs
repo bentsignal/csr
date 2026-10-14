@@ -724,3 +724,57 @@ fn entry_count_and_directory_limits_are_checked_before_eager_zip_parsing() {
             .contains("directory mismatch")
     );
 }
+
+#[test]
+fn particle_definitions_reopen_and_mount_with_declared_identity() {
+    let temp = Temp::new();
+    let mut m = manifest();
+    m.provides.push("mod_particle_training_smoke".into());
+    m.resources.push(ResourceDef {
+        id: "mod_particle_training_smoke".into(),
+        path: "particles/training_smoke.pcf".into(),
+    });
+    // Original synthetic payload: pack validation treats format bytes as data;
+    // the runtime's bounded reader owns PCF decoding.
+    let pcf = b"<!-- dmx encoding binary 5 format pcf 2 -->\n\0synthetic";
+    let bytes = build(
+        &m,
+        &[
+            ("maps/arena_file.bsp", b"map"),
+            ("particles/training_smoke.pcf", pcf),
+        ],
+    )
+    .unwrap();
+    let path = temp.write("particle.csrpack", &bytes);
+    let pack = Pack::open(&path).unwrap();
+    assert_eq!(
+        pack.manifest().resources[0].id,
+        "mod_particle_training_smoke"
+    );
+    let mut fs = vfs::Vfs::new();
+    fs.push_front("particle-pack", pack.mount());
+    assert_eq!(fs.read("particles/training_smoke.pcf").unwrap(), pcf);
+    let mut invalid = m.clone();
+    invalid.resources[0].path = "particles/training_smoke.dll".into();
+    assert!(
+        build(
+            &invalid,
+            &[
+                ("maps/arena_file.bsp", b"map"),
+                ("particles/training_smoke.dll", pcf)
+            ]
+        )
+        .is_err()
+    );
+    invalid.resources[0].path = "materials/training_smoke.pcf".into();
+    assert!(
+        build(
+            &invalid,
+            &[
+                ("maps/arena_file.bsp", b"map"),
+                ("materials/training_smoke.pcf", pcf)
+            ]
+        )
+        .is_err()
+    );
+}
