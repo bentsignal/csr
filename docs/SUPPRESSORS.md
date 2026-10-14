@@ -41,6 +41,7 @@ or game asset bytes enter the repository.
 Validation so far: two focused sim tests pass at 64/128 tick, including authority
 versus snapshot replay/prediction identity, trigger/reload lockout, held secondary
 input, holster cancellation and drop/pickup preservation. The installed profile check
-also passes for M4A1-S/USP-S and confirms MP5-SD stays nonremovable. Protocol, full
-workspace, rendered and audio validation are pending. This draft
+also passes for M4A1-S/USP-S and confirms MP5-SD stays nonremovable. Twelve focused protocol
+tests pass, including rejection of pre-v15 peers before admission. Full workspace,
+rendered and audio validation are pending. This draft
 is separate from the current staged playtest candidate.
