@@ -294,10 +294,11 @@ pub fn update(
         let rotation = if let Some(flying) = fx.projectiles.get_mut(&p.id) {
             let dt = (time - flying.last_time).clamp(0.0, 0.1);
             flying.last_time = time;
-            if p.velocity.length_squared() > 1.0 {
+            if !p.settled {
                 // Presentation only: the old yaw-only spin left every grenade
                 // upright. Carry a stable two-axis tumble through each bounce;
-                // stop rotating when authoritative translation comes to rest.
+                // stop after the authoritative soft-floor stop, including its
+                // subsequent tiny gravity/contact cycles.
                 let direction = to_bevy(p.velocity).normalize_or_zero();
                 let axis = Vec3::Y.cross(direction).normalize_or(Vec3::X);
                 flying.rotation = (Quat::from_axis_angle(axis, dt * 6.0)

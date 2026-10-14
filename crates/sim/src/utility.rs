@@ -49,6 +49,9 @@ pub struct Projectile {
     pub kind: Kind,
     pub pos: Vec3,
     pub velocity: Vec3,
+    /// Presentation rests after the existing soft floor stop, despite the
+    /// solver's small gravity/contact cycles. Never skips ballistic integration.
+    pub settled: bool,
     pub born: f32,
     /// Immutable weapon ContentId captured when a decoy leaves the hand.
     /// Other grenade kinds carry no copied gun identity.
@@ -187,6 +190,7 @@ impl World {
             kind,
             pos,
             velocity,
+            settled: false,
             born: time,
             decoy_weapon,
         });
@@ -198,6 +202,8 @@ impl World {
         true
     }
     pub(crate) fn step_utility(&mut self) {
+        const CONTACT_NUDGE: f32 = 0.1;
+        const FLOOR_NORMAL_Z: f32 = 0.65;
         let time = self.time();
         let dt = self.dt();
         let mut exploded = Vec::new();
@@ -213,13 +219,30 @@ impl World {
                 contents::MASK_SOLID,
             );
             p.pos = p.pos.lerp(end, tr.fraction);
-            let floor = tr.hit() && tr.normal.z > 0.65;
+            let floor = tr.hit() && tr.normal.z > FLOOR_NORMAL_Z;
             if tr.hit() {
-                p.pos += tr.normal * 0.1;
+                p.pos += tr.normal * CONTACT_NUDGE;
                 p.velocity = (p.velocity - 2.0 * p.velocity.dot(tr.normal) * tr.normal) * 0.45;
                 if floor && p.velocity.length() < 35.0 {
                     p.velocity = Vec3::ZERO;
+                    p.settled = true;
+                } else {
+                    p.settled = false;
                 }
+            } else if p.settled {
+                // The unchanged solver still applies gravity after a soft stop.
+                // Keep the visual rest mark through its separation/contact cycle,
+                // but wake immediately if a dynamic world removes the support.
+                // Probe only the existing nudge + collision skin, projected onto
+                // the shallowest floor normal accepted by this same solver.
+                let support = self.collision.trace_box(
+                    p.pos,
+                    p.pos - Vec3::Z * ((CONTACT_NUDGE + collision::DIST_EPSILON) / FLOOR_NORMAL_Z),
+                    Vec3::splat(-2.0),
+                    Vec3::splat(2.0),
+                    contents::MASK_SOLID,
+                );
+                p.settled = support.hit() && !support.start_solid && support.normal.z > FLOOR_NORMAL_Z;
             }
             let age = time - p.born;
             let detonate = if p.kind.fire() {
@@ -439,7 +462,7 @@ mod tests {
                 world.tick = rate as u64;
                 world.projectiles.push(Projectile {
                     id: 1, owner: 1, kind, pos: Vec3::Z * 4.,
-                    velocity: -Vec3::Z * 400., born: 0., decoy_weapon: None,
+                    velocity: -Vec3::Z * 400., settled: false, born: 0., decoy_weapon: None,
                 });
                 world.step_utility();
                 if kind.fire() {
@@ -465,6 +488,73 @@ mod tests {
                     world.step_utility();
                     assert!(!world.events.iter().any(|e| matches!(e, GameEvent::UtilityBounced { .. })));
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn settled_projectiles_replay_through_contact_cycles_and_wake_when_support_disappears() {
+        use collision::{CollisionWorld, Convex, Plane};
+        use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
+        struct RemovableFloor { collision: CollisionWorld, present: AtomicBool }
+        impl collision::DynamicWorld for RemovableFloor {
+            fn trace_box(&self, start: Vec3, end: Vec3, mins: Vec3, maxs: Vec3, mask: i32) -> collision::Trace {
+                if self.present.load(Ordering::Relaxed) {
+                    self.collision.trace_box(start, end, mins, maxs, mask)
+                } else { collision::Trace::empty(end) }
+            }
+            fn point_contents(&self, _: Vec3, _: i32) -> i32 { 0 }
+        }
+        for rate in [64, 128] {
+            for normal in [Vec3::Z, Vec3::new(0.6, 0.0, 0.8)] {
+                let mut floor = CollisionWorld::new();
+                floor.add_convex(Convex {
+                    mins: Vec3::splat(-512.), maxs: Vec3::splat(512.),
+                    planes: [Vec3::X, -Vec3::X, Vec3::Y, -Vec3::Y, normal, -Vec3::Z]
+                        .into_iter().zip([512., 512., 512., 512., 0., 512.])
+                        .map(|(normal, dist)| Plane { normal, dist }).collect(),
+                    contents: contents::SOLID, surface: 0,
+                });
+                floor.finalize();
+                let floor = Arc::new(RemovableFloor { collision: floor, present: AtomicBool::new(true) });
+                let mut collision = CollisionWorld::new();
+                collision.dynamic = Some(floor.clone());
+                let mut world = World::new(Arc::new(collision));
+                world.set_tick_rate(rate);
+                world.projectiles.push(Projectile {
+                    id: 1, owner: 1, kind: Kind::He, pos: Vec3::Z * 6.,
+                    velocity: -Vec3::Z * 100., settled: false, born: 0., decoy_weapon: None,
+                });
+                let mut bounced = false;
+                for _ in 0..rate {
+                    world.step(&[]);
+                    let p = &world.projectiles[0];
+                    if world.events.iter().any(|e| matches!(e, GameEvent::UtilityBounced { .. })) {
+                        bounced = true;
+                        assert!(!p.settled, "a genuine bounce must keep tumbling");
+                    }
+                    if p.settled { break; }
+                }
+                assert!(bounced && world.projectiles[0].settled);
+                let mut restored = world.clone();
+                restored.restore(world.decode(&world.encode_state()).unwrap());
+                let mut predicted = restored.clone();
+                let mut moving_during_rest = false;
+                for _ in 0..rate / 4 {
+                    world.step(&[]); restored.step(&[]); predicted.step_prediction(&[]);
+                    assert!(world.projectiles[0].settled, "gravity/nudge cycles must not restart tumble");
+                    moving_during_rest |= world.projectiles[0].velocity != Vec3::ZERO;
+                    assert_eq!(world.state(), restored.state());
+                    assert_eq!(world.state(), predicted.state());
+                }
+                assert!(moving_during_rest, "the original ballistic/contact integration still runs");
+                let previous_z = world.projectiles[0].pos.z;
+                floor.present.store(false, Ordering::Relaxed);
+                world.step(&[]); restored.step(&[]); predicted.step_prediction(&[]);
+                assert!(!world.projectiles[0].settled, "lost support must wake on the first airborne tick");
+                assert!(world.projectiles[0].pos.z < previous_z && world.projectiles[0].velocity.z < 0.);
+                assert_eq!(world.state(), restored.state());
+                assert_eq!(world.state(), predicted.state());
             }
         }
     }
@@ -643,6 +733,7 @@ mod tests {
             kind: Kind::Flash,
             pos: Vec3::new(200.0, 0.0, 64.0),
             velocity: Vec3::ZERO,
+            settled: false,
             born: 0.0,
             decoy_weapon: None,
         });
