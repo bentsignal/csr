@@ -531,3 +531,6 @@ parity and the gameplay gaps listed above remain unfinished.
   competitive inventories are unchanged. This exposes existing grenade
   simulation/effects for testing; throw timing, trajectories and particle
   fidelity are still unfinished.
+- [x] Retain bounded death bodies using the installed full death animation;
+  verified with a lethal simulation shot and rendered pose. Authentic ragdoll
+  physics, impulse response and airborne settling remain unfinished.
