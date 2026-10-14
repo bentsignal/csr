@@ -583,6 +583,9 @@ parity and the gameplay gaps listed above remain unfinished.
   `34900ea`, [PR #106](https://github.com/bentsignal/global-offensive/pull/106).
   Fire remains too bright and smoke too dark; dual-sequence modes and complete
   SpriteCard/native appearance parity remain open.
+- [x] Honor explicit particle sorting flags and order enabled layers by their
+  currently drawn centers. Absent flags retain the prior enabled behavior;
+  rendered validation and smoke/fire material parity remain pending.
 - [x] Preserve the throw-time primary/pistol ContentId for positional decoy
   playback through inventory changes, death and snapshots. The existing 2 Hz
   cadence is still provisional; native burst/tap timing is not established.

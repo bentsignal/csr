@@ -43,6 +43,7 @@ pub struct Layer {
     sequence: [usize; 2],
     animation_rate: f32,
     blend_frames: bool,
+    sort_particles: bool,
     fps: bool,
     roll: [f32; 2],
     spin: f32,
@@ -292,6 +293,9 @@ pub fn load(
             .map(|v| v.max(0.0) as usize),
             animation_rate,
             blend_frames,
+            // Preserve the previous sorting behavior when this field is absent;
+            // an explicit authored false keeps the particle emission order.
+            sort_particles: sorting_enabled(e),
             fps: render.is_some_and(|r| r.number("use animation rate as FPS", 0.0) != 0.0),
             roll: range(
                 op(&init, "Rotation Random"),
@@ -331,6 +335,34 @@ struct Particle {
     yaw: f32,
     sequence: usize,
 }
+impl Particle {
+    fn center(&self, time: f32, gravity: Vec3) -> Vec3 {
+        let age = (time - self.born).max(0.0);
+        self.pos + self.velocity * age + gravity * 0.5 * age * age
+    }
+}
+
+fn sorting_enabled(definition: &Element) -> bool {
+    definition.number("sort particles", 1.0) != 0.0
+}
+
+fn sort_particles(
+    particles: &mut [Particle],
+    enabled: bool,
+    time: f32,
+    gravity: Vec3,
+    origin: Vec3,
+    eye: Vec3,
+) {
+    if enabled {
+        particles.sort_by(|a, b| {
+            (origin + b.center(time, gravity))
+                .distance_squared(eye)
+                .total_cmp(&(origin + a.center(time, gravity)).distance_squared(eye))
+        });
+    }
+}
+
 pub struct Emitter {
     pub batches: Vec<Batch>,
     pub origin: Vec3,
@@ -551,15 +583,19 @@ impl Emitter {
             let mut uvs = Vec::new();
             let mut next_frames = Vec::new();
             let mut colors = Vec::new();
-            // Transparent quads within one batched mesh still need back-to-front ordering.
-            b.particles.sort_by(|a, b| {
-                (self.origin + b.pos)
-                    .distance_squared(eye)
-                    .total_cmp(&(self.origin + a.pos).distance_squared(eye))
-            });
+            // Only sort layers that permit it, using their drawn positions
+            // rather than their initial positions before velocity/gravity.
+            sort_particles(
+                &mut b.particles,
+                l.sort_particles,
+                time,
+                l.gravity,
+                self.origin,
+                eye,
+            );
             for p in &b.particles {
                 let age = (time - p.born).max(0.0);
-                let center = p.pos + p.velocity * age + l.gravity * 0.5 * age * age;
+                let center = p.center(time, l.gravity);
                 let external_fade = ((self.until - time) / p.fade_out.max(0.25)).clamp(0.0, 1.0);
                 let alpha = p.alpha * fade(age, p.life, p.fade_in, p.fade_out) * external_fade;
                 if alpha <= 0.001 {
@@ -721,6 +757,99 @@ impl Rng {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn particle(sequence: usize, born: f32, pos: Vec3, velocity: Vec3) -> Particle {
+        Particle {
+            born,
+            life: 20.0,
+            pos,
+            velocity,
+            radius: 1.0,
+            alpha: 1.0,
+            color: [1.0; 4],
+            fade_in: 0.0,
+            fade_out: 0.0,
+            roll: 0.0,
+            yaw: 0.0,
+            sequence,
+        }
+    }
+
+    #[test]
+    fn explicit_unsorted_layers_keep_emission_order_as_the_eye_moves() {
+        let mut definition = Element::default();
+        assert!(sorting_enabled(&definition)); // Compatibility for absent fields.
+        definition
+            .attrs
+            .insert("sort particles".into(), particle_data::Value::Number(0.0));
+        assert!(!sorting_enabled(&definition));
+        let mut particles = vec![
+            particle(0, 0.0, Vec3::X, Vec3::ZERO),
+            particle(1, 0.0, Vec3::X * 100.0, Vec3::ZERO),
+        ];
+        for eye in [Vec3::ZERO, Vec3::X * 200.0] {
+            sort_particles(
+                &mut particles,
+                sorting_enabled(&definition),
+                1.0,
+                Vec3::ZERO,
+                Vec3::ZERO,
+                eye,
+            );
+            assert_eq!(
+                particles.iter().map(|p| p.sequence).collect::<Vec<_>>(),
+                [0, 1]
+            );
+        }
+        particles.remove(0); // Expiry preserves survivors, then new emissions append.
+        particles.push(particle(2, 1.0, Vec3::X * 300.0, Vec3::ZERO));
+        sort_particles(
+            &mut particles,
+            false,
+            2.0,
+            Vec3::ZERO,
+            Vec3::ZERO,
+            Vec3::ZERO,
+        );
+        assert_eq!(
+            particles.iter().map(|p| p.sequence).collect::<Vec<_>>(),
+            [1, 2]
+        );
+    }
+
+    #[test]
+    fn sorted_layers_follow_drawn_centers_after_velocity_and_gravity() {
+        let mut particles = vec![
+            particle(0, 0.0, Vec3::ZERO, Vec3::X * 20.0),
+            particle(1, 1.0, Vec3::X * 10.0, Vec3::ZERO),
+        ];
+        let gravity = Vec3::Y * 6.0;
+        let origin = Vec3::new(100.0, 50.0, -30.0);
+        // Birth positions would put 1 first. The older particle has moved
+        // farther and risen under the same authored gravity used for drawing.
+        assert_eq!(
+            particles[0].center(2.0, gravity),
+            Vec3::new(40.0, 12.0, 0.0)
+        );
+        assert_eq!(particles[1].center(2.0, gravity), Vec3::new(10.0, 3.0, 0.0));
+        sort_particles(&mut particles, true, 2.0, gravity, origin, origin);
+        assert_eq!(
+            particles.iter().map(|p| p.sequence).collect::<Vec<_>>(),
+            [0, 1]
+        );
+        sort_particles(
+            &mut particles,
+            true,
+            2.0,
+            gravity,
+            origin,
+            origin + Vec3::X * 100.0,
+        );
+        assert_eq!(
+            particles.iter().map(|p| p.sequence).collect::<Vec<_>>(),
+            [1, 0]
+        );
+    }
 
     #[test]
     fn authored_upright_cards_do_not_tilt_with_eye_height() {
