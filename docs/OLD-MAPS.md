@@ -4,8 +4,19 @@
 snapshots published by Valve. `csr fetch-map <name|all>` prefetches archives;
 `csr remove-map <name|all>` removes their local copies. Loading a snapshot
 with `probe`, `sim` or `play` fetches it automatically. These commands support
-development and fidelity checks; archives are not offered in the match menu
-until their gameplay and dependencies are validated.
+development and fidelity checks. The classic map picker also offers
+**Dust II (2017)**, the pinned pre-rework archive, as an experimental map.
+Other archives remain hidden pending their gameplay/dependency work.
+
+Choose Dust II (2017) in the original map picker and press GO. The existing
+loading screen reports contacting Steam, download percentage, verification
+and preparation before normal map loading. Escape or Cancel returns home;
+acquisition stops at the next callback and retains resumable download bytes.
+Only one map worker owns the archive until it exits, so immediately choosing
+GO again waits for cancellation rather than racing two downloads. Outstanding
+network I/O has connection/response/body deadlines; cancellation does not
+interrupt a blocking socket read. A failed acquisition reports a friendly
+retry message and keeps the main menu usable.
 
 ## Runtime data
 
@@ -101,7 +112,14 @@ Unresolved dependencies:
   `materials/de_cache/darkmetal3.vmt`, but that is a different lookup path;
   do not invent an alias without checking the original game's behavior.
 - Classic Dust II: `models/props_mill/millwall_01.mdl` references
-  `models/props_mill/greygrid`.
+  `models/props_mill/greygrid`. Read-only inspection on 2026-10-14 confirms
+  that neither model nor material is embedded in the archive; the Legacy
+  model's second mesh uses that unavailable material on one three-vertex
+  triangle. The archive places one instance, at `-128 -1024 69`, skin 0.
+  Its main mesh has 417 vertices and resolves `building_concrete`. The
+  renderer retains its existing missing-material fallback for the small
+  triangle; no alias, replacement or silent omission is introduced, and
+  the archived-map probe still reports the dependency.
 - Nuke 2019: `tools/toolsblockbullets_cs` is absent. The renderer skips tool
   surfaces, but the dependency probe still reports the missing material.
 - Overpass: `models/props_urban/park_fence_128.mdl` references
@@ -115,7 +133,9 @@ of visual parity. Material/lighting and sky fidelity remain Track D work.
 Local logs, CSV results and captures are under
 `%USERPROFILE%\csr-fidelity\workshop-review`, outside the repository.
 
-Menu integration needs a visible, cancellable download screen through the
-Track C app-state work, resolved dependencies and matched reference captures.
+The Dust II menu pilot uses the existing Track C loading worker and original
+Scaleform card/loading surface. Other archive menu integration still needs
+dependency resolution and matched reference captures. The archive year does
+not establish 2015 parity; the existing material and lighting gaps remain.
 Content packs remain separate Track E work; this archive loader does not
 complete `.csrpack`, file associations, drag-and-drop or server-driven downloads.

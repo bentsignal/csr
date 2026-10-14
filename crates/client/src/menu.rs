@@ -82,7 +82,8 @@ impl MapRequest {
     pub(crate) fn label(&self) -> String {
         self.pack.as_ref().and_then(|(_, entry, id)| entry.manifest().maps.iter().find(|map| map.id == id.to_string()))
             .map(|map| crate::pack_flow::caption(&map.name))
-            .unwrap_or_else(|| self.options.map.clone())
+            .unwrap_or_else(|| workshop::find(&self.options.map)
+                .map(|map| map.title.to_owned()).unwrap_or_else(|| self.options.map.clone()))
     }
 }
 #[derive(Resource, Clone, Default)]

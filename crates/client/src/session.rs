@@ -5,7 +5,8 @@ use crate::ClientOptions;
 use crate::{GameData, LoadedLevel, Options, PendingLevel};
 use bevy::prelude::*;
 use std::sync::{
-    Mutex,
+    Arc, Mutex,
+    atomic::{AtomicBool, Ordering},
     mpsc::{self, Receiver, TryRecvError},
 };
 
@@ -38,6 +39,74 @@ pub(crate) fn own_entity<T: Component>(
 struct Job {
     serial: u64,
     result: Mutex<Receiver<Result<LoadedMap, String>>>,
+    progress: Arc<LoadProgress>,
+}
+
+#[derive(Default)]
+struct LoadProgress {
+    cancelled: AtomicBool,
+    status: Mutex<Option<String>>,
+}
+
+impl LoadProgress {
+    fn report(&self, title: &str, p: workshop::Progress) -> bool {
+        if self.cancelled.load(Ordering::Relaxed) {
+            return false;
+        }
+        let stage = match p.stage {
+            workshop::Stage::Query => "Contacting Steam",
+            workshop::Stage::Download => "Downloading",
+            workshop::Stage::Verify => "Checking download",
+            workshop::Stage::Extract => "Preparing map",
+        };
+        let percent = if p.total > 0 {
+            format!(
+                " — {}%",
+                p.done
+                    .saturating_mul(100)
+                    .checked_div(p.total)
+                    .unwrap_or(0)
+                    .min(100)
+            )
+        } else {
+            String::new()
+        };
+        *self.status.lock().unwrap() = Some(format!("{stage} {title}{percent}"));
+        true
+    }
+}
+
+fn load_requested_map(
+    request: &crate::menu::MapRequest,
+    game_dir: &std::path::Path,
+    progress: &LoadProgress,
+) -> Result<level::Level, String> {
+    if progress.cancelled.load(Ordering::Relaxed) {
+        return Err(workshop::CANCELLED.into());
+    }
+    if let Some((store, entry, id)) = &request.pack {
+        return level::Level::load_catalog_map(store, entry, id, Some(game_dir))
+            .map_err(|e| e.to_string());
+    }
+    if let Some(old) = workshop::find(&request.options.map) {
+        workshop::Store::current().fetch(old, &mut |p| progress.report(old.title, p)).map_err(|error| {
+            if error == workshop::CANCELLED { return error; }
+            error!("Classic map acquisition failed for {}: {error}", old.name);
+            format!("Could not prepare {}. Check your connection and available storage, then choose GO to retry.", old.title)
+        })?;
+        if progress.cancelled.load(Ordering::Relaxed) {
+            return Err(workshop::CANCELLED.into());
+        }
+        *progress.status.lock().unwrap() = Some(format!("Loading {}…", old.title));
+        return level::Level::load_id(&old.content_id(), Some(game_dir)).map_err(|error| {
+            error!("Classic map load failed for {}: {error}", old.name);
+            format!(
+                "Could not open {}. Return to the map picker and try again.",
+                old.title
+            )
+        });
+    }
+    level::Level::load(&request.options.map, Some(game_dir)).map_err(|e| e.to_string())
 }
 
 #[derive(Clone)]
@@ -98,18 +167,15 @@ impl Loader {
         let stores = crate::remote_join::local_stores();
         let game_dir = game_dir.to_path_buf();
         let (tx, rx) = mpsc::channel();
+        let progress = Arc::new(LoadProgress::default());
+        let worker_progress = progress.clone();
         self.status = format!("Loading {}…", options.label());
         match std::thread::Builder::new()
             .name("map-loader".into())
             .spawn(move || {
                 let result = match selection {
                     Selection::Offline(request) => {
-                        let result = match request.pack {
-                            Some((store, entry, id)) => {
-                                level::Level::load_catalog_map(&store, &entry, &id, Some(&game_dir))
-                            }
-                            None => level::Level::load(&request.options.map, Some(&game_dir)),
-                        };
+                        let result = load_requested_map(&request, &game_dir, &worker_progress);
                         result
                             .map(|level| LoadedMap {
                                 level,
@@ -123,12 +189,7 @@ impl Loader {
                             let _ = tx.send(Err(error));
                             return;
                         }
-                        let result = match &selected.map.pack {
-                            Some((store, entry, id)) => {
-                                level::Level::load_catalog_map(store, entry, id, Some(&game_dir))
-                            }
-                            None => level::Level::load(&selected.map.options.map, Some(&game_dir)),
-                        };
+                        let result = load_requested_map(&selected.map, &game_dir, &worker_progress);
                         result.map_err(|error| error.to_string()).and_then(|level| {
                             let manifest = crate::remote_map::manifest_for_level(&level)
                                 .map_err(|error| error.to_string())?;
@@ -209,6 +270,7 @@ impl Loader {
                 self.job = Some(Job {
                     serial,
                     result: Mutex::new(rx),
+                    progress,
                 })
             }
             Err(e) => self.status = format!("Could not start map loader: {e}"),
@@ -239,6 +301,9 @@ impl Loader {
     }
 
     pub(crate) fn invalidate(&mut self) {
+        if let Some(job) = &self.job {
+            job.progress.cancelled.store(true, Ordering::Relaxed);
+        }
         self.wanted = None;
         self.selection = None;
         self.host_selection = None;
@@ -279,6 +344,9 @@ pub(crate) fn begin_load(
 }
 
 pub(crate) fn cancel_load(mut loader: ResMut<Loader>) {
+    if let Some(job) = &loader.job {
+        job.progress.cancelled.store(true, Ordering::Relaxed);
+    }
     // A remote preparation retains its generation through Match render warmup.
     if !loader
         .wanted
@@ -337,7 +405,17 @@ pub(crate) fn poll_load(
         }
         return;
     };
+    let status = (*state.get() == AppState::Loading
+        && loader
+            .wanted
+            .as_ref()
+            .is_some_and(|(serial, _)| *serial == job.serial))
+    .then(|| job.progress.status.lock().unwrap().clone())
+    .flatten();
     let result = job.result.lock().unwrap().try_recv();
+    if let Some(status) = status {
+        loader.status = status;
+    }
     let result = match result {
         Ok(result) => result,
         Err(TryRecvError::Empty) => return,
@@ -485,6 +563,7 @@ mod tests {
         app.world_mut().resource_mut::<Loader>().job = Some(Job {
             serial: 1,
             result: Mutex::new(rx),
+            progress: Default::default(),
         });
         tx.send(Err("Cancelled map must not replace menu status".into()))
             .unwrap();
@@ -500,6 +579,50 @@ mod tests {
             *app.world().resource::<State<AppState>>().get(),
             AppState::Menu
         );
+    }
+
+    #[test]
+    fn archive_progress_belongs_to_its_load_generation_and_cancels_acquisition() {
+        let mut app = loading_app(AppState::Loading);
+        let (_tx, rx) = mpsc::channel();
+        let progress = Arc::new(LoadProgress::default());
+        let update = workshop::Progress {
+            stage: workshop::Stage::Download,
+            done: 50,
+            total: 100,
+        };
+        assert!(progress.report("Dust II (2017)", update));
+        {
+            let mut loader = app.world_mut().resource_mut::<Loader>();
+            loader.wanted = Some((1, Selection::Offline(ClientOptions::default().into())));
+            loader.job = Some(Job {
+                serial: 1,
+                result: Mutex::new(rx),
+                progress: progress.clone(),
+            });
+        }
+        app.update();
+        assert_eq!(
+            app.world().resource::<Loader>().status,
+            "Downloading Dust II (2017) — 50%"
+        );
+        {
+            let mut loader = app.world_mut().resource_mut::<Loader>();
+            loader.wanted = Some((2, Selection::Offline(ClientOptions::default().into())));
+            loader.status = "Loading a newer selection".into();
+        }
+        assert!(progress.report("Dust II (2017)", workshop::Progress { done: 90, ..update }));
+        app.update();
+        assert_eq!(
+            app.world().resource::<Loader>().status,
+            "Loading a newer selection"
+        );
+        app.world_mut().resource_mut::<Loader>().invalidate();
+        assert!(!progress.report("Dust II (2017)", update));
+        assert!(progress.cancelled.load(Ordering::Relaxed));
+        // The old worker remains retained until its result, avoiding a second
+        // writer to the resumable archive while cancellation is in flight.
+        assert!(app.world().resource::<Loader>().job.is_some());
     }
 
     #[test]
@@ -541,6 +664,7 @@ mod tests {
             loader.job = Some(Job {
                 serial: 100,
                 result: Mutex::new(rx),
+                progress: Default::default(),
             });
             loader.wanted = Some((100, Selection::Offline(ClientOptions::default().into())));
         }
@@ -604,6 +728,7 @@ mod tests {
             loader.job = Some(Job {
                 serial: 100,
                 result: Mutex::new(rx),
+                progress: Default::default(),
             });
             loader.wanted = Some((
                 101,
@@ -676,6 +801,7 @@ mod tests {
             loader.job = Some(Job {
                 serial: 1,
                 result: Mutex::new(rx),
+                progress: Default::default(),
             });
             loader.wanted = Some((
                 2,

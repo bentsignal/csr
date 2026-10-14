@@ -215,6 +215,10 @@ byte-identical to 2018.
       screen. Resolve the four material dependencies and measure fidelity
       against the archived maps before calling them ready. Archive years
       do not establish August 2018 parity. Results: [OLD-MAPS.md](OLD-MAPS.md).
+      Dust II (2017), the pre-rework archive, now has an experimental native
+      card and generation-owned download/progress/cancellation path. Its one
+      small prop material fallback remains documented; other archives and
+      native visual parity are still open.
 - [ ] Optional: a 2018 build via `download_depot` with the owner's own
       account, if Steam still serves old manifests (unverified). Only adds
       a few changed models and the old HE explosion sound.

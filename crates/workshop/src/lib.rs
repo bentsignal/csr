@@ -476,6 +476,9 @@ fn agent() -> ureq::Agent {
     ureq::Agent::config_builder()
         .timeout_connect(Some(Duration::from_secs(20)))
         .timeout_recv_response(Some(Duration::from_secs(30)))
+        // A stalled body must eventually release the retained map worker after
+        // cancellation. Partial bytes remain resumable on the next attempt.
+        .timeout_recv_body(Some(Duration::from_secs(120)))
         .user_agent(concat!("csgo-rewrite/", env!("CARGO_PKG_VERSION")))
         .build()
         .new_agent()
