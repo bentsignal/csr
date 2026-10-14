@@ -195,38 +195,6 @@ _global.csrBindings.focusWidget = function(path, index) {
     }
 };
 
-// Retain the original dropdown and its notification. The runtime updates the
-// selected index but does not notify our engine bridge, so observe that public
-// notification boundary once. Each new scene replaces our wrapper around the
-// retained base; old closures retain their own revision and are rejected.
-_global.csrBindings.bindOptionsDropdown = function(path, revision, index, convar, trace) {
-    var root = _global.csrResolve(path);
-    var slot = root.TopPanel.Panel.arraySlots[index];
-    var widget = slot.Widget;
-    var ready = slot.TypeID == 2 && widget.Convar == convar &&
-        typeof widget.NotifyValueChange == "function" && typeof widget.GetSelectedIndex == "function";
-    if (trace) {
-        _global.csrProbeTrace("DropdownBinding", path + "#" + revision + "[" + index + "]",
-            "ready=" + ready + ", type=" + slot.TypeID + ", convar=" + widget.Convar +
-            ", notify=" + typeof widget.NotifyValueChange + ", selected=" + typeof widget.GetSelectedIndex +
-            ", widget=" + String(widget));
-    }
-    if (!ready) {
-        return false;
-    }
-    var original = widget.csrOwnedDropdownNotify;
-    if (typeof original != "function") {
-        original = widget.NotifyValueChange;
-        widget.csrOwnedDropdownNotify = original;
-    }
-    widget.NotifyValueChange = function() {
-        var result = original.apply(this, arguments);
-        csrEI.call("OwnedOptions.DropdownSelection", path, revision, index, convar, this.GetSelectedIndex());
-        return result;
-    };
-    return true;
-};
-
 // Resolves "_global.MainMenuMovie.Panel" or "_level31.Panel" to an object.
 _global.csrResolve = function(path) {
     var parts = path.split(".");

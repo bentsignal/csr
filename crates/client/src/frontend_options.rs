@@ -28,7 +28,6 @@ struct Widget {
 #[derive(Default)]
 pub(super) struct Scene {
     pub mode: u32,
-    revision: u64,
     widgets: Vec<Widget>,
     layout_initialized: bool,
     focused_widget: Option<usize>,
@@ -50,10 +49,7 @@ impl Scene {
             .first()
             .and_then(|(_, value)| value.as_block())
             .unwrap_or(&doc);
-        let mut scene = Self::from_block(root, mode, loc);
-        static NEXT_REVISION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
-        scene.revision = NEXT_REVISION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        scene
+        Self::from_block(root, mode, loc)
     }
 
     fn from_block(root: &kv::Block, mode: u32, loc: &Localization) -> Self {
@@ -120,7 +116,6 @@ impl Scene {
         widgets.sort_by_key(|widget| widget.priority);
         Self {
             mode,
-            revision: 0,
             widgets,
             layout_initialized: false,
             focused_widget: None,
@@ -131,50 +126,6 @@ impl Scene {
         self.widgets.len() as u32
     }
 
-    /// Only an active, current owned dropdown may commit its native selection.
-    pub fn dropdown_value(
-        &mut self,
-        args: &[Value],
-        path: &str,
-        calls: &mut Calls,
-    ) -> Option<(String, Value)> {
-        let [
-            Value::String(root),
-            Value::String(revision),
-            Value::Number(index),
-            Value::String(convar),
-            selection,
-        ] = args
-        else {
-            return None;
-        };
-        if root != path
-            || revision != &self.revision.to_string()
-            || self.revision == 0
-            || !self.layout_initialized
-            || !index.is_finite()
-            || *index < 0.0
-            || index.fract() != 0.0
-        {
-            return None;
-        }
-        let widget = self.widgets.get(*index as usize)?;
-        let Kind::Dropdown { choices, .. } = &widget.kind else {
-            return None;
-        };
-        let Value::Number(next) = selection else {
-            return None;
-        };
-        if convar != &widget.convar
-            || !next.is_finite()
-            || *next < 0.0
-            || next.fract() != 0.0
-            || *next >= choices.len() as f64
-        {
-            return None;
-        }
-        self.update_value(&args[2], selection, path, calls, true)
-    }
     pub fn bounds(&self, name: &str) -> Option<(f64, f64)> {
         self.widgets
             .iter()
@@ -191,17 +142,6 @@ impl Scene {
         value: &Value,
         path: &str,
         calls: &mut Calls,
-    ) -> Option<(String, Value)> {
-        self.update_value(index, value, path, calls, false)
-    }
-
-    fn update_value(
-        &mut self,
-        index: &Value,
-        value: &Value,
-        path: &str,
-        calls: &mut Calls,
-        owned_dropdown: bool,
     ) -> Option<(String, Value)> {
         let (Value::Number(index), Value::Number(value)) = (index, value) else {
             return None;
@@ -244,12 +184,6 @@ impl Scene {
                 choices[*selected].1
             }
             Kind::Dropdown { choices, selected } => {
-                // The original notification still runs, but its unversioned
-                // engine callback cannot identify the current dropdown scene.
-                // Only dropdown_value admits a validated owned notification.
-                if !owned_dropdown {
-                    return None;
-                }
                 // The authored dropdown reports a list index, not a convar
                 // value. Preserve arbitrary ordering/noncontiguous schema IDs.
                 if *value < 0.0 || value.fract() != 0.0 || *value >= choices.len() as f64 {
@@ -447,23 +381,6 @@ impl Scene {
             );
         }
         calls.call(path, "RefreshWidgetLayout", vec![]);
-        // Authored setup/refresh establishes the native widget's properties.
-        // Bind after those calls finish, including on a cached scene refresh.
-        for (index, widget) in self.widgets.iter().enumerate() {
-            if matches!(widget.kind, Kind::Dropdown { .. }) {
-                calls.call(
-                    "_global.csrBindings",
-                    "bindOptionsDropdown",
-                    vec![
-                        path.into(),
-                        self.revision.to_string().into(),
-                        (index as u32).into(),
-                        widget.convar.clone().into(),
-                        std::env::var_os("CSR_UI_TRACE").is_some().into(),
-                    ],
-                );
-            }
-        }
     }
 }
 
@@ -514,7 +431,6 @@ mod tests {
             (None, "Unavailable".into())
         );
         let mut scene = Scene {
-            revision: 9,
             layout_initialized: true,
             widgets: vec![Widget {
                 convar: "cl_crosshaircolor".into(),
@@ -534,89 +450,55 @@ mod tests {
         assert!(
             matches!(&scene.widgets[0].kind, Kind::Dropdown { selected: None, choices } if choices.len() == 2)
         );
-        let mut args = vec![
-            "_level21".into(),
-            "9".into(),
-            0u32.into(),
-            "cl_crosshaircolor".into(),
-            (-1.0).into(),
-        ];
         assert!(
             scene
-                .dropdown_value(&args, "_level21", &mut calls)
+                .value(&0u32.into(), &(-1.0).into(), "_level21", &mut calls)
                 .is_none()
         );
-        args[4] = 0u32.into();
-        let (convar, value) = scene.dropdown_value(&args, "_level21", &mut calls).unwrap();
+        let (convar, value) = scene
+            .value(&0u32.into(), &0u32.into(), "_level21", &mut calls)
+            .unwrap();
         assert!(settings.set_convar_number(&convar, value.num()));
         assert_eq!(settings.convar_number("cl_crosshaircolor"), Some(1.0));
     }
     #[test]
-    fn dropdown_commits_schema_ids_and_rejects_stale_or_malformed_callbacks() {
+    fn native_dropdown_maps_schema_ids_and_rejects_malformed_selections() {
         let block = kv::parse(
             r#"
             color { type dropdown convar cl_crosshaircolor dropdown { Blue 3 Green 1 Yellow 2 } }
-            rotate { type choice convar cl_radar_rotate choices { No 0 Yes 1 } }
-            unsupported { type choice convar pretend choices { No 0 Yes 1 } }
+            unsupported { type dropdown convar pretend dropdown { No 0 Yes 1 } }
         "#,
         )
         .unwrap();
         let mut scene = Scene::from_block(&block, 2, &Localization::default());
-        scene.revision = 7;
-        let mut settings = Settings::default();
-        settings.invert_y = true;
-        settings.radar_rotate = true;
         let mut calls = Calls::default();
-        scene.show("_level21", &settings, &mut calls);
-        scene.layout_ready("_level21", &settings, &mut calls);
-        assert_eq!(scene.count(), 2);
-        assert_eq!(
-            scene
-                .value(&1u32.into(), &1.0.into(), "_level21", &mut calls)
-                .unwrap()
-                .1
-                .num(),
-            0.0
-        );
-        let args = vec![
-            "_level21".into(),
-            "7".into(),
-            0u32.into(),
-            "cl_crosshaircolor".into(),
-            0u32.into(),
-        ];
-        assert!(
-            scene
-                .value(&0u32.into(), &0u32.into(), "_level21", &mut calls)
-                .is_none()
-        );
-        let changed = scene.dropdown_value(&args, "_level21", &mut calls).unwrap();
+        scene.show("_level21", &Settings::default(), &mut calls);
+        scene.layout_ready("_level21", &Settings::default(), &mut calls);
+        assert_eq!(scene.count(), 1);
+        let changed = scene
+            .value(&0u32.into(), &0u32.into(), "_level21", &mut calls)
+            .unwrap();
         assert_eq!(changed.0, "cl_crosshaircolor");
         assert_eq!(changed.1.num(), 3.0); // First list item carries ID3, not0.
-        for (field, invalid) in [
-            (0, "_level99".into()),
-            (1, "6".into()),
-            (2, 1u32.into()),
-            (3, "volume".into()),
-            (4, 1.5.into()),
-            (4, f64::NAN.into()),
-            (4, 3u32.into()),
+        for (index, selection) in [
+            (1.0, 0.0),
+            (-1.0, 0.0),
+            (0.5, 0.0),
+            (f64::NAN, 0.0),
+            (0.0, -1.0),
+            (0.0, 1.5),
+            (0.0, f64::NAN),
+            (0.0, f64::INFINITY),
+            (0.0, 3.0),
         ] {
-            let mut stale = args.clone();
-            stale[field] = invalid;
             assert!(
                 scene
-                    .dropdown_value(&stale, "_level21", &mut calls)
+                    .value(&index.into(), &selection.into(), "_level21", &mut calls)
                     .is_none()
             );
         }
-        scene.layout_initialized = false;
-        assert!(
-            scene
-                .dropdown_value(&args, "_level21", &mut calls)
-                .is_none()
-        );
     }
+
     fn scene() -> Scene {
         let block = kv::parse(
             r#"reverse { type choice convar m_pitch choices { Off 0.022 On -0.022 } priority 1 }

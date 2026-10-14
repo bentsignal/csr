@@ -315,19 +315,6 @@ impl Engine for Bridge {
             self.data.lock().unwrap().pause_surface.accept(args);
             return Some(Value::Undefined);
         }
-        if object == "OwnedOptions" && method == "DropdownSelection" {
-            let mut data = self.data.lock().unwrap();
-            if data.pause_surface.options_requested() {
-                if let Some(path) = self.roots.get("OptionsMenu") {
-                    if let Some((name, value)) = self.options.dropdown_value(args, path, calls) {
-                        if apply_setting(&mut data.settings, &name, &value) {
-                            self.actions.lock().unwrap().push(Action::Convar(name, value));
-                        }
-                    }
-                }
-            }
-            return Some(Value::Undefined);
-        }
         if object == "OptionsMenu" && method == "OnCancel" {
             let mut data = self.data.lock().unwrap();
             if data.pause_surface.options_requested() {
@@ -532,6 +519,16 @@ impl Engine for Bridge {
             if let Some(value) = data.inventory.call(method, args) {
                 return Some(value);
             }
+        }
+        // The original movie's native widget API is shared by dropdowns,
+        // choices and sliders. Cached/hidden pages cannot publish changes.
+        if object == "OptionsMenu"
+            && matches!(method, "OnUpdateValue" | "OnHighlightWidget" | "OnRefreshValues" | "OnLayoutComplete")
+            && !(data.pause_surface.options_requested()
+                && (matches!(data.state, AppState::Menu | AppState::Browser)
+                    || (data.state == AppState::Match && data.menu_open)))
+        {
+            return None;
         }
         match (object, method) {
             ("PartyList", "GetPartySessionSetting") => self.lobby.lock().unwrap().party_setting(&arg(0)),
