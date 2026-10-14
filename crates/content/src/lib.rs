@@ -89,6 +89,7 @@ pub enum ContentKind {
     Equipment,
     Character,
     Mode,
+    Particle,
 }
 
 impl ContentKind {
@@ -104,6 +105,7 @@ impl ContentKind {
             ContentKind::Equipment => "equipment",
             ContentKind::Character => "character",
             ContentKind::Mode => "mode",
+            ContentKind::Particle => "particle",
         }
     }
 
@@ -119,6 +121,7 @@ impl ContentKind {
             "equipment" => ContentKind::Equipment,
             "character" => ContentKind::Character,
             "mode" => ContentKind::Mode,
+            "particle" => ContentKind::Particle,
             _ => return None,
         })
     }
@@ -180,7 +183,13 @@ impl ContentId {
 
 impl fmt::Display for ContentId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}_{}_{}", self.origin.prefix(), self.kind.as_str(), self.name)
+        write!(
+            f,
+            "{}_{}_{}",
+            self.origin.prefix(),
+            self.kind.as_str(),
+            self.name
+        )
     }
 }
 
@@ -192,7 +201,11 @@ impl FromStr for ContentId {
         let (origin, rest) = s.split_once('_').ok_or_else(err)?;
         let (kind, name) = rest.split_once('_').ok_or_else(err)?;
         let kind = ContentKind::parse(kind).ok_or_else(err)?;
-        if origin.is_empty() || name.is_empty() || sanitize(name) != name || sanitize(origin) != origin {
+        if origin.is_empty()
+            || name.is_empty()
+            || sanitize(name) != name
+            || sanitize(origin) != origin
+        {
             return Err(err());
         }
         Ok(ContentId {
@@ -217,6 +230,9 @@ mod tests {
         assert_eq!(parsed, id);
         let mw2: ContentId = "iw4_weapon_m4a1".parse().unwrap();
         assert_eq!(mw2.origin, GameOrigin::Iw4);
+        let particle: ContentId = "mod_particle_training_smoke".parse().unwrap();
+        assert_eq!(particle.kind, ContentKind::Particle);
+        assert_eq!(particle.to_string(), "mod_particle_training_smoke");
     }
 
     #[test]

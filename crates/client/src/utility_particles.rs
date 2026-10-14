@@ -165,7 +165,7 @@ pub fn load(
         let radius_scale = op(&operators, "Radius Scale");
         let lifetime = op(&init, "Lifetime Random");
         let lifetime_sequence = op(&init, "Lifetime From Sequence");
-        let content_id: content::ContentId = format!("csgo_material_{}", name)
+        let content_id: content::ContentId = format!("csgo_particle_{}", name)
             .parse()
             .expect("static particle id");
         info!("Utility particle {content_id}: {} sequences", sheets.len());

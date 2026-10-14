@@ -82,7 +82,7 @@ pub struct ResourceDef {
     pub path: String,
 }
 
-/// Version 1 intentionally supports maps and model/material/sound resources.
+/// Version 1 supports maps and model/material/sound/particle resources.
 /// Weapon overrides, importer recipes and sandboxed mechanics are later APIs.
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -229,6 +229,9 @@ impl Manifest {
                 ContentKind::Material => {
                     resource.path.starts_with("materials/") && extension == "vmt"
                 }
+                ContentKind::Particle => {
+                    resource.path.starts_with("particles/") && extension == "pcf"
+                }
                 ContentKind::Sound => {
                     resource.path.starts_with("sound/")
                         && matches!(extension, "wav" | "mp3" | "ogg")
@@ -293,6 +296,7 @@ fn asset_path(path: &str) -> bool {
     match path.split('/').next().unwrap_or("") {
         "maps" => matches!(extension, "bsp" | "nav"),
         "materials" => matches!(extension, "vmt" | "vtf"),
+        "particles" => extension == "pcf",
         "models" => matches!(extension, "mdl" | "vvd" | "vtx" | "phy" | "ani"),
         "sound" => matches!(extension, "wav" | "mp3" | "ogg"),
         "resource" => path.starts_with("resource/overviews/") && extension == "txt",

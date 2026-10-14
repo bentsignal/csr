@@ -18,8 +18,11 @@ with runtime-loaded particle layers and authored sprite-sheet sequences.
   and independently compare parser output. No SDK, leaked or decompiled engine
   implementation was used.
 
-Each named layer gets a `csgo_material_<layer>` ContentId. The VFS can resolve
-PCF/VMT/VTF paths through mounted packs as well as the installed game.
+Each named layer gets a typed `csgo_particle_<layer>` ContentId. Asset packs
+can declare `mod_particle_<name>` resources at `particles/*.pcf`; normal VMT/VTF
+dependencies remain under `materials/`. Pack validation, reopen and VFS mounting
+are covered by an original synthetic payload. The VFS can resolve all three
+formats through mounted packs as well as the installed game.
 
 ## Implemented presentation subset
 
