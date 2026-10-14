@@ -4,7 +4,7 @@ The installed classic main menu emits `MainMenu.BasePanelRunCommand("OpenServerB
 
 `frontend_servers_data` reads browser, game-page, Add Server and game-info RES files and English localization from the detected Legacy installation's `platform/servers` directory. It reads the source scheme from the game VFS. No layout, font or game asset is embedded or copied into the repository. The caller mounts that platform directory read-only and supplies runtime font sources.
 
-`frontend_servers` owns only its Bevy UI tree. The caller supplies a camera, viewport, definition, fonts, bounded model and backend snapshot, gates input by window and browser ownership, and tears down the tree on transitions. A failed build removes all allocated descendants. The view emits explicit refresh, address probe/add/cancel, close and generation-stamped connect intents; it never resolves hosts, writes favorites, joins sessions or fetches assets. The backend must validate the stable key and generation before connecting. Unknown name, map, player-count and latency remain blank. A successful address discovery does not imply admission.
+`frontend_servers` owns only its Bevy UI tree. The caller supplies a camera, viewport, definition, fonts, bounded model and backend snapshot, gates input by window and browser ownership, and tears down the tree on transitions. A failed build removes all allocated descendants. The view emits explicit refresh, address probe/add/cancel, close and generation-stamped connect intents; it never resolves hosts, writes favorites, joins sessions or fetches assets. The backend must validate the stable key and generation before connecting. Unknown name, map, player-count and latency remain blank. A successful address discovery does not imply admission. Verified Inspect metadata supplies the Players column as occupied roster slots / configured roster capacity; bots, spectators and dead players occupy slots, while discovery probes do not. Capacity is the initial roster plus the authority's configured transport admission limit (at most 64 total). Counts are a discovery snapshot, refreshed with the row. Name and ping remain unknown; resolution plus Inspect elapsed time is not an RTT measurement. Protocol 19 rejects older peers instead of interpreting the changed metadata layout.
 
 The Add Server field accepts bounded UTF-8 editing, selection, Backspace/Delete and cursor navigation. Ctrl+V reads Windows Unicode clipboard data only on an explicit nonrepeat paste with owned address focus; invalid/oversized/control-character text is rejected atomically. Enter emits one AddFavorite request from the address dialog; selecting a validated favorite and pressing Connect emits its current key/generation. Escape/Close cancels an open address dialog explicitly before closing the browser. Busy snapshots prevent refresh/tab/address edits and joining; address cancellation remains available. Up/Down and wheel scrolling reach all filtered rows without changing row identity.
 
@@ -57,7 +57,24 @@ invalidates the generation immediately; the worker observes cancellation and
 drops its socket. Refresh replaces LAN membership with fresh verified results;
 it does not save discoveries as favorites or admit gameplay players.
 
-This initial scope uses IPv4 and the OS-selected multicast interface. IPv6,
+Wildcard authorities and browser collection explicitly use the IPv4 interface
+selected by an ephemeral UDP socket's broadcast-route lookup. That socket binds
+to `0.0.0.0:0`, enables broadcast, connects to `255.255.255.255:9`, reads its
+local address and is dropped **without sending**. Unspecified/loopback results
+disable optional LAN discovery; direct addresses and Favorites remain available.
+An authority bound to a specific IPv4 address uses that interface instead.
+
+The previous implicit multicast-interface selection was observed on this PC
+delivering actual Rust authority hints from `127.0.0.1` despite a non-loopback
+Ethernet route being selected. This local observation does not establish what
+another machine received. Explicit `IP_MULTICAST_IF` and matching receiver
+membership correct the interface choice without changing system routes. The
+[Rust UDP connect API](https://doc.rust-lang.org/std/net/struct.UdpSocket.html#method.connect)
+sets the socket's remote address; the lookup makes no send call.
+[Microsoft documents `IP_MULTICAST_IF`](https://learn.microsoft.com/windows/win32/winsock/ip-multicast-2)
+as the multicast-interface selection option.
+
+This initial scope uses one OS-selected IPv4 LAN interface. IPv6,
 multi-interface enumeration, routed discovery and exact native tab sizing are
 not implemented. Multicast filtering, a VPN/default-route choice or a blocked
 port may hide a server; an empty list is not proof that no host exists. The UI
@@ -69,6 +86,9 @@ receivers seeing both server ports, socket release, rate limits and malformed
 hint rejection. Browser compilation/integration and rendered joining remain
 pending central verification; no completed cross-machine LAN or UI fidelity
 claim is made.
+An opt-in ignored test checks wildcard advertisement source and matching
+membership on an active non-loopback interface, using an isolated ephemeral
+destination port; the interface-selection change still awaits that runtime check.
 
 The existing browser engine proof has an optional LAN path: retain
 `CSR_TEST_BROWSER=localhost:<owned-port>` and set

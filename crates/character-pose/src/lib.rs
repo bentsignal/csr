@@ -158,7 +158,7 @@ impl PlayerAnimSet {
 
     /// Installed full-body death sequence, played once and held at its end.
     /// This is the model's low-violence animation, not a ragdoll simulation.
-    pub fn death_pose(&mut self, seconds: f32) -> Option<Vec<glam::Mat4>> {
+    pub fn death_pose(&self, seconds: f32) -> Option<Vec<glam::Mat4>> {
         let clip = self.cached_clip("@deathpose_lowviolence")?;
         if clip.delta || clip.looping || clip.frames.len() < 2 {
             return None;
@@ -447,7 +447,7 @@ mod death_tests {
             ],
             animated: vec![true],
         };
-        let mut anims = PlayerAnimSet {
+        let anims = PlayerAnimSet {
             bones: vec![bone],
             upper: vec![true],
             source: Arc::new(mdl::Model::default()),

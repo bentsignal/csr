@@ -108,6 +108,7 @@ mod tests {
         ready(&mut server, &mut remote);
         assert_eq!(server.session().world().players.len(), 1);
         let info = remote.server_info().unwrap();
+        assert_eq!((info.players, info.max_players), (1, 4));
         assert_eq!(info.tick_rate, 64);
         assert_eq!(info.snapshot_interval_ticks, 2);
         let id = remote.player().unwrap();
@@ -325,6 +326,48 @@ mod tests {
             changed.update(Duration::from_secs_f64(1. / 128.)).unwrap();
         }
         assert!(changed.session().world().players.is_empty());
+    }
+
+    #[test]
+    fn ready_roster_changes_refresh_metadata_without_discarding_the_owned_session() {
+        let mut server = server(128, 8);
+        let mut remote = RemoteSession::discover(
+            server.address(), "Local".into(), Team::CounterTerrorist,
+        ).unwrap();
+        ready(&mut server, &mut remote);
+        let owner = remote.player().unwrap();
+        assert_eq!(remote.server_info().unwrap().players, 1);
+        let mut other = Client::connect(
+            server.address(), "Other".into(), Team::Spectator, manifest(), map().catalog,
+        ).unwrap();
+        let dt = Duration::from_secs_f64(1. / 128.);
+        for _ in 0..256 {
+            other.update(dt).unwrap();
+            server.update(dt).unwrap();
+            remote.update(1. / 128.).unwrap();
+            if other.player().is_some() { break; }
+        }
+        assert!(other.player().is_some());
+        assert_eq!(server.info().players, 2);
+        for players in [2, 1] {
+            if players == 1 {
+                other.disconnect();
+                for _ in 0..256 {
+                    server.update(dt).unwrap();
+                    remote.update(1. / 128.).unwrap();
+                    if server.info().players == 1 { break; }
+                }
+                assert_eq!(server.info().players, 1);
+            }
+            server.inject_info(server.info());
+            server.update(Duration::from_secs_f64(1. / 128.)).unwrap();
+            remote.update(1. / 128.).unwrap();
+            assert_eq!(remote.status(), &Status::Ready);
+            assert_eq!(remote.player(), Some(owner));
+            assert_eq!(remote.server_info().unwrap().players, players);
+            assert!(remote.predicted_world().is_some());
+            assert!(remote.pose_history().is_some());
+        }
     }
 
     #[test]
@@ -795,9 +838,14 @@ impl RemoteSession {
         }
         if let Some(current) = client.server_info() {
             current.validate().map_err(Error::InvalidState)?;
-            if Some(current) != self.info.as_ref() {
+            if self.info.as_ref().is_none_or(|known| !known.same_session_policy(current)) {
                 return self.reprobe();
             }
+            // A joining player or another peer's departure changes roster metadata,
+            // not the verified content or simulation/render timing contract.
+            let known = self.info.as_mut().ok_or(Error::NotReady)?;
+            known.players = current.players;
+            known.max_players = current.max_players;
         }
         if let Some(ServerControl::Welcome {
             version,

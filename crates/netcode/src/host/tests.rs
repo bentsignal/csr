@@ -615,6 +615,8 @@ fn delayed_cancel_and_preparing_publications_cannot_replace_terminal_result() {
             local_address: config().bind,
             info: ServerInfo {
                 version: VERSION,
+                players: 0,
+                max_players: 4,
                 tick_rate: 128,
                 snapshot_interval_ticks: 4,
                 max_unlag_ticks: 128,

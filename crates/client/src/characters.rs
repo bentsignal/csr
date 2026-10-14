@@ -25,7 +25,7 @@ pub const CT_MODEL: &str = "models/player/custom_player/legacy/ctm_sas.mdl";
 
 pub struct TeamModel {
     pub asset: SkinnedAsset,
-    pub anims: PlayerAnimSet,
+    pub anims: Arc<PlayerAnimSet>,
     pub ragdoll: Option<Arc<ragdoll::Rig>>,
 }
 
@@ -81,9 +81,14 @@ pub fn load(
     exposure: f32,
 ) -> CharacterModels {
     let fs = &level.vfs;
-    let mut team = |path: &str| -> Option<TeamModel> {
+    let mut team = |path: &str, admitted: Option<&Arc<PlayerAnimSet>>| -> Option<TeamModel> {
         let model = Arc::new(load_model(fs, path)?);
-        let anims = PlayerAnimSet::load(&model, fs)?;
+        // These exact team paths are admitted by this same level's VFS. Share
+        // its prepared clips; only profile-free content uses the old fallback.
+        let anims = match admitted {
+            Some(animations) => animations.clone(),
+            None => Arc::new(PlayerAnimSet::load(&model, fs)?),
+        };
         let asset = skinning::build_asset(model, fs, meshes, materials, images, textures, shared, bindposes, exposure, true);
         let ragdoll = fs.read(path).and_then(|mdl_bytes| {
             let phy_bytes = fs.read(&path.replace(".mdl", ".phy"))?;
@@ -91,8 +96,8 @@ pub fn load(
         });
         Some(TeamModel { asset, anims, ragdoll })
     };
-    let terrorist = team(T_MODEL);
-    let counter_terrorist = team(CT_MODEL);
+    let terrorist = team(T_MODEL, level.character_profiles.terrorist.as_ref().map(|p| &p.animations));
+    let counter_terrorist = team(CT_MODEL, level.character_profiles.counter_terrorist.as_ref().map(|p| &p.animations));
     let mut weapons = HashMap::new();
     for def in &level.catalog.weapons {
         if def.world_model.is_empty() || weapons.contains_key(&def.class_name) {
@@ -197,7 +202,6 @@ pub fn sync(
 ) {
     muzzles.world.clear();
     let dt = time.delta_secs();
-    let now = time.elapsed_secs();
     let sim_now = world.0.time();
     let sun = models.sun;
 
@@ -314,8 +318,8 @@ pub fn sync(
         c.anim.move_cycle = render.animation.move_cycle;
         let CharacterModels { terrorist, counter_terrorist, weapons: weapon_assets, .. } = &mut *models;
         let anims = match p.team {
-            sim::Team::Terrorist => terrorist.as_mut().map(|m| &mut m.anims),
-            _ => counter_terrorist.as_mut().map(|m| &mut m.anims),
+            sim::Team::Terrorist => terrorist.as_ref().map(|m| &m.anims),
+            _ => counter_terrorist.as_ref().map(|m| &m.anims),
         };
         let Some(anims) = anims else { continue };
         let pose = anims.evaluate_prepared(&mut c.anim, &input, 0.);

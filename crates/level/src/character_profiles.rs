@@ -1,14 +1,13 @@
 //! Read character collision and animation through the selected runtime VFS.
 use crate::LoadError;
 use character_pose::{AnimInput, AnimState, PlayerAnimSet};
-use content::{ContentId, ContentKind, GameOrigin};
+use content::{ContentId, ContentKind};
 use sha1::{Digest, Sha1};
 use sim::model_pose::{Profile, Profiles};
 use std::sync::Arc;
 
 pub(crate) fn load(
     fs: &vfs::Vfs,
-    origin: &GameOrigin,
     previous: Option<[u8; 20]>,
 ) -> Result<(Arc<Profiles>, Option<[u8; 20]>), LoadError> {
     let mut digest = Sha1::new();
@@ -71,7 +70,7 @@ pub(crate) fn load(
         set.pose(&pose)
             .map_err(|e| LoadError::Io(format!("character profile {path}: {e}")))?;
         Ok(Some(Profile {
-            id: ContentId::new(origin.clone(), ContentKind::Character, name),
+            id: ContentId::csgo(ContentKind::Character, name),
             animations: Arc::new(animations),
             hitboxes: set,
         }))

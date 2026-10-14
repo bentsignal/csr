@@ -125,9 +125,9 @@ fn tracked_receipt_must_already_satisfy_existing_admission_limits() {
 }
 
 #[test]
-fn older_protocol_versions_cannot_admit_a_peer_to_model_hitboxes_v18() {
-    assert_eq!(VERSION, 18);
-    assert_eq!(PROTOCOL_ID, 0x4353_5257_0000_0012);
+fn older_protocol_versions_cannot_admit_a_peer_to_roster_counts_v19() {
+    assert_eq!(VERSION, 19);
+    assert_eq!(PROTOCOL_ID, 0x4353_5257_0000_0013);
     let content = ContentManifest {
         map_id: "csgo_map_test".into(),
         map_name: "test".into(),

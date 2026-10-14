@@ -19,6 +19,26 @@ const COLLECT_TIME: Duration = Duration::from_millis(2500);
 const MAX_PACKETS: usize = 256;
 pub const MAX_SERVERS: usize = 32;
 
+/// Select the OS's IPv4 broadcast route without transmitting a datagram.
+/// Explicit multicast interface selection avoids an implicit loopback route.
+fn default_ipv4_interface() -> io::Result<Ipv4Addr> {
+    let route = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0))?;
+    route.set_broadcast(true)?;
+    route.connect((Ipv4Addr::BROADCAST, 9))?;
+    let SocketAddr::V4(local) = route.local_addr()? else {
+        return Err(io::ErrorKind::AddrNotAvailable.into());
+    };
+    let ip = *local.ip();
+    if ip.is_unspecified() || ip.is_loopback() || ip.is_multicast() || ip == Ipv4Addr::BROADCAST {
+        return Err(io::Error::new(
+            io::ErrorKind::AddrNotAvailable,
+            "No non-loopback IPv4 LAN interface selected",
+        ));
+    }
+    // No send/send_to call: dropping this temporary socket ends the lookup.
+    Ok(ip)
+}
+
 fn packet(port: u16) -> [u8; PACKET_LEN] {
     let mut bytes = [0; PACKET_LEN];
     bytes[..8].copy_from_slice(MAGIC);
@@ -59,9 +79,12 @@ impl Announcer {
         socket.set_nonblocking(true)?;
         socket.set_multicast_ttl_v4(1)?;
         socket.set_multicast_loop_v4(true)?;
-        if !game.ip().is_unspecified() {
-            socket.set_multicast_if_v4(game.ip())?;
-        }
+        let interface = if game.ip().is_unspecified() {
+            default_ipv4_interface()?
+        } else {
+            *game.ip()
+        };
+        socket.set_multicast_if_v4(&interface)?;
         socket.bind(&SocketAddr::from((*game.ip(), 0)).into())?;
         Ok(Some(Self {
             socket: socket.into(),
@@ -102,7 +125,7 @@ pub fn collect(cancel: &AtomicBool) -> io::Result<Vec<SocketAddr>> {
     if cancel.load(Ordering::Acquire) {
         return Err(io::ErrorKind::Interrupted.into());
     }
-    let socket = listener(PORT, Ipv4Addr::UNSPECIFIED)?;
+    let socket = listener(PORT, default_ipv4_interface()?)?;
     let deadline = Instant::now() + COLLECT_TIME;
     let mut endpoints = BTreeSet::new();
     let mut packets = 0;
@@ -134,6 +157,41 @@ pub fn collect(cancel: &AtomicBool) -> io::Result<Vec<SocketAddr>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    #[ignore = "requires an active non-loopback IPv4 interface; run explicitly for LAN verification"]
+    fn wildcard_announcer_uses_the_selected_lan_interface() {
+        let interface = default_ipv4_interface().expect("active LAN route required");
+        let receiver = listener(0, interface).unwrap();
+        let port = receiver.local_addr().unwrap().port();
+        let announcer = Announcer::new("0.0.0.0:27018".parse().unwrap())
+            .unwrap()
+            .unwrap();
+        // The production socket/interface and packet, isolated from port42690.
+        announcer
+            .socket
+            .send_to(&announcer.bytes, SocketAddrV4::new(GROUP, port))
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            let mut bytes = [0; PACKET_LEN + 1];
+            match receiver.recv_from(&mut bytes) {
+                Ok((len, source)) => {
+                    assert_eq!(source.ip(), IpAddr::V4(interface));
+                    assert_eq!(
+                        hint(&bytes[..len], source),
+                        Some(SocketAddr::from((interface, 27018)))
+                    );
+                    break;
+                }
+                Err(error)
+                    if error.kind() == io::ErrorKind::WouldBlock && Instant::now() < deadline =>
+                {
+                    thread::sleep(Duration::from_millis(2))
+                }
+                Err(error) => panic!("selected LAN interface multicast receive: {error}"),
+            }
+        }
+    }
     #[test]
     fn hints_cannot_supply_an_address_or_metadata_and_require_exact_version_and_length() {
         let source: SocketAddr = "192.168.2.3:40000".parse().unwrap();
