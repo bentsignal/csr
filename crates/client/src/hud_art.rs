@@ -9,7 +9,7 @@ pub struct BuyIcon;
 #[derive(Component)]
 pub struct RadarDot(sim::PlayerId);
 #[derive(Resource, Default)]
-pub struct Radar { pub(crate) origin: Vec2, pub(crate) scale: f32 }
+pub struct Radar { pub(crate) origin: Vec2, pub(crate) scale: f32, material: Option<Handle<crate::radar_view::RadarMaterial>> }
 #[derive(Resource, Default)]
 pub struct Inventory { signature: String, root: Option<Entity> }
 
@@ -17,7 +17,7 @@ fn icon(commands: &mut Commands, handle: Handle<Image>, node: Node) -> Entity {
     commands.spawn((ImageNode::new(handle), node)).id()
 }
 
-pub fn setup(mut commands: Commands, art: Res<UiAssets>, level: Res<crate::LoadedLevel>, world: Res<SimWorld>, mut images: ResMut<Assets<Image>>) {
+pub fn setup(mut commands: Commands, art: Res<UiAssets>, level: Res<crate::LoadedLevel>, world: Res<SimWorld>, mut images: ResMut<Assets<Image>>, mut materials: ResMut<Assets<crate::radar_view::RadarMaterial>>) {
     if std::env::var_os("CSR_NO_HUD").is_some() {
         commands.init_resource::<Radar>();
         commands.init_resource::<Inventory>();
@@ -34,8 +34,8 @@ pub fn setup(mut commands: Commands, art: Res<UiAssets>, level: Res<crate::Loade
         let entity = icon(&mut commands, image, Node { position_type: PositionType::Absolute, left: px(160.0), top: px(291.0), width: px(28.0), height: px(28.0), ..default() });
         commands.entity(entity).insert(BuyIcon);
     }
-    // Full-map, north-up radar. Its scale and translation come from the map,
-    // including workshop maps; positions use the same interpolated render time.
+    // The unmasked overview is sampled into a fixed circular viewport. Image
+    // and ally markers use the same player-centered interpolated transform.
     let mut radar = Radar::default();
     if let Some(doc) = level.0.overview().and_then(|text| kv::parse(&text).ok()) {
         if let Some(root) = doc.iter().find_map(|(_, v)| v.as_block()) {
@@ -44,7 +44,12 @@ pub fn setup(mut commands: Commands, art: Res<UiAssets>, level: Res<crate::Loade
             radar.scale = number("scale");
             let material = root.str("material").unwrap_or("");
             if let Some(img) = level.0.vfs.read(&format!("resource/overviews/{}_radar.dds", level.0.name)).or_else(|| level.0.vfs.read(&format!("resource/{material}_radar.dds"))).and_then(|bytes| radar_image(&bytes)) {
-                icon(&mut commands, images.add(img), Node { position_type: PositionType::Absolute, left: px(22.0), top: px(24.0), width: px(250.0), height: px(250.0), ..default() });
+                let material = materials.add(crate::radar_view::RadarMaterial {
+                    overview: images.add(img),
+                    view: crate::radar_view::view(Vec2::splat(0.5), 0.5, false, 0.0),
+                });
+                commands.spawn((MaterialNode(material.clone()), Node { position_type: PositionType::Absolute, left: px(22.0), top: px(24.0), width: px(250.0), height: px(250.0), ..default() }));
+                radar.material = Some(material);
             } else { warn!("Radar image not available: {material}"); }
         }
     }
@@ -66,18 +71,25 @@ fn radar_image(bytes: &[u8]) -> Option<Image> {
     let (w, h) = (u32_at(16)? as usize, u32_at(12)? as usize);
     if w == 0 || h == 0 || w > 4096 || h > 4096 { return None; }
     let format = match bytes.get(84..88)? { b"DXT1" => vtf::Format::Dxt1, b"DXT3" => vtf::Format::Dxt3, b"DXT5" => vtf::Format::Dxt5, _ => return None };
-    let mut rgba = vtf::decode_rgba8(format, bytes.get(128..)?, w, h)?;
-    for y in 0..h { for x in 0..w {
-        let radius = ((x as f32 + 0.5) / w as f32 * 2.0 - 1.0).hypot((y as f32 + 0.5) / h as f32 * 2.0 - 1.0);
-        if radius > 1.0 { rgba[(y*w+x)*4+3] = 0; }
-    } }
+    let rgba = vtf::decode_rgba8(format, bytes.get(128..)?, w, h)?;
     Some(Image::new(Extent3d { width: w as u32, height: h as u32, depth_or_array_layers: 1 }, TextureDimension::D2, rgba, TextureFormat::Rgba8UnormSrgb, RenderAssetUsages::RENDER_WORLD))
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn update(mut commands: Commands, art: Res<UiAssets>, world: Res<SimWorld>, local: Res<LocalPlayer>, radar: Res<Radar>, poses: Res<crate::interpolation::RenderPoses>, time: Res<Time<Fixed>>, mut state: ResMut<Inventory>, mut armor: Query<&mut ImageNode, With<ArmorIcon>>, mut carts: Query<&mut Visibility, (With<BuyIcon>, Without<RadarDot>)>, mut dots: Query<(Entity, &RadarDot, &mut Node, &mut Visibility), Without<BuyIcon>>) {
+pub fn update(mut commands: Commands, art: Res<UiAssets>, world: Res<SimWorld>, local: Res<LocalPlayer>, radar: Res<Radar>, poses: Res<crate::interpolation::RenderPoses>, time: Res<Time<Fixed>>, settings: Res<crate::settings::Settings>, mut materials: ResMut<Assets<crate::radar_view::RadarMaterial>>, mut state: ResMut<Inventory>, mut armor: Query<&mut ImageNode, With<ArmorIcon>>, mut carts: Query<&mut Visibility, (With<BuyIcon>, Without<RadarDot>)>, mut dots: Query<(Entity, &RadarDot, &mut Node, &mut Visibility), Without<BuyIcon>>) {
     let w = &world.0;
     let Some(p) = w.player(local.view_target()) else { return };
+    let to_uv = |pos: glam::Vec3| Vec2::new(pos.x-radar.origin.x, radar.origin.y-pos.y) / (1024.0 * radar.scale);
+    let camera = poses.sample(p, time.overstep_fraction());
+    // Local mouse look is current even between simulation ticks, matching the
+    // camera's update_camera branch. Spectated players retain sampled angles.
+    let yaw = if local.spectating.is_some() && !local.noclip { camera.angles.y } else { local.yaw };
+    let map_view = crate::radar_view::view(to_uv(camera.origin), settings.radar_scale, settings.radar_rotate, yaw);
+    if radar.scale > 0.0 {
+        if let Some(mut material) = radar.material.as_ref().and_then(|handle| materials.get_mut(handle)) {
+            material.view = map_view;
+        }
+    }
     for mut image in &mut armor { if let Some(handle) = art.image(if p.helmet { "helmet" } else { "armor" }) { image.image = handle; } }
     for mut visibility in &mut carts { *visibility = if p.alive && p.in_buy_zone && w.competitive() && w.round.can_buy(&w.rules, w.time()) { Visibility::Inherited } else { Visibility::Hidden }; }
     let present: std::collections::HashSet<_> = dots.iter().map(|(_, dot, _, _)| dot.0).collect();
@@ -93,9 +105,9 @@ pub fn update(mut commands: Commands, art: Res<UiAssets>, world: Res<SimWorld>, 
         let Some(teammate) = w.player(dot.0).filter(|t| t.team == p.team && t.alive) else { continue };
         if radar.scale <= 0.0 { continue; }
         let pos = poses.sample(teammate, time.overstep_fraction()).origin;
-        let uv = Vec2::new(pos.x-radar.origin.x, radar.origin.y-pos.y) / (1024.0 * radar.scale);
-        if uv.distance(Vec2::splat(0.5)) > 0.5 { continue; }
-        node.left = px(22.0 + uv.x * 250.0 - 5.0); node.top = px(24.0 + uv.y * 250.0 - 5.0);
+        let offset = crate::radar_view::marker_offset(map_view, to_uv(pos));
+        if offset.length() > 120.0 { continue; }
+        node.left = px(147.0 + offset.x - 5.0); node.top = px(149.0 + offset.y - 5.0);
         *visibility = Visibility::Inherited;
     }
     let signature = format!("{:?}|{}|{}|{:?}|{:?}", p.id, p.alive, p.active, p.weapons.iter().map(|wp| &wp.def.class_name).collect::<Vec<_>>(), w.players.iter().map(|p| (p.id, p.alive)).collect::<Vec<_>>());

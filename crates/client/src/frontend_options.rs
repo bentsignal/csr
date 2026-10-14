@@ -13,6 +13,10 @@ enum Kind {
         choices: Vec<(String, f64)>,
         selected: usize,
     },
+    Dropdown {
+        choices: Vec<(String, f64)>,
+        selected: Option<usize>,
+    },
 }
 struct Widget {
     convar: String,
@@ -55,7 +59,7 @@ impl Scene {
                 let block = value.as_block()?;
                 let convar = block.str("convar")?;
                 let kind = match (block.str("type")?, convar) {
-                    ("slider", "volume" | "sensitivity") => {
+                    ("slider", "volume" | "sensitivity" | "cl_radar_scale") => {
                         let min = f64::from(block.f32("minvalue")?);
                         let max = f64::from(block.f32("maxvalue")?);
                         if !min.is_finite() || !max.is_finite() || min >= max {
@@ -63,9 +67,16 @@ impl Scene {
                         }
                         Kind::Slider { min, max }
                     }
-                    ("choice", "m_pitch") => {
+                    (
+                        kind @ ("choice" | "dropdown"),
+                        "m_pitch" | "cl_radar_rotate" | "cl_crosshaircolor",
+                    ) => {
                         let choices = block
-                            .block("choices")?
+                            .block(if kind == "dropdown" {
+                                "dropdown"
+                            } else {
+                                "choices"
+                            })?
                             .iter()
                             .map(|(label, value)| {
                                 let value = value.as_str()?.parse::<f64>().ok()?;
@@ -77,9 +88,16 @@ impl Scene {
                         if choices.len() < 2 || choices.len() > 32 {
                             return None;
                         }
-                        Kind::Choice {
-                            choices,
-                            selected: 0,
+                        if kind == "dropdown" {
+                            Kind::Dropdown {
+                                choices,
+                                selected: None,
+                            }
+                        } else {
+                            Kind::Choice {
+                                choices,
+                                selected: 0,
+                            }
                         }
                     }
                     _ => return None,
@@ -107,13 +125,14 @@ impl Scene {
     pub fn count(&self) -> u32 {
         self.widgets.len() as u32
     }
+
     pub fn bounds(&self, name: &str) -> Option<(f64, f64)> {
         self.widgets
             .iter()
             .find(|slider| slider.convar == name)
             .and_then(|widget| match widget.kind {
                 Kind::Slider { min, max } => Some((min, max)),
-                Kind::Choice { .. } => None,
+                Kind::Choice { .. } | Kind::Dropdown { .. } => None,
             })
     }
 
@@ -163,6 +182,17 @@ impl Scene {
                     vec![choices[*selected].0.clone().into()],
                 );
                 choices[*selected].1
+            }
+            Kind::Dropdown { choices, selected } => {
+                // The authored dropdown reports a list index, not a convar
+                // value. Preserve arbitrary ordering/noncontiguous schema IDs.
+                if *value < 0.0 || value.fract() != 0.0 || *value >= choices.len() as f64 {
+                    return None;
+                }
+                let index = *value as usize;
+                *selected = Some(index);
+                set_dropdown_caption(&control, &choices[index].0, calls);
+                choices[index].1
             }
         };
         self.focused_widget = Some(*index as usize);
@@ -220,9 +250,30 @@ impl Scene {
                 Kind::Choice { choices, selected } => {
                     *selected = choices
                         .iter()
-                        .position(|(_, value)| (*value < 0.0) == settings.invert_y)
+                        .position(|(_, value)| {
+                            settings
+                                .convar_number(&widget.convar)
+                                .is_some_and(|current| (current - value).abs() < 1e-7)
+                        })
                         .unwrap_or(0);
                     (1u32, choices[*selected].0.clone(), Value::Undefined)
+                }
+                Kind::Dropdown { choices, selected } => {
+                    *selected = choices.iter().position(|(_, value)| {
+                        settings
+                            .convar_number(&widget.convar)
+                            .is_some_and(|current| (current - value).abs() < 1e-7)
+                    });
+                    (
+                        2u32,
+                        widget.label.clone(),
+                        Value::List(
+                            choices
+                                .iter()
+                                .map(|(label, _)| label.clone().into())
+                                .collect(),
+                        ),
+                    )
                 }
             };
             calls.call(
@@ -271,23 +322,52 @@ impl Scene {
             let control = format!("{path}.TopPanel.Panel.arraySlots.{index}.Widget");
             match &mut widget.kind {
                 Kind::Slider { .. } => {
-                    let current = match widget.convar.as_str() {
-                        "volume" => settings.volume,
-                        "sensitivity" => settings.sensitivity,
-                        _ => continue,
+                    let Some(current) = settings.convar_number(&widget.convar) else {
+                        continue;
                     };
-                    calls.call(&control, "SetValueScaled", vec![(current as f64).into()]);
+                    calls.call(&control, "SetValueScaled", vec![current.into()]);
                 }
                 Kind::Choice { choices, selected } => {
                     *selected = choices
                         .iter()
-                        .position(|(_, value)| (*value < 0.0) == settings.invert_y)
+                        .position(|(_, value)| {
+                            settings
+                                .convar_number(&widget.convar)
+                                .is_some_and(|current| (current - value).abs() < 1e-7)
+                        })
                         .unwrap_or(0);
                     calls.call(
                         &control,
                         "SetText",
                         vec![choices[*selected].0.clone().into()],
                     );
+                }
+                Kind::Dropdown { choices, selected } => {
+                    let (current, caption) = dropdown_presentation(
+                        &widget.convar,
+                        choices,
+                        settings.convar_number(&widget.convar),
+                    );
+                    *selected = current;
+                    let native_index = selected.map_or(-1.0, |index| index as f64);
+                    calls.call(
+                        &control,
+                        "SetUpDropDownForOptions",
+                        vec![
+                            Value::List(
+                                choices
+                                    .iter()
+                                    .map(|(label, _)| label.clone().into())
+                                    .collect(),
+                            ),
+                            native_index.into(),
+                        ],
+                    );
+                    // An older saved value need not be offered by this schema.
+                    // Preserve it, show it truthfully and leave no list choice
+                    // selected until the player explicitly picks one.
+                    calls.set(&control, "m_nSelectedIndex", native_index.into());
+                    set_dropdown_caption(&control, &caption, calls);
                 }
             }
             calls.set(
@@ -300,9 +380,130 @@ impl Scene {
     }
 }
 
+fn set_dropdown_caption(control: &str, caption: &str, calls: &mut Calls) {
+    // Cached authored buttons retain their initial `buttonText` binding.
+    // Update that binding and its existing TextField together, as numeric
+    // entry does, keeping the same display object across cached selections.
+    let button = format!("{control}.Catagory.ButtonText");
+    calls.set(&button, "buttonText", caption.into());
+    calls.set(&format!("{button}.Text"), "text", caption.into());
+}
+
+fn dropdown_presentation(
+    convar: &str,
+    choices: &[(String, f64)],
+    current: Option<f64>,
+) -> (Option<usize>, String) {
+    let index = choices
+        .iter()
+        .position(|(_, value)| current.is_some_and(|current| (current - value).abs() < 1e-7));
+    let caption = index
+        .map(|index| choices[index].0.clone())
+        .unwrap_or_else(|| match (convar, current) {
+            (_, None) => "Unavailable".into(),
+            ("cl_crosshaircolor", Some(0.0)) => "Red".into(),
+            ("cl_crosshaircolor", Some(1.0)) => "Green".into(),
+            ("cl_crosshaircolor", Some(2.0)) => "Yellow".into(),
+            ("cl_crosshaircolor", Some(3.0)) => "Blue".into(),
+            ("cl_crosshaircolor", Some(4.0)) => "Light Blue".into(),
+            (_, Some(_)) => "Custom".into(),
+        });
+    (index, caption)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn unlisted_saved_color_is_preserved_until_an_explicit_schema_selection() {
+        let choices = vec![("Green".into(), 1.0), ("Blue".into(), 3.0)];
+        let mut settings = Settings::default();
+        settings.cross_color = 4; // Source ID0 is absent from this schema.
+        assert_eq!(
+            dropdown_presentation(
+                "cl_crosshaircolor",
+                &choices,
+                settings.convar_number("cl_crosshaircolor")
+            ),
+            (None, "Red".into())
+        );
+        assert_eq!(
+            dropdown_presentation("cl_crosshaircolor", &choices, Some(13.0)),
+            (None, "Custom".into())
+        );
+        assert_eq!(
+            dropdown_presentation("cl_crosshaircolor", &choices, None),
+            (None, "Unavailable".into())
+        );
+        let mut scene = Scene {
+            layout_initialized: true,
+            widgets: vec![Widget {
+                convar: "cl_crosshaircolor".into(),
+                label: "Color".into(),
+                tooltip: String::new(),
+                priority: 0,
+                kind: Kind::Dropdown {
+                    choices,
+                    selected: None,
+                },
+            }],
+            ..Default::default()
+        };
+        let mut calls = Calls::default();
+        scene.refresh_values("_level21", &settings, &mut calls);
+        assert_eq!(settings.cross_color, 4);
+        assert!(
+            matches!(&scene.widgets[0].kind, Kind::Dropdown { selected: None, choices } if choices.len() == 2)
+        );
+        assert!(
+            scene
+                .value(&0u32.into(), &(-1.0).into(), "_level21", &mut calls)
+                .is_none()
+        );
+        let (convar, value) = scene
+            .value(&0u32.into(), &0u32.into(), "_level21", &mut calls)
+            .unwrap();
+        assert!(settings.set_convar_number(&convar, value.num()));
+        assert_eq!(settings.convar_number("cl_crosshaircolor"), Some(1.0));
+    }
+    #[test]
+    fn native_dropdown_maps_schema_ids_and_rejects_malformed_selections() {
+        let block = kv::parse(
+            r#"
+            color { type dropdown convar cl_crosshaircolor dropdown { Blue 3 Green 1 Yellow 2 } }
+            unsupported { type dropdown convar pretend dropdown { No 0 Yes 1 } }
+        "#,
+        )
+        .unwrap();
+        let mut scene = Scene::from_block(&block, 2, &Localization::default());
+        let mut calls = Calls::default();
+        scene.show("_level21", &Settings::default(), &mut calls);
+        scene.layout_ready("_level21", &Settings::default(), &mut calls);
+        assert_eq!(scene.count(), 1);
+        let changed = scene
+            .value(&0u32.into(), &0u32.into(), "_level21", &mut calls)
+            .unwrap();
+        assert_eq!(changed.0, "cl_crosshaircolor");
+        assert_eq!(changed.1.num(), 3.0); // First list item carries ID3, not0.
+        for (index, selection) in [
+            (1.0, 0.0),
+            (-1.0, 0.0),
+            (0.5, 0.0),
+            (f64::NAN, 0.0),
+            (0.0, -1.0),
+            (0.0, 1.5),
+            (0.0, f64::NAN),
+            (0.0, f64::INFINITY),
+            (0.0, 3.0),
+        ] {
+            assert!(
+                scene
+                    .value(&index.into(), &selection.into(), "_level21", &mut calls)
+                    .is_none()
+            );
+        }
+    }
+
     fn scene() -> Scene {
         let block = kv::parse(
             r#"reverse { type choice convar m_pitch choices { Off 0.022 On -0.022 } priority 1 }

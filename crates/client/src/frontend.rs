@@ -90,13 +90,7 @@ fn apply_setting(settings: &mut Settings, name: &str, value: &Value) -> bool {
     let Some(number) = number.filter(|number| number.is_finite()) else {
         return false;
     };
-    match name {
-        "volume" => settings.volume = number.clamp(0.0, 1.0) as f32,
-        "sensitivity" => settings.sensitivity = number.clamp(0.1, 10.0) as f32,
-        "m_pitch" => settings.invert_y = number < 0.0,
-        _ => return false,
-    }
-    true
+    settings.set_convar_number(name, number)
 }
 
 fn keyvalues(block: &kv::Block, localization: &crate::localize::Localization) -> Value {
@@ -526,6 +520,16 @@ impl Engine for Bridge {
                 return Some(value);
             }
         }
+        // The original movie's native widget API is shared by dropdowns,
+        // choices and sliders. Cached/hidden pages cannot publish changes.
+        if object == "OptionsMenu"
+            && matches!(method, "OnUpdateValue" | "OnHighlightWidget" | "OnRefreshValues" | "OnLayoutComplete")
+            && !(data.pause_surface.options_requested()
+                && (matches!(data.state, AppState::Menu | AppState::Browser)
+                    || (data.state == AppState::Match && data.menu_open)))
+        {
+            return None;
+        }
         match (object, method) {
             ("PartyList", "GetPartySessionSetting") => self.lobby.lock().unwrap().party_setting(&arg(0)),
             ("PartyList", "GetPartySystemSetting") if arg(0) == "xuidHost" && self.lobby.lock().unwrap().active() => Some("0".into()),
@@ -619,20 +623,11 @@ impl Engine for Bridge {
                 None
             }
             ("GameInterface", "GetConvarNumber") => Some(Value::Number(match arg(0).as_str() {
-                "volume" => data.settings.volume as f64,
-                "sensitivity" => data.settings.sensitivity as f64,
-                "m_pitch" => {
-                    if data.settings.invert_y {
-                        -0.022
-                    } else {
-                        0.022
-                    }
-                }
                 "safezonex" | "safezoney" => 1.0,
                 "hud_scaling" => 0.85,
                 "game_type" => 0.0,
                 "game_mode" => 1.0,
-                _ => return None,
+                name => data.settings.convar_number(name)?,
             })),
             ("MyPersona", "GetXuid") => Some("0".into()),
             ("MyPersona", "GetXpPerLevel") => Some(5000.0.into()),

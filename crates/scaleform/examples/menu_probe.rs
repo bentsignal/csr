@@ -254,6 +254,25 @@ fn pointer_inputs(action: &str, args: &[Value]) -> anyhow::Result<Vec<Input>> {
     })
 }
 
+fn widget_input(path: &str, function: &str, args: Vec<Value>) -> anyhow::Result<Input> {
+    if function == "@set" {
+        let [Value::String(property), value] = args.as_slice() else {
+            anyhow::bail!("property updates require [property,value]");
+        };
+        Ok(Input::Set {
+            path: path.into(),
+            property: property.clone(),
+            value: value.clone(),
+        })
+    } else {
+        Ok(Input::Call {
+            path: path.into(),
+            function: function.into(),
+            args,
+        })
+    }
+}
+
 fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter("warn,scaleform=info,menu_probe=info,avm_warning=info")
@@ -346,16 +365,27 @@ fn main() -> anyhow::Result<()> {
             let parts: Vec<_> = command.split('|').collect();
             anyhow::ensure!(parts.len() >= 2, "calls: path|function|arg,arg;...");
             let args = parse_args(parts.get(2).copied().unwrap_or_default())?;
-            if parts[0].starts_with('@') {
+            if parts[0] == "@batch" {
+                // Production queues widget init/update/show together. Keeping
+                // those calls adjacent exposes load-order bugs hidden by the
+                // normal three-second observation after each probe command.
+                for call in args {
+                    let Value::List(call) = call else {
+                        anyhow::bail!("batch calls must be [path,function,args] arrays");
+                    };
+                    let [Value::String(path), Value::String(function), Value::List(args)] =
+                        call.as_slice()
+                    else {
+                        anyhow::bail!("batch calls must be [path,function,args] arrays");
+                    };
+                    menu.send(widget_input(path, function, args.clone())?);
+                }
+            } else if parts[0].starts_with('@') {
                 for input in pointer_inputs(parts[0], &args)? {
                     menu.send(input);
                 }
             } else {
-                menu.send(Input::Call {
-                    path: parts[0].into(),
-                    function: parts[1].into(),
-                    args,
-                });
+                menu.send(widget_input(parts[0], parts[1], args)?);
             }
             settle(&menu, &mut latest, Duration::from_secs(3))?;
             save(

@@ -77,6 +77,8 @@ pub struct Settings {
     pub cross_gap: f32,
     pub cross_thickness: f32,
     pub cross_dot: bool,
+    pub radar_scale: f32,
+    pub radar_rotate: bool,
     pub binds: [KeyCode; 13],
 }
 pub const RESOLUTIONS: [(u32, u32); 4] = [(1280, 720), (1600, 900), (1920, 1080), (2560, 1440)];
@@ -99,6 +101,9 @@ impl Default for Settings {
             cross_gap: 4.0,
             cross_thickness: 2.0,
             cross_dot: false,
+            // Installed game_options sliderhome and ordinary rotating radar.
+            radar_scale: 0.5,
+            radar_rotate: true,
             binds: [
                 KeyCode::KeyW,
                 KeyCode::KeyS,
@@ -173,6 +178,10 @@ impl Settings {
                         s.cross_color = (v as usize).min(4);
                     }
                 }
+                "radar_scale" => {
+                    if let Some(v) = v { s.radar_scale = v.clamp(0.4, 1.0); }
+                }
+                "radar_rotate" => s.radar_rotate = value == "true",
                 "resolution" => {
                     if let Some(v) = v {
                         s.resolution = (v as usize).min(3);
@@ -220,6 +229,7 @@ impl Settings {
             self.cross_dot
         );
         text.push_str(&format!("menu_blur={}\n", self.menu_blur));
+        text.push_str(&format!("radar_scale={}\nradar_rotate={}\n", self.radar_scale, self.radar_rotate));
         for (i, key) in self.binds.iter().enumerate() {
             text.push_str(&format!("bind{i}={key:?}\n"));
         }
@@ -245,11 +255,40 @@ impl Settings {
     pub fn crosshair_color(&self) -> Color {
         [
             Color::srgb(0.2, 1.0, 0.2),
-            Color::srgb(0.2, 0.85, 1.0),
+            Color::srgb(0.2, 0.2, 1.0),
             Color::srgb(1.0, 0.85, 0.2),
-            Color::WHITE,
-            Color::srgb(1.0, 0.2, 0.7),
+            Color::srgb(0.2, 1.0, 1.0),
+            Color::srgb(1.0, 0.2, 0.2),
         ][self.cross_color.min(4)]
+    }
+
+    /// Preserve the saved palette index while presenting Source's numeric IDs.
+    pub(crate) fn convar_number(&self, name: &str) -> Option<f64> {
+        Some(match name {
+            "volume" => self.volume as f64,
+            "sensitivity" => self.sensitivity as f64,
+            "m_pitch" => if self.invert_y { -0.022 } else { 0.022 },
+            "cl_crosshaircolor" => [1., 3., 2., 4., 0.][self.cross_color.min(4)],
+            "cl_radar_scale" => self.radar_scale as f64,
+            "cl_radar_rotate" => u8::from(self.radar_rotate) as f64,
+            _ => return None,
+        })
+    }
+
+    pub(crate) fn set_convar_number(&mut self, name: &str, number: f64) -> bool {
+        if !number.is_finite() { return false; }
+        match name {
+            "volume" => self.volume = number.clamp(0.0, 1.0) as f32,
+            "sensitivity" => self.sensitivity = number.clamp(0.1, 10.0) as f32,
+            "m_pitch" => self.invert_y = number < 0.0,
+            "cl_crosshaircolor" if number.fract() == 0.0 && (0.0..=4.0).contains(&number) => {
+                self.cross_color = [4, 0, 2, 1, 3][number as usize];
+            }
+            "cl_radar_scale" => self.radar_scale = number.clamp(0.4, 1.0) as f32,
+            "cl_radar_rotate" if number == 0.0 || number == 1.0 => self.radar_rotate = number == 1.0,
+            _ => return false,
+        }
+        true
     }
 }
 pub fn key_name(key: KeyCode) -> String {
@@ -269,8 +308,27 @@ mod tests {
         s.volume = 0.7;
         s.cross_dot = true;
         s.menu_blur = false;
+        s.radar_scale = 0.8;
+        s.radar_rotate = false;
         assert_eq!(s.binds[1], KeyCode::KeyW);
         assert_eq!(Settings::parse(&s.encode()), s);
+    }
+    #[test]
+    fn classic_color_ids_and_radar_choices_are_independent_of_mouse_inversion() {
+        let mut s = Settings::default();
+        s.invert_y = true;
+        for color in 0..=4 {
+            assert!(s.set_convar_number("cl_crosshaircolor", color as f64));
+            assert_eq!(s.convar_number("cl_crosshaircolor"), Some(color as f64));
+        }
+        assert!(!s.set_convar_number("cl_crosshaircolor", 1.5));
+        assert!(!s.set_convar_number("cl_radar_rotate", 2.0));
+        assert!(s.set_convar_number("cl_radar_rotate", 0.0));
+        assert_eq!(s.convar_number("cl_radar_rotate"), Some(0.0));
+        assert!(s.invert_y);
+        assert!(s.set_convar_number("cl_radar_scale", 2.0));
+        assert_eq!(s.radar_scale, 1.0);
+        assert!(!s.set_convar_number("cl_radar_scale", f64::NAN));
     }
     #[test]
     fn invalid_config_is_bounded() {

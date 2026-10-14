@@ -1261,7 +1261,7 @@ pub fn draw(
                 &mut commands,
                 body,
                 "Colour",
-                ["Green", "Cyan", "Yellow", "White", "Pink"][settings.cross_color].into(),
+                ["Green", "Blue", "Yellow", "Light Blue", "Red"][settings.cross_color].into(),
                 10,
                 1.0,
             );
