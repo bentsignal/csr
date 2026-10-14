@@ -396,7 +396,8 @@ const WORKER_TRACE_LIMIT: usize = 65_536;
 /// A progress opportunity follows every finite input batch, including batches
 /// whose producer keeps the queue nonempty. Barriers are never reordered.
 /// After elapsed expiry, at most one existing FIFO boundary completes before
-/// progress: a non-motion event, with its preceding motion if necessary. This
+/// progress: a non-motion, non-passive event, with its preceding motion and
+/// passive visibility samples if necessary. This
 /// prevents one slow motion from repeatedly deferring a queued click/key while
 /// keeping pure-motion turns unchanged. All calls still count toward the cap.
 /// The elapsed budget cannot preempt a slow movie action or GPU readback.
