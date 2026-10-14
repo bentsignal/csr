@@ -2,9 +2,9 @@
 use serde::{Deserialize, Serialize};
 use sim::{GameEvent, PlayerId, Snapshot, Team, TickInput};
 
-// v18 replicates tick-owned character animation clocks for model hit registration.
-pub const VERSION: u32 = 18;
-pub const PROTOCOL_ID: u64 = 0x4353_5257_0000_0012;
+// v19 includes authoritative roster counts in inspected server metadata.
+pub const VERSION: u32 = 19;
+pub const PROTOCOL_ID: u64 = 0x4353_5257_0000_0013;
 pub const CONTROL: u8 = 0;
 pub const INPUT: u8 = 1;
 pub const SNAPSHOT: u8 = 2;
@@ -227,6 +227,10 @@ pub enum ServerControl {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ServerInfo {
     pub version: u32,
+    /// Occupied roster slots, including bots, spectators and dead players.
+    pub players: u16,
+    /// Initial roster plus this authority's configured transport admission slots.
+    pub max_players: u16,
     pub tick_rate: u32,
     pub snapshot_interval_ticks: u32,
     pub max_unlag_ticks: u32,
@@ -234,8 +238,21 @@ pub struct ServerInfo {
     pub content: ContentManifest,
 }
 impl ServerInfo {
+    /// Admission/render timing compatibility excludes changing roster metadata.
+    pub(crate) fn same_session_policy(&self, other: &Self) -> bool {
+        self.version == other.version
+            && self.tick_rate == other.tick_rate
+            && self.snapshot_interval_ticks == other.snapshot_interval_ticks
+            && self.max_unlag_ticks == other.max_unlag_ticks
+            && self.interpolation_allowance_ticks == other.interpolation_allowance_ticks
+            && self.content == other.content
+    }
+
     pub fn validate(&self) -> Result<(), String> {
         if self.version != VERSION
+            || self.max_players == 0
+            || self.max_players > 64
+            || self.players > self.max_players
             || !sim::TICK_RATE_RANGE.contains(&self.tick_rate)
             || self.snapshot_interval_ticks == 0
             || self.snapshot_interval_ticks > self.tick_rate

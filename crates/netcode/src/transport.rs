@@ -29,6 +29,8 @@ pub struct Server {
     connection: RenetServer,
     transport: NetcodeServerTransport,
     session: Session,
+    /// Roster capacity is fixed at bind; Inspect connections do not occupy it.
+    max_players: u16,
     clock: TickClock,
     snapshot_every: u64,
     pending_hellos: std::collections::HashMap<u64, Duration>,
@@ -74,11 +76,13 @@ impl Server {
         )
         .map_err(|e| e.to_string())?;
         let rate = session.world().tick_rate;
+        let max_players = (session.world().players.len() + max_clients) as u16;
         Ok(Self {
             lan,
             connection: RenetServer::new(channels()),
             transport,
             session,
+            max_players,
             clock: TickClock::new(rate)?,
             snapshot_every: (rate / 32).max(1) as u64,
             pending_hellos: Default::default(),
@@ -116,6 +120,8 @@ impl Server {
     pub(crate) fn info(&self) -> ServerInfo {
         ServerInfo {
             version: VERSION,
+            players: self.session.world().players.len() as u16,
+            max_players: self.max_players,
             tick_rate: self.session.world().tick_rate,
             snapshot_interval_ticks: self.snapshot_every as u32,
             max_unlag_ticks: self.session.lag_policy().max_history_ticks,
@@ -833,6 +839,7 @@ mod tests {
         let info = probe.server_info().unwrap();
         info.validate().unwrap();
         assert_eq!(info.content, manifest());
+        assert_eq!((info.players, info.max_players), (0, 4));
         assert_eq!(info.tick_rate, 128);
         assert_eq!(info.snapshot_interval_ticks, 4);
         assert_eq!(info.interpolation_allowance_ticks, 8);
@@ -847,6 +854,81 @@ mod tests {
         }
         assert!(server.pending_hellos.is_empty());
     }
+    #[test]
+    fn inspected_roster_counts_include_initial_occupants_and_follow_join_leave() {
+        let mut world = World::new(Arc::new(collision::CollisionWorld::new()));
+        let bot = world.add_bot("Bot", Team::CounterTerrorist);
+        world.player_mut(bot).unwrap().health = 0;
+        world.add_player("Observer", Team::Spectator);
+        let session = Session::new(world, manifest()).unwrap();
+        let mut server = Server::bind("127.0.0.1:0".parse().unwrap(), session, 2).unwrap();
+        let initial = server.info();
+        assert_eq!((initial.players, initial.max_players), (2, 4));
+        initial.validate().unwrap();
+        assert_eq!(
+            decode::<ServerInfo>(&encode(&initial).unwrap()).unwrap(),
+            initial
+        );
+
+        let reply = server.session.join(
+            7,
+            ClientControl::Hello {
+                version: VERSION,
+                name: "Player".into(),
+                team: Team::Terrorist,
+                content: manifest(),
+            },
+        );
+        assert!(matches!(reply, ServerControl::Welcome { .. }));
+        assert_eq!((server.info().players, server.info().max_players), (3, 4));
+        server.session.leave(7);
+        assert_eq!((server.info().players, server.info().max_players), (2, 4));
+        server.session.leave(7);
+        assert_eq!(server.info(), initial, "repeated disconnect changed the roster");
+
+        for (players, max_players, valid) in [
+            (0, 1, true), (64, 64, true), (0, 0, false), (0, 65, false), (5, 4, false),
+        ] {
+            let mut info = initial.clone();
+            info.players = players;
+            info.max_players = max_players;
+            assert_eq!(info.validate().is_ok(), valid, "{players}/{max_players}");
+        }
+        let mut old = initial;
+        old.version = 18;
+        assert!(old.validate().is_err());
+    }
+
+    #[test]
+    fn old_inspect_version_is_rejected_without_admitting_a_player() {
+        let session = Session::new(
+            World::new(Arc::new(collision::CollisionWorld::new())),
+            manifest(),
+        ).unwrap();
+        let mut server = Server::bind("127.0.0.1:0".parse().unwrap(), session, 1).unwrap();
+        // Use the current transport envelope to exercise the application-version gate.
+        // Actual v18 transports also have a distinct protocol ID and cannot connect.
+        let mut probe = Client::open(
+            server.address(),
+            ClientControl::Inspect { version: 18 },
+            Arc::new(weapons::Catalog::default()),
+            None,
+        ).unwrap();
+        let dt = Duration::from_secs_f64(1. / 128.);
+        let mut rejected = false;
+        for _ in 0..256 {
+            if let Err(error) = probe.update(dt) {
+                assert_eq!(error, "incompatible protocol version");
+                rejected = true;
+                break;
+            }
+            server.update(dt).unwrap();
+        }
+        assert!(rejected, "old Inspect did not receive a rejection");
+        assert!(probe.server_info().is_none());
+        assert!(server.session().world().players.is_empty());
+    }
+
     #[test]
     fn malformed_fragment_indices_and_inconsistent_counts_disconnect_without_panicking() {
         let mut client = RenetClient::new(channels());
