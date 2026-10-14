@@ -11,7 +11,7 @@ use glam::{EulerRot, Mat4, Quat, Vec3, Vec4};
 use std::io;
 
 pub const BONE_STRIDE: usize = 216;
-pub const HITBOX_STRIDE: usize = 68;
+pub use crate::hitbox::HITBOX_STRIDE;
 
 #[derive(Clone, Debug)]
 pub struct Bone {
@@ -28,17 +28,8 @@ pub struct Bone {
     pub flags: i32,
 }
 
-#[derive(Clone, Debug)]
-pub struct Hitbox {
-    pub bone: i32,
-    /// Hit group (1 head, 2 chest, 3 stomach, 4/5 arms, 6/7 legs).
-    pub group: i32,
-    pub min: Vec3,
-    pub max: Vec3,
-    /// Capsule radius (CS:GO hitboxes); 0 for boxes.
-    pub radius: f32,
-    pub name: String,
-}
+/// Compatibility export; hitbox parsing and query geometry live in [`crate::hitbox`].
+pub use crate::hitbox::Hitbox;
 
 /// Source `RadianEuler` → quaternion (rotation order Z · Y · X).
 pub fn euler_to_quat(e: Vec3) -> Quat {
@@ -80,31 +71,6 @@ pub(crate) fn read_bones(r: &R, count: usize, index: usize) -> io::Result<Vec<Bo
             rot_scale: r.vec3(o + 84)?,
             pose_to_bone: matrix3x4(r, o + 96)?,
             flags: r.i32(o + 160)?,
-        });
-    }
-    Ok(out)
-}
-
-pub(crate) fn read_hitboxes(r: &R, sets: usize, set_index: usize) -> io::Result<Vec<Hitbox>> {
-    if sets == 0 {
-        return Ok(Vec::new());
-    }
-    // First hitbox set.
-    let set = set_index;
-    let count = r.i32(set + 4)?.max(0) as usize;
-    let first = set + r.i32(set + 8)?.max(0) as usize;
-    let mut out = Vec::with_capacity(count);
-    for i in 0..count {
-        let o = first + i * HITBOX_STRIDE;
-        let name_ofs = r.i32(o + 32)?;
-        let name = if name_ofs > 0 { r.cstr(o + name_ofs as usize)? } else { String::new() };
-        out.push(Hitbox {
-            bone: r.i32(o)?,
-            group: r.i32(o + 4)?,
-            min: r.vec3(o + 8)?,
-            max: r.vec3(o + 20)?,
-            radius: r.f32(o + 48)?.max(0.0),
-            name,
         });
     }
     Ok(out)
