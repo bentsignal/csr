@@ -57,7 +57,24 @@ invalidates the generation immediately; the worker observes cancellation and
 drops its socket. Refresh replaces LAN membership with fresh verified results;
 it does not save discoveries as favorites or admit gameplay players.
 
-This initial scope uses IPv4 and the OS-selected multicast interface. IPv6,
+Wildcard authorities and browser collection explicitly use the IPv4 interface
+selected by an ephemeral UDP socket's broadcast-route lookup. That socket binds
+to `0.0.0.0:0`, enables broadcast, connects to `255.255.255.255:9`, reads its
+local address and is dropped **without sending**. Unspecified/loopback results
+disable optional LAN discovery; direct addresses and Favorites remain available.
+An authority bound to a specific IPv4 address uses that interface instead.
+
+The previous implicit multicast-interface selection was observed on this PC
+delivering actual Rust authority hints from `127.0.0.1` despite a non-loopback
+Ethernet route being selected. This local observation does not establish what
+another machine received. Explicit `IP_MULTICAST_IF` and matching receiver
+membership correct the interface choice without changing system routes. The
+[Rust UDP connect API](https://doc.rust-lang.org/std/net/struct.UdpSocket.html#method.connect)
+sets the socket's remote address; the lookup makes no send call.
+[Microsoft documents `IP_MULTICAST_IF`](https://learn.microsoft.com/windows/win32/winsock/ip-multicast-2)
+as the multicast-interface selection option.
+
+This initial scope uses one OS-selected IPv4 LAN interface. IPv6,
 multi-interface enumeration, routed discovery and exact native tab sizing are
 not implemented. Multicast filtering, a VPN/default-route choice or a blocked
 port may hide a server; an empty list is not proof that no host exists. The UI
@@ -69,6 +86,9 @@ receivers seeing both server ports, socket release, rate limits and malformed
 hint rejection. Browser compilation/integration and rendered joining remain
 pending central verification; no completed cross-machine LAN or UI fidelity
 claim is made.
+An opt-in ignored test checks wildcard advertisement source and matching
+membership on an active non-loopback interface, using an isolated ephemeral
+destination port; the interface-selection change still awaits that runtime check.
 
 The existing browser engine proof has an optional LAN path: retain
 `CSR_TEST_BROWSER=localhost:<owned-port>` and set
