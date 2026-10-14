@@ -681,8 +681,12 @@ fn smoke_test(
 
     let opts = &options.0;
     let Some(path) = &opts.screenshot else { return };
+    let capture_time=std::env::var("CSR_CAPTURE_SIM_TIME").ok().and_then(|v|v.parse::<f32>().ok())
+        .filter(|v|v.is_finite()&&*v>=0.);
     if probe.active() && probe_frame.is_none() && world.as_ref().is_some_and(|w| w.0.time() >= probe.duration()) { *probe_frame = Some(*frame); }
-    let capture_frame = if probe.active() { probe_frame.unwrap_or(u32::MAX - 30) } else { opts.frames };
+    if !probe.active() && capture_time.is_some() && probe_frame.is_none()
+        && world.as_ref().is_some_and(|w|w.0.time()>=capture_time.unwrap()) { *probe_frame=Some(*frame); }
+    let capture_frame = if probe.active()||capture_time.is_some() { probe_frame.unwrap_or(u32::MAX - 30) } else { opts.frames };
     if *frame > 120 && *frame <= capture_frame { frame_times.push(real.delta_secs() * 1000.0); }
     // CSR_FRAME_LOG=ms: log every frame slower than that, with renderer stats.
     if let Some(limit) = std::env::var("CSR_FRAME_LOG").ok().and_then(|v| v.parse::<f32>().ok()) {
@@ -739,6 +743,14 @@ fn smoke_test(
             if kind=="he" {w.0.projectiles.push(sim::utility::Projectile{id:999998,owner:l.id,kind:sim::utility::Kind::He,pos:pos+glam::Vec3::Z*3.0,velocity:glam::Vec3::ZERO,born:now-2.0});}
             else if kind=="flash" {if let Some(p)=w.0.player_mut(l.view_target()){p.flash_until=now+5.0;}}
             else {w.0.utility_fields.push(sim::utility::Field{id:999999,owner:l.id,kind:if kind=="fire"{sim::utility::Kind::Molotov}else{sim::utility::Kind::Smoke},pos,born:now-1.0,until:now+20.0});}
+        }
+    }
+    if *frame == capture_frame {
+        if let (Some(w),Some(l))=(world.as_ref(),local.as_ref()) {
+            info!("capture authority: time={:.5} weapon={:?} grenade={:?} projectiles={} fields={}",
+                w.0.time(),w.0.player(l.id).and_then(|p|p.active_weapon()).map(|g|g.def.class_name.as_str()),
+                w.0.player(l.id).and_then(|p|p.active_weapon()).and_then(|g|g.grenade_throw),
+                w.0.projectiles.len(),w.0.utility_fields.len());
         }
     }
     // CSR_WATCH_BOT=n: park the camera 120 units in front of bot n, facing it.

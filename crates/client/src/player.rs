@@ -369,6 +369,19 @@ pub fn tick(
         input.buttons |= buttons::ATTACK;
     }
     if !enabled.0 && std::env::var_os("CSR_ATTACK2").is_some() { input.buttons |= buttons::ATTACK2; }
+    // Screenshot-only phase proof through real TickInput. Each five-second
+    // cycle holds from 0.5 to 2.5 seconds, then releases all attack buttons.
+    if !enabled.0 {
+        let mode=std::env::var("CSR_TEST_GRENADE_INPUT").ok();
+        let bits=match mode.as_deref() {
+            Some("left")=>Some(buttons::ATTACK),Some("right")=>Some(buttons::ATTACK2),
+            Some("both")=>Some(buttons::ATTACK|buttons::ATTACK2),_=>None,
+        };
+        if let Some(bits)=bits {
+            input.buttons&=!(buttons::ATTACK|buttons::ATTACK2);
+            if (0.5..2.5).contains(&world.0.time().rem_euclid(5.)) {input.buttons|=bits;}
+        }
+    }
     if !enabled.0 && std::env::var_os("CSR_TEST_SWITCH").is_some() {
         match world.0.tick {
             64 => input.buttons |= buttons::ATTACK,

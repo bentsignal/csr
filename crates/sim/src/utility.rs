@@ -4,6 +4,9 @@ use collision::contents;
 use glam::Vec3;
 use serde::{Deserialize, Serialize};
 
+mod throw_state;
+pub use throw_state::{ThrowMode,ThrowPhase,ThrowState};
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Kind {
     Smoke,
@@ -133,14 +136,14 @@ impl World {
         }
         true
     }
-    pub(crate) fn throw_grenade(&mut self, i: usize) {
+    fn spawn_grenade(&mut self, i: usize) -> bool {
         let time = self.time();
         let p = &self.players[i];
         let Some(kind) = p
             .active_weapon()
             .and_then(|w| Kind::from_name(&w.def.class_name))
         else {
-            return;
+            return false;
         };
         let (from, angles) = p.aim_origin_angles();
         let (forward, _, _) = movement::angle_vectors(angles);
@@ -152,19 +155,15 @@ impl World {
             contents::MASK_SOLID,
         );
         if tr.start_solid {
-            return;
+            return false;
         }
         let pos = from + forward * 18.0 * tr.fraction;
         let owner = p.id;
-        let velocity = forward * 750.0 + p.movement.velocity * 0.5;
-        let active = p.active;
-        if self.mode == crate::GameMode::Deathmatch && self.rules.grenade_practice && !p.is_bot {
-            // Keep the selected utility for repeated sandbox throws. Retain a
-            // cooldown so an automatic definition cannot spawn one every tick.
-            self.players[i].weapons[active].next_attack = time + 1.0;
-        } else {
-            self.players[i].take(active, time);
-        }
+        let strength=p.active_weapon().and_then(|w|w.grenade_throw).map_or(1.,|s|s.mode.strength());
+        // Read the release tick's actual movement, not the pull-pin tick. This
+        // includes running/backpedalling/jumping; crouch uses the current eye.
+        // The inherited 0.5 coefficient remains an uncalibrated approximation.
+        let velocity = forward * (750.0*strength) + p.movement.velocity * 0.5;
         self.next_item += 1;
         self.projectiles.push(Projectile {
             id: self.next_item,
@@ -179,6 +178,7 @@ impl World {
             kind,
             pos,
         });
+        true
     }
     pub(crate) fn step_utility(&mut self) {
         let time = self.time();
@@ -372,11 +372,18 @@ mod tests {
     }
     #[test]
     fn throwing_consumes_inventory_and_never_emits_bullets() {
+      for rate in [64,128] {
         let mut w = arena();
+        w.set_tick_rate(rate);
         let cat=weapons::Catalog::from_items_game(r#""items_game" { "items" { "43" { "name" "weapon_flashbang" "baseitem" "0" "attributes" { "primary default clip size" "1" "in game price" "200" } } } }"#).unwrap();
         assert_eq!(cat.weapons.len(), 1);
         let id = w.add_player("thrower", crate::Team::Terrorist);
-        let def = cat.get("weapon_flashbang").unwrap();
+        let mut def = cat.get("weapon_flashbang").unwrap().clone();
+        // Installed flashbang declarations: 30fps, 30 pull frames, 23 throw
+        // frames and event at 10/22 cycle. This tests our authored policy.
+        def.grenade_animations=Some(weapons::GrenadeAnimations {pull_pin_duration:29./30.,
+            overhand:weapons::GrenadeReleaseAnimation {duration:22./30.,release_time:(22./30.)*(10./22.)},
+            underhand:weapons::GrenadeReleaseAnimation {duration:12./30.,release_time:(12./30.)*(10./12.)}});
         assert_eq!(def.clip_size, 1);
         w.player_mut(id)
             .unwrap()
@@ -390,13 +397,22 @@ mod tests {
                 ..Default::default()
             },
         )]);
+        assert!(w.player(id).unwrap().has("weapon_flashbang"));
+        assert!(w.projectiles.is_empty());
+        for _ in 0..rate {
+            w.step(&[(id,crate::TickInput {buttons:movement::buttons::ATTACK,..Default::default()})]);
+            assert!(w.projectiles.is_empty(),"holding never launches the grenade");
+        }
+        assert_eq!(w.player(id).unwrap().active_weapon().unwrap().grenade_throw.unwrap().phase,ThrowPhase::Holding);
+        let mut thrown=false;
+        for _ in 0..rate {
+            w.step(&[(id,crate::TickInput::default())]);
+            thrown|=w.events.iter().any(|e|matches!(e,GameEvent::UtilityThrown {..}));
+            assert!(!w.events.iter().any(|e|matches!(e,GameEvent::Fire {..}|GameEvent::Tracer {..})));
+        }
+        assert!(thrown);
         assert!(!w.player(id).unwrap().has("weapon_flashbang"));
         assert_eq!(w.projectiles.len(), 1);
-        assert!(
-            w.events
-                .iter()
-                .any(|e| matches!(e, GameEvent::UtilityThrown { .. }))
-        );
         assert!(
             !w.events
                 .iter()
@@ -412,6 +428,7 @@ mod tests {
             },
         )]);
         assert_eq!(w.projectiles.len(), 1);
+      }
     }
     #[test]
     fn flash_respects_facing_and_line_of_sight() {

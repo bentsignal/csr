@@ -51,6 +51,7 @@ pub struct WeaponState {
     pub def: Arc<WeaponDefinition>,
     pub cosmetic: Option<Cosmetic>,
     pub cosmetic_owner: Option<crate::PlayerId>,
+    pub grenade_throw: Option<crate::utility::ThrowState>,
     pub clip: i32,
     pub reserve: i32,
     /// Sim time at which the next shot may fire.
@@ -86,6 +87,7 @@ impl WeaponState {
             def,
             cosmetic: None,
             cosmetic_owner: None,
+            grenade_throw: None,
             clip,
             reserve,
             next_attack: 0.0,
@@ -467,6 +469,7 @@ mod tests {
 
     fn ak() -> WeaponDefinition {
         WeaponDefinition {
+            grenade_animations: None,
             id: ContentId::csgo(ContentKind::Weapon, "ak47"),
             class_name: "weapon_ak47".into(),
             def_index: 7,

@@ -60,6 +60,21 @@ pub struct Accuracy {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+pub struct GrenadeReleaseAnimation {
+    pub duration: f32,
+    pub release_time: f32,
+}
+
+/// Declarative timing imported from the selected installed grenade viewmodel.
+/// Native minimum windup/ballistic behavior is not inferred from this metadata.
+#[derive(Clone, Debug, PartialEq)]
+pub struct GrenadeAnimations {
+    pub pull_pin_duration: f32,
+    pub overhand: GrenadeReleaseAnimation,
+    pub underhand: GrenadeReleaseAnimation,
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub struct WeaponDefinition {
     pub id: ContentId,
     /// Engine class name, e.g. `weapon_ak47`.
@@ -86,6 +101,7 @@ pub struct WeaponDefinition {
     pub accuracy: Accuracy,
     pub recoil: Recoil,
     pub view_model: String,
+    pub grenade_animations: Option<GrenadeAnimations>,
     pub world_model: String,
     /// Soundscript entry for the default equipped shot, e.g. `Weapon_AK47.Single`.
     /// Suppressor-equipped definitions use their `sound_special1` entry.
@@ -249,6 +265,7 @@ fn build(index: &str, class_name: &str, r: &Resolved) -> WeaponDefinition {
         _ => Side::Both,
     };
     WeaponDefinition {
+        grenade_animations: None,
         id: ContentId::csgo(ContentKind::Weapon, short),
         class_name: class_name.to_string(),
         def_index: index.parse().unwrap_or(0),
