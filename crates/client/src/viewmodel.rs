@@ -314,6 +314,7 @@ pub struct ViewModelState {
     shell_seen: Option<i32>,
     planting: bool,
     grenade_seen: Option<(u64, sim::utility::ThrowPhase)>,
+    suppressor_seen: Option<sim::weapon::SuppressorTransition>,
     light_timer: f32,
     /// Persistent bone-local pose: sequences only overwrite the bones they
     /// animate (weighted), as the game layers masked viewmodel sequences.
@@ -334,6 +335,7 @@ impl ViewModelState {
         self.shell_seen = None;
         self.planting = false;
         self.grenade_seen = None;
+        self.suppressor_seen = None;
         self.light_timer = 0.0;
         // Masked clips deliberately preserve untouched bones within one life.
         // They must never inherit the reload/inspect pose of a previous life.
@@ -400,6 +402,9 @@ pub fn load(
                         if def.class==weapons::WeaponClass::Grenade
                             && matches!(seq.activity.to_ascii_uppercase().as_str(),"ACT_VM_PULLPIN"|"ACT_VM_THROW"|"ACT_VM_RELEASE") {
                             clip.looping=false;
+                        }
+                        if matches!(seq.activity.as_str(), "ACT_VM_ATTACH_SILENCER" | "ACT_VM_DETACH_SILENCER") {
+                            clip.looping = false;
                         }
                         clips.entry(if seq.name == "lookat01" || seq.name == "inspect" {"INSPECT".into()}else{seq.activity.to_ascii_uppercase()}).or_default().push(SeqClip {
                             clip: Arc::new(clip),
@@ -591,8 +596,11 @@ pub fn update(
                 let material = model.skins.first().and_then(|s| s.get(mesh.material)).copied().unwrap_or(mesh.material);
                 model.textures.get(material).is_some_and(|m| m.starts_with("scope_") || m.contains("scope_glass"))
             })).unwrap_or(false);
+        let hide_suppressor = index < gun.meshes.len() && models.weapons.get(&name).is_some_and(|view|
+            skinning::suppressor_mesh_hidden(&view.asset.model, index, p.active_weapon().is_some_and(|w|
+                w.suppressor_visible(world.0.time() + fixed.overstep_fraction() * world.0.dt(), world.0.dt()))));
         if let Ok(mut v) = visibility.get_mut(*e) {
-            *v = if show && !clear_lens { Visibility::Inherited } else { Visibility::Hidden };
+            *v = if show && !clear_lens && !hide_suppressor { Visibility::Inherited } else { Visibility::Hidden };
         }
     }
     if !p.alive || local.noclip { return; }
@@ -611,9 +619,22 @@ pub fn update(
         }
         state.grenade_seen=grenade_key;
     }
+    let suppressor = w.and_then(|w| w.suppressor_transition);
+    if suppressor != state.suppressor_seen {
+        state.pose = mdl::skeleton::rest_pose(&view.asset.model.bones);
+        state.activity = suppressor.map_or("ACT_VM_IDLE", |s| s.activity()).into();
+        state.started = now;
+        state.clip_index = 0;
+        state.suppressor_seen = suppressor;
+    }
+    if let Some(transition) = suppressor { state.activity = transition.activity().into(); }
     let inspect_requested=state.inspect_seen!=request.0;state.inspect_seen=request.0;
     let reloading = w.is_some_and(|w| w.reload_end.is_some());
-    let attack = effects.consume_attack(p.id, &name, &mut state.last_attack_seen);
+    // Consume reliable shot serials even while a newer suppressor transition
+    // owns the pose. A delayed earlier shot must neither replace its clip nor
+    // replay after the transition ends.
+    let attack = effects.consume_attack(p.id, &name, &mut state.last_attack_seen)
+        .filter(|_| suppressor.is_none());
     // Shotguns that load shell by shell follow the simulation's stage:
     // the start, then one insert per shell, then (below) the finish.
     let sim_now = world.0.time() + fixed.overstep_fraction() * world.0.dt();
@@ -634,7 +655,7 @@ pub fn update(
         state.clip_index = (state.clip_index + 1) % 3;
         state.started = now;
     }
-    if attack.is_none() && !reloading && p.plant_start.is_none() && w.is_some_and(|w|w.zoom_level==0 && w.next_attack<=world.0.time()) && inspect_requested && view.clips.contains_key("INSPECT") {
+    if suppressor.is_none() && attack.is_none() && !reloading && p.plant_start.is_none() && w.is_some_and(|w|w.zoom_level==0 && w.next_attack<=world.0.time()) && inspect_requested && view.clips.contains_key("INSPECT") {
         state.activity="INSPECT".into();state.started=now;state.clip_index=0;
     }
     if state.activity=="INSPECT" && w.is_some_and(|w|w.zoom_level>0) {state.activity="ACT_VM_IDLE".into();state.started=now;}
@@ -654,9 +675,13 @@ pub fn update(
             state.activity = if start { "ACT_SHOTGUN_RELOAD_START" } else { "ACT_VM_RELOAD" }.into();
         }
     }
+    // The installed draw activities carry explicit first-frame SHOW/HIDE events.
+    let activity = if state.activity == "ACT_VM_DRAW" {
+        w.map_or("ACT_VM_DRAW", |w| w.draw_activity())
+    } else { state.activity.as_str() };
     let clips = view
         .clips
-        .get(&state.activity)
+        .get(activity)
         .filter(|c| !c.is_empty())
         .or_else(|| {
             // Some knife variants name only the miss activities.
@@ -676,6 +701,9 @@ pub fn update(
         // Grenade phase clips are loaded non-looping: holding keeps the final pose.
         t=(sim_now-started as f32*world.0.dt()).clamp(0.,clip.duration());
     }
+    if let Some(transition) = suppressor {
+        t = (sim_now - transition.started_tick as f32 * world.0.dt()).clamp(0., clip.duration());
+    }
     if let (Some((_, frac)), "ACT_SHOTGUN_RELOAD_START" | "ACT_VM_RELOAD") = (shell, state.activity.as_str()) {
         // One pass of the start or insert clip per simulated stage.
         t = frac * clip.duration();
@@ -685,7 +713,7 @@ pub fn update(
             t = frac * clip.duration();
         }
     }
-    if grenade.is_none() && state.activity != "ACT_VM_IDLE" && t > clip.duration() && !reloading {
+    if grenade.is_none() && suppressor.is_none() && state.activity != "ACT_VM_IDLE" && t > clip.duration() && !reloading {
         state.activity = "ACT_VM_IDLE".into();
         state.started = now;
         if let Some(idle) = view.clips.get("ACT_VM_IDLE").and_then(|c| c.first()) {

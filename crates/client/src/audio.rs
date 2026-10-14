@@ -564,6 +564,15 @@ impl SoundLibrary {
         self.classic.select(&weapon.id, &weapon.fire_sound).unwrap_or(&weapon.fire_sound)
     }
 
+    /// Reliable shot events carry the mode at fire time, independent of a later
+    /// snapshot's active weapon. Classic overrides apply only to matching bindings.
+    pub fn weapon_shot_mode_entry<'a>(&'a self, weapon: &'a weapons::WeaponDefinition, suppressed: bool) -> &'a str {
+        let binding = if suppressed || !weapon.attr_f32("has silencer").is_some_and(|v| v > 0.) {
+            &weapon.fire_sound
+        } else { &weapon.unsuppressed_fire_sound };
+        self.classic.select(&weapon.id, binding).unwrap_or(binding)
+    }
+
     /// Soundscript entry names (lower case).
     pub fn names(&self) -> impl Iterator<Item = &str> {
         self.entries.keys().map(String::as_str)

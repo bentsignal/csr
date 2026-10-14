@@ -2,9 +2,9 @@
 use serde::{Deserialize, Serialize};
 use sim::{GameEvent, PlayerId, Snapshot, Team, TickInput};
 
-// Appended timed decoy expiry; v13 adds contacts, v12 decoy weapon ids.
-pub const VERSION: u32 = 14;
-pub const PROTOCOL_ID: u64 = 0x4353_5257_0000_000e;
+// Replicated suppressor mode/transition and shot-time mode; v14 adds decoy expiry.
+pub const VERSION: u32 = 15;
+pub const PROTOCOL_ID: u64 = 0x4353_5257_0000_000f;
 pub const CONTROL: u8 = 0;
 pub const INPUT: u8 = 1;
 pub const SNAPSHOT: u8 = 2;
@@ -36,6 +36,7 @@ pub(crate) fn validate_events(batch: &EventBatch) -> Result<(), String> {
                 player,
                 weapon,
                 origin,
+                ..
             }
             | Melee {
                 player,
@@ -443,7 +444,7 @@ pub(crate) fn validate_state(
         }
         if let sim::GroundKind::Weapon(weapon) = &item.kind {
             validate_weapon(weapon,world.tick)?;
-            if weapon.grenade_throw.is_some(){return Err("dropped grenade retains throw state".into());}
+            if weapon.grenade_throw.is_some() || weapon.suppressor_transition.is_some(){return Err("dropped weapon retains active animation state".into());}
         }
     }
     if world
@@ -479,6 +480,17 @@ fn valid_decoy_weapon(kind: sim::utility::Kind, weapon: Option<&str>) -> bool {
 }
 
 fn validate_weapon(weapon: &sim::weapon::WeaponState, tick:u64) -> Result<(), String> {
+    if weapon.suppressor_attached && !weapon.def.attr_f32("has silencer").is_some_and(|v| v > 0.) {
+        return Err("weapon has no suppressor".into());
+    }
+    if let Some(state) = weapon.suppressor_transition {
+        let Some(animation) = weapon.suppressor_animation() else { return Err("suppressor timing profile missing".into()); };
+        if state.started_tick > tick || weapon.reload_end.is_some()
+            || !animation.duration.is_finite() || animation.duration <= 0. || animation.duration > 30.
+            || !animation.complete_time.is_finite() || !(0. ..=animation.duration).contains(&animation.complete_time) {
+            return Err("invalid snapshot suppressor transition".into());
+        }
+    }
     if let Some(state)=weapon.grenade_throw {
         use sim::utility::ThrowPhase;
         let Some(profile)=weapon.def.grenade_animations.as_ref() else {return Err("grenade timing profile missing".into());};
@@ -575,6 +587,7 @@ mod tests {
                 player: 1,
                 weapon: "weapon_test".into(),
                 origin: Vec3::NAN,
+                suppressed: false,
             },
             GameEvent::Impact {
                 player: 1,
@@ -616,7 +629,8 @@ mod tests {
                     GameEvent::Fire {
                         player: 1,
                         weapon: "weapon_test".into(),
-                        origin: Vec3::ZERO
+                        origin: Vec3::ZERO,
+                        suppressed: false,
                     },
                     GameEvent::Land {
                         player: 1,

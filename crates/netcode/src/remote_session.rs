@@ -370,6 +370,7 @@ mod tests {
         server.inject_events(&EventBatch {
             tick: 1,
             events: vec![sim::GameEvent::Fire {
+                suppressed: false,
                 player: remote.player().unwrap(),
                 weapon: "weapon_test".into(),
                 origin: glam::Vec3::NAN,
