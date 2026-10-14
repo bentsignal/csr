@@ -43,6 +43,7 @@ pub struct Effects {
     /// discard simultaneous deaths. No receipt becomes simulation state.
     pub(crate) deaths: Vec<sim::death::DeathReceipt>,
     pub feedback: Vec<GameEvent>,
+    pub(crate) utility_detonations: Vec<(sim::utility::Kind, glam::Vec3)>,
     pub kill_feed: Vec<KillFeedEntry>,
     /// Time of the local player's last hit on someone (hit marker).
     pub last_hit: f32,
@@ -116,6 +117,7 @@ pub fn process(
                 sounds.play(&mut commands,fs,&mut sources,sound,if player==local.view_target(){None}else{Some(pos)});
             }
             GameEvent::UtilityDetonated { kind,pos,.. } => {
+                if effects.utility_detonations.len()<128 {effects.utility_detonations.push((kind,pos));}
                 let sound=match kind {sim::utility::Kind::Flash=>"Flashbang.Explode",sim::utility::Kind::He=>"BaseGrenade.Explode",
                     sim::utility::Kind::Molotov|sim::utility::Kind::Incendiary=>"Inferno.Start_IncGrenade",_=>"SmokeGrenade.Bounce"};
                 sounds.play(&mut commands,fs,&mut sources,sound,Some(pos));
@@ -247,6 +249,7 @@ pub fn process(
             }
             GameEvent::RoundStart { .. } => {
                 effects.deaths.clear();
+                effects.utility_detonations.clear();
                 effects.banner = None;
             }
             GameEvent::FreezeEnd => {
