@@ -43,17 +43,17 @@ content identities for supported images. Missing art must not be represented
 as successful loading of an unrelated resource.
 
 The follow-up adapter recognizes only the two observed parent-path URL
-families with canonical map identifiers. It reads the exact `_loading.jpg`
-or spectate DDS first, and only when absent uses the same map's plain JPG
-or normal radar DDS. These are explicit compatibility fallbacks for the
-installed Legacy data, not a claim that the original engine substituted them.
+families with canonical map identifiers. It reads only the exact `_loading.jpg`
+for that family. The spectate DDS family may use the same map's normal radar
+only when the preferred spectate file is absent. This is an explicit
+compatibility fallback, not a claim that the original engine substituted it.
 Corrupt preferred data is an error. JPEG and DXT1/3/5 DDS are converted to PNG
 in memory with a 4096-pixel side limit, 64 MiB RGBA limit, 32 MiB encoded
 input limit and bounded encoded output/cache. No parent-path access is enabled
 outside these families.
 
 The frontend gets its selected map and generation from the owned loader.
-Only Legacy identities with installed metadata and all required art families
+Only Legacy identities with installed metadata, radar and collection icon
 initialize the movie. Map title comes from installed localization. Unknown
 mode/scenario fields are null; their native domains remain unverified.
 Unsupported pack/archive art uses the existing progress/cancel surface.
@@ -64,3 +64,43 @@ Private logs, captures and owned-process receipts are under
 `csr-fidelity/overnight-feedback-20261014/loading-*` outside the repository.
 Two earlier probe preflight failures are retained there alongside the actual
 public observations; they are not counted as successful observations.
+
+## Presentation correction
+
+The first converted-art run exited normally with no raw loading errors, but
+the modern plain JPG overflowed the authored panel. Public settled bounds
+showed that `Panel.Overview` received the 1920 by 1080 photo at the origin of
+the 479 by 479 `Panel.OverviewBG`; `MapHolder.ImageThumbnail` stayed empty.
+A final opt-in public MovieClipLoader observation confirmed that the movie
+itself requested `_loading.jpg` into `Panel.Overview`, and both Complete and
+Init reported that same clip. No radar request followed. This is not a
+misrouted asynchronous image: substituting the modern plain JPG makes the
+optional older loading image falsely succeed and suppresses the movie's
+observed radar fallback. That plain-JPG substitution is not a valid fidelity
+fix. It has been removed; modern photo compatibility is deferred.
+
+The corrected compatibility surface uses the actual normal radar in the
+measured authored overview region. The frontend enables it only when the
+exact optional `_loading.jpg` is absent and the same map's installed radar
+and icon exist. A root/map/generation-owned MovieClipLoader hook redirects
+only that exact optional-photo URL/target pair to the normal radar URL.
+The original call, return and authored callbacks remain in place. After
+initialization a one-shot listener fits the radar in the measured sibling
+OverviewBG bounds without resampling its source or distorting its aspect.
+This is an explicit compatibility route, not native fallback parity. A
+preferred real loading image keeps its original request unchanged. Context
+replacement, unsupported art, Home and cancellation remove the owned listener
+and request unloading of its clip; stale callback identities cannot apply
+the old layout. The pinned Ruffle implementation notes unfinished unload
+cancellation semantics, so this does not prove that a mid-load cancellation
+prevents every pending asset write. That edge remains unverified.
+Runtime verification of the corrected candidate is pending.
+
+Calling the observed `setHintText("")` removes the absent hint. Hiding only
+the observed `Panel.MainText.ModeText` and `ScenarioText` after
+`showLoadinginfo` removes unknown labels without inventing game metadata.
+The same order was verified in the current offscreen probe. Clearing the
+cached root with `hidePanel` then six null `setMapInfo` arguments made no
+null or undefined image requests; subsequent Inferno context did request its
+own art. This is a movie-level check, not a claim of an actual mid-loading
+frontend cancellation test.

@@ -414,8 +414,63 @@ Stage.addProperty("visibleRect", function() {
 // avatar.swf hides DynamicAvatar right before loading `img://avatar_<xuid>`
 // into it and never shows it again, yet the reference shows avatars:
 // Scaleform's load left the clip visible. Emulate that for avatar loads only.
+// Explicit compatibility surface: use the selected map's installed radar,
+// not the unrelated modern full-screen photo, in the authored overview box.
+// The frontend owns the generation and clears it on Home/cancellation.
+_global.csrLoadingOverviews = new Object();
+_global.csrBindings.configureLoadingOverview = function(path, map, serial, radarOnly) {
+    var previous = _global.csrLoadingOverviews[path];
+    if (previous != undefined && previous.map == map && previous.serial == serial) { return true; }
+    delete _global.csrLoadingOverviews[path];
+    if (previous != undefined && previous.loader != undefined) {
+        previous.loader.removeListener(previous.listener);
+        previous.loader.unloadClip(previous.target);
+    }
+    if (radarOnly !== true || typeof map != "string" || map.length == 0 || map.length > 128) { return false; }
+    var root = _global.csrResolve(path);
+    var box = root.Panel.OverviewBG;
+    if (box == undefined || box._width <= 0 || box._height <= 0 ||
+        box._width > 4096 || box._height > 4096) { return false; }
+    _global.csrLoadingOverviews[path] = {map: map, serial: serial,
+        target: root.Panel.Overview, x: box._x, y: box._y, width: box._width, height: box._height};
+    return true;
+};
 var csrLoadClip = MovieClipLoader.prototype.loadClip;
 MovieClipLoader.prototype.loadClip = function(url, target) {
+    var rootPath = String(target).split(".Panel.Overview")[0];
+    var context = _global.csrLoadingOverviews[rootPath];
+    if (context != undefined && String(target) == rootPath + ".Panel.Overview" &&
+        String(url) == "../../maps/" + context.map + "_loading.jpg") {
+        // The normal radar is an observed installed resource. No synthetic
+        // success or invented authored error callback is needed.
+        url = "../overviews/" + context.map + "_radar.dds";
+        arguments[0] = url;
+        if (context.loader != undefined) {
+            context.loader.removeListener(context.listener);
+            context.loader.unloadClip(context.target);
+        }
+        var fit = new Object();
+        fit.context = context;
+        fit.path = rootPath;
+        fit.loader = this;
+        fit.onLoadInit = function(mc) {
+            this.loader.removeListener(this);
+            if (_global.csrLoadingOverviews[this.path] != this.context ||
+                this.context.listener != this ||
+                mc != this.context.target || mc._width <= 0 || mc._height <= 0) { return; }
+            // Preserve aspect and source resolution; fit in measured authored
+            // parent coordinates after the movie's own initialization.
+            var scale = Math.min(this.context.width / mc._width, this.context.height / mc._height);
+            mc._xscale *= scale;
+            mc._yscale *= scale;
+            mc._x = this.context.x + (this.context.width - mc._width) / 2;
+            mc._y = this.context.y + (this.context.height - mc._height) / 2;
+        };
+        fit.onLoadError = function(mc, error) { this.loader.removeListener(this); };
+        context.loader = this;
+        context.listener = fit;
+        this.addListener(fit);
+    }
     // Opt-in public loader observation for the existing menu probe only.
     if (_global.csrDiagnostics.loadingTraceBudget > 0 &&
         (String(url).indexOf("_loading.jpg") >= 0 || String(url).indexOf("_radar") >= 0)) {
@@ -445,7 +500,9 @@ MovieClipLoader.prototype.loadClip = function(url, target) {
         };
         this.addListener(shower);
     }
-    return csrLoadClip.apply(this, arguments);
+    var result = csrLoadClip.apply(this, arguments);
+    if (result !== true && fit != undefined) { this.removeListener(fit); }
+    return result;
 };
 
 _global.GameInterface = _global.csrMakeProxy("GameInterface");

@@ -50,14 +50,9 @@ impl<'a> Request<'a> {
     pub fn read(&self, fs: &vfs::Vfs) -> Option<Vec<u8>> {
         let (raw, dds) = match self {
             Self::Thumbnail(map) => {
-                // Compatibility with Legacy installs that retain the movie but
-                // ship the newer plain map JPG name. Never replace a corrupt
-                // preferred image with a different successful one.
-                (
-                    fs.read(&format!("maps/{map}_loading.jpg"))
-                        .or_else(|| fs.read(&format!("maps/{map}.jpg")))?,
-                    false,
-                )
+                // A modern plain map JPG is not the optional authored loading
+                // overview. Substituting it suppresses the movie's radar path.
+                (fs.read(&format!("maps/{map}_loading.jpg"))?, false)
             }
             Self::Radar { map, spectate } => {
                 let preferred = format!(
@@ -176,7 +171,7 @@ mod tests {
     }
 
     #[test]
-    fn thumbnail_fallback_is_explicit_and_never_hides_corrupt_preferred_data() {
+    fn thumbnail_requires_the_exact_loading_asset_and_rejects_corruption() {
         let mut fs = vfs::Vfs::new();
         fs.push_back(
             "fallback",
@@ -186,6 +181,14 @@ mod tests {
             )])),
         );
         let request = Request::Thumbnail("de_dust2");
+        assert!(request.read(&fs).is_none());
+        fs.push_front(
+            "exact loading image",
+            vfs::Mount::Memory(BTreeMap::from([(
+                "maps/de_dust2_loading.jpg".into(),
+                Arc::<[u8]>::from(jpeg([20, 40, 200])),
+            )])),
+        );
         let png = request.read(&fs).unwrap();
         assert_eq!(image::load_from_memory(&png).unwrap().width(), 4);
         fs.push_front(

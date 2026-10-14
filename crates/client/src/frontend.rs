@@ -43,18 +43,20 @@ struct Data {
 struct LoadingContext {
     selected: crate::session::LoadingMap,
     title: String,
+    radar_only: bool,
 }
 impl LoadingContext {
     fn installed(selected: crate::session::LoadingMap, data: &Data) -> Option<Self> {
         let map = data.game_modes.block("maps")?.block(&selected.name)?;
         let title = map.str("nameID")?;
         let title = data.localization.get(title).unwrap_or(title).to_owned();
-        // The authored movie requests all three families. Unknown art keeps
+        // Photo compatibility is deferred. The installed radar and icon are
+        // sufficient for the explicit radar surface. Unknown art keeps
         // the engine progress/cancel surface, never an invented map alias.
-        if !(data.fs.exists(&format!("maps/{}_loading.jpg", selected.name)) || data.fs.exists(&format!("maps/{}.jpg", selected.name)))
-            || !data.fs.exists(&format!("resource/overviews/{}_radar.dds", selected.name))
+        if !data.fs.exists(&format!("resource/overviews/{}_radar.dds", selected.name))
             || !data.fs.exists(&format!("resource/flash/images/map_icons/collection_icon_{}.png", selected.name)) { return None; }
-        Some(Self { selected, title })
+        let radar_only = !data.fs.exists(&format!("maps/{}_loading.jpg", selected.name));
+        Some(Self { selected, title, radar_only })
     }
 
     fn arguments(&self) -> Vec<Value> {
@@ -456,6 +458,7 @@ impl Engine for Bridge {
                 if data.state == AppState::Loading {
                     calls.call(path, "setLoadingText", vec![data.loading.clone().into()]);
                     if let Some(context) = &data.loading_map {
+                        calls.call("_global.csrBindings", "configureLoadingOverview", vec![path.clone().into(), context.selected.name.clone().into(), context.selected.serial.to_string().into(), context.radar_only.into()]);
                         calls.call(path, "setMapInfo", context.arguments());
                         calls.call(path, "setHintText", vec!["".into()]);
                         calls.call(path, "showPanel", vec![]);
@@ -463,8 +466,12 @@ impl Engine for Bridge {
                         for label in ["ModeText", "ScenarioText"] {
                             calls.set(&format!("{path}.Panel.MainText.{label}"), "_visible", false.into());
                         }
-                    } else { calls.call(path, "hidePanel", vec![]); }
+                    } else {
+                        calls.call("_global.csrBindings", "configureLoadingOverview", vec![path.clone().into(), Value::Null]);
+                        calls.call(path, "hidePanel", vec![]);
+                    }
                 } else {
+                    calls.call("_global.csrBindings", "configureLoadingOverview", vec![path.clone().into(), Value::Null]);
                     calls.call(path, "hidePanel", vec![]);
                 }
             }
@@ -1231,6 +1238,7 @@ pub(crate) fn update(
         front.loading_map = loading_map.clone();
         if front.movie_ready("LoadingScreen") {
             if let Some(context) = loading_map {
+                front.send(Input::Call { path: "_global.csrBindings".into(), function: "configureLoadingOverview".into(), args: vec!["_level1000".into(), context.selected.name.clone().into(), context.selected.serial.to_string().into(), context.radar_only.into()] });
                 for (function, args) in [
                     ("setMapInfo", context.arguments()),
                     ("setHintText", vec!["".into()]),
@@ -1244,6 +1252,7 @@ pub(crate) fn update(
                     front.send(Input::Set { path: format!("_level1000.Panel.MainText.{label}"), property: "_visible".into(), value: false.into() });
                 }
             } else {
+                front.send(Input::Call { path: "_global.csrBindings".into(), function: "configureLoadingOverview".into(), args: vec!["_level1000".into(), Value::Null] });
                 front.send(Input::Call { path: "_level1000".into(), function: "hidePanel".into(), args: vec![] });
                 front.send(Input::Call { path: "_level1000".into(), function: "setMapInfo".into(), args: vec![Value::Null; 6] });
             }
