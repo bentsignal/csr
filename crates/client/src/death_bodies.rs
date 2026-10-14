@@ -70,8 +70,10 @@ pub(super) fn update(
         // bones are authored Y-up, unlike evaluated Source character poses;
         // placing that pose at the feet embeds its hulls in the floor. Start
         // from the installed death clip's evaluated first frame in this case.
-        let pose = captured_pose.or_else(|| model.anims.death_pose(0.)).unwrap_or_else(|| mdl::skeleton::model_space(
-            &model.asset.model.bones, &mdl::skeleton::rest_pose(&model.asset.model.bones)));
+        let Some(pose) = captured_pose.or_else(|| model.anims.death_pose(0.)) else {
+            despawn_instance(commands, &instance);
+            continue;
+        };
         let trace_pending = std::env::var_os("CSR_DEATH_TRACE").is_some();
         if trace_pending {
             info!("death body initial: origin={:?} yaw={} velocity={:?} pelvis={:?} rig={}",
