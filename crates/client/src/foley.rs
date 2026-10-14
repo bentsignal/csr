@@ -37,6 +37,7 @@ struct PlayerFoley {
     reloading: bool,
     shell_stage: Option<Option<i32>>,
     grenade_pull: Option<u64>,
+    suppressor_transition: Option<sim::weapon::SuppressorTransition>,
     moving: bool,
     step_timer: f32,
     left: bool,
@@ -84,6 +85,7 @@ struct Queued {
     weapon: String,
     entry: String,
     reload: bool,
+    suppressor: Option<sim::weapon::SuppressorTransition>,
 }
 
 #[derive(Resource, Default)]
@@ -121,7 +123,7 @@ impl Foley {
 
     fn schedule(&mut self, player: sim::PlayerId, weapon: &str, now: f32, duration: f32, events: &[(f32, String)], reload: bool) {
         for (cycle, entry) in events {
-            self.queue.push(Queued { at: now + cycle * duration, player, weapon: weapon.to_string(), entry: entry.clone(), reload });
+            self.queue.push(Queued { at: now + cycle * duration, player, weapon: weapon.to_string(), entry: entry.clone(), reload, suppressor: None });
         }
     }
 }
@@ -189,8 +191,9 @@ pub fn update(
             st.weapon = weapon.clone();
             st.reloading = false;
             st.shell_stage = None;
+            st.suppressor_transition = None;
             foley.queue.retain(|q| q.player != p.id);
-            if let Some((duration, events)) = views.activity_sounds(&weapon, "ACT_VM_DRAW") {
+            if let Some((duration, events)) = views.activity_sounds(&weapon, p.active_weapon().map_or("ACT_VM_DRAW", |w| w.draw_activity())) {
                 foley.schedule(p.id, &weapon, now, duration, &events, false);
             }
         }
@@ -199,6 +202,26 @@ pub fn update(
         // as the viewmodel plays it; shotguns per stage.
         let st = foley.players.get_mut(&p.id).unwrap();
         let w = p.active_weapon();
+        let transition = w.and_then(|w| w.suppressor_transition);
+        let new_transition = transition.is_some() && transition != st.suppressor_transition;
+        st.suppressor_transition = transition;
+        foley.queue.retain(|q| q.player != p.id || q.suppressor.is_none() || q.suppressor == transition);
+        if new_transition {
+            let transition = transition.unwrap();
+            if let Some((duration, events)) = views.activity_sounds(&weapon, transition.activity()) {
+                let started = transition.started_tick as f32 * world.0.dt();
+                for (cycle, entry) in events.iter() {
+                    let at = started + cycle * duration;
+                    // A newly received snapshot must not replay the preceding
+                    // seconds of screw sounds as one burst.
+                    if at >= now - elapsed.tick_seconds {
+                        foley.queue.push(Queued { at, player: p.id, weapon: weapon.clone(),
+                            entry: entry.clone(), reload: false, suppressor: Some(transition) });
+                    }
+                }
+            }
+        }
+        let st = foley.players.get_mut(&p.id).unwrap();
         let pull=w.and_then(|w|w.grenade_throw).map(|s|s.pull_started_tick);
         let new_pull=pull.is_some() && pull!=st.grenade_pull;
         st.grenade_pull=pull;

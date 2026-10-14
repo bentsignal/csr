@@ -301,6 +301,19 @@ pub fn sync(
             }
         }
 
+        if let Some((name, instance, _)) = &c.weapon {
+            if let Some(asset) = models.weapons.get(name) {
+                for (index, entity) in instance.meshes.iter().enumerate() {
+                    if let Ok(mut value) = visibility.get_mut(*entity) {
+                        *value = if skinning::suppressor_mesh_hidden(&asset.model, index,
+                            p.active_weapon().is_some_and(|w| w.suppressor_attached)) {
+                            Visibility::Hidden
+                        } else { Visibility::Inherited };
+                    }
+                }
+            }
+        }
+
         // Animation inputs from the simulation.
         let v = render.velocity;
         let speed = v.truncate().length();

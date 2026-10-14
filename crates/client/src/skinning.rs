@@ -47,6 +47,14 @@ pub struct SkinnedAsset {
     pub inverse_bindposes: Handle<SkinnedMeshInverseBindposes>,
 }
 
+/// The default imported bodygroup contains the authored suppressor geometry.
+/// An absent suppressor selects its empty sibling by hiding only that bodypart.
+pub fn suppressor_mesh_hidden(model: &mdl::Model, mesh: usize, visible: bool) -> bool {
+    !visible && model.meshes.get(mesh).and_then(|m| m.hardware)
+        .and_then(|h| model.body_parts.get(h.body_part as usize))
+        .is_some_and(|(name, _, _)| name.eq_ignore_ascii_case("silencer"))
+}
+
 /// One spawned copy of a [`SkinnedAsset`].
 #[derive(Clone, Debug)]
 pub struct SkinnedInstance {

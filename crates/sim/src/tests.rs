@@ -112,6 +112,7 @@ fn ray_box_hits_and_misses() {
 
 fn def(name: &str, index: u32, class: WeaponClass, side: Side, price: i32, clip: i32) -> WeaponDefinition {
     WeaponDefinition {
+        suppressor_animations: None,
         grenade_animations: (class==WeaponClass::Grenade).then_some(weapons::GrenadeAnimations {
             pull_pin_duration:0.25,
             overhand:weapons::GrenadeReleaseAnimation {duration:0.4,release_time:0.1},
@@ -139,6 +140,7 @@ fn def(name: &str, index: u32, class: WeaponClass, side: Side, price: i32, clip:
         recoil: Default::default(),
         view_model: String::new(),
         world_model: String::new(),
+        unsuppressed_fire_sound: String::new(),
         fire_sound: String::new(),
         zoom_in_sound: String::new(),
         zoom_out_sound: String::new(),
@@ -858,3 +860,6 @@ mod aim;
 mod rewind;
 mod death;
 mod movement_fidelity;
+
+#[path = "tests/suppressors.rs"]
+mod suppressors;
