@@ -25,6 +25,7 @@ bsp.workspace = true
 vtf.workspace = true
 vmt.workspace = true
 mdl.workspace = true
+character-pose.workspace = true
 collision.workspace = true
 movement.workspace = true
 sim.workspace = true
