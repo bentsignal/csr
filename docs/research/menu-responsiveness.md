@@ -16,20 +16,17 @@ revision, and the frontend waits for the current revision before revealing its
 image. A frame from the preceding open cannot satisfy a close/reopen cycle.
 The authored `showPanel` animation still plays; it is not replaced or skipped.
 
-## Worker deadlines
+## Pointer queue pressure
 
-The pinned public Ruffle revision (`5b20c6507c51657dabdad25e172cc81c8587d898`)
-exposes `Player::time_til_next_frame`, which includes the next ActionScript timer
-deadline. `Player::tick` also performs display-list mouse picking even when no
-timeline frame runs, through its stream-manager update. The host previously
-called it on every worker turn, including idle turns separated by only 4 ms.
+`CSR_UI_WORKER_TRACE=1` now records each consumed pointer's queue age and the
+remaining queue length. Coalescing updates that timestamp along with the latest
+position. This distinguishes stale queued positions from expensive processing
+or a slow authored animation; an Inspect acknowledgement does not measure that.
 
-The worker now accumulates elapsed time from the last actual tick and honors
-that deadline. Input handling and rendering do not wait for the deadline:
-pointer input updates Flash hover immediately, and dirty frames can publish on
-the same turn. Loads continue pumping between ticks. Input alone never resets
-the elapsed clock, so continuous motion cannot starve frames or timers. Inactive
-movies retain the previous paused-clock policy.
+`CSR_TEST_PAUSE_HOVER=1` extends the existing opt-in bot play proof with five
+seconds of continuous pointer movement over Pause's options at the game update
+cadence. It uses the production frontend input bridge and the Bevy window's
+cursor state, without moving the OS pointer. Normal gameplay never runs it.
 
 Adjacent pointer positions were already coalesced. Every click, key, focus,
 release and lifecycle command retains its existing FIFO boundary. No Ruffle
@@ -37,7 +34,9 @@ hit-testing semantics, ActionScript method caches, menu movies, or content are
 modified here. In particular, `call_internal_interface` does not itself perform
 the additional mouse pick; native property calls are not the claimed hot path.
 
-These changes address concrete presentation and redundant scheduling behavior.
-They do not establish exact original-game latency or prove that all delayed
-hover animation is eliminated. Rendered fullscreen comparisons and normal
-Pause/Options/reopen checks remain necessary.
+An attempted frame/timer-deadline scheduler did not improve the first paired
+fullscreen comparison (both `play` profile at 2560x1440, CI activity recorded):
+baseline 464 presentations/20s versus candidate 435, input receipt p95 50.5ms
+versus 49.0ms. It was removed. No menu performance improvement is claimed from
+that experiment. The atomic Pause correction remains separate from unresolved
+hover latency and original-game timing fidelity.

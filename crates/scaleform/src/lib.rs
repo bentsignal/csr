@@ -265,7 +265,8 @@ impl Menu {
 // Only the immediately adjacent motion run is replaceable. Every other input
 // forms a FIFO barrier, including release, focus and engine lifecycle commands.
 struct InputQueue {
-    pending: VecDeque<Input>,
+    pending: VecDeque<(Input, Instant)>,
+    trace_remaining: usize,
     sender_alive: bool,
     receiver_alive: bool,
 }
@@ -279,6 +280,7 @@ impl InputReceiver {
 fn input_queue() -> (InputSender, InputReceiver) {
     let shared = Arc::new(Mutex::new(InputQueue {
         pending: VecDeque::new(),
+        trace_remaining: if std::env::var("CSR_UI_WORKER_TRACE").as_deref() == Ok("1") { WORKER_TRACE_LIMIT } else { 0 },
         sender_alive: true,
         receiver_alive: true,
     }));
@@ -291,11 +293,11 @@ impl InputSender {
             return;
         }
         if matches!(input, Input::MouseMove { .. })
-            && matches!(queue.pending.back(), Some(Input::MouseMove { .. }))
+            && matches!(queue.pending.back(), Some((Input::MouseMove { .. }, _)))
         {
-            *queue.pending.back_mut().unwrap() = input;
+            *queue.pending.back_mut().unwrap() = (input, Instant::now());
         } else {
-            queue.pending.push_back(input);
+            queue.pending.push_back((input, Instant::now()));
         }
     }
 }
@@ -320,7 +322,8 @@ trait InputSource<T> {
 impl InputSource<Input> for InputReceiver {
     fn try_input(&self) -> Result<Input, TryRecvError> {
         let mut queue = self.0.lock().unwrap();
-        if let Some(input) = queue.pending.pop_front() {
+        if let Some((input, queued)) = queue.pending.pop_front() {
+            queue.trace_motion(&input, queued);
             return Ok(input);
         }
         Err(if queue.sender_alive {
@@ -332,8 +335,8 @@ impl InputSource<Input> for InputReceiver {
     fn take_boundary(&self, remaining: usize) -> Vec<Input> {
         let mut queue = self.0.lock().unwrap();
         let count = match queue.pending.front() {
-            Some(Input::MouseMove { .. }) => match queue.pending.get(1) {
-                Some(input) if !matches!(input, Input::MouseMove { .. }) => 2,
+            Some((Input::MouseMove { .. }, _)) => match queue.pending.get(1) {
+                Some((input, _)) if !matches!(input, Input::MouseMove { .. }) => 2,
                 _ => return Vec::new(),
             },
             Some(_) => 1,
@@ -342,7 +345,20 @@ impl InputSource<Input> for InputReceiver {
         if count > remaining { return Vec::new(); }
         // Snapshot under one lock before running callbacks. Producer work
         // appended while these events execute cannot extend this completion.
-        queue.pending.drain(..count).collect()
+        let entries: Vec<_> = queue.pending.drain(..count).collect();
+        entries.into_iter().map(|(input, queued)| {
+            queue.trace_motion(&input, queued);
+            input
+        }).collect()
+    }
+}
+impl InputQueue {
+    fn trace_motion(&mut self, input: &Input, queued: Instant) {
+        if self.trace_remaining == 0 { return; }
+        if let Input::MouseMove { x, y } = input {
+            self.trace_remaining -= 1;
+            tracing::info!(target: "scaleform::queue", age_ms = queued.elapsed().as_secs_f64() * 1000., pending = self.pending.len(), x, y, "UI pointer consumed");
+        }
     }
 }
 impl<T> InputSource<T> for Receiver<T> {
@@ -533,21 +549,12 @@ fn run(
                         }
                         let now = Instant::now();
                         let dt = now - last;
+                        last = now;
                         if active {
                             // Host::step pumps the executor, advances the player and drains
                             // engine commands. Separate render spans identify GPU readback waits.
                             trace.event("step_begin", active, serial, count, budget_exhausted);
-                            // Ruffle's deadline includes both timeline frames and
-                            // ActionScript timers. Calling tick before that deadline
-                            // still traverses the whole display list for mouse picking,
-                            // despite having no frame/timer to run. Input already updates
-                            // hover synchronously and may render below without waiting.
-                            if dt >= host.time_til_next_frame() {
-                                host.step(dt);
-                                last = now;
-                            } else {
-                                host.pump_loads();
-                            }
+                            host.step(dt);
                             trace.event("step_end", active, serial, count, budget_exhausted);
                             if host.needs_render() {
                                 trace.event(
@@ -572,7 +579,6 @@ fn run(
                                 }
                             }
                         } else {
-                            last = now;
                             trace.event("executor_begin", active, serial, count, budget_exhausted);
                             host.pump_loads();
                             trace.event("executor_end", active, serial, count, budget_exhausted);
