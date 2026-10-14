@@ -42,6 +42,18 @@ fn target(input: &str) -> Result<String, &'static str> {
     Ok(format!("localhost:{port}"))
 }
 
+fn lan_target(localhost: &str, owned: &str) -> Result<String, &'static str> {
+    // This opt-in proof parameter is supplied by the owned authority's runner,
+    // never by discovery. It restricts selection to that exact endpoint.
+    let expected = target(localhost)?;
+    let port: u16 = expected.rsplit_once(':').unwrap().1.parse().unwrap();
+    let address: std::net::SocketAddrV4 = owned.parse().map_err(|_| "owned LAN endpoint must be IPv4:port")?;
+    if address.port() != port || address.ip().is_unspecified()
+        || address.ip().is_multicast() || *address.ip() == std::net::Ipv4Addr::BROADCAST
+    { return Err("owned LAN endpoint must be unicast IPv4 with the proof port"); }
+    Ok(address.to_string())
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Phase {
     Start,
@@ -50,6 +62,8 @@ enum Phase {
     AwaitBrowser,
     Favorites,
     AwaitFavorites,
+    Lan,
+    AwaitLan,
     OpenAdd,
     AwaitAdd,
     Type,
@@ -91,6 +105,7 @@ pub(crate) struct Proof {
     pointer_diagnostic: Duration,
     presented_wait: Option<(Instant, u64)>,
     endpoint: String,
+    lan: bool,
     key: Option<ServerKey>,
     map: String,
     tick: u64,
@@ -107,6 +122,7 @@ impl Default for Proof {
             pointer_diagnostic: Duration::ZERO,
             presented_wait: None,
             endpoint: String::new(),
+            lan: false,
             key: None,
             map: String::new(),
             tick: 0,
@@ -357,11 +373,13 @@ fn current_action(action: &UiAction, generation: u64) -> bool {
     }
 }
 fn favorites(world: &mut World, proof: &mut Proof, id: Entity, current: Option<(Model, Snapshot)>) {
+    let tab = if proof.lan { Tab::Lan } else { Tab::Favorites };
+    let next = if proof.lan { Phase::AwaitLan } else { Phase::AwaitFavorites };
     // The tab changes on press. Finish the owned release before consulting
     // that changed model or busy refresh, otherwise the next click stays held.
     if proof.step == 2 {
         if click_ui(world, proof, id, MouseButton::Left, |_| false) {
-            proof.enter(Phase::AwaitFavorites);
+            proof.enter(next);
         }
         return;
     }
@@ -371,12 +389,12 @@ fn favorites(world: &mut World, proof: &mut Proof, id: Entity, current: Option<(
     if snapshot.busy {
         return;
     }
-    if (model.tab == Tab::Favorites && proof.step == 0)
+    if (model.tab == tab && proof.step == 0)
         || click_ui(world, proof, id, MouseButton::Left, |action| {
-            matches!(action, UiAction::Tab(Tab::Favorites))
+            matches!(action, UiAction::Tab(found) if *found == tab)
         })
     {
-        proof.enter(Phase::AwaitFavorites);
+        proof.enter(next);
     }
 }
 fn click_movie(world: &mut World, proof: &mut Proof, id: Entity, x: f64, y: f64) -> bool {
@@ -562,7 +580,17 @@ pub(crate) fn update(world: &mut World, mut proof: Local<Proof>) {
                 data.unwrap().display(),
                 shot.unwrap().parent().unwrap().display()
             );
-            proof.endpoint = endpoint;
+            if let Some(owned) = std::env::var_os("CSR_TEST_BROWSER_LAN") {
+                let Some(owned) = owned.to_str().and_then(|owned| lan_target(&endpoint, owned).ok()) else {
+                    failed(world, &mut proof, "CSR_TEST_BROWSER_LAN must be the owned authority's unicast IPv4 endpoint with the localhost proof port");
+                    return;
+                };
+                proof.endpoint = owned;
+                proof.lan = true;
+                info!("browser flow: LAN selection restricted to owned authority {}", proof.endpoint);
+            } else {
+                proof.endpoint = endpoint;
+            }
             proof.enter(Phase::Play);
         }
         Phase::Play | Phase::ReopenPlay => {
@@ -590,10 +618,31 @@ pub(crate) fn update(world: &mut World, mut proof: Local<Proof>) {
                 proof.enter(next);
             }
         }
-        Phase::AwaitBrowser if state == AppState::Browser => proof.enter(Phase::Favorites),
-        Phase::Favorites => {
+        Phase::AwaitBrowser if state == AppState::Browser => {
+            let next = if proof.lan { Phase::Lan } else { Phase::Favorites };
+            proof.enter(next);
+        }
+        Phase::Favorites | Phase::Lan => {
             let current = browser(world);
             favorites(world, &mut proof, id, current);
+        }
+        Phase::AwaitLan => {
+            let Some((model, snapshot)) = browser(world) else { return };
+            if snapshot.busy || model.tab != Tab::Lan { return; }
+            if snapshot.error.is_some() {
+                failed(world, &mut proof, "LAN collection/Inspect verification failed");
+                return;
+            }
+            if let Some(row) = snapshot.rows.iter().find(|row| row.endpoint == proof.endpoint && row.connectable) {
+                if row.favorite || row.name.is_some() || row.players.is_some() || row.ping_ms.is_some() {
+                    failed(world, &mut proof, "LAN discovery saved a favorite or invented unsupported metadata");
+                    return;
+                }
+                proof.key = Some(row.key);
+                proof.map = row.map.clone().unwrap_or_default();
+                info!("browser flow: verified LAN authority {} key {:?}, generation {}, map {:?}", row.endpoint, row.key, snapshot.generation, row.map);
+                proof.enter(Phase::CaptureFavorite);
+            }
         }
         Phase::AwaitFavorites => {
             let Some((model, snapshot)) = browser(world) else {
@@ -722,7 +771,8 @@ pub(crate) fn update(world: &mut World, mut proof: Local<Proof>) {
         }
         Phase::CaptureFavorite => {
             if proof.settled() {
-                capture_then(world, &mut proof, "browser-favorite.png", Phase::Select);
+                let name = if proof.lan { "browser-lan.png" } else { "browser-favorite.png" };
+                capture_then(world, &mut proof, name, Phase::Select);
             }
         }
         Phase::Select => {
@@ -745,7 +795,7 @@ pub(crate) fn update(world: &mut World, mut proof: Local<Proof>) {
                 failed(
                     world,
                     &mut proof,
-                    "actual row pointer did not select the favorite",
+                    "actual row pointer did not select the server",
                 );
                 return;
             }
@@ -839,7 +889,8 @@ pub(crate) fn update(world: &mut World, mut proof: Local<Proof>) {
             proof.enter(Phase::CaptureHome);
         }
         Phase::CaptureHome => {
-            capture_then(world, &mut proof, "browser-home.png", Phase::ReopenPlay)
+            let next = if proof.lan { Phase::Finish } else { Phase::ReopenPlay };
+            capture_then(world, &mut proof, "browser-home.png", next)
         }
         Phase::AwaitReopen if state == AppState::Browser => {
             let Some((model, snapshot)) = browser(world) else {
@@ -957,13 +1008,18 @@ pub(crate) fn update(world: &mut World, mut proof: Local<Proof>) {
         }
         Phase::Finish => {
             let captures = world.resource::<Captures>();
-            if captures.saved.len() != 7 || captures.saved != captures.requested {
+            let expected = if proof.lan { 3 } else { 7 };
+            if captures.saved.len() != expected || captures.saved != captures.requested {
                 failed(world, &mut proof, "not all requested captures completed");
                 return;
             }
-            info!(
+            if proof.lan {
+                info!("browser flow: authored Play -> Community -> actual LAN tab -> multicast hint/verified Inspect -> row Select/Connect -> rendered Ready/content match/advancing tick -> clean engine Home; three ScreenshotCaptured saves; failures: 0");
+            } else {
+                info!(
                 "browser flow: authored Play -> Community -> Favorites -> actual Add/typed hostname/OK -> persisted discovery -> row Connect -> rendered Ready -> engine Home -> authored reopen -> right-click context removal -> Escape Close; seven ScreenshotCaptured saves; failures: 0"
-            );
+                );
+            }
             proof.enter(Phase::Done);
             world.write_message(AppExit::Success);
         }
@@ -1085,6 +1141,15 @@ mod tests {
         ] {
             assert!(target(value).is_err(), "accepted {value:?}");
         }
+    }
+
+    #[test]
+    fn lan_proof_requires_an_explicit_unicast_ipv4_endpoint_on_the_owned_port() {
+        assert_eq!(lan_target("localhost:27018", "192.168.1.4:27018"), Ok("192.168.1.4:27018".into()));
+        for owned in ["192.168.1.4:27019", "0.0.0.0:27018", "239.1.2.3:27018", "255.255.255.255:27018", "[::1]:27018", "localhost:27018", "https://192.168.1.4:27018"] {
+            assert!(lan_target("localhost:27018", owned).is_err(), "accepted {owned}");
+        }
+        assert!(lan_target("192.168.1.4:27018", "192.168.1.4:27018").is_err());
     }
     #[test]
     fn every_character_in_a_normalized_hostname_has_a_literal_keyboard_event() {

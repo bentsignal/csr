@@ -69,3 +69,16 @@ receivers seeing both server ports, socket release, rate limits and malformed
 hint rejection. Browser compilation/integration and rendered joining remain
 pending central verification; no completed cross-machine LAN or UI fidelity
 claim is made.
+
+The existing browser engine proof has an optional LAN path: retain
+`CSR_TEST_BROWSER=localhost:<owned-port>` and set
+`CSR_TEST_BROWSER_LAN=<owned-authority-IPv4>:<same-port>` in isolated userdata.
+An independently owned headless authority must already be running and
+advertising. The proof clicks the real LAN tab, waits for that exact endpoint's
+successful discovery, selects its row and clicks Connect. It checks Ready,
+content identity and advancing authoritative ticks, then returns Home and
+checks teardown. Three fresh ScreenshotCaptured saves are required:
+`browser-lan.png`, `browser-ready.png` and `browser-home.png`. It does not inject
+rows, enter addresses or bypass the join flow. Without the optional variable,
+the existing seven-capture Favorites proof is unchanged. These are engine
+input fixtures, not operating-system mouse input or cross-machine evidence.
