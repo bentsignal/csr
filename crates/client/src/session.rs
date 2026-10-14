@@ -162,7 +162,32 @@ pub(crate) struct Loader {
     title: String,
 }
 
+/// A selected Legacy map, owned by one loader generation. Other content keeps
+/// the engine's progress presentation without borrowing unrelated Legacy art.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct LoadingMap {
+    pub serial: u64,
+    pub name: String,
+}
+
 impl Loader {
+    pub(crate) fn loading_map(&self) -> Option<LoadingMap> {
+        let (serial, selection) = self.wanted.as_ref()?;
+        let name = match selection {
+            Selection::Offline(request) if request.pack.is_none() && workshop::find(&request.options.map).is_none() => &request.options.map,
+            Selection::Host(selected) if selected.map.pack.is_none() && workshop::find(&selected.map.options.map).is_none() => &selected.map.options.map,
+            Selection::Remote(info) => {
+                let id = info.content.validate().ok()?;
+                if id.origin != content::GameOrigin::Csgo || id.name != info.content.map_name { return None; }
+                &info.content.map_name
+            }
+            _ => return None,
+        };
+        (!name.is_empty() && name.len() <= 128
+            && content::sanitize(name) == *name)
+            .then(|| LoadingMap { serial: *serial, name: name.clone() })
+    }
+
     pub(crate) fn select_host(&mut self, selected: crate::hosting::HostSelection) {
         self.host_selection = Some(selected);
     }

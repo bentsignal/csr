@@ -42,6 +42,24 @@ A future adapter must keep generic path restrictions and use explicit owned
 content identities for supported images. Missing art must not be represented
 as successful loading of an unrelated resource.
 
+The follow-up adapter recognizes only the two observed parent-path URL
+families with canonical map identifiers. It reads the exact `_loading.jpg`
+or spectate DDS first, and only when absent uses the same map's plain JPG
+or normal radar DDS. These are explicit compatibility fallbacks for the
+installed Legacy data, not a claim that the original engine substituted them.
+Corrupt preferred data is an error. JPEG and DXT1/3/5 DDS are converted to PNG
+in memory with a 4096-pixel side limit, 64 MiB RGBA limit, 32 MiB encoded
+input limit and bounded encoded output/cache. No parent-path access is enabled
+outside these families.
+
+The frontend gets its selected map and generation from the owned loader.
+Only Legacy identities with installed metadata and all required art families
+initialize the movie. Map title comes from installed localization. Unknown
+mode/scenario fields are null; their native domains remain unverified.
+Unsupported pack/archive art uses the existing progress/cancel surface.
+Home and cancellation clear the context, and cached roots receive the new
+map before being shown. Runtime verification of this follow-up is pending.
+
 Private logs, captures and owned-process receipts are under
 `csr-fidelity/overnight-feedback-20261014/loading-*` outside the repository.
 Two earlier probe preflight failures are retained there alongside the actual

@@ -32,10 +32,36 @@ struct Data {
     state: AppState,
     menu_open: bool,
     loading: String,
+    loading_map: Option<LoadingContext>,
     player_name: String,
     movie_ready: HashSet<String>,
     pause_surface: crate::frontend_pause_surface::Tracker,
     deferred_pause: crate::frontend_pause_surface::DeferredPause,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+struct LoadingContext {
+    selected: crate::session::LoadingMap,
+    title: String,
+}
+impl LoadingContext {
+    fn installed(selected: crate::session::LoadingMap, data: &Data) -> Option<Self> {
+        let map = data.game_modes.block("maps")?.block(&selected.name)?;
+        let title = map.str("nameID")?;
+        let title = data.localization.get(title).unwrap_or(title).to_owned();
+        // The authored movie requests all three families. Unknown art keeps
+        // the engine progress/cancel surface, never an invented map alias.
+        if !(data.fs.exists(&format!("maps/{}_loading.jpg", selected.name)) || data.fs.exists(&format!("maps/{}.jpg", selected.name)))
+            || !data.fs.exists(&format!("resource/overviews/{}_radar.dds", selected.name))
+            || !data.fs.exists(&format!("resource/flash/images/map_icons/collection_icon_{}.png", selected.name)) { return None; }
+        Some(Self { selected, title })
+    }
+
+    fn arguments(&self) -> Vec<Value> {
+        // Observed map/title positions. The other argument domains remain
+        // unknown; never label a remote game Competitive by default.
+        vec![self.selected.name.clone().into(), Value::Null, self.title.clone().into(), Value::Null, Value::Null, Value::Null]
+    }
 }
 enum Action {
     Sound(String),
@@ -429,8 +455,11 @@ impl Engine for Bridge {
                 let data = self.data.lock().unwrap();
                 if data.state == AppState::Loading {
                     calls.call(path, "setLoadingText", vec![data.loading.clone().into()]);
-                    calls.call(path, "showPanel", vec![]);
-                    calls.call(path, "showLoadinginfo", vec![]);
+                    if let Some(context) = &data.loading_map {
+                        calls.call(path, "setMapInfo", context.arguments());
+                        calls.call(path, "showPanel", vec![]);
+                        calls.call(path, "showLoadinginfo", vec![]);
+                    } else { calls.call(path, "hidePanel", vec![]); }
                 } else {
                     calls.call(path, "hidePanel", vec![]);
                 }
@@ -684,6 +713,8 @@ pub struct Frontend {
     loaded: HashSet<String>,
     scene: Option<AppState>,
     loading_text: String,
+    loading_map: Option<LoadingContext>,
+    loading_selection: Option<crate::session::LoadingMap>,
     lobby: Arc<Mutex<crate::frontend_lobby::Scene>>,
     notice: Entity,
     notice_text: Entity,
@@ -754,6 +785,7 @@ pub(crate) fn setup(
         state: AppState::Menu,
         menu_open: menu.open(),
         loading: String::new(),
+        loading_map: None,
         player_name: "You".into(),
         movie_ready: HashSet::new(),
         pause_surface: Default::default(),
@@ -878,6 +910,8 @@ pub(crate) fn setup(
         loaded: HashSet::new(),
         scene: None,
         loading_text: String::new(),
+        loading_map: None,
+        loading_selection: None,
         lobby,
         notice,
         notice_text,
@@ -922,6 +956,9 @@ pub(crate) fn update(
     let remote_loading = crate::remote_join::loading(remote.as_deref());
     let scene = if remote_loading { AppState::Loading } else { *state.get() };
     if scene != AppState::Match { front.pause_presentation.close(); }
+    let loading_selection = if scene == AppState::Loading { loader.loading_map() } else { None };
+    let loading_selection_changed = front.loading_selection != loading_selection;
+    front.loading_selection = loading_selection.clone();
     {
         let mut snapshot = front.data.lock().unwrap();
         snapshot.state = scene;
@@ -929,6 +966,9 @@ pub(crate) fn update(
         let options_opening = snapshot.pause_surface.options_requested();
         snapshot.deferred_pause.observe(scene == AppState::Match && menu.open(), options_opening);
         snapshot.loading = loader.status.clone();
+        if loading_selection_changed {
+            snapshot.loading_map = loading_selection.and_then(|selected| LoadingContext::installed(selected, &snapshot));
+        }
         snapshot.pause_surface.activate(front.worker_generation,
             scene == AppState::Match && matches!(menu.page, Some(crate::menu::Page::Main | crate::menu::Page::Pause)));
     }
@@ -1166,16 +1206,6 @@ pub(crate) fn update(
                 args: vec![],
             });
             front.request("LoadingScreen");
-            front.send(Input::Call {
-                path: "_level1000".into(),
-                function: "setLoadingText".into(),
-                args: vec![loader.status.clone().into()],
-            });
-            front.send(Input::Call {
-                path: "_level1000".into(),
-                function: "showPanel".into(),
-                args: vec![],
-            });
         } else {
             front.send(Input::Call {
                 path: "_level1000".into(),
@@ -1191,6 +1221,25 @@ pub(crate) fn update(
             }
         }
         front.scene = Some(scene);
+    }
+    let loading_map = front.data.lock().unwrap().loading_map.clone();
+    if front.loading_map != loading_map {
+        front.loading_map = loading_map.clone();
+        if front.movie_ready("LoadingScreen") {
+            if let Some(context) = loading_map {
+                for (function, args) in [
+                    ("setMapInfo", context.arguments()),
+                    ("setLoadingText", vec![loader.status.clone().into()]),
+                    ("showPanel", vec![]),
+                    ("showLoadinginfo", vec![]),
+                ] {
+                    front.send(Input::Call { path: "_level1000".into(), function: function.into(), args });
+                }
+            } else {
+                front.send(Input::Call { path: "_level1000".into(), function: "hidePanel".into(), args: vec![] });
+                front.send(Input::Call { path: "_level1000".into(), function: "setMapInfo".into(), args: vec![Value::Null; 6] });
+            }
+        }
     }
     let loading = scene == AppState::Loading;
     if loading && front.loading_text != loader.status {
@@ -1646,7 +1695,7 @@ mod tests {
         let data = Arc::new(Mutex::new(Data {
             inventory: InventoryView::new(&fs), fs, settings: Settings::default(),
             localization: Default::default(), game_modes: modes.clone(),
-            state: AppState::Menu, menu_open: true, loading: String::new(), player_name: "You".into(), movie_ready: HashSet::new(), pause_surface: Default::default(),
+            state: AppState::Menu, menu_open: true, loading: String::new(), loading_map: None, player_name: "You".into(), movie_ready: HashSet::new(), pause_surface: Default::default(),
         deferred_pause: Default::default(),
         }));
         let mut scene = Scene::new(Catalog::installed(&crate::ClientOptions::default(), &["de_dust2".into()]));
@@ -1741,6 +1790,7 @@ mod tests {
             state: AppState::Menu,
             menu_open: false,
             loading: String::new(),
+            loading_map: None,
             player_name: "You".into(),
         movie_ready: HashSet::new(),
         pause_surface: Default::default(),
