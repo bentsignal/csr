@@ -34,8 +34,16 @@ color/alpha, position/offset, gravity and opacity fades where supported. Meshes
 batch all particles in a layer, and shared textures are decoded once per load.
 
 Positions belong to a fixed world origin. Individual smoke puffs billboard,
-matching the selected material's camera-facing intent; the whole volume is
-never rotated. Fire ground cards and upright cards remain fixed in world
+matching the selected renderer's camera-facing intent; the whole volume is
+never rotated. The installed `explosion_child_smoke03d_ring` and
+`explosion_child_smoke_bottom` renderers explicitly use `orientation_type 1`.
+Their cards turn around the vertical Source Z axis (Bevy Y), without pitching
+toward an elevated or lowered eye. This follows the documented upright mode in
+the [Valve-hosted particle renderer documentation](https://www.dota2.com.cn/wiki/Dota_2_Workshop_Tools/Particles/Particle_System_Renderers.htm).
+Their authored roll/spin still rotates the image within that vertical plane.
+Other smoke layers retain camera-facing billboards; some individual card
+rotation is therefore expected, independently of the anchored volume.
+Fire ground cards and upright cards remain fixed in world
 orientation. Ending a field fades alpha instead of dragging positions and
 scales back into its center. Fire particle bases trace to actual ground. The authored emission scaling
 uses a temporary 19-point rendering cover of the current circular field;
