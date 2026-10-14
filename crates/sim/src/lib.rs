@@ -369,7 +369,8 @@ pub enum MeleeHit { Miss, World, Player }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum GameEvent {
     StatTrakKill { owner:PlayerId, serial:u64 },
-    DecoyShot { player: PlayerId, pos: Vec3 },
+    /// `weapon` is the throw-time weapon ContentId, independent of current inventory.
+    DecoyShot { player: PlayerId, pos: Vec3, weapon: String },
     UtilityThrown { player: PlayerId, kind: utility::Kind, pos: Vec3 },
     UtilityDetonated { player: PlayerId, kind: utility::Kind, pos: Vec3 },
     Melee { player: PlayerId, weapon: String, origin: Vec3, secondary: bool, hit: MeleeHit },

@@ -232,6 +232,7 @@ impl Plugin for CsgoPlugin {
             .init_resource::<effects::Effects>()
             .init_resource::<characters::Characters>()
             .init_resource::<viewmodel::ViewModelState>()
+            .init_resource::<viewmodel::HeldWick>()
             .add_systems(
                 Update,
                 (
@@ -242,7 +243,7 @@ impl Plugin for CsgoPlugin {
                     effects::draw,
                     characters::sync,
                     items::sync,
-                    viewmodel::update,
+                    (viewmodel::update, utility_fx::update_wick).chain(),
                     tracers::draw,
                     scope::update,
                     buymenu::draw,
@@ -743,9 +744,9 @@ fn smoke_test(
             let (forward,_,_)=movement::angle_vectors(glam::Vec3::new(0.0,l.yaw,0.0));
             let now=w.0.time();
             let pos=w.0.collision.trace_ray(l.curr_eye+forward*330.0,l.curr_eye+forward*330.0-glam::Vec3::Z*200.0,collision::contents::MASK_SOLID).end;
-            if kind=="he" {w.0.projectiles.push(sim::utility::Projectile{id:999998,owner:l.id,kind:sim::utility::Kind::He,pos:pos+glam::Vec3::Z*3.0,velocity:glam::Vec3::ZERO,born:now-2.0});}
+            if kind=="he" {w.0.projectiles.push(sim::utility::Projectile{id:999998,owner:l.id,kind:sim::utility::Kind::He,pos:pos+glam::Vec3::Z*3.0,velocity:glam::Vec3::ZERO,born:now-2.0,decoy_weapon:None});}
             else if kind=="flash" {if let Some(p)=w.0.player_mut(l.view_target()){p.flash_until=now+5.0;}}
-            else {w.0.utility_fields.push(sim::utility::Field{id:999999,owner:l.id,kind:if kind=="fire"{sim::utility::Kind::Molotov}else{sim::utility::Kind::Smoke},pos,born:now-1.0,until:now+20.0});}
+            else {w.0.utility_fields.push(sim::utility::Field{id:999999,owner:l.id,kind:if kind=="fire"{sim::utility::Kind::Molotov}else{sim::utility::Kind::Smoke},pos,born:now-1.0,until:now+20.0,decoy_weapon:None});}
         }
     }
     if *frame == capture_frame {

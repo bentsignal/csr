@@ -80,8 +80,8 @@ fn restored_state_steps_identically() {
     let pistol = a.players[ti].weapon_in_slot(2).unwrap();
     a.drop_weapon(ti, pistol, 30.0);
     let now = a.time();
-    a.projectiles.push(utility::Projectile { id: 900, owner: ct, kind: utility::Kind::He, pos: Vec3::new(0.0, 300.0, 64.0), velocity: Vec3::new(200.0, 0.0, 100.0), born: now });
-    a.utility_fields.push(utility::Field { id: 901, owner: ct, kind: utility::Kind::Smoke, pos: Vec3::new(500.0, 0.0, 0.0), born: now, until: now + 18.0 });
+    a.projectiles.push(utility::Projectile { id: 900, owner: ct, kind: utility::Kind::He, pos: Vec3::new(0.0, 300.0, 64.0), velocity: Vec3::new(200.0, 0.0, 100.0), born: now, decoy_weapon: None });
+    a.utility_fields.push(utility::Field { id: 901, owner: ct, kind: utility::Kind::Smoke, pos: Vec3::new(500.0, 0.0, 0.0), born: now, until: now + 18.0, decoy_weapon: None });
     assert!(a.bomb.is_some() && !a.items.is_empty());
 
     let bytes = a.encode_state();
