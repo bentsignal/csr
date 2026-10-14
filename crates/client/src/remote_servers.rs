@@ -290,7 +290,10 @@ impl Backend {
                     key: row.key,
                     endpoint: endpoint.0.clone(),
                     name: None,
-                    players: None,
+                    players: row
+                        .observed
+                        .as_ref()
+                        .map(|o| (o.info.players, o.info.max_players)),
                     ping_ms: None,
                     map: row
                         .observed
@@ -723,7 +726,7 @@ fn run(
             netcode::lan::collect(cancel)
                 .map_err(|error| format!("LAN discovery unavailable: {error}. Direct addresses and Favorites remain available."))?
                 .into_iter().map(|address| Endpoint(address.to_string())).collect(),
-            "LAN refresh completed. Only verified local announcements are listed; network filtering may hide servers.",
+            "LAN servers refreshed.",
         ),
         Action::Probe(endpoint) => (
             vec![endpoint.clone()],
@@ -921,6 +924,8 @@ mod tests {
     fn info() -> ServerInfo {
         ServerInfo {
             version: VERSION,
+            players: 2,
+            max_players: 4,
             tick_rate: 128,
             snapshot_interval_ticks: 4,
             max_unlag_ticks: 26,
@@ -1012,6 +1017,8 @@ mod tests {
         let row = &snapshot.rows[0];
         assert!(row.connectable && row.favorite);
         assert_eq!(row.endpoint, good.0);
+        assert_eq!(row.players, Some((2, 4)));
+        assert!(row.ping_ms.is_none());
         assert!(backend.apply(Intent::Connect { key: row.key, generation: snapshot.generation }).unwrap().is_some());
         assert!(!backend.rows.contains_key(&bad), "unverified advertisement created a row");
         publish_lan(&mut backend, good.clone(), BTreeMap::new());
@@ -1066,6 +1073,7 @@ mod tests {
             .unwrap();
         assert!(backend.snapshot().busy);
         let initial = backend.snapshot();
+        assert!(initial.rows[0].players.is_none());
         assert!(
             backend
                 .apply(Intent::Connect {
@@ -1088,7 +1096,8 @@ mod tests {
             "stale busy error survived successful discovery"
         );
         assert_eq!(row.map.as_deref(), Some("catalog_test"));
-        assert!(row.name.is_none() && row.players.is_none() && row.ping_ms.is_none());
+        assert_eq!(row.players, Some((0, 4)));
+        assert!(row.name.is_none() && row.ping_ms.is_none());
         assert!(row.discovery_elapsed.unwrap() > Duration::ZERO);
         let request = backend
             .apply(Intent::Connect {

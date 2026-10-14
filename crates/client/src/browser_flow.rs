@@ -634,13 +634,19 @@ pub(crate) fn update(world: &mut World, mut proof: Local<Proof>) {
                 return;
             }
             if let Some(row) = snapshot.rows.iter().find(|row| row.endpoint == proof.endpoint && row.connectable) {
-                if row.favorite || row.name.is_some() || row.players.is_some() || row.ping_ms.is_some() {
-                    failed(world, &mut proof, "LAN discovery saved a favorite or invented unsupported metadata");
+                let Some((players, capacity)) = row.players else {
+                    failed(world, &mut proof, "LAN discovery omitted authoritative player counts");
+                    return;
+                };
+                if row.favorite || row.name.is_some() || row.ping_ms.is_some()
+                    || capacity == 0 || capacity > 64 || players > capacity
+                {
+                    failed(world, &mut proof, "LAN discovery saved a favorite or supplied invalid metadata");
                     return;
                 }
                 proof.key = Some(row.key);
                 proof.map = row.map.clone().unwrap_or_default();
-                info!("browser flow: verified LAN authority {} key {:?}, generation {}, map {:?}", row.endpoint, row.key, snapshot.generation, row.map);
+                info!("browser flow: verified LAN authority {} key {:?}, generation {}, map {:?}, players {}/{}; name/ping unknown", row.endpoint, row.key, snapshot.generation, row.map, players, capacity);
                 proof.enter(Phase::CaptureFavorite);
             }
         }
@@ -748,13 +754,19 @@ pub(crate) fn update(world: &mut World, mut proof: Local<Proof>) {
             {
                 proof.key = Some(row.key);
                 proof.map = row.map.clone().unwrap_or_default();
-                if row.name.is_some() || row.players.is_some() || row.ping_ms.is_some() {
-                    failed(world, &mut proof, "discovery invented unsupported metadata");
+                let Some((players, capacity)) = row.players else {
+                    failed(world, &mut proof, "discovery omitted authoritative player counts");
+                    return;
+                };
+                if row.name.is_some() || row.ping_ms.is_some()
+                    || capacity == 0 || capacity > 64 || players > capacity
+                {
+                    failed(world, &mut proof, "discovery supplied invalid metadata");
                     return;
                 }
                 info!(
-                    "browser flow: discovered favorite {} key {:?}, generation {}, advertised map {:?}; name/count/ping unknown",
-                    row.endpoint, row.key, snapshot.generation, row.map
+                    "browser flow: discovered favorite {} key {:?}, generation {}, advertised map {:?}, players {}/{}; name/ping unknown",
+                    row.endpoint, row.key, snapshot.generation, row.map, players, capacity
                 );
                 proof.enter(Phase::DismissAdd);
             }
