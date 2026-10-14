@@ -1603,7 +1603,7 @@ pub(crate) fn apply(
     if opts.0.screenshot.is_some() {
         return;
     }
-    display.apply(&mut window, &settings);
+    display.apply(&mut window, &settings, opts.0.size_explicit.then_some((opts.0.width, opts.0.height)));
     for mut aa in &mut cameras {
         *aa = if settings.msaa {
             Msaa::Sample4

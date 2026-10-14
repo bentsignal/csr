@@ -88,7 +88,6 @@ use bevy::diagnostic::FrameTimeDiagnosticsPlugin;
 use bevy::pbr::MaterialPlugin;
 use bevy::prelude::*;
 use bevy::render::view::screenshot::{save_to_disk, Screenshot};
-use bevy::window::WindowResolution;
 use material::WorldMaterial;
 use player::{LocalPlayer, PlayerCamera, SimWorld};
 use std::path::PathBuf;
@@ -113,6 +112,8 @@ pub struct ClientOptions {
     pub exposure: f32,
     pub width: u32,
     pub height: u32,
+    /// Explicit session-only windowed size; defaults remain screenshot controls.
+    pub size_explicit: bool,
     /// Enemy bots; the local team gets one fewer so teams are even.
     pub bots: u32,
     /// Play as a Terrorist instead of a Counter-Terrorist.
@@ -134,6 +135,7 @@ impl Default for ClientOptions {
             exposure: 2.0,
             width: 1600,
             height: 900,
+            size_explicit: false,
             bots: 5,
             terrorist: false,
             deathmatch: false,
@@ -281,6 +283,7 @@ pub fn run(opts: ClientOptions) -> i32 {
         }
     };
     let video_settings = settings::Settings::load();
+    let (resolution, window_mode) = frontend_display::startup(&opts, &video_settings);
     let load_request = menu::LoadRequest::default();
     let mut app = App::new();
     app.add_plugins(
@@ -289,7 +292,8 @@ pub fn run(opts: ClientOptions) -> i32 {
                 close_when_requested: false,
                 primary_window: Some(Window {
                     title: format!("CSGO Rewrite — {}", opts.map),
-                    resolution: WindowResolution::new(opts.width, opts.height),
+                    resolution,
+                    mode: window_mode,
                     present_mode: input_latency::present_mode(video_settings.vsync),
                     desired_maximum_frame_latency: input_latency::surface_frame_latency(),
                     ..default()
