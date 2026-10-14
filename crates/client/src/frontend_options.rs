@@ -191,11 +191,8 @@ impl Scene {
                 }
                 let index = *value as usize;
                 *selected = Some(index);
-                calls.call(
-                    &control,
-                    "SetDropDownSelectedText",
-                    vec![choices[index].0.clone().into()],
-                );
+                // Native selection already updates its authored caption.
+
                 choices[index].1
             }
         };
@@ -370,8 +367,10 @@ impl Scene {
                     // An older saved value need not be offered by this schema.
                     // Preserve it, show it truthfully and leave no list choice
                     // selected until the player explicitly picks one.
-                    calls.set(&control, "m_nSelectedIndex", native_index.into());
-                    calls.call(&control, "SetDropDownSelectedText", vec![caption.into()]);
+                    if selected.is_none() {
+                        calls.set(&control, "m_nSelectedIndex", native_index.into());
+                        calls.call(&control, "SetDropDownSelectedText", vec![caption.into()]);
+                    }
                 }
             }
             calls.set(
