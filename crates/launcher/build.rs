@@ -16,6 +16,8 @@ fn main() {
         // still carry debug information. Their combined PDB can exceed MSVC's
         // LNK1140 limit. Suppress only the examples' final PDB, preserving
         // dependency artifacts and normal executable/test debug behavior.
-        println!("cargo:rustc-link-arg-examples=/PDB:NONE");
+        // /PDB:NONE names a shared file on current MSVC; /DEBUG:NONE actually
+        // disables PDB generation for concurrently linked examples.
+        println!("cargo:rustc-link-arg-examples=/DEBUG:NONE");
     }
 }
