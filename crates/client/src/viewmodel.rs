@@ -619,6 +619,15 @@ pub fn update(
         }
         state.grenade_seen=grenade_key;
     }
+    let suppressor = w.and_then(|w| w.suppressor_transition);
+    if suppressor != state.suppressor_seen {
+        state.pose = mdl::skeleton::rest_pose(&view.asset.model.bones);
+        state.activity = suppressor.map_or("ACT_VM_IDLE", |s| s.activity()).into();
+        state.started = now;
+        state.clip_index = 0;
+        state.suppressor_seen = suppressor;
+    }
+    if let Some(transition) = suppressor { state.activity = transition.activity().into(); }
     let inspect_requested=state.inspect_seen!=request.0;state.inspect_seen=request.0;
     let reloading = w.is_some_and(|w| w.reload_end.is_some());
     let attack = effects.consume_attack(p.id, &name, &mut state.last_attack_seen);
@@ -652,15 +661,6 @@ pub fn update(
         let activity=if grenade.phase==sim::utility::ThrowPhase::Throwing {grenade.mode.activity()}else{"ACT_VM_PULLPIN"};
         state.activity=activity.into();state.clip_index=0;
     }
-    let suppressor = w.and_then(|w| w.suppressor_transition);
-    if suppressor != state.suppressor_seen {
-        state.pose = mdl::skeleton::rest_pose(&view.asset.model.bones);
-        state.activity = suppressor.map_or("ACT_VM_IDLE", |s| s.activity()).into();
-        state.started = now;
-        state.clip_index = 0;
-        state.suppressor_seen = suppressor;
-    }
-    if let Some(transition) = suppressor { state.activity = transition.activity().into(); }
     if let Some((stage, _)) = shell {
         if stage != state.shell_seen && stage.is_some() && std::env::var_os("CSR_WEAPON_TRACE").is_some() {
             info!("weapon activity: {} shell insert {}", name, stage.unwrap_or(0) + 1);
