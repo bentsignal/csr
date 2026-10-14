@@ -255,6 +255,15 @@ _global.csrProbeRecord = function(value, path, depth) {
 // Explicit probe-only observation of absent runtime member lookups. Existing
 // resolvers are preserved, and absent members still resolve to undefined.
 _global.csrDiagnostics = new Object();
+_global.csrDiagnostics.observeRecord = function(path) {
+    var split = path.lastIndexOf(".");
+    var parent = _global.csrResolve(path.substr(0, split));
+    var key = path.substr(split + 1);
+    if (parent == undefined || typeof parent[key] != "object" || parent[key] == null) { return false; }
+    _global.csrProbeBudget = 128;
+    parent[key] = _global.csrProbeRecord(parent[key], path, 0);
+    return true;
+};
 _global.csrDiagnostics.observeGlobal = function() {
     var previousResolver = _global.__resolve;
     _global.csrProbeBudget = 128;
@@ -323,6 +332,15 @@ csrEI.addCallback("csrGet", null, function(path) {
 csrEI.addCallback("csrInspect", null, function(path) {
     var o = _global.csrResolve(path);
     var entries = [];
+    if (typeof o == "movieclip") {
+        var localBounds = o.getBounds(o);
+        var bounds = o._parent == undefined ? localBounds : o.getBounds(o._parent);
+        entries.push("_x:number=" + o._x, "_y:number=" + o._y,
+            "_width:number=" + o._width, "_height:number=" + o._height,
+            "_xscale:number=" + o._xscale, "_yscale:number=" + o._yscale,
+            "boundsInParent:string=" + [bounds.xMin, bounds.yMin, bounds.xMax, bounds.yMax].join(","),
+            "boundsLocal:string=" + [localBounds.xMin, localBounds.yMin, localBounds.xMax, localBounds.yMax].join(","));
+    }
     for (var key in o) {
         var t = typeof o[key];
         var primitive = t == "number" || t == "boolean" || t == "string" || o[key] == null;
@@ -396,8 +414,85 @@ Stage.addProperty("visibleRect", function() {
 // avatar.swf hides DynamicAvatar right before loading `img://avatar_<xuid>`
 // into it and never shows it again, yet the reference shows avatars:
 // Scaleform's load left the clip visible. Emulate that for avatar loads only.
+// Explicit compatibility surface: use the selected map's installed radar,
+// not the unrelated modern full-screen photo, in the authored overview box.
+// The frontend owns the generation and clears it on Home/cancellation.
+_global.csrLoadingOverviews = new Object();
+_global.csrBindings.configureLoadingOverview = function(path, map, serial, radarOnly) {
+    var previous = _global.csrLoadingOverviews[path];
+    if (previous != undefined && previous.map == map && previous.serial == serial) { return true; }
+    delete _global.csrLoadingOverviews[path];
+    if (previous != undefined && previous.loader != undefined) {
+        previous.loader.removeListener(previous.listener);
+        previous.loader.unloadClip(previous.target);
+    }
+    if (radarOnly !== true || typeof map != "string" || map.length == 0 || map.length > 128) { return false; }
+    var root = _global.csrResolve(path);
+    var box = root.Panel.OverviewBG;
+    if (box == undefined || box._width <= 0 || box._height <= 0 ||
+        box._width > 4096 || box._height > 4096) { return false; }
+    _global.csrLoadingOverviews[path] = {map: map, serial: serial,
+        target: root.Panel.Overview, x: box._x, y: box._y, width: box._width, height: box._height};
+    return true;
+};
 var csrLoadClip = MovieClipLoader.prototype.loadClip;
 MovieClipLoader.prototype.loadClip = function(url, target) {
+    var rootPath = String(target).split(".Panel.Overview")[0];
+    var context = _global.csrLoadingOverviews[rootPath];
+    if (context != undefined && String(target) == rootPath + ".Panel.Overview" &&
+        String(url) == "../../maps/" + context.map + "_loading.jpg") {
+        // The normal radar is an observed installed resource. No synthetic
+        // success or invented authored error callback is needed.
+        url = "../overviews/" + context.map + "_radar.dds";
+        arguments[0] = url;
+        if (context.loader != undefined) {
+            context.loader.removeListener(context.listener);
+            context.loader.unloadClip(context.target);
+        }
+        var fit = new Object();
+        fit.context = context;
+        fit.path = rootPath;
+        fit.loader = this;
+        fit.onLoadInit = function(mc) {
+            this.loader.removeListener(this);
+            if (_global.csrLoadingOverviews[this.path] != this.context ||
+                this.context.listener != this ||
+                mc != this.context.target || mc._width <= 0 || mc._height <= 0) { return; }
+            // Preserve aspect and source resolution; fit in measured authored
+            // parent coordinates after the movie's own initialization.
+            var scale = Math.min(this.context.width / mc._width, this.context.height / mc._height);
+            mc._xscale *= scale;
+            mc._yscale *= scale;
+            mc._x = this.context.x + (this.context.width - mc._width) / 2;
+            mc._y = this.context.y + (this.context.height - mc._height) / 2;
+        };
+        fit.onLoadError = function(mc, error) { this.loader.removeListener(this); };
+        context.loader = this;
+        context.listener = fit;
+        this.addListener(fit);
+    }
+    // Opt-in public loader observation for the existing menu probe only.
+    if (_global.csrDiagnostics.loadingTraceBudget > 0 &&
+        (String(url).indexOf("_loading.jpg") >= 0 || String(url).indexOf("_radar") >= 0)) {
+        _global.csrDiagnostics.loadingTraceBudget -= 1;
+        csrEI.call("csr.LoadingArtRequest", String(url), String(target));
+        var observer = new Object();
+        observer.loader = this;
+        observer.url = String(url);
+        observer.requested = String(target);
+        observer.onLoadComplete = function(mc) {
+            csrEI.call("csr.LoadingArtComplete", this.url, this.requested, String(mc), mc._width, mc._height);
+        };
+        observer.onLoadInit = function(mc) {
+            csrEI.call("csr.LoadingArtInit", this.url, this.requested, String(mc), mc._width, mc._height);
+            this.loader.removeListener(this);
+        };
+        observer.onLoadError = function(mc, error) {
+            csrEI.call("csr.LoadingArtError", this.url, this.requested, String(mc), String(error));
+            this.loader.removeListener(this);
+        };
+        this.addListener(observer);
+    }
     if (String(url).indexOf("img://avatar_") == 0) {
         var shower = new Object();
         shower.onLoadInit = function(mc) {
@@ -405,7 +500,9 @@ MovieClipLoader.prototype.loadClip = function(url, target) {
         };
         this.addListener(shower);
     }
-    return csrLoadClip.apply(this, arguments);
+    var result = csrLoadClip.apply(this, arguments);
+    if (result !== true && fit != undefined) { this.removeListener(fit); }
+    return result;
 };
 
 _global.GameInterface = _global.csrMakeProxy("GameInterface");

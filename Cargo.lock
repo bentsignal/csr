@@ -3605,6 +3605,8 @@ dependencies = [
  "num-traits",
  "png",
  "tiff",
+ "zune-core",
+ "zune-jpeg",
 ]
 
 [[package]]
@@ -5835,6 +5837,7 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "vfs",
+ "vtf",
 ]
 
 [[package]]

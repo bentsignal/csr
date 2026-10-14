@@ -255,7 +255,13 @@ fn pointer_inputs(action: &str, args: &[Value]) -> anyhow::Result<Vec<Input>> {
 }
 
 fn widget_input(path: &str, function: &str, args: Vec<Value>) -> anyhow::Result<Input> {
-    if function == "@set" {
+    if function == "@inspect" {
+        anyhow::ensure!(args.is_empty(), "public inspections take no arguments");
+        Ok(Input::Inspect(path.into()))
+    } else if function == "@request" {
+        anyhow::ensure!(args.is_empty(), "element requests take no arguments");
+        Ok(Input::RequestElement(path.into()))
+    } else if function == "@set" {
         let [Value::String(property), value] = args.as_slice() else {
             anyhow::bail!("property updates require [property,value]");
         };
@@ -339,7 +345,7 @@ fn main() -> anyhow::Result<()> {
     );
     settle(&menu, &mut latest, Duration::from_secs(5))?;
     save(latest.as_ref().unwrap(), out.join("home.png"))?;
-    if let Some(points) = std::env::args().nth(2) {
+    if let Some(points) = std::env::args().nth(2).filter(|points| !points.is_empty()) {
         for (i, point) in points.split(';').enumerate() {
             let (x, y) = point
                 .split_once(',')
