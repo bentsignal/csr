@@ -679,8 +679,12 @@ fn smoke_test(
 
     let opts = &options.0;
     let Some(path) = &opts.screenshot else { return };
+    let capture_time=std::env::var("CSR_CAPTURE_SIM_TIME").ok().and_then(|v|v.parse::<f32>().ok())
+        .filter(|v|v.is_finite()&&*v>=0.);
     if probe.active() && probe_frame.is_none() && world.as_ref().is_some_and(|w| w.0.time() >= probe.duration()) { *probe_frame = Some(*frame); }
-    let capture_frame = if probe.active() { probe_frame.unwrap_or(u32::MAX - 30) } else { opts.frames };
+    if !probe.active() && capture_time.is_some() && probe_frame.is_none()
+        && world.as_ref().is_some_and(|w|w.0.time()>=capture_time.unwrap()) { *probe_frame=Some(*frame); }
+    let capture_frame = if probe.active()||capture_time.is_some() { probe_frame.unwrap_or(u32::MAX - 30) } else { opts.frames };
     if *frame > 120 && *frame <= capture_frame { frame_times.push(real.delta_secs() * 1000.0); }
     // CSR_FRAME_LOG=ms: log every frame slower than that, with renderer stats.
     if let Some(limit) = std::env::var("CSR_FRAME_LOG").ok().and_then(|v| v.parse::<f32>().ok()) {
@@ -754,6 +758,12 @@ fn smoke_test(
         }
     }
     if *frame == capture_frame {
+        if let (Some(w),Some(l))=(world.as_ref(),local.as_ref()) {
+            info!("capture authority: time={:.5} weapon={:?} grenade={:?} projectiles={} fields={}",
+                w.0.time(),w.0.player(l.id).and_then(|p|p.active_weapon()).map(|g|g.def.class_name.as_str()),
+                w.0.player(l.id).and_then(|p|p.active_weapon()).and_then(|g|g.grenade_throw),
+                w.0.projectiles.len(),w.0.utility_fields.len());
+        }
         let fps = diagnostics
             .get(&FrameTimeDiagnosticsPlugin::FPS)
             .and_then(|d| d.average())
