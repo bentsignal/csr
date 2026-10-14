@@ -1,20 +1,32 @@
-//! SpriteCard's explicitly authored additive-over blend, without changing gain.
+//! Bounded SpriteCard frame interpolation and authored additive-over composition.
 use bevy::{
-    pbr::{ExtendedMaterial, MaterialExtension},
+    mesh::{MeshVertexAttribute, MeshVertexBufferLayoutRef},
+    pbr::{ExtendedMaterial, MaterialExtension, MaterialExtensionKey, MaterialExtensionPipeline},
     prelude::*,
-    render::render_resource::AsBindGroup,
+    render::render_resource::{
+        AsBindGroup, RenderPipelineDescriptor, SpecializedMeshPipelineError, VertexFormat,
+    },
     shader::ShaderRef,
 };
 
 pub type ParticleMaterial = ExtendedMaterial<StandardMaterial, ParticleExtension>;
 
+/// Next sheet UV and interpolation fraction, constant in Z across each card.
+pub const ATTRIBUTE_NEXT_FRAME: MeshVertexAttribute =
+    MeshVertexAttribute::new("Particle_NextFrame", 190_104_105, VertexFormat::Float32x3);
+
 #[derive(Asset, TypePath, AsBindGroup, Debug, Clone)]
 pub struct ParticleExtension {
     #[uniform(100)]
     pub additive_over: u32,
+    #[uniform(101)]
+    pub blend_frames: u32,
 }
 
 impl MaterialExtension for ParticleExtension {
+    fn vertex_shader() -> ShaderRef {
+        "embedded://client/shaders/particle.wgsl".into()
+    }
     fn fragment_shader() -> ShaderRef {
         "embedded://client/shaders/particle.wgsl".into()
     }
@@ -23,6 +35,22 @@ impl MaterialExtension for ParticleExtension {
     }
     fn enable_shadows() -> bool {
         false
+    }
+
+    fn specialize(
+        _pipeline: &MaterialExtensionPipeline,
+        descriptor: &mut RenderPipelineDescriptor,
+        layout: &MeshVertexBufferLayoutRef,
+        _key: MaterialExtensionKey<Self>,
+    ) -> Result<(), SpecializedMeshPipelineError> {
+        descriptor.vertex.buffers = vec![layout.0.get_layout(&[
+            Mesh::ATTRIBUTE_POSITION.at_shader_location(0),
+            Mesh::ATTRIBUTE_NORMAL.at_shader_location(1),
+            Mesh::ATTRIBUTE_UV_0.at_shader_location(2),
+            Mesh::ATTRIBUTE_COLOR.at_shader_location(5),
+            ATTRIBUTE_NEXT_FRAME.at_shader_location(8),
+        ])?];
+        Ok(())
     }
 }
 

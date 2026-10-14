@@ -259,6 +259,13 @@ pub fn sheets(vtf: &[u8]) -> Option<HashMap<usize, Sheet>> {
 }
 impl Sheet {
     pub fn frame(&self, age: f32, life: f32, rate: f32, fps: bool) -> usize {
+        self.frame_blend(age, life, rate, fps).0
+    }
+
+    /// Adjacent authored frames and the elapsed fraction of the current frame.
+    /// A clamped sequence holds its final image; a looping one blends back to
+    /// its first image across the final frame's own duration.
+    pub fn frame_blend(&self, age: f32, life: f32, rate: f32, fps: bool) -> (usize, usize, f32) {
         let total = if fps {
             age * rate
         } else {
@@ -271,11 +278,19 @@ impl Sheet {
         };
         for (i, d) in self.durations.iter().enumerate() {
             if t < *d {
-                return i;
+                let next = if i + 1 < self.frames.len() {
+                    i + 1
+                } else if self.clamp {
+                    i
+                } else {
+                    0
+                };
+                return (i, next, if next == i { 0.0 } else { t / d });
             }
             t -= *d;
         }
-        self.frames.len() - 1
+        let last = self.frames.len() - 1;
+        (last, last, 0.0)
     }
 }
 
@@ -299,7 +314,12 @@ mod tests {
         };
         assert_eq!(s.frame(1.5, 1., 1., true), 1);
         assert_eq!(s.frame(20., 1., 1., true), 2);
+        assert_eq!(s.frame_blend(1.5, 1., 1., true), (1, 2, 0.25));
+        assert_eq!(s.frame_blend(0.375, 1., 1., false), (1, 2, 0.25));
+        assert_eq!(s.frame_blend(3.5, 1., 1., true), (2, 2, 0.));
+        assert_eq!(s.frame_blend(20., 1., 1., true), (2, 2, 0.));
         s.clamp = false;
         assert_eq!(s.frame(4.1, 1., 1., true), 0);
+        assert_eq!(s.frame_blend(3.5, 1., 1., true), (2, 0, 0.5));
     }
 }
