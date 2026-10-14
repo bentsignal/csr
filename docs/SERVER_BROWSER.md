@@ -64,5 +64,8 @@ port may hide a server; an empty list is not proof that no host exists. The UI
 keeps direct address/Favorites access available. The socket ownership/reuse
 follows [Microsoft's multicast reuse documentation](https://learn.microsoft.com/windows/win32/winsock/using-so-reuseaddr-and-so-exclusiveaddruse)
 and the [socket2 API](https://docs.rs/socket2/0.6.3/socket2/struct.Socket.html).
-Compilation, multicast/browser integration and rendered joining remain pending
-central verification; no completed cross-machine LAN or UI fidelity claim is made.
+Focused netcode tests pass, including two simultaneous loopback multicast
+receivers seeing both server ports, socket release, rate limits and malformed
+hint rejection. Browser compilation/integration and rendered joining remain
+pending central verification; no completed cross-machine LAN or UI fidelity
+claim is made.
