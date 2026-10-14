@@ -169,11 +169,21 @@ impl NavigatorBackend for InstallNavigator {
     }
 
     fn fetch(&self, request: Request) -> OwnedFuture<Box<dyn SuccessResponse>, ErrorResponse> {
-        let url = request.url().to_string();
-        let result = match self.files.get(&url) {
-            Some(data) => Ok(Box::new(MemResponse { url, data: Some(data) }) as Box<dyn SuccessResponse>),
-            None => Err(create_fetch_error(&url, "not in the install")),
-        };
+        let result = (|| {
+            // Ruffle parses SuccessResponse.url without a base when constructing
+            // loaded movies/images. Keep its identity absolute, including query
+            // parameters, even when the request used an install-relative path.
+            let url = self.resolve_url(request.url())
+                .map_err(|error| create_fetch_error(request.url(), error))?;
+            if !matches!(url.scheme(), "file" | "img") {
+                return Err(create_fetch_error(request.url(), "unsupported install URL scheme"));
+            }
+            // Preserve the original lookup restrictions: resolving first must
+            // not turn a rejected parent path into an admitted local request.
+            let data = self.files.get(request.url())
+                .ok_or_else(|| create_fetch_error(request.url(), "not in the install"))?;
+            Ok(Box::new(MemResponse { url: url.to_string(), data: Some(data) }) as Box<dyn SuccessResponse>)
+        })();
         Box::pin(async move { result })
     }
 
@@ -641,6 +651,45 @@ fn compile_shim() -> Result<Vec<u8>, Error> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn fetched_loader_identity_is_absolute_and_content_stays_local() {
+        use super::*;
+        use futures::executor::block_on;
+
+        struct Images;
+        impl Engine for Images {
+            fn call(&mut self, _: &str, _: &str, _: &[Value], _: &mut Calls) -> Option<Value> { None }
+            fn image(&mut self, url: &str) -> Option<Vec<u8>> {
+                (url == "img://owned/tile").then(|| vec![4, 5, 6])
+            }
+        }
+        let mut fs = vfs::Vfs::new();
+        fs.push_back("synthetic", vfs::Mount::Memory(std::collections::BTreeMap::from([
+            ("resource/flash/icons/tile.png".into(), Arc::<[u8]>::from(vec![1, 2, 3])),
+        ])));
+        let files = Rc::new(Files {
+            vfs: fs, engine: Rc::new(RefCell::new(Box::new(Images))),
+            loc: Rc::new(Localization::from_bytes(&[0xff, 0xfe]).unwrap()),
+            cache: Default::default(), stats: Default::default(),
+        });
+        let executor = NullExecutor::new();
+        let navigator = InstallNavigator { files, spawner: executor.spawner(), base: Url::parse(BASE_URL).unwrap() };
+        for (request, expected, bytes) in [
+            ("icons/tile.png?label=One%20Two#selected", "file:///csgo/resource/flash/icons/tile.png?label=One%20Two#selected", vec![1, 2, 3]),
+            ("file:///csgo/resource/flash/icons/tile.png", "file:///csgo/resource/flash/icons/tile.png", vec![1, 2, 3]),
+            ("img://owned/tile?variant=One#selected", "img://owned/tile?variant=One#selected", vec![4, 5, 6]),
+        ] {
+            let response = block_on(navigator.fetch(Request::get(request.into())))
+                .unwrap_or_else(|error| panic!("fetch failed: {}", error.error));
+            assert_eq!(response.url(), expected);
+            assert!(Url::parse(&response.url()).is_ok());
+            assert_eq!(block_on(response.body()).unwrap(), bytes);
+        }
+        for rejected in ["missing.png", "../icons/tile.png", "http://[", "https://example.test/csgo/resource/flash/icons/tile.png", "img://unowned/tile"] {
+            assert!(block_on(navigator.fetch(Request::get(rejected.into()))).is_err(), "{rejected}");
+        }
+    }
+
     #[test]
     fn authored_character_contract_uses_strings_and_preserves_unicode() {
         for typed in ['3', '\u{e9}', '\u{1f600}', '\r'] {

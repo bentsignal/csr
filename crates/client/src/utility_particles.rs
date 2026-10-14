@@ -3,6 +3,7 @@
 use crate::{
     coords::to_bevy,
     particle_data::{self, Element, Sheet},
+    particle_material::{self, ParticleExtension, ParticleMaterial},
 };
 use bevy::{
     asset::RenderAssetUsages,
@@ -13,7 +14,7 @@ use std::collections::HashMap;
 
 #[derive(Clone)]
 pub struct Layer {
-    pub material: Handle<StandardMaterial>,
+    pub material: Handle<ParticleMaterial>,
     sheets: HashMap<usize, Sheet>,
     max: usize,
     burst: usize,
@@ -47,6 +48,29 @@ pub struct Layer {
     ground: bool,
 }
 
+/// Last possible particle death for these instantaneous layers. The enclosing
+/// emitter must outlive each layer's authored delay and lifetime; an unrelated
+/// flash timeout would erase dust before its fade-in can develop.
+pub fn burst_duration(layers: &[Layer]) -> f32 {
+    layers
+        .iter()
+        .filter(|l| l.burst > 0)
+        .map(|l| {
+            let life = if l.life_fps > 0.0 {
+                l.sheets
+                    .iter()
+                    .filter(|(id, _)| **id >= l.sequence[0] && **id <= l.sequence[1])
+                    .map(|(_, sheet)| sheet.frames.len() as f32 / l.life_fps)
+                    .reduce(f32::max)
+                    .unwrap_or(1.0)
+            } else {
+                l.life[0].max(l.life[1])
+            };
+            l.start + life.max(0.01)
+        })
+        .fold(0.01, f32::max)
+}
+
 fn op<'a>(ops: &[&'a Element], name: &str) -> Option<&'a Element> {
     ops.iter().copied().find(|e| {
         e.text("functionName").eq_ignore_ascii_case(name) || e.name.eq_ignore_ascii_case(name)
@@ -69,7 +93,7 @@ pub fn load(
     fs: &vfs::Vfs,
     path: &str,
     names: &[&str],
-    materials: &mut Assets<StandardMaterial>,
+    materials: &mut Assets<ParticleMaterial>,
     images: &mut Assets<Image>,
 ) -> Vec<Layer> {
     let Some(elements) = fs.read(path).and_then(|data| particle_data::pcf(&data)) else {
@@ -132,21 +156,23 @@ pub fn load(
         };
         let additive =
             value("$addself").parse::<f32>().unwrap_or(0.0) > 0.0 || value("$additive") == "1";
-        let material = materials.add(StandardMaterial {
-            base_color_texture: Some(image),
-            base_color: Color::linear_rgb(
-                value("$overbrightfactor").parse().unwrap_or(1.0),
-                value("$overbrightfactor").parse().unwrap_or(1.0),
-                value("$overbrightfactor").parse().unwrap_or(1.0),
-            ),
-            unlit: true,
-            alpha_mode: if additive {
-                AlphaMode::Add
-            } else {
-                AlphaMode::Blend
+        let additive_over = value("$addoverblend").parse::<f32>().unwrap_or(0.0) > 0.0;
+        let material = materials.add(ParticleMaterial {
+            base: StandardMaterial {
+                base_color_texture: Some(image),
+                base_color: Color::linear_rgb(
+                    value("$overbrightfactor").parse().unwrap_or(1.0),
+                    value("$overbrightfactor").parse().unwrap_or(1.0),
+                    value("$overbrightfactor").parse().unwrap_or(1.0),
+                ),
+                unlit: true,
+                alpha_mode: particle_material::alpha_mode(additive_over, additive),
+                cull_mode: None,
+                ..default()
             },
-            cull_mode: None,
-            ..default()
+            extension: ParticleExtension {
+                additive_over: u32::from(additive_over),
+            },
         });
         let init = e.refs("initializers", &elements);
         let operators = e.refs("operators", &elements);

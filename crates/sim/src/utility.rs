@@ -202,6 +202,7 @@ impl World {
         let dt = self.dt();
         let mut exploded = Vec::new();
         for p in &mut self.projectiles {
+            let was_moving = p.velocity != Vec3::ZERO;
             p.velocity.z -= 320.0 * dt;
             let end = p.pos + p.velocity * dt;
             let tr = self.collision.trace_box(
@@ -228,6 +229,17 @@ impl World {
             } else {
                 age > 1.5
             };
+            // The existing solver settles soft floor contacts to ZERO. Such
+            // contacts are silent: its 0.1-unit separation nudge otherwise
+            // produces another gravity-driven "bounce" every few ticks.
+            // No new speed threshold or velocity-to-loudness curve is added.
+            if was_moving && tr.hit() && !tr.start_solid && p.velocity != Vec3::ZERO
+                && !(p.kind.fire() && detonate)
+            {
+                self.events.push(GameEvent::UtilityBounced {
+                    player: p.owner, kind: p.kind, pos: p.pos,
+                });
+            }
             if detonate {
                 exploded.push(p.clone());
             }
@@ -291,6 +303,11 @@ impl World {
             .filter(|f| f.kind == Kind::Smoke && f.until > time)
             .map(|f| f.pos)
             .collect();
+        // Only timed decoy expiry emits this cue. Round cleanup clears fields
+        // independently, and must never sound like a live decoy has expired.
+        for f in self.utility_fields.iter().filter(|f| f.kind == Kind::Decoy && f.until <= time) {
+            self.events.push(GameEvent::DecoyExpired { player: f.owner, pos: f.pos });
+        }
         self.utility_fields.retain(|f| {
             f.until > time && !(f.kind.fire() && smokes.iter().any(|s| s.distance(f.pos) < 180.0))
         });
@@ -362,6 +379,95 @@ impl World {
 mod tests {
     use super::*;
     use crate::Team;
+
+    #[test]
+    fn decoy_expiry_is_once_at_deadline_and_never_round_cleanup() {
+        for rate in [64, 128] {
+            let mut world = arena();
+            world.set_tick_rate(rate);
+            let pos = Vec3::new(100., 20., 2.);
+            let decoy = Field { id: 1, owner: 7, kind: Kind::Decoy, pos,
+                born: 0., until: 15., decoy_weapon: None };
+            world.utility_fields = vec![decoy.clone(), Field { id: 2, kind: Kind::Smoke, ..decoy.clone() }];
+            world.tick = 15 * rate as u64 - 1;
+            world.step_utility();
+            assert!(world.events.is_empty());
+            assert_eq!(world.utility_fields.len(), 2);
+            // The deadline remains deterministic after restoring network state.
+            let mut restored = world.clone();
+            restored.restore(world.decode(&world.encode_state()).unwrap());
+            for w in [&mut world, &mut restored] {
+                w.tick += 1;
+                w.step_utility();
+                assert_eq!(w.events, vec![GameEvent::DecoyExpired { player: 7, pos }]);
+                assert!(w.utility_fields.is_empty());
+                w.events.clear();
+                for _ in 0..rate {
+                    w.tick += 1;
+                    w.step_utility();
+                    assert!(w.events.is_empty(), "removed decoy cannot expire repeatedly");
+                }
+                // Round cleanup must remain silent even for an overdue field.
+                w.utility_fields.push(decoy.clone());
+                w.start_round(false);
+                w.step_utility();
+                assert!(!w.events.iter().any(|e| matches!(e, GameEvent::DecoyExpired { .. })));
+                assert!(w.utility_fields.is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn contacts_emit_once_while_moving_but_not_at_rest_or_fire_detonation() {
+        use collision::{CollisionWorld, Convex, Plane};
+        use std::sync::Arc;
+        for rate in [64, 128] {
+            let mut collision = CollisionWorld::new();
+            collision.add_convex(Convex {
+                mins: Vec3::new(-512., -512., -16.),
+                maxs: Vec3::new(512., 512., 0.),
+                planes: [Vec3::X, -Vec3::X, Vec3::Y, -Vec3::Y, Vec3::Z, -Vec3::Z]
+                    .into_iter().zip([512., 512., 512., 512., 0., 16.])
+                    .map(|(normal, dist)| Plane { normal, dist }).collect(),
+                contents: contents::SOLID, surface: 0,
+            });
+            collision.finalize();
+            let collision = Arc::new(collision);
+            for kind in [Kind::He, Kind::Flash, Kind::Smoke, Kind::Decoy, Kind::Molotov, Kind::Incendiary] {
+                let mut world = World::new(collision.clone());
+                world.set_tick_rate(rate);
+                world.tick = rate as u64;
+                world.projectiles.push(Projectile {
+                    id: 1, owner: 1, kind, pos: Vec3::Z * 4.,
+                    velocity: -Vec3::Z * 400., born: 0., decoy_weapon: None,
+                });
+                world.step_utility();
+                if kind.fire() {
+                    assert!(world.events.iter().any(|e| matches!(e, GameEvent::UtilityDetonated { .. })));
+                    assert!(!world.events.iter().any(|e| matches!(e, GameEvent::UtilityBounced { .. })));
+                    continue;
+                }
+                let contacts: Vec<_> = world.events.iter().filter_map(|e| match e {
+                    GameEvent::UtilityBounced { player, kind, pos } => Some((*player, *kind, *pos)),
+                    _ => None,
+                }).collect();
+                assert_eq!(contacts.len(), 1);
+                assert_eq!((contacts[0].0, contacts[0].1), (1, kind));
+                assert!((2. ..2.3).contains(&contacts[0].2.z));
+                assert!(world.projectiles[0].velocity.z > 0.);
+                // Exercise repeated gravity/nudge contacts, not just one ZERO tick.
+                world.projectiles[0].velocity = Vec3::ZERO;
+                world.projectiles[0].pos = Vec3::Z * 2.1;
+                world.projectiles[0].born = world.time();
+                for _ in 0..rate {
+                    world.tick += 1;
+                    world.events.clear();
+                    world.step_utility();
+                    assert!(!world.events.iter().any(|e| matches!(e, GameEvent::UtilityBounced { .. })));
+                }
+            }
+        }
+    }
 
     #[test]
     fn decoy_captures_primary_else_pistol_through_throw_death_and_snapshot_restore() {

@@ -302,8 +302,9 @@ thing is uncanny. Fidelity is measured, never eyeballed:
 - [ ] Ragdolls/death animations; burst, suppressor and revolver modes.
       Installed death-pose/PHY and classic kill-feed metadata, authority
       receipt gaps and remaining observation plan:
-      [DEATH_PRESENTATION.md](DEATH_PRESENTATION.md). No dynamics or
-      authored death-notice integration is complete.
+      [DEATH_PRESENTATION.md](DEATH_PRESENTATION.md). Bounded cosmetic MDL/PHY
+      dynamics now retain the victim's pose and velocity; exact VPhysics
+      response and authored death-notice integration remain unfinished.
 - [ ] Validate the map pool beyond Dust II (Mirage, Inferno, Nuke, Overpass,
       Train, Cache, Vertigo, Office, Italy, ...).
 - [ ] The inherited fidelity checklist below (M2–M4).
@@ -422,7 +423,7 @@ lightmaps, props and sun, HUD, and the weapon catalog.
 
 - [x] 3D skybox (`sky_camera`, drawn by a second camera at 16x)
 - [x] 2D skybox cube faces loaded from the original materials
-- [ ] Overlays and decals (`info_overlay`)
+- [ ] Overlays and decals (`info_overlay`): [affine static-world subset](BSP_OVERLAYS.md), rendered verification pending
 - [ ] Detail props (grass and bushes from `detail.vbsp`)
 - [ ] Static prop vertex lighting from the pakfile's `sp_hdr_*.vhv` (replaces the ambient-cube approximation)
 - [x] Bump-mapped directional lightmaps, `$bumpmap`/`$bumpmap2`, SSBump and model normal maps
@@ -526,8 +527,9 @@ parity and the gameplay gaps listed above remain unfinished.
 
 - [x] `csr play de_dust2 --grenade-practice --bots 0` starts directly with
   respawns and HE, flash, smoke, Molotov, incendiary and decoy in inventory.
-  Press 4 repeatedly to cycle utility; click to throw again after the sandbox
-  cooldown. Grenades remain available after throws and respawns. Bots and
+  Press 4 repeatedly to cycle utility. Hold left for overhand, right for
+  underhand, or both for the intermediate throw; release both buttons to
+  throw. Grenades remain available after throws and respawns. Bots and
   competitive inventories are unchanged. This exposes existing grenade
   simulation/effects for testing; throw timing, trajectories and particle
   fidelity are still unfinished.
@@ -537,6 +539,33 @@ parity and the gameplay gaps listed above remain unfinished.
   practice redraws a replenished grenade after the release clip. Numeric
   strengths and inherited velocity remain provisional; trajectories, native
   command timing and particle fidelity are still unfinished.
-- [x] Retain bounded death bodies using the installed full death animation;
-  verified with a lethal simulation shot and rendered pose. Authentic ragdoll
-  physics, impulse response and airborne settling remain unfinished.
+- [x] Timed decoy expiry emits a separate positional near/distant cue from
+  installed soundscripts, matching observed terminal sound requests. Round
+  cleanup is silent. Cadence/lifetime stay provisional; damage and visual
+  expiry behaviour remain unmeasured. [Evidence](research/decoy-expiry-audio.md).
+- [x] Authoritative grenade contact audio uses installed HE/flash/smoke/incendiary
+  entries at the projectile position, with resting chatter and contact-fire
+  duplication suppressed. Decoy/Molotov bindings and final soft settling taps
+  remain unsupported; native cadence/mix parity is unmeasured.
+- [x] Retain bounded articulated death bodies from installed MDL/PHY rigs,
+  captured live poses, velocity and hit context, with asynchronous nearby
+  collision cooking. An evaluated authored pose covers a death before its
+  first rendered frame. Actual kill captures show the full body resting on
+  the floor. Exact native impulses, friction and solver response remain open.
+  [Cosmetic physics and limits](research/cosmetic-ragdolls.md), [PR #89](https://github.com/bentsignal/global-offensive/pull/89).
+- [x] Load the installed PCF/VMT/VTF smoke, fire and HE layers into bounded,
+  world-anchored particle batches, and render the held Molotov wick at its
+  current posed attachment. Actual captures verify the effects and repeated
+  throw pose cleanup. Fire/HE brightness, complete SpriteCard behavior and
+  original appearance remain unfinished. [Particle subset](research/utility-particles.md).
+- [x] Preserve the throw-time primary/pistol ContentId for positional decoy
+  playback through inventory changes, death and snapshots. The existing 2 Hz
+  cadence is still provisional; native burst/tap timing is not established.
+  [PR #90](https://github.com/bentsignal/global-offensive/pull/90).
+- [x] Remove look-driven viewmodel lag; retain authored weapon animations.
+- [x] Present Pause transitions atomically, reject obsolete open-cycle
+  rasters, and coalesce stale pointer motion across the passive visibility
+  observation. Rendered checks support reduced hover backlog; overall menu
+  smoothness and physical input latency remain open. Audio Settings/Back and
+  Pause/reopen flow work; Game Settings routing now opens its original scene,
+  whose controls are still being connected. [PR #87](https://github.com/bentsignal/global-offensive/pull/87), [PR #93](https://github.com/bentsignal/global-offensive/pull/93).

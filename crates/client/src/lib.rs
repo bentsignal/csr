@@ -36,6 +36,7 @@ pub mod menu;
 pub mod feedback;
 pub mod utility_fx;
 mod particle_data;
+mod particle_material;
 mod utility_particles;
 pub mod buymenu;
 pub mod items;
@@ -87,7 +88,7 @@ use bevy::diagnostic::FrameTimeDiagnosticsPlugin;
 use bevy::pbr::MaterialPlugin;
 use bevy::prelude::*;
 use bevy::render::view::screenshot::{save_to_disk, Screenshot};
-use bevy::window::{PresentMode, WindowResolution};
+use bevy::window::WindowResolution;
 use material::WorldMaterial;
 use player::{LocalPlayer, PlayerCamera, SimWorld};
 use std::path::PathBuf;
@@ -180,9 +181,11 @@ impl Plugin for CsgoPlugin {
     fn build(&self, app: &mut App) {
         embedded_asset!(app, "shaders/world.wgsl");
         embedded_asset!(app, "shaders/radar.wgsl");
+        embedded_asset!(app, "shaders/particle.wgsl");
         app.add_plugins(menu_blur::PostProcessPlugin)
             .add_plugins(UiMaterialPlugin::<radar_view::RadarMaterial>::default())
             .add_plugins(MaterialPlugin::<WorldMaterial>::default())
+            .add_plugins(MaterialPlugin::<particle_material::ParticleMaterial>::default())
             .init_state::<AppState>()
             .init_resource::<session::Loader>()
             .init_resource::<remote_join::JoinRequest>()
@@ -287,12 +290,7 @@ pub fn run(opts: ClientOptions) -> i32 {
                 primary_window: Some(Window {
                     title: format!("CSGO Rewrite — {}", opts.map),
                     resolution: WindowResolution::new(opts.width, opts.height),
-                    present_mode: match std::env::var("CSR_PRESENT").as_deref() {
-                        Ok("immediate") => PresentMode::Immediate,
-                        Ok("mailbox") => PresentMode::Mailbox,
-                        Ok("fifo") => PresentMode::Fifo,
-                        _ => PresentMode::AutoNoVsync,
-                    },
+                    present_mode: input_latency::present_mode(video_settings.vsync),
                     desired_maximum_frame_latency: input_latency::surface_frame_latency(),
                     ..default()
                 }),
@@ -316,6 +314,7 @@ pub fn run(opts: ClientOptions) -> i32 {
     .insert_state(if browser_flow::enabled() || remote_flow::enabled() || pack_ui::proof_enabled() || frontend_flow::enabled() || std::env::var("CSR_TEST_MENU").as_deref() == Ok("main") { AppState::Menu }
         else if opts.direct || opts.screenshot.is_some() { AppState::Loading } else { AppState::Menu });
     bot_performance::install(&mut app);
+    input_latency::install_frame_log(&mut app);
     if opts.screenshot.is_some() {
         // Automated runs never have focus; don't let the unfocused 60 Hz
         // throttle skew frame-rate readings.
@@ -374,6 +373,8 @@ fn spawn_level(
     let atlas = world_mesh::LightmapAtlas::build(&level.bsp);
     let main = world_mesh::build(&level.bsp, &atlas, &|f| !sky_faces.contains(&f));
     let skybox = world_mesh::build(&level.bsp, &atlas, &|f| sky_faces.contains(&f));
+    let main_overlays = world_mesh::build_overlays(&level.bsp, &atlas, &|f| !sky_faces.contains(&f));
+    let sky_overlays = world_mesh::build_overlays(&level.bsp, &atlas, &|f| sky_faces.contains(&f));
     let lightmap = images.add(atlas.to_image());
     drop(atlas);
     let world_shared = world_mesh::SharedHandles {
@@ -402,6 +403,25 @@ fn spawn_level(
             world_draws += 1;
         }
     }
+    let mut overlay_materials: std::collections::HashMap<(String, u8), Option<Handle<WorldMaterial>>> = Default::default();
+    let mut overlay_draws = 0;
+    for (in_sky, build) in [(false, &main_overlays), (true, &sky_overlays)] {
+        for (name, order, mesh) in &build.meshes {
+            let mat = overlay_materials.entry((name.clone(), *order)).or_insert_with(|| {
+                let material = world_mesh::overlay_material(name, *order, &level.vfs, &mut textures, &mut images, &world_shared, opts.exposure);
+                if material.is_none() { warn!("overlay material unavailable/unsupported: {name}"); }
+                material.map(|m| materials.add(m))
+            }).clone();
+            let Some(mat) = mat else { continue };
+            let mut e = commands.spawn((Mesh3d(meshes.add(mesh.clone())), MeshMaterial3d(mat)));
+            match (in_sky, sky) {
+                (true, Some(s)) => { e.insert((sky::sky_transform(&s), sky::sky_layer())); }
+                _ => { e.insert((Transform::IDENTITY, visibility::MapClusters::mesh(&level.bsp, mesh))); }
+            }
+            overlay_draws += 1;
+        }
+    }
+    info!("overlays: {overlay_draws} draws, {} triangles, {} main-world records skipped (non-affine/invalid/unsupported receivers)", main_overlays.triangles + sky_overlays.triangles, main_overlays.skipped);
     let t_world = t.elapsed().as_secs_f32();
 
     let sun = props::Sun::from_bsp(&level.bsp);
@@ -692,13 +712,6 @@ fn smoke_test(
         && world.as_ref().is_some_and(|w|w.0.time()>=capture_time.unwrap()) { *probe_frame=Some(*frame); }
     let capture_frame = if probe.active()||capture_time.is_some() { probe_frame.unwrap_or(u32::MAX - 30) } else { opts.frames };
     if *frame > 120 && *frame <= capture_frame { frame_times.push(real.delta_secs() * 1000.0); }
-    // CSR_FRAME_LOG=ms: log every frame slower than that, with renderer stats.
-    if let Some(limit) = std::env::var("CSR_FRAME_LOG").ok().and_then(|v| v.parse::<f32>().ok()) {
-        let ms = real.delta_secs() * 1000.0;
-        if ms > limit {
-            info!("slow frame {}: {ms:.1} ms", *frame);
-        }
-    }
     if *frame == capture_frame.saturating_sub(90) && std::env::var_os("CSR_INSPECT").is_some(){inspect.0+=1;}
     // CSR_BUY_MENU=n: show the buy menu on category n (0 = none picked).
     if let Ok(cat) = std::env::var("CSR_BUY_MENU").map(|v| v.parse::<usize>().unwrap_or(0)) {
