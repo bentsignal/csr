@@ -83,7 +83,7 @@ pub fn update(mut commands: Commands, art: Res<UiAssets>, world: Res<SimWorld>, 
     let camera = poses.sample(p, time.overstep_fraction());
     let map_view = crate::radar_view::view(to_uv(camera.origin), settings.radar_scale, settings.radar_rotate, camera.angles.y);
     if radar.scale > 0.0 {
-        if let Some(material) = radar.material.as_ref().and_then(|handle| materials.get_mut(handle)) {
+        if let Some(mut material) = radar.material.as_ref().and_then(|handle| materials.get_mut(handle)) {
             material.view = map_view;
         }
     }
