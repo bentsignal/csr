@@ -457,8 +457,12 @@ impl Engine for Bridge {
                     calls.call(path, "setLoadingText", vec![data.loading.clone().into()]);
                     if let Some(context) = &data.loading_map {
                         calls.call(path, "setMapInfo", context.arguments());
+                        calls.call(path, "setHintText", vec!["".into()]);
                         calls.call(path, "showPanel", vec![]);
                         calls.call(path, "showLoadinginfo", vec![]);
+                        for label in ["ModeText", "ScenarioText"] {
+                            calls.set(&format!("{path}.Panel.MainText.{label}"), "_visible", false.into());
+                        }
                     } else { calls.call(path, "hidePanel", vec![]); }
                 } else {
                     calls.call(path, "hidePanel", vec![]);
@@ -1229,11 +1233,15 @@ pub(crate) fn update(
             if let Some(context) = loading_map {
                 for (function, args) in [
                     ("setMapInfo", context.arguments()),
+                    ("setHintText", vec!["".into()]),
                     ("setLoadingText", vec![loader.status.clone().into()]),
                     ("showPanel", vec![]),
                     ("showLoadinginfo", vec![]),
                 ] {
                     front.send(Input::Call { path: "_level1000".into(), function: function.into(), args });
+                }
+                for label in ["ModeText", "ScenarioText"] {
+                    front.send(Input::Set { path: format!("_level1000.Panel.MainText.{label}"), property: "_visible".into(), value: false.into() });
                 }
             } else {
                 front.send(Input::Call { path: "_level1000".into(), function: "hidePanel".into(), args: vec![] });

@@ -255,7 +255,10 @@ fn pointer_inputs(action: &str, args: &[Value]) -> anyhow::Result<Vec<Input>> {
 }
 
 fn widget_input(path: &str, function: &str, args: Vec<Value>) -> anyhow::Result<Input> {
-    if function == "@request" {
+    if function == "@inspect" {
+        anyhow::ensure!(args.is_empty(), "public inspections take no arguments");
+        Ok(Input::Inspect(path.into()))
+    } else if function == "@request" {
         anyhow::ensure!(args.is_empty(), "element requests take no arguments");
         Ok(Input::RequestElement(path.into()))
     } else if function == "@set" {
