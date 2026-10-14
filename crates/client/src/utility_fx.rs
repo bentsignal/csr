@@ -83,6 +83,10 @@ pub fn setup(
     for layer in smoke.iter().chain(&fire).chain(&he).chain(&wick) {
         let mut mesh = Mesh::from(Rectangle::new(0.001, 0.001));
         mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, vec![[1.0_f32; 4]; 4]);
+        mesh.insert_attribute(
+            crate::particle_material::ATTRIBUTE_NEXT_FRAME,
+            vec![[0.0_f32; 3]; 4],
+        );
         let mesh = meshes.add(mesh);
         commands.spawn((
             Mesh3d(mesh),

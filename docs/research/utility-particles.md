@@ -127,3 +127,32 @@ contributes no light. Other ADDSELF materials retain the prior approximation.
 This addresses one known blend mismatch, not complete SpriteCard parity:
 power-function remapping, ramps, depth blending and the remaining ADDSELF
 semantics are still unresolved. Rendered brightness must be checked again.
+
+## Authored single-sequence frame interpolation
+
+The installed ground-fire, center/fancy fire and flame materials explicitly
+set `$BLENDFRAMES 1`. The renderer previously selected one whole sheet frame,
+discarding the fractional time before the next image. It now transports the
+next frame's UV and that fraction per card, and mixes the two sampled RGBA
+values before fog, particle opacity and the existing blend composition. This
+avoids two separate transparent draws, which would attenuate the background
+twice. Materials without the supported flag retain one texture sample.
+
+The [sprite-sheet format reference](https://srctools.readthedocs.io/en/latest/modules/vtf.html)
+documents frame rectangles and durations. A creator's original
+[in-game authoring walkthrough](https://steamcommunity.com/sharedfiles/filedetails/?id=2954928838&l=english)
+also demonstrates the `$blendframes` switch as blending adjacent sprite
+images. This is author-observed tool behavior, not an engine implementation
+reference. The bounded implementation uses linear interpolation within each
+authored frame duration, holds the final frame for clamped sequences, and
+wraps to the first image for looping sequences. The existing animation clock,
+emission, lifetime, gain, tint and additive-over composition are unchanged.
+
+Dual-sequence and max-luminance frame modes are deliberately excluded: their
+combination law is not established. In particular, this does not implement
+the smoke materials' `$DUALSEQUENCE`, `$SEQUENCE_BLEND_MODE`,
+`$MAXLUMFRAMEBLEND2` or `$ZOOMANIMATESEQ2`, nor fire's `$POWERFUNCTION`.
+Their unknown laws are not replaced with a guessed tint or gain. This change
+targets hard frame cuts and does not claim to solve white fire, dark uniform
+smoke or native/2015 material parity. Runtime shader validation and rendered
+checks must establish the visible result before delivery.

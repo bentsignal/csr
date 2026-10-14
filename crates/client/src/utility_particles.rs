@@ -42,6 +42,7 @@ pub struct Layer {
     gravity: Vec3,
     sequence: [usize; 2],
     animation_rate: f32,
+    blend_frames: bool,
     fps: bool,
     roll: [f32; 2],
     spin: f32,
@@ -157,6 +158,11 @@ pub fn load(
         let additive =
             value("$addself").parse::<f32>().unwrap_or(0.0) > 0.0 || value("$additive") == "1";
         let additive_over = value("$addoverblend").parse::<f32>().unwrap_or(0.0) > 0.0;
+        // Dual-sequence/max-luminance modes need their own authored law;
+        // this interpolation implements the explicit single-sequence flag.
+        let blend_frames = value("$blendframes").parse::<f32>().unwrap_or(0.0) > 0.0
+            && value("$dualsequence").parse::<f32>().unwrap_or(0.0) == 0.0
+            && value("$maxlumframeblend1").parse::<f32>().unwrap_or(0.0) == 0.0;
         let material = materials.add(ParticleMaterial {
             base: StandardMaterial {
                 base_color_texture: Some(image),
@@ -172,6 +178,7 @@ pub fn load(
             },
             extension: ParticleExtension {
                 additive_over: u32::from(additive_over),
+                blend_frames: u32::from(blend_frames),
             },
         });
         let init = e.refs("initializers", &elements);
@@ -283,6 +290,7 @@ pub fn load(
             )
             .map(|v| v.max(0.0) as usize),
             animation_rate,
+            blend_frames,
             fps: render.is_some_and(|r| r.number("use animation rate as FPS", 0.0) != 0.0),
             roll: range(
                 op(&init, "Rotation Random"),
@@ -539,6 +547,7 @@ impl Emitter {
             let mut positions = Vec::new();
             let mut normals = Vec::new();
             let mut uvs = Vec::new();
+            let mut next_frames = Vec::new();
             let mut colors = Vec::new();
             // Transparent quads within one batched mesh still need back-to-front ordering.
             b.particles.sort_by(|a, b| {
@@ -556,11 +565,20 @@ impl Emitter {
                 }
                 let radius = p.radius
                     * (l.scale[0] + (l.scale[1] - l.scale[0]) * (age / p.life).clamp(0.0, 1.0));
-                let uv = l
+                let (uv, next_uv, blend) = l
                     .sheets
                     .get(&p.sequence)
-                    .map(|s| s.frames[s.frame(age, p.life, l.animation_rate, l.fps)])
-                    .unwrap_or([0.0, 0.0, 1.0, 1.0]);
+                    .map(|s| {
+                        if l.blend_frames {
+                            let (current, next, blend) =
+                                s.frame_blend(age, p.life, l.animation_rate, l.fps);
+                            (s.frames[current], s.frames[next], blend)
+                        } else {
+                            let uv = s.frames[s.frame(age, p.life, l.animation_rate, l.fps)];
+                            (uv, uv, 0.0)
+                        }
+                    })
+                    .unwrap_or(([0.0, 0.0, 1.0, 1.0], [0.0, 0.0, 1.0, 1.0], 0.0));
                 let (right, up) = if l.ground {
                     (
                         Vec3::new(p.yaw.cos(), 0.0, p.yaw.sin()),
@@ -580,15 +598,16 @@ impl Emitter {
                 let normal = right.cross(up).normalize_or_zero();
                 let mut color = p.color;
                 color[3] = alpha;
-                for (position, uv) in [
-                    (center - r - u, [uv[0], uv[3]]),
-                    (center + r - u, [uv[2], uv[3]]),
-                    (center + r + u, [uv[2], uv[1]]),
-                    (center - r + u, [uv[0], uv[1]]),
+                for (position, uv, next_uv) in [
+                    (center - r - u, [uv[0], uv[3]], [next_uv[0], next_uv[3]]),
+                    (center + r - u, [uv[2], uv[3]], [next_uv[2], next_uv[3]]),
+                    (center + r + u, [uv[2], uv[1]], [next_uv[2], next_uv[1]]),
+                    (center - r + u, [uv[0], uv[1]], [next_uv[0], next_uv[1]]),
                 ] {
                     positions.push(position.to_array());
                     normals.push(normal.to_array());
                     uvs.push(uv);
+                    next_frames.push([next_uv[0], next_uv[1], blend]);
                     colors.push(color);
                 }
             }
@@ -598,11 +617,13 @@ impl Emitter {
             positions.resize(l.max * 4, [0.0; 3]);
             normals.resize(l.max * 4, [0.0, 1.0, 0.0]);
             uvs.resize(l.max * 4, [0.0; 2]);
+            next_frames.resize(l.max * 4, [0.0; 3]);
             colors.resize(l.max * 4, [0.0; 4]);
             if let Some(mut mesh) = meshes.get_mut(&b.mesh) {
                 mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
                 mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
                 mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
+                mesh.insert_attribute(particle_material::ATTRIBUTE_NEXT_FRAME, next_frames);
                 mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
             }
         }
@@ -634,6 +655,10 @@ fn empty_mesh(capacity: usize) -> Mesh {
         vec![[0.0_f32, 1.0, 0.0]; capacity * 4],
     );
     mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, vec![[0.0_f32; 2]; capacity * 4]);
+    mesh.insert_attribute(
+        particle_material::ATTRIBUTE_NEXT_FRAME,
+        vec![[0.0_f32; 3]; capacity * 4],
+    );
     mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, vec![[0.0_f32; 4]; capacity * 4]);
     mesh.insert_indices(Indices::U32(
         (0..capacity as u32)
