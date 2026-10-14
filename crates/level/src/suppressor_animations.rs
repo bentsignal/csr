@@ -80,6 +80,9 @@ pub(super) fn import(
         .iter_mut()
         .filter(|w| w.attr_f32("has silencer").is_some_and(|v| v > 0.))
         .collect();
+    if definitions.is_empty() {
+        return previous_hash;
+    }
     definitions.sort_by(|a, b| a.class_name.cmp(&b.class_name));
     for weapon in definitions {
         digest.update(weapon.class_name.as_bytes());
