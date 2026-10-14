@@ -37,6 +37,9 @@ pub mod flags {
     pub const SSBUMP_MATHFIX: u32 = 1 << 12;
     /// Developer-only factor visualization on an owned material variant.
     pub const SHADOW_DIAGNOSTIC: u32 = 1 << 13;
+    /// Projected BSP overlay; the following two bits hold its authored order.
+    pub const OVERLAY: u32 = 1 << 14;
+    pub const OVERLAY_ORDER_SHIFT: u32 = 15;
 }
 
 #[derive(Clone, Copy, Debug, ShaderType)]
@@ -101,6 +104,7 @@ pub struct WorldMaterialKey {
     pub cull: bool,
     pub depth_write: bool,
     pub shadow_diagnostic: bool,
+    pub overlay_order: Option<u8>,
 }
 
 #[derive(Asset, TypePath, AsBindGroup, Debug, Clone)]
@@ -148,6 +152,8 @@ impl From<&WorldMaterial> for WorldMaterialKey {
             cull: m.cull,
             depth_write: !matches!(m.alpha_mode, AlphaMode::Blend | AlphaMode::Add | AlphaMode::Premultiplied),
             shadow_diagnostic: crate::shadow_diagnostic::enabled(),
+            overlay_order: (m.params.flags & flags::OVERLAY != 0)
+                .then_some(((m.params.flags >> flags::OVERLAY_ORDER_SHIFT) & 3) as u8),
         }
     }
 }
@@ -159,6 +165,14 @@ impl Material for WorldMaterial {
 
     fn alpha_mode(&self) -> AlphaMode {
         self.alpha_mode
+    }
+
+    fn depth_bias(&self) -> f32 {
+        // Retain BSP order as Bevy's transparent sort bias. General
+        // intersecting translucent-surface sorting remains a renderer gap.
+        if self.params.flags & flags::OVERLAY != 0 {
+            1.0 + ((self.params.flags >> flags::OVERLAY_ORDER_SHIFT) & 3) as f32
+        } else { 0.0 }
     }
 
     fn enable_prepass() -> bool {
@@ -191,6 +205,13 @@ impl Material for WorldMaterial {
         }
         if let Some(ds) = descriptor.depth_stencil.as_mut() {
             ds.depth_write_enabled = Some(key.bind_group_data.depth_write);
+            if let Some(order) = key.bind_group_data.overlay_order {
+                // Bevy uses reversed Z (GreaterEqual). A positive raster bias
+                // keeps coplanar decals visible without moving world geometry.
+                ds.depth_write_enabled = Some(false);
+                ds.bias.constant = 1 + i32::from(order);
+                ds.bias.slope_scale = 1.0;
+            }
         }
         Ok(())
     }

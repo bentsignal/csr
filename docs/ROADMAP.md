@@ -423,7 +423,7 @@ lightmaps, props and sun, HUD, and the weapon catalog.
 
 - [x] 3D skybox (`sky_camera`, drawn by a second camera at 16x)
 - [x] 2D skybox cube faces loaded from the original materials
-- [ ] Overlays and decals (`info_overlay`)
+- [ ] Overlays and decals (`info_overlay`): [affine static-world subset](BSP_OVERLAYS.md), rendered verification pending
 - [ ] Detail props (grass and bushes from `detail.vbsp`)
 - [ ] Static prop vertex lighting from the pakfile's `sp_hdr_*.vhv` (replaces the ambient-cube approximation)
 - [x] Bump-mapped directional lightmaps, `$bumpmap`/`$bumpmap2`, SSBump and model normal maps

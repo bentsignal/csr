@@ -13,6 +13,7 @@ pub mod visibility;
 pub mod lump;
 pub mod staticprops;
 pub mod primitives;
+pub mod overlays;
 
 use glam::{Vec3, Vec4};
 use std::io;
@@ -20,6 +21,7 @@ use std::io;
 pub use disp::DispMesh;
 pub use staticprops::{StaticProp, StaticProps};
 pub use primitives::{FaceMesh, FaceMeshError, Primitive};
+pub use overlays::Overlay;
 
 /// Lump indices used by this reader.
 pub mod lumps {
@@ -48,6 +50,7 @@ pub mod lumps {
     pub const CUBEMAPS: usize = 42;
     pub const TEXDATA_STRING_DATA: usize = 43;
     pub const TEXDATA_STRING_TABLE: usize = 44;
+    pub const OVERLAYS: usize = 45;
     pub const DISP_TRIS: usize = 48;
     pub const LEAF_AMBIENT_INDEX_HDR: usize = 51;
     pub const LEAF_AMBIENT_INDEX: usize = 52;
@@ -55,6 +58,7 @@ pub mod lumps {
     pub const LEAF_AMBIENT_LIGHTING_HDR: usize = 55;
     pub const LEAF_AMBIENT_LIGHTING: usize = 56;
     pub const FACES_HDR: usize = 58;
+    pub const OVERLAY_FADES: usize = 60;
 }
 
 /// `texinfo.flags` bits.
@@ -281,6 +285,7 @@ pub struct Bsp {
     /// The embedded ZIP of map-specific files.
     pub pakfile: Vec<u8>,
     pub static_props: StaticProps,
+    pub overlays: Vec<Overlay>,
 }
 
 fn invalid(msg: impl Into<String>) -> io::Error {
@@ -462,6 +467,11 @@ impl Bsp {
         });
         bsp.pakfile = get(lumps::PAKFILE)?;
         bsp.static_props = staticprops::parse(file, &get(lumps::GAME_LUMP)?)?;
+        let overlay_bytes = get(lumps::OVERLAYS)?;
+        if !overlay_bytes.is_empty() && header.lumps[lumps::OVERLAYS].version != 0 {
+            return Err(invalid("unsupported BSP overlay lump version"));
+        }
+        bsp.overlays = overlays::parse(&overlay_bytes, &get(lumps::OVERLAY_FADES)?)?;
         Ok(bsp)
     }
 
