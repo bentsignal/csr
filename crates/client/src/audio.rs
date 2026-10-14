@@ -22,6 +22,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 mod classic;
+mod utility;
 pub use classic::SoundEra;
 
 /// Rodio applies inverse-square attenuation in spatial-scale units; scaling
@@ -551,6 +552,7 @@ impl SoundLibrary {
             }
         }
         lib.classic = classic::Profile::load(fs, &mut lib.entries, era);
+        utility::import(&mut lib);
         lib
     }
 
@@ -638,6 +640,17 @@ impl SoundLibrary {
     ) {
         let entry = self.weapon_shot_entry(weapon).to_string();
         self.play(commands, fs, sources, &entry, Some(pos));
+    }
+
+    /// Contact audio is spatial even for a grenade thrown by the listener.
+    /// Imported entries retain authored gain, pitch and soundlevel unchanged.
+    pub fn play_grenade_bounce(
+        &mut self, commands: &mut Commands, fs: &vfs::Vfs,
+        sources: &mut Assets<AudioSource>, kind: sim::utility::Kind, pos: glam::Vec3,
+    ) {
+        if let Some(id) = utility::bounce_id(kind) {
+            self.play(commands, fs, sources, &id.to_string(), Some(pos));
+        }
     }
 
     /// Plays an entry for an owner: a new sound on a single-sound channel
