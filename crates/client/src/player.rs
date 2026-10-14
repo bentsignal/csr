@@ -400,6 +400,21 @@ pub fn tick(
                     weapon.map(|w| w.def.class_name.as_str()), weapon.map(|w| w.suppressor_attached),
                     weapon.and_then(|w| w.suppressor_transition), weapon.map(|w| w.next_attack));
             }
+        } else if std::env::var("CSR_TEST_SWITCH").as_deref() == Ok("inventory-previous") {
+            // Keep the ordinary practice inventory intact. Select Flash by its
+            // installed item id, then ask authority for the previous weapon.
+            input.buttons &= !(buttons::ATTACK | buttons::ATTACK2);
+            if world.0.tick == world.0.ticks(0.5) {
+                input.utility = world.0.catalog.get("weapon_flashbang").map_or(0, |def| def.def_index);
+            }
+            if world.0.tick == world.0.ticks(1.5) { input.weapon_slot = sim::SLOT_PREVIOUS; }
+            if input.utility != 0 || input.weapon_slot != 0 {
+                let player = world.0.player(local.id);
+                info!("inventory wheel fixture: tick={} time={:.5} request_slot={} utility={} before={:?} inventory={:?}",
+                    world.0.tick, world.0.time(), input.weapon_slot, input.utility,
+                    player.and_then(|p| p.active_weapon()).map(|w| w.def.class_name.as_str()),
+                    player.map(|p| p.weapons.iter().map(|w| w.def.class_name.as_str()).collect::<Vec<_>>()));
+            }
         } else {
             match world.0.tick {
                 64 => input.buttons |= buttons::ATTACK,
