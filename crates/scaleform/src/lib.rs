@@ -347,7 +347,7 @@ impl InputSource<Input> for InputReceiver {
     }
     fn take_boundary(&self, remaining: usize) -> Vec<Input> {
         let mut queue = self.0.lock().unwrap();
-        let count = match queue.pending.front() {
+        let fallback_count = match queue.pending.front() {
             Some((Input::MouseMove { .. }, _)) => match queue.pending.get(1) {
                 Some((input, _)) if !matches!(input, Input::MouseMove { .. }) => 2,
                 _ => return Vec::new(),
@@ -355,6 +355,15 @@ impl InputSource<Input> for InputReceiver {
             Some(_) => 1,
             None => return Vec::new(),
         };
+        // Our passive sampler is not the click/key/lifecycle boundary that
+        // this completion protects. Include intervening samples in the same
+        // FIFO snapshot, stopping at the first actual boundary. Inspect one
+        // entry beyond the remaining cap so a boundary there stays queued
+        // with its preceding motion, just like an adjacent motion/key pair.
+        let count = queue.pending.iter().take(remaining.saturating_add(1))
+            .position(|(input, _)| !matches!(input,
+                Input::MouseMove { .. } | Input::ObservePauseSurface { .. }))
+            .map_or(fallback_count, |index| index + 1);
         if count > remaining { return Vec::new(); }
         // Snapshot under one lock before running callbacks. Producer work
         // appended while these events execute cannot extend this completion.
@@ -387,7 +396,8 @@ const WORKER_TRACE_LIMIT: usize = 65_536;
 /// A progress opportunity follows every finite input batch, including batches
 /// whose producer keeps the queue nonempty. Barriers are never reordered.
 /// After elapsed expiry, at most one existing FIFO boundary completes before
-/// progress: a non-motion event, with its preceding motion if necessary. This
+/// progress: a non-motion, non-passive event, with its preceding motion and
+/// passive visibility samples if necessary. This
 /// prevents one slow motion from repeatedly deferring a queued click/key while
 /// keeping pure-motion turns unchanged. All calls still count toward the cap.
 /// The elapsed budget cannot preempt a slow movie action or GPU readback.
@@ -1027,6 +1037,71 @@ mod worker_tests {
             assert_eq!(delivered, vec![format!("{:?}", motion(0)), format!("{:?}", motion(99)), format!("{barrier:?}")]);
             assert_eq!(progress, 1);
             assert!(matches!(receiver.try_input(), Ok(Input::MouseMove { x: 100., .. })));
+        }
+    }
+
+    #[test]
+    fn slow_motion_completes_one_actual_boundary_past_passive_samples() {
+        for preceding_motion in [false, true] {
+            for boundary in [
+                Input::MouseDown { x: 1., y: -1., button: MouseButton::Left },
+                Input::Call { path: "button".into(), function: "activate".into(), args: vec![] },
+            ] {
+                let (sender, receiver) = input_queue();
+                let sample = Input::ObservePauseSurface { args: vec!["sample".into()] };
+                let next = Input::MouseUp { x: 1., y: -1., button: MouseButton::Left };
+                sender.send(motion(0));
+                let mut delivered = Vec::new();
+                service_input_turn_until(&receiver, INPUT_TURN_BUDGET, || true, |turn| {
+                    match turn {
+                        InputTurn::Input(input) => {
+                            delivered.push(format!("{input:?}"));
+                            if delivered.len() == 1 {
+                                if preceding_motion { sender.send(motion(1)); }
+                                sender.send(sample.clone());
+                                sender.send(boundary.clone());
+                                sender.send(next.clone());
+                            }
+                        }
+                        InputTurn::Progress { count, budget_exhausted } => {
+                            assert_eq!(count, 3 + usize::from(preceding_motion));
+                            assert!(budget_exhausted);
+                        }
+                    }
+                    Ok::<_, ()>(())
+                }).unwrap();
+                let mut expected = vec![format!("{:?}", motion(0))];
+                if preceding_motion { expected.push(format!("{:?}", motion(1))); }
+                expected.extend([format!("{sample:?}"), format!("{boundary:?}")]);
+                assert_eq!(delivered, expected);
+                // The authored call is a real boundary too: the following
+                // release never joins the already reserved completion.
+                assert_eq!(format!("{:?}", receiver.try_input().unwrap()), format!("{next:?}"));
+                assert!(matches!(receiver.try_input(), Err(std::sync::mpsc::TryRecvError::Empty)));
+            }
+        }
+    }
+
+    #[test]
+    fn passive_boundary_completion_never_exceeds_the_remaining_input_cap() {
+        for preceding_motion in [false, true] {
+            let (sender, receiver) = input_queue();
+            let sample = Input::ObservePauseSurface { args: vec!["sample".into()] };
+            let click = Input::MouseDown { x: 1., y: -1., button: MouseButton::Left };
+            if preceding_motion { sender.send(motion(1)); }
+            sender.send(sample.clone());
+            sender.send(click.clone());
+            let count = 2 + usize::from(preceding_motion);
+            // Leave the whole existing prefix queued when its actual boundary
+            // is one entry beyond the cap, then admit it exactly once it fits.
+            assert!(receiver.take_boundary(count - 1).is_empty());
+            let delivered: Vec<_> = receiver.take_boundary(count).into_iter()
+                .map(|input| format!("{input:?}")).collect();
+            let mut expected = Vec::new();
+            if preceding_motion { expected.push(format!("{:?}", motion(1))); }
+            expected.extend([format!("{sample:?}"), format!("{click:?}")]);
+            assert_eq!(delivered, expected);
+            assert!(matches!(receiver.try_input(), Err(std::sync::mpsc::TryRecvError::Empty)));
         }
     }
 
