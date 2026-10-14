@@ -47,8 +47,6 @@ impl DeferredPause {
     }
 }
 
-pub(crate) const SAMPLER_PATH: &str = "_global.csrBindings";
-pub(crate) const SAMPLER_METHOD: &str = "samplePauseSurface";
 pub(crate) const RECEIVER: &str = "OwnedPauseSurface";
 pub(crate) const CALLBACK: &str = "Visibility";
 

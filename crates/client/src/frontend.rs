@@ -1120,7 +1120,7 @@ pub(crate) fn update(
     }
     let sample = front.data.lock().unwrap().pause_surface.request(front.presented_serial);
     if let Some(sample) = sample {
-        front.send(Input::Call { path: crate::frontend_pause_surface::SAMPLER_PATH.into(), function: crate::frontend_pause_surface::SAMPLER_METHOD.into(), args: sample.args() });
+        front.send(Input::ObservePauseSurface { args: sample.args() });
     }
     if scene != AppState::Menu && front.lobby.lock().unwrap().active() { front.lobby.lock().unwrap().cancel(); }
     if front.scene != Some(scene) {

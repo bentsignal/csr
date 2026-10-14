@@ -28,8 +28,12 @@ seconds of continuous pointer movement over Pause's options at the game update
 cadence. It uses the production frontend input bridge and the Bevy window's
 cursor state, without moving the OS pointer. Normal gameplay never runs it.
 
-Adjacent pointer positions were already coalesced. Every click, key, focus,
-release and lifecycle command retains its existing FIFO boundary. No Ruffle
+Adjacent pointer positions were already coalesced. Pause's passive visibility
+query formerly interrupted that coalescing. It now has an explicit observation
+input: newer motion can replace the preceding position across this query alone,
+so the query sees current hover state rather than retaining obsolete positions.
+Every authored call, click, key, focus, release and lifecycle command retains its
+existing FIFO boundary. No Ruffle
 hit-testing semantics, ActionScript method caches, menu movies, or content are
 modified here. In particular, `call_internal_interface` does not itself perform
 the additional mouse pick; native property calls are not the claimed hot path.
@@ -40,3 +44,10 @@ baseline 464 presentations/20s versus candidate 435, input receipt p95 50.5ms
 versus 49.0ms. It was removed. No menu performance improvement is claimed from
 that experiment. The atomic Pause correction remains separate from unresolved
 hover latency and original-game timing fidelity.
+
+The first five-second Pause pressure run with the observation still acting as a
+barrier consumed 55 pointer positions: queue age p95 167.2ms, maximum 208.0ms,
+maximum five pending inputs. Only positive-coordinate pressure positions were
+included; inactive/startup ownership-reset positions were excluded. Other CPU
+build activity was recorded. The coalescing correction requires a follow-up
+pressure comparison; these numbers are not a claim of one-second FIFO backlog.

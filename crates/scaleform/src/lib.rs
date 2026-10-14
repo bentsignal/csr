@@ -157,6 +157,9 @@ pub enum Input {
     /// One display transition. No movie tick or frame publication can split
     /// these commands; resulting frames carry this presentation revision.
     Present { commands: Vec<Command>, revision: u64 },
+    /// Passive owned visibility bookkeeping. It observes the latest pointer
+    /// state; unlike an authored call it does not create a motion boundary.
+    ObservePauseSurface { args: Vec<Value> },
     /// Read-only names/types of a runtime object's public properties.
     Inspect(String),
     /// Advance the movies only while visible (saves CPU in a match).
@@ -292,13 +295,23 @@ impl InputSender {
         if !queue.receiver_alive {
             return;
         }
-        if matches!(input, Input::MouseMove { .. })
-            && matches!(queue.pending.back(), Some((Input::MouseMove { .. }, _)))
-        {
-            *queue.pending.back_mut().unwrap() = (input, Instant::now());
-        } else {
-            queue.pending.push_back((input, Instant::now()));
+        if matches!(input, Input::MouseMove { .. }) {
+            // Only our passive visibility sampler may sit between replaceable
+            // positions. A click, key, focus, lifecycle or authored call still
+            // freezes the preceding position and remains strictly FIFO.
+            for (pending, queued) in queue.pending.iter_mut().rev() {
+                match pending {
+                    Input::ObservePauseSurface { .. } => continue,
+                    Input::MouseMove { .. } => {
+                        *pending = input;
+                        *queued = Instant::now();
+                        return;
+                    }
+                    _ => break,
+                }
+            }
         }
+        queue.pending.push_back((input, Instant::now()));
     }
 }
 impl Drop for InputSender {
@@ -525,6 +538,11 @@ fn run(
                             }
                             presentation_revision = revision;
                         }
+                        Input::ObservePauseSurface { args } => host.run_command(Command::Call {
+                            path: "_global.csrBindings".into(),
+                            function: "samplePauseSurface".into(),
+                            args,
+                        }),
                         other => host.input(other),
                     },
                     InputTurn::Progress {
@@ -604,6 +622,28 @@ fn run(
 mod worker_tests {
     use super::{INPUT_TURN_BUDGET, Input, InputSource, InputTurn, MouseButton, Value, input_queue, service_input_turn_until};
     use std::sync::mpsc::channel;
+
+    #[test]
+    fn passive_surface_sample_keeps_latest_pointer_but_never_crosses_click_or_call() {
+        let (sender, receiver) = input_queue();
+        sender.send(motion(1));
+        sender.send(Input::ObservePauseSurface { args: vec!["first".into()] });
+        sender.send(motion(2));
+        sender.send(Input::MouseDown { x: 2., y: -2., button: MouseButton::Left });
+        sender.send(motion(3));
+        sender.send(Input::ObservePauseSurface { args: vec!["second".into()] });
+        sender.send(motion(4));
+        sender.send(Input::Call { path: "button".into(), function: "activate".into(), args: vec![] });
+        sender.send(motion(5));
+        assert!(matches!(receiver.try_input(), Ok(Input::MouseMove { x: 2., .. })));
+        assert!(matches!(receiver.try_input(), Ok(Input::ObservePauseSurface { .. })));
+        assert!(matches!(receiver.try_input(), Ok(Input::MouseDown { x: 2., .. })));
+        assert!(matches!(receiver.try_input(), Ok(Input::MouseMove { x: 4., .. })));
+        assert!(matches!(receiver.try_input(), Ok(Input::ObservePauseSurface { .. })));
+        assert!(matches!(receiver.try_input(), Ok(Input::Call { .. })));
+        assert!(matches!(receiver.try_input(), Ok(Input::MouseMove { x: 5., .. })));
+        assert!(matches!(receiver.try_input(), Err(std::sync::mpsc::TryRecvError::Empty)));
+    }
 
     #[test]
     fn excess_input_stays_fifo_and_progress_runs_after_budget() {
