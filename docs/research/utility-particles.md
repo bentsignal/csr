@@ -34,7 +34,10 @@ Positions belong to a fixed world origin. Individual smoke puffs billboard,
 matching the selected material's camera-facing intent; the whole volume is
 never rotated. Fire ground cards and upright cards remain fixed in world
 orientation. Ending a field fades alpha instead of dragging positions and
-scales back into its center. Fire particle bases trace to actual ground.
+scales back into its center. Fire particle bases trace to actual ground. The authored emission scaling
+uses a temporary 19-point rendering cover of the current circular field;
+these are not native spread cells. Authored distance-based alpha remaps keep
+the denser layers from becoming an additive white mass.
 
 Grenade presentation now tumbles around its mesh center on multiple axes,
 retains orientation across bounces, and stops when authoritative velocity rests.

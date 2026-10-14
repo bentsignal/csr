@@ -20,6 +20,8 @@ pub struct Layer {
     rate: f32,
     start: f32,
     duration: f32,
+    scale_to_points: bool,
+    alpha_distance: Option<[f32; 4]>,
     life: [f32; 2],
     life_fps: f32,
     radius: [f32; 2],
@@ -183,6 +185,23 @@ pub fn load(
                 .or(burst)
                 .map_or(0.0, |e| e.number("emission_start_time", 0.0)),
             duration: emit.map_or(0.0, |e| e.number("emission_duration", 0.0)),
+            scale_to_points: emit
+                .is_some_and(|e| e.number("scale emission to used control points", 0.0) != 0.0),
+            alpha_distance: init
+                .iter()
+                .find(|e| {
+                    e.text("functionName")
+                        .eq_ignore_ascii_case("Remap Initial Distance to Control Point to Scalar")
+                        && e.number("output field", 1.0) == 7.0
+                })
+                .map(|e| {
+                    [
+                        e.number("distance minimum", 0.0),
+                        e.number("distance maximum", 1.0),
+                        e.number("output minimum", 0.0),
+                        e.number("output maximum", 1.0),
+                    ]
+                }),
             life: range(lifetime, "lifetime_min", "lifetime_max", 1.0),
             life_fps: lifetime_sequence.map_or(0.0, |e| e.number("Frames Per Second", 0.0)),
             radius: range(
@@ -300,7 +319,7 @@ impl Emitter {
             .iter()
             .enumerate()
             .map(|(layer, l)| {
-                let mesh = meshes.add(empty_mesh());
+                let mesh = meshes.add(empty_mesh(l.max));
                 let entity = commands
                     .spawn((
                         Mesh3d(mesh.clone()),
@@ -351,6 +370,12 @@ impl Emitter {
             b.particles
                 .retain(|p| time - p.born < p.life && time < self.until);
             let age = (time - self.born - l.start).max(0.0);
+            let rate = l.rate
+                * if self.fire && l.scale_to_points {
+                    19.0
+                } else {
+                    1.0
+                };
             let emission_end =
                 (self.until - self.born - l.start)
                     .max(0.0)
@@ -362,7 +387,7 @@ impl Emitter {
             let emitted = if time < self.born + l.start {
                 0
             } else {
-                l.burst + (age.min(emission_end) * l.rate).floor() as usize
+                l.burst + (age.min(emission_end) * rate).floor() as usize
             };
             // Late network snapshots advance the schedule without a one-frame burst.
             let first = b.next.max(emitted.saturating_sub(l.max));
@@ -372,7 +397,7 @@ impl Emitter {
                     + if i < l.burst {
                         0.0
                     } else {
-                        (i - l.burst + 1) as f32 / l.rate.max(0.001)
+                        (i - l.burst + 1) as f32 / rate.max(0.001)
                     };
                 if born >= self.until || time >= self.until || b.particles.len() >= l.max {
                     continue;
@@ -417,9 +442,7 @@ impl Emitter {
                 if self.fire {
                     // PCF distributes to inferno control points. Until fire-cell
                     // authority exists, sample only the sim's occupied 130-inch disc.
-                    let a = rng.unit() * std::f32::consts::TAU;
-                    let r = rng.unit().sqrt() * 100.0;
-                    pos += Vec3::new(a.cos() * r, 0.0, a.sin() * r);
+                    pos += fire_control_point(i % 19);
                     let at = crate::coords::to_source(self.origin + pos);
                     let from = at + glam::Vec3::Z * 32.0;
                     let to = at - glam::Vec3::Z * 64.0;
@@ -450,7 +473,12 @@ impl Emitter {
                     pos,
                     velocity: rng.vector(l.velocity) + direction * rng.range(l.speed),
                     radius,
-                    alpha: rng.range(l.alpha),
+                    alpha: rng.range(l.alpha)
+                        * l.alpha_distance.map_or(1.0, |r| {
+                            let t =
+                                ((pos.length() - r[0]) / (r[1] - r[0]).max(0.001)).clamp(0.0, 1.0);
+                            r[2] + (r[3] - r[2]) * t
+                        }),
                     color,
                     fade_in: rng.range(l.fade_in),
                     fade_out: rng.range(l.fade_out),
@@ -464,7 +492,6 @@ impl Emitter {
             let mut normals = Vec::new();
             let mut uvs = Vec::new();
             let mut colors = Vec::new();
-            let mut indices = Vec::new();
             // Transparent quads within one batched mesh still need back-to-front ordering.
             b.particles.sort_by(|a, b| {
                 (self.origin + b.pos)
@@ -503,7 +530,6 @@ impl Emitter {
                 let r = (right * cos + up * sin) * radius;
                 let u = (up * cos - right * sin) * radius;
                 let normal = right.cross(up).normalize_or_zero();
-                let base = positions.len() as u32;
                 let mut color = p.color;
                 color[3] = alpha;
                 for (position, uv) in [
@@ -517,28 +543,58 @@ impl Emitter {
                     uvs.push(uv);
                     colors.push(color);
                 }
-                indices.extend([base, base + 1, base + 2, base, base + 2, base + 3]);
             }
+            // Keep a nonempty, fixed allocation even for delayed/expired layers.
+            // Empty dynamic buffers hit Bevy's slab allocator copy path without
+            // an allocated key; changing capacity also needlessly reallocates.
+            positions.resize(l.max * 4, [0.0; 3]);
+            normals.resize(l.max * 4, [0.0, 1.0, 0.0]);
+            uvs.resize(l.max * 4, [0.0; 2]);
+            colors.resize(l.max * 4, [0.0; 4]);
             if let Some(mut mesh) = meshes.get_mut(&b.mesh) {
                 mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
                 mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
                 mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
                 mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
-                mesh.insert_indices(Indices::U32(indices));
             }
         }
     }
 }
-fn empty_mesh() -> Mesh {
+// Temporary render control points cover the authoritative circular field;
+// authored PCF emission rates explicitly scale by used control-point count.
+// These are not native inferno spread cells and never affect damage.
+fn fire_control_point(i: usize) -> Vec3 {
+    if i == 0 {
+        return Vec3::ZERO;
+    }
+    let (n, r, index) = if i <= 6 {
+        (6, 48.0, i - 1)
+    } else {
+        (12, 96.0, i - 7)
+    };
+    let angle = index as f32 / n as f32 * std::f32::consts::TAU;
+    Vec3::new(angle.cos() * r, 0.0, angle.sin() * r)
+}
+fn empty_mesh(capacity: usize) -> Mesh {
     let mut mesh = Mesh::new(
         PrimitiveTopology::TriangleList,
         RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
     );
-    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, Vec::<[f32; 3]>::new());
-    mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, Vec::<[f32; 3]>::new());
-    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, Vec::<[f32; 2]>::new());
-    mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, Vec::<[f32; 4]>::new());
-    mesh.insert_indices(Indices::U32(Vec::new()));
+    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, vec![[0.0_f32; 3]; capacity * 4]);
+    mesh.insert_attribute(
+        Mesh::ATTRIBUTE_NORMAL,
+        vec![[0.0_f32, 1.0, 0.0]; capacity * 4],
+    );
+    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, vec![[0.0_f32; 2]; capacity * 4]);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, vec![[0.0_f32; 4]; capacity * 4]);
+    mesh.insert_indices(Indices::U32(
+        (0..capacity as u32)
+            .flat_map(|i| {
+                let b = i * 4;
+                [b, b + 1, b + 2, b, b + 2, b + 3]
+            })
+            .collect(),
+    ));
     mesh
 }
 fn fade(age: f32, life: f32, fade_in: f32, fade_out: f32) -> f32 {
