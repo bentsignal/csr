@@ -774,10 +774,12 @@ fn smoke_test(
     if *frame == capture_frame {
         if let (Some(w),Some(l))=(world.as_ref(),local.as_ref()) {
             let weapon = w.0.player(l.id).and_then(|p| p.active_weapon());
-            info!("capture authority: time={:.5} weapon={:?} grenade={:?} suppressor_attached={:?} suppressor_transition={:?} projectiles={} fields={}",
+            info!("capture authority: time={:.5} weapon={:?} grenade={:?} suppressor_attached={:?} suppressor_transition={:?} projectiles={} fields={} burst_mode={:?} burst_pending={:?} clip={:?} shots={:?}",
                 w.0.time(), weapon.map(|g| g.def.class_name.as_str()), weapon.and_then(|g| g.grenade_throw),
                 weapon.map(|g| g.suppressor_attached), weapon.and_then(|g| g.suppressor_transition),
-                w.0.projectiles.len(),w.0.utility_fields.len());
+                w.0.projectiles.len(),w.0.utility_fields.len(),
+                weapon.map(|g| g.burst_mode), weapon.and_then(|g| g.burst), weapon.map(|g| g.clip),
+                w.0.player(l.id).map(|p| p.shots));
             if std::env::var_os("CSR_WEAPON_TRACE").is_some() {
                 for projectile in &w.0.projectiles {
                     info!("capture projectile: id={} kind={:?} pos={:?} velocity={:?} settled={}",

@@ -51,6 +51,30 @@ pub struct SuppressorTransition {
     pub attached: bool,
 }
 
+/// Three-round option declared by the installed item schema/localization.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BurstProfile {
+    pub cycle: f32,
+    pub interval: f32,
+}
+impl BurstProfile {
+    pub fn from_def(def: &WeaponDefinition) -> Option<Self> {
+        if def.attr_f32("has burst mode") != Some(1.) || def.clip_size <= 0
+            || matches!(def.class, WeaponClass::Knife | WeaponClass::Grenade | WeaponClass::Equipment) { return None; }
+        let cycle = def.attr_f32("cycletime when in burst mode")?;
+        let interval = def.attr_f32("time between burst shots")?;
+        (cycle.is_finite() && interval.is_finite() && interval > 0.
+            && interval * 2. <= cycle && cycle <= 30.).then_some(Self { cycle, interval })
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct BurstState {
+    /// Follow-up bullets still due, excluding the bullet already emitted.
+    pub remaining: u8,
+    pub next_shot: f32,
+}
+
 impl SuppressorTransition {
     pub fn activity(self) -> &'static str {
         if self.attached { "ACT_VM_ATTACH_SILENCER" } else { "ACT_VM_DETACH_SILENCER" }
@@ -66,6 +90,8 @@ pub struct WeaponState {
     pub grenade_throw: Option<crate::utility::ThrowState>,
     pub suppressor_attached: bool,
     pub suppressor_transition: Option<SuppressorTransition>,
+    pub burst_mode: bool,
+    pub burst: Option<BurstState>,
     pub clip: i32,
     pub reserve: i32,
     /// Sim time at which the next shot may fire.
@@ -101,6 +127,8 @@ impl WeaponState {
         Self {
             suppressor_attached,
             suppressor_transition: None,
+            burst_mode: false,
+            burst: None,
             def,
             cosmetic: None,
             cosmetic_owner: None,
@@ -127,6 +155,45 @@ impl WeaponState {
     pub fn set_def(&mut self, def: Arc<WeaponDefinition>) {
         self.def = def;
         self.pattern = RecoilPatternCache::default();
+    }
+
+    pub fn burst_profile(&self) -> Option<BurstProfile> { BurstProfile::from_def(&self.def) }
+
+    /// Toggle only on an admitted secondary press while the weapon is ready.
+    /// Native switch lockout is unmeasured; no invented animation delay is added.
+    pub fn switch_burst(&mut self, time: f32) -> bool {
+        if self.burst_profile().is_none() || self.burst.is_some() || self.reload_end.is_some()
+            || self.suppressor_transition.is_some() || time < self.next_attack || time < self.next_secondary_attack { return false; }
+        self.burst_mode = !self.burst_mode;
+        self.pattern = RecoilPatternCache::default();
+        true
+    }
+
+    pub fn cancel_burst(&mut self) { self.burst = None; }
+
+    pub fn burst_due(&self, time: f32) -> bool {
+        self.burst_mode && self.burst.is_some_and(|burst| time >= burst.next_shot && burst.remaining > 0)
+            && self.reload_end.is_none() && self.clip > 0
+    }
+
+    /// Called after every ordinary authoritative bullet. Recovery is measured
+    /// from the first bullet; native final-shot recovery remains unverified.
+    pub(crate) fn shot_cooldown(&mut self, time: f32) {
+        if self.burst_mode {
+            if let Some(profile) = self.burst_profile() {
+                self.burst = if let Some(burst) = self.burst {
+                    (burst.remaining > 1 && self.clip > 0).then_some(BurstState {
+                        remaining: burst.remaining.saturating_sub(1), next_shot: burst.next_shot + profile.interval,
+                    })
+                } else {
+                    self.next_attack = time + profile.cycle;
+                    (self.clip > 0).then_some(BurstState { remaining: self.clip.min(2) as u8, next_shot: time + profile.interval })
+                };
+                return;
+            }
+        }
+        self.cancel_burst();
+        self.next_attack = time + self.alt_stat("cycletime", self.def.cycle_time).max(0.01);
     }
 
     pub fn draw_activity(&self) -> &str {
@@ -181,7 +248,18 @@ impl WeaponState {
     }
 
     fn pattern(&self) -> &[[f32; 2]] {
-        self.pattern.0.get_or_init(|| Arc::new(recoil_pattern(&self.def)))
+        self.pattern.0.get_or_init(|| {
+            let mut def = (*self.def).clone();
+            if self.burst_mode {
+                let alt = |key, base| def.attr_f32(key).filter(|v| v.is_finite()).unwrap_or(base);
+                def.recoil = weapons::Recoil { angle: alt("recoil angle alt", def.recoil.angle),
+                    angle_variance: alt("recoil angle variance alt", def.recoil.angle_variance),
+                    magnitude: alt("recoil magnitude alt", def.recoil.magnitude),
+                    magnitude_variance: alt("recoil magnitude variance alt", def.recoil.magnitude_variance),
+                    seed: def.recoil.seed };
+            }
+            Arc::new(recoil_pattern(&def))
+        })
     }
 
     pub fn zoom_levels(&self) -> u8 {
@@ -212,7 +290,7 @@ impl WeaponState {
     }
 
     pub fn alt_stat(&self, key: &str, base: f32) -> f32 {
-        if self.zoom_level > 0 { self.def.attr_f32(&format!("{key} alt")).unwrap_or(base) } else { base }
+        if self.zoom_level > 0 || self.burst_mode { self.def.attr_f32(&format!("{key} alt")).unwrap_or(base) } else { base }
     }
 
     pub fn max_speed(&self) -> f32 { self.alt_stat("max player speed", self.def.max_player_speed) }
@@ -230,7 +308,7 @@ impl WeaponState {
     }
 
     pub fn can_reload(&self) -> bool {
-        self.uses_ammo() && self.suppressor_transition.is_none() && self.reload_end.is_none() && self.clip < self.def.clip_size && self.reserve > 0
+        self.uses_ammo() && self.burst.is_none() && self.suppressor_transition.is_none() && self.reload_end.is_none() && self.clip < self.def.clip_size && self.reserve > 0
     }
 
     /// Shell-by-shell timing if this weapon loads one shell at a time.
@@ -242,6 +320,7 @@ impl WeaponState {
     /// that load shells take a start, then one insert per missing shell (up
     /// to the reserve), loading each shell as its insert completes.
     pub fn begin_reload(&mut self, time: f32) {
+        self.cancel_burst();
         self.reload_start = time;
         self.shells_loaded = 0;
         let total = match self.shell_reload() {

@@ -282,6 +282,7 @@ impl Player {
         // in another player's hands.
         w.reload_end = None;
         w.grenade_throw = None;
+        w.cancel_burst();
         w.cancel_suppressor(time);
         w.reset_zoom(time);
         let was_active = self.active == index;
@@ -307,7 +308,7 @@ impl Player {
         }
         if index!=self.active && self.active_weapon().is_some_and(|w| w.grenade_throw.is_some_and(|s|s.phase==utility::ThrowPhase::Throwing)) {return;}
         if let Some(old) = self.weapons.get_mut(self.active) {
-            if index!=self.active {old.grenade_throw=None; old.cancel_suppressor(time);}
+            if index!=self.active {old.grenade_throw=None; old.cancel_suppressor(time); old.cancel_burst();}
             old.reset_zoom(time);
             old.reload_end = None;
         }
@@ -1512,6 +1513,7 @@ impl World {
 
             // Admit the tracked muzzle against current geometry and the current
             // post-movement eye. A nearby hand must not begin beyond a wall.
+            let mut muzzle_blocked = false;
             if let Some(aim) = &mut input.aim {
                 let p = &self.players[i];
                 let eye_offset = Vec3::Z * p.movement.view_offset();
@@ -1531,6 +1533,7 @@ impl World {
                     // Leaving a brush may be start-solid with fraction 1, so
                     // falling back to that eye alone cannot safely fire.
                     if trace.start_solid || trace.all_solid {
+                        muzzle_blocked = true;
                         input.buttons &= !(buttons::ATTACK | buttons::ATTACK2);
                     }
                 }
@@ -1557,6 +1560,8 @@ impl World {
                         self.events.push(GameEvent::Scope { player: id, weapon: w.def.class_name.clone(), origin: eye, level: w.zoom_level });
                     }
                     if secondary_pressed { w.begin_suppressor(self.tick, dt); }
+                    if secondary_pressed { w.switch_burst(time); }
+                    if frozen || busy || muzzle_blocked { w.cancel_burst(); }
                     stab = secondary && w.is_melee();
                     let can_fire = w.def.class_name != C4 && w.def.class!=weapons::WeaponClass::Grenade;
                     // Pulling the trigger stops a shell-by-shell reload once
@@ -1564,7 +1569,10 @@ impl World {
                     if attack && (pressed || w.def.full_auto) && w.reload_end.is_some() && w.shell_reload().is_some() && w.clip > 0 {
                         w.reload_end = None;
                     }
-                    if can_fire && (attack || stab) && w.reload_end.is_none() && time >= w.next_attack && (w.def.full_auto || pressed || w.is_melee()) {
+                    if w.burst_due(time) {
+                        fire = true;
+                    } else if can_fire && (attack || stab) && w.reload_end.is_none() && time >= w.next_attack
+                        && ((w.def.full_auto && !w.burst_mode) || pressed || w.is_melee()) {
                         if w.uses_ammo() && w.clip <= 0 {
                             if w.can_reload() {
                                 w.reset_zoom(time);
@@ -1580,7 +1588,7 @@ impl World {
                     // would recover the entire recoil step between AK shots.
                     // Reloads, dry weapons and a held semiautomatic trigger
                     // still recover normally when they cannot sustain fire.
-                    let recoil_firing = fire || (attack && can_fire && w.def.full_auto
+                    let recoil_firing = fire || w.burst.is_some() || (attack && can_fire && w.def.full_auto && !w.burst_mode
                         && w.reload_end.is_none() && w.clip > 0);
                     weapon::think(w, time, dt, ducked, recoil_firing);
                 }
@@ -1589,7 +1597,15 @@ impl World {
                 self.players[i].animation.last_fire_tick = Some(self.tick);
                 if self.players[i].active_weapon().is_some_and(|w| w.is_melee()) {
                     self.melee_attack(i, time, stab);
-                } else { self.fire(i, time, input.rewind_tick); }
+                } else {
+                    self.fire(i, time, input.rewind_tick);
+                    // At low tick rates several imported intervals can become
+                    // due together. A burst has at most two follow-up bullets.
+                    for _ in 0..2 {
+                        if !self.players[i].active_weapon().is_some_and(|w| w.burst_due(time)) { break; }
+                        self.fire(i, time, input.rewind_tick);
+                    }
+                }
             }
             if !frozen && !busy && self.players[i].active_weapon().is_some_and(|w|w.def.class==weapons::WeaponClass::Grenade) {
                 self.step_grenade(i,input.buttons);
@@ -1779,7 +1795,7 @@ impl World {
             if w.uses_ammo() {
                 w.clip -= 1;
             }
-            w.next_attack = time + w.alt_stat("cycletime", def.cycle_time).max(0.01);
+            w.shot_cooldown(time);
             w.accuracy_penalty += w.alt_stat("inaccuracy fire", def.accuracy.inaccuracy_fire);
             w.recoil_index += 1.0;
             if w.zoom_level > 0 && def.attr_f32("unzoom after shot").is_some_and(|v| v != 0.0) {
@@ -1831,7 +1847,7 @@ impl World {
         let v = &mut self.players[victim];
         v.health = 0;
         v.alive = false;
-        for w in &mut v.weapons { w.reset_zoom(now); }
+        for w in &mut v.weapons { w.reset_zoom(now); w.cancel_burst(); }
         v.deaths += 1;
         v.plant_start = None;
         v.respawn_at = now + RESPAWN_DELAY;
