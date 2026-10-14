@@ -274,14 +274,11 @@ pub fn look(
     if keys.just_pressed(settings.binds[10]) {
         local.pending_drop = true;
     }
-    if grabbed && scroll.delta.y != 0.0 {
-        if let Some(p) = me.filter(|p| !p.weapons.is_empty()) {
-            // Step through the inventory, by the slot of the next weapon.
-            let count = p.weapons.len() as i32;
-            let step = if scroll.delta.y > 0.0 { -1 } else { 1 };
-            let next = (p.active as i32 + step).rem_euclid(count) as usize;
-            local.pending_slot = sim::weapon::slot(&p.weapons[next].def);
-        }
+    if grabbed && scroll.delta.y != 0.0 && me.is_some_and(|p| !p.weapons.is_empty()) {
+        // Installed defaults bind MWHEELUP invprev and MWHEELDOWN invnext.
+        // Authority chooses the weapon; reducing this to a slot loses reverse
+        // direction among grenades and at slot boundaries.
+        local.pending_slot = if scroll.delta.y > 0.0 { sim::SLOT_PREVIOUS } else { sim::SLOT_NEXT };
     }
 }
 
@@ -402,6 +399,21 @@ pub fn tick(
                     world.0.tick, world.0.time(), input.buttons, input.weapon_slot,
                     weapon.map(|w| w.def.class_name.as_str()), weapon.map(|w| w.suppressor_attached),
                     weapon.and_then(|w| w.suppressor_transition), weapon.map(|w| w.next_attack));
+            }
+        } else if std::env::var("CSR_TEST_SWITCH").as_deref() == Ok("inventory-previous") {
+            // Keep the ordinary practice inventory intact. Select Flash by its
+            // installed item id, then ask authority for the previous weapon.
+            input.buttons &= !(buttons::ATTACK | buttons::ATTACK2);
+            if world.0.tick == world.0.ticks(0.5) {
+                input.utility = world.0.catalog.get("weapon_flashbang").map_or(0, |def| def.def_index);
+            }
+            if world.0.tick == world.0.ticks(1.5) { input.weapon_slot = sim::SLOT_PREVIOUS; }
+            if input.utility != 0 || input.weapon_slot != 0 {
+                let player = world.0.player(local.id);
+                info!("inventory wheel fixture: tick={} time={:.5} request_slot={} utility={} before={:?} inventory={:?}",
+                    world.0.tick, world.0.time(), input.weapon_slot, input.utility,
+                    player.and_then(|p| p.active_weapon()).map(|w| w.def.class_name.as_str()),
+                    player.map(|p| p.weapons.iter().map(|w| w.def.class_name.as_str()).collect::<Vec<_>>()));
             }
         } else {
             match world.0.tick {

@@ -408,3 +408,49 @@ fn a_dropped_skin_keeps_its_owner_and_finish() {
     let gun = w.player(t2).unwrap().weapons.iter().find(|g| g.def.class_name == "weapon_glock").unwrap();
     assert_eq!((gun.cosmetic_owner, gun.cosmetic.map(|c| c.serial)), (Some(t), Some(5)));
 }
+
+#[test]
+fn weapon_wheel_direction_and_drop_mutation_replay_at_both_tick_rates() {
+    for rate in [64, 128] {
+        let mut authority = world();
+        authority.set_tick_rate(rate);
+        let mut definitions = authority.catalog.weapons.clone();
+        for (name, index) in [("weapon_hegrenade", 44), ("weapon_flashbang", 43), ("weapon_smokegrenade", 45)] {
+            definitions.push(def(name, index, WeaponClass::Grenade, Side::Both, 300, 1));
+        }
+        authority.catalog = Arc::new(weapons::Catalog { weapons: definitions });
+        let id = authority.add_player("wheel player", Team::Terrorist);
+        let names = ["weapon_ak47", "weapon_glock", "weapon_knife_t", "weapon_hegrenade",
+            "weapon_flashbang", "weapon_smokegrenade", C4];
+        let weapons = names.iter().map(|name| WeaponState::new(Arc::new(
+            authority.catalog.get(name).unwrap().clone()))).collect();
+        let player = authority.player_mut(id).unwrap();
+        player.weapons = weapons; player.active = 4;
+        let input = |slot| TickInput { weapon_slot: slot, ..Default::default() };
+        authority.step(&[(id, input(SLOT_PREVIOUS))]);
+        assert_eq!(authority.player(id).unwrap().active_weapon().unwrap().def.class_name, "weapon_hegrenade");
+        let snapshot: Snapshot = authority.decode(&state::encode(&authority.snapshot())).unwrap();
+        let mut restored = authority.clone(); restored.restore(snapshot.state);
+        let mut predicted = authority.clone();
+        for (slot, expected) in [(SLOT_PREVIOUS, "weapon_knife_t"), (SLOT_NEXT, "weapon_hegrenade"),
+            (SLOT_NEXT, "weapon_flashbang"), (SLOT_NEXT, "weapon_smokegrenade"), (SLOT_NEXT, C4),
+            (SLOT_NEXT, "weapon_ak47"), (SLOT_PREVIOUS, C4), (SLOT_PREVIOUS, "weapon_smokegrenade")] {
+            let inputs = [(id, input(slot))];
+            authority.step(&inputs); restored.step(&inputs); predicted.step_prediction(&inputs);
+            assert_eq!(authority.player(id).unwrap().active_weapon().unwrap().def.class_name, expected);
+            assert_eq!(authority.state(), restored.state());
+            assert_eq!(authority.state(), predicted.state());
+        }
+        // Drop runs before selecting. The current smoke leaves the inventory,
+        // selects the best remaining gun, then invnext chooses its pistol.
+        // A client-derived pre-drop slot/index would instead select the bomb.
+        let inputs = [(id, TickInput { drop: true, weapon_slot: SLOT_NEXT, ..Default::default() })];
+        authority.step(&inputs); restored.step(&inputs); predicted.step_prediction(&inputs);
+        let player = authority.player(id).unwrap();
+        assert_eq!(player.active_weapon().unwrap().def.class_name, "weapon_glock");
+        assert!(player.active_weapon().unwrap().next_attack > authority.time());
+        assert!(authority.items.iter().any(|item| item.class_name() == "weapon_smokegrenade"));
+        assert_eq!(authority.state(), restored.state());
+        assert_eq!(authority.state(), predicted.state());
+    }
+}
