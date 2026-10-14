@@ -2,9 +2,9 @@
 use serde::{Deserialize, Serialize};
 use sim::{GameEvent, PlayerId, Snapshot, Team, TickInput};
 
-// Grenade projectiles/fields and DecoyShot carry throw-time weapon ContentIds.
-pub const VERSION: u32 = 12;
-pub const PROTOCOL_ID: u64 = 0x4353_5257_0000_000c;
+// Appended authoritative grenade contact cues; v12 carries decoy weapon ids.
+pub const VERSION: u32 = 13;
+pub const PROTOCOL_ID: u64 = 0x4353_5257_0000_000d;
 pub const CONTROL: u8 = 0;
 pub const INPUT: u8 = 1;
 pub const SNAPSHOT: u8 = 2;
@@ -73,6 +73,10 @@ pub(crate) fn validate_events(batch: &EventBatch) -> Result<(), String> {
                 && valid_decoy_weapon(sim::utility::Kind::Decoy, Some(weapon)),
             UtilityThrown { player, pos, .. }
             | UtilityDetonated { player, pos, .. } => *player != 0 && position(*pos),
+            UtilityBounced { player, kind, pos } => *player != 0 && position(*pos)
+                && matches!(kind, sim::utility::Kind::Smoke | sim::utility::Kind::Flash
+                    | sim::utility::Kind::He | sim::utility::Kind::Molotov
+                    | sim::utility::Kind::Incendiary | sim::utility::Kind::Decoy),
             BombPlanted { player, site, pos } => {
                 *player != 0 && site.is_ascii_uppercase() && position(*pos)
             }
@@ -532,6 +536,22 @@ mod death_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn grenade_contact_batch_round_trips_and_rejects_invalid_authority() {
+        let event = GameEvent::UtilityBounced {
+            player: 7, kind: sim::utility::Kind::Smoke, pos: glam::Vec3::new(100., 20., 2.),
+        };
+        let batch = EventBatch { tick: 200, events: vec![event] };
+        assert!(validate_events(&batch).is_ok());
+        assert_eq!(decode::<EventBatch>(&encode(&batch).unwrap()).unwrap(), batch);
+        for (player, pos) in [(0, glam::Vec3::ZERO), (7, glam::Vec3::NAN)] {
+            let invalid = EventBatch { tick: 200, events: vec![GameEvent::UtilityBounced {
+                player, kind: sim::utility::Kind::He, pos,
+            }] };
+            assert!(validate_events(&invalid).is_err());
+        }
+    }
+
     #[test]
     fn authoritative_effects_reject_nonfinite_and_unbounded_payloads() {
         use glam::Vec3;

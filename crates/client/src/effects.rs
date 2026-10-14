@@ -120,11 +120,16 @@ pub fn process(
                 let sound=match kind {sim::utility::Kind::Molotov=>"Molotov.Throw",sim::utility::Kind::Incendiary=>"IncGrenade.Throw",_=>"HEGrenade.Throw"};
                 sounds.play(&mut commands,fs,&mut sources,sound,if player==local.view_target(){None}else{Some(pos)});
             }
+            GameEvent::UtilityBounced { kind, pos, .. } => {
+                sounds.play_grenade_bounce(&mut commands, fs, &mut sources, kind, pos);
+            }
             GameEvent::UtilityDetonated { kind,pos,.. } => {
                 if effects.utility_detonations.len()<128 {effects.utility_detonations.push((kind,pos));}
-                let sound=match kind {sim::utility::Kind::Flash=>"Flashbang.Explode",sim::utility::Kind::He=>"BaseGrenade.Explode",
-                    sim::utility::Kind::Molotov|sim::utility::Kind::Incendiary=>"Inferno.Start_IncGrenade",_=>"SmokeGrenade.Bounce"};
-                sounds.play(&mut commands,fs,&mut sources,sound,Some(pos));
+                let sound=match kind {sim::utility::Kind::Flash=>Some("Flashbang.Explode"),sim::utility::Kind::He=>Some("BaseGrenade.Explode"),
+                    sim::utility::Kind::Molotov|sim::utility::Kind::Incendiary=>Some("Inferno.Start_IncGrenade"),_=>None};
+                // A smoke/decoy activation is not a shell collision. Contact
+                // cues come only from the authoritative bounce event above.
+                if let Some(sound)=sound {sounds.play(&mut commands,fs,&mut sources,sound,Some(pos));}
             }
             GameEvent::Melee { player, weapon, origin, secondary, hit } => {
                 let activity = match (secondary, hit == sim::MeleeHit::Miss) {

@@ -539,6 +539,10 @@ parity and the gameplay gaps listed above remain unfinished.
   practice redraws a replenished grenade after the release clip. Numeric
   strengths and inherited velocity remain provisional; trajectories, native
   command timing and particle fidelity are still unfinished.
+- [x] Authoritative grenade contact audio uses installed HE/flash/smoke/incendiary
+  entries at the projectile position, with resting chatter and contact-fire
+  duplication suppressed. Decoy/Molotov bindings and final soft settling taps
+  remain unsupported; native cadence/mix parity is unmeasured.
 - [x] Retain bounded articulated death bodies from installed MDL/PHY rigs,
   captured live poses, velocity and hit context, with asynchronous nearby
   collision cooking. An evaluated authored pose covers a death before its
