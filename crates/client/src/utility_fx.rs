@@ -21,6 +21,8 @@ pub struct AssetsFx {
     smoke: Vec<crate::utility_particles::Layer>,
     fire: Vec<crate::utility_particles::Layer>,
     he: Vec<crate::utility_particles::Layer>,
+    wick: Vec<crate::utility_particles::Layer>,
+    held_wick: Option<((sim::PlayerId, u64, u64), crate::utility_particles::Emitter)>,
     fields: HashMap<u32, crate::utility_particles::Emitter>,
     explosions: Vec<crate::utility_particles::Emitter>,
     projectiles: HashMap<u32, Flying>,
@@ -69,9 +71,16 @@ pub fn setup(
         &mut mats,
         &mut images,
     );
+    let wick = crate::utility_particles::load(
+        fs,
+        "particles/weapons/cs_weapon_fx.pcf",
+        &["weapon_molotov_fp_wick"],
+        &mut mats,
+        &mut images,
+    );
     // Prewarm each material without a visible particle, so a first short HE
     // flash does not expire while its pipeline compiles.
-    for layer in smoke.iter().chain(&fire).chain(&he) {
+    for layer in smoke.iter().chain(&fire).chain(&he).chain(&wick) {
         let mut mesh = Mesh::from(Rectangle::new(0.001, 0.001));
         mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, vec![[1.0_f32; 4]; 4]);
         let mesh = meshes.add(mesh);
@@ -86,6 +95,8 @@ pub fn setup(
         smoke,
         fire,
         he,
+        wick,
+        held_wick: None,
         fields: HashMap::new(),
         explosions: Vec::new(),
         projectiles: HashMap::new(),
@@ -102,6 +113,56 @@ pub fn setup(
         GlobalZIndex(90),
         FlashOverlay,
     ));
+}
+
+/// Ordered directly after viewmodel::update: use this frame's posed attachment,
+/// on the same dedicated layer and FOV as the bottle and authored lighter.
+pub fn update_wick(
+    mut commands: Commands,
+    world: Res<SimWorld>,
+    local: Res<LocalPlayer>,
+    sample: Res<crate::viewmodel::HeldWick>,
+    mut fx: ResMut<AssetsFx>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut transforms: Query<&mut Transform>,
+    level: Res<crate::LoadedLevel>,
+) {
+    let AssetsFx {
+        wick, held_wick, ..
+    } = &mut *fx;
+    let current_key = sample.sample.map(|s| s.key);
+    if held_wick.as_ref().map(|(key, _)| *key) != current_key {
+        if let Some((_, emitter)) = held_wick.take() {
+            emitter.despawn(&mut commands, &mut meshes);
+        }
+    }
+    let Some(sample) = sample.sample else { return };
+    let time = world.0.time();
+    if held_wick.is_none() {
+        let emitter = crate::utility_particles::Emitter::spawn(
+            &mut commands,
+            &mut meshes,
+            wick,
+            crate::coords::to_source(sample.position),
+            time,
+            time + 1.0,
+            sample.key.2 as u32,
+            false,
+        );
+        emitter.render_layers(&mut commands, crate::viewmodel::layer());
+        *held_wick = Some((sample.key, emitter));
+    }
+    if let Some((_, emitter)) = held_wick {
+        emitter.until = time + 1.0;
+        emitter.follow(sample.position, &mut transforms);
+        emitter.update(
+            time,
+            to_bevy(local.render_eye),
+            wick,
+            &mut meshes,
+            &level.0.collision,
+        );
+    }
 }
 #[allow(clippy::too_many_arguments)]
 pub fn update(
