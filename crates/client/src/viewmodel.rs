@@ -33,6 +33,86 @@ pub fn layer() -> RenderLayers {
     RenderLayers::layer(VIEWMODEL_LAYER)
 }
 
+/// Presentation-only attachment sampled from this frame's actual weapon pose.
+/// No gameplay state or guessed bottle-space offset is stored here.
+#[derive(Resource, Default)]
+pub struct HeldWick {
+    pub sample: Option<WickSample>,
+}
+
+#[derive(Clone, Copy)]
+pub struct WickSample {
+    pub key: (sim::PlayerId, u64, u64),
+    pub position: Vec3,
+}
+
+fn held_wick(
+    player: &sim::Player,
+    show: bool,
+    model: &mdl::Model,
+    pose: &[glam::Mat4],
+    world_from_model: Mat4,
+) -> Option<WickSample> {
+    let weapon = player.active_weapon()?;
+    let state = weapon.grenade_throw?;
+    if !player.alive || !show || weapon.def.class_name != "weapon_molotov"
+        || state.phase != sim::utility::ThrowPhase::Holding || state.spawned {
+        return None;
+    }
+    let attachment = model.attachments.iter().find(|a| a.name.eq_ignore_ascii_case("Wick"))?;
+    let point = pose.get(attachment.bone)?.transform_point3(attachment.position);
+    let position = world_from_model.transform_point3(to_bevy(point));
+    position.is_finite().then_some(WickSample {
+        key: (player.id, player.life_epoch, state.pull_started_tick),
+        position,
+    })
+}
+
+#[cfg(test)]
+mod wick_tests {
+    use super::*;
+
+    #[test]
+    fn wick_follows_current_pose_and_disappears_outside_a_visible_live_hold() {
+        let catalog = weapons::Catalog::from_items_game(r#""items_game" { "items" { "46" { "name" "weapon_molotov" "baseitem" "0" "attributes" { "primary default clip size" "1" } } } }"#).unwrap();
+        let mut collision = collision::CollisionWorld::new();
+        collision.finalize();
+        let mut world = sim::World::new(Arc::new(collision));
+        let id = world.add_player("wick fixture", sim::Team::Terrorist);
+        let p = world.player_mut(id).unwrap();
+        p.weapons = vec![sim::weapon::WeaponState::new(Arc::new(catalog.get("weapon_molotov").unwrap().clone()))];
+        p.active = 0;
+        p.weapons[0].grenade_throw = Some(sim::utility::ThrowState {
+            phase: sim::utility::ThrowPhase::Holding,
+            mode: sim::utility::ThrowMode::Overhand,
+            pull_started_tick: 7, throw_started_tick: None,
+            release_requested: false, spawned: false,
+        });
+        let model = mdl::Model {
+            attachments: vec![mdl::Attachment { name: "Wick".into(), bone: 0,
+                position: glam::Vec3::new(1., 2., 3.), rotation: glam::Mat3::IDENTITY }],
+            ..Default::default()
+        };
+        let pose = [glam::Mat4::from_translation(glam::Vec3::new(10., 20., 30.))];
+        let transform = Mat4::from_translation(Vec3::new(100., 200., 300.));
+        let sample = held_wick(p, true, &model, &pose, transform).unwrap();
+        assert_eq!(sample.position, Vec3::new(111., 233., 278.));
+        assert_eq!(sample.key, (id, p.life_epoch, 7));
+        let moved = held_wick(p, true, &model, &pose, Mat4::from_translation(Vec3::Y * 5.) * transform).unwrap();
+        assert_eq!(moved.position, sample.position + Vec3::Y * 5.);
+        assert!(held_wick(p, false, &model, &pose, transform).is_none());
+        p.alive = false;
+        assert!(held_wick(p, true, &model, &pose, transform).is_none());
+        p.alive = true;
+        for phase in [sim::utility::ThrowPhase::PullingPin, sim::utility::ThrowPhase::Throwing] {
+            p.weapons[0].grenade_throw.as_mut().unwrap().phase = phase;
+            assert!(held_wick(p, true, &model, &pose, transform).is_none());
+        }
+        p.weapons[0].grenade_throw = None;
+        assert!(held_wick(p, true, &model, &pose, transform).is_none());
+    }
+}
+
 #[cfg(test)]
 mod life_tests {
     use super::*;
@@ -97,6 +177,7 @@ mod life_tests {
         app.insert_resource(SimWorld(world)).insert_resource(local).insert_resource(models)
             .insert_resource(materials).insert_resource(LoadedLevel(level))
             .insert_resource(ViewModelState::default())
+            .init_resource::<HeldWick>()
             .insert_resource(crate::tracers::InspectRequest::default())
             .insert_resource(crate::tracers::Muzzles::default())
             .insert_resource(crate::cosmetics::Inventory::default())
@@ -433,7 +514,7 @@ pub fn update(
     models: Res<ViewModels>,
     mut state: ResMut<ViewModelState>,
     (request,inventory): (Res<crate::tracers::InspectRequest>,Res<crate::cosmetics::Inventory>),
-    mut muzzles: ResMut<crate::tracers::Muzzles>,
+    (mut muzzles, mut wick): (ResMut<crate::tracers::Muzzles>, ResMut<HeldWick>),
     mut materials: ResMut<Assets<WorldMaterial>>,
     effects: Res<crate::effects::Effects>,
     level: Res<LoadedLevel>,
@@ -445,6 +526,8 @@ pub fn update(
     mut visibility: Query<&mut Visibility>,
 ) {
     muzzles.first=None;
+    // Clear before every early return, including death, noclip and switching.
+    wick.sample = None;
     let now = time.elapsed_secs();
     let dt = time.delta_secs();
     let Some(p) = world.0.player(local.view_target()) else { return };
@@ -640,6 +723,7 @@ pub fn update(
     let origin = eye + f * offset.x - r * offset.y + u * offset.z;
     let world_from_model = Mat4::from_rotation_translation(rotation_to_bevy(rot), to_bevy(origin));
     skinning::apply_pose(&gun, world_from_model, &pose, &mut transforms);
+    wick.sample = held_wick(p, show, model, &pose, world_from_model);
     if show {if let Some(point)=crate::tracers::muzzle_position(model,&pose,seq.left_muzzle) {
         let muzzle=world_from_model.transform_point3(to_bevy(point));
         let world_fov=vertical_fov(w.map_or(90.0,|w|w.rendered_fov(world.0.time())));

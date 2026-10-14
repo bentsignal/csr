@@ -33,7 +33,7 @@ impl Scene {
         let (file, mode) = match command {
             "OpenAudioSettingsDialog" => ("audio_options", 8),
             "OpenMouseDialog" | "OpenKeyboardMouseDialog" => ("mouse_keyboard_options", 0),
-            "OpenGameSettingsDialog" => ("game_options", 2),
+            "OpenGameSettingsDialog" | "OpenSettingsDialog" => ("game_options", 2),
             _ => ("video_options", 6),
         };
         let doc = fs
