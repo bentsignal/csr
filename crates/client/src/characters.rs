@@ -202,7 +202,6 @@ pub fn sync(
 ) {
     muzzles.world.clear();
     let dt = time.delta_secs();
-    let now = time.elapsed_secs();
     let sim_now = world.0.time();
     let sun = models.sun;
 

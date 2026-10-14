@@ -230,7 +230,7 @@ impl Level {
         let catalog_sha1=suppressor_animations::import(&mut catalog,&fs,catalog_sha1);
         timings.push(("weapons", t.elapsed().as_secs_f32()));
         let t = Instant::now();
-        let (character_profiles, catalog_sha1) = character_profiles::load(&fs, &id.origin, catalog_sha1)?;
+        let (character_profiles, catalog_sha1) = character_profiles::load(&fs, catalog_sha1)?;
         timings.push(("character poses", t.elapsed().as_secs_f32()));
 
         let nav = scoped_map_resource(&fs, &id, name, "maps", "nav", metadata_pack.as_deref())
