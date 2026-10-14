@@ -94,6 +94,15 @@ opt-level = 1
 [profile.dev.package."*"]
 opt-level = 3
 
+# Desktop tools link both render stacks and cosmetic physics. Full CodeView
+# symbols exceed MSVC's PDB limit in installed-data examples (LNK1140).
+# Keep symbols for the small sim/format crates; desktop checks need no PDB.
+[profile.dev.package.launcher]
+debug = 0
+
+[profile.dev.package.client]
+debug = 0
+
 # Day-to-day playable build: optimised, fast to link.
 [profile.play]
 inherits = "release"
