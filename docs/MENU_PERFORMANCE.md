@@ -31,6 +31,23 @@ Both final fixtures used normal 1600×900 physical pixels at DPI scale 1. Frame 
 
 ## Live presentation diagnostics
 
+The pending nonblocking-readback change replaces the worker's synchronous GPU
+wait with one outstanding capture and a bounded completion callback. Input turns
+and movie ticks continue while mapping is pending; rendering waits until that
+same transfer buffer has been unmapped. The frontend retains its last completed
+image. Completed captures retain their submission-time Pause revision, and a
+viewport generation discards captures submitted before resize. This preserves
+the existing readiness fence without republishing old pixels as a new frame.
+Movie clock and input handlers are unchanged; raster opportunities can coalesce
+while the GPU capture is outstanding.
+
+This change has no measured FPS or latency result yet. Its ignored Host GPU
+lifecycle test exercises pending-submit rejection, revision retention, resize
+discard and remapping after pending-host teardown. Compilation, that GPU test
+and the existing production Pause fixture still require central validation.
+The render trace's `completion_age_ms` includes intervening input and movie
+work; it is not a measurement of GPU wait time.
+
 `CSR_PRESENT=immediate|mailbox|fifo` overrides the requested presentation mode
 both at startup and when normal display preferences are reapplied. Without a
 valid override, the saved VSync choice controls the request. The override does

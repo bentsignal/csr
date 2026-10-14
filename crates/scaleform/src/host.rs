@@ -737,6 +737,68 @@ fn compile_shim() -> Result<Vec<u8>, Error> {
 #[cfg(test)]
 mod tests {
     #[test]
+    #[ignore = "requires a GPU and installed CS:GO Legacy; does not launch the native game"]
+    fn readback_preserves_revision_discards_resize_and_unmaps_on_drop() {
+        use super::*;
+
+        struct Offline;
+        impl Engine for Offline {
+            fn call(&mut self, _: &str, _: &str, _: &[Value], _: &mut Calls) -> Option<Value> { None }
+        }
+        fn finish(host: &mut Host) -> Option<CapturedFrame> {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while host.readback_pending() {
+                if let Some(frame) = host.poll_render().unwrap() { return Some(frame); }
+                assert!(Instant::now() < deadline, "GPU readback did not complete");
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            None
+        }
+
+        let config = Config {
+            game_dir: vfs::find_csgo_dir().expect("installed CS:GO Legacy required"),
+            width: 64, height: 48, language: "english".into(), elements: vec![],
+        };
+        let (events, _receiver) = mpsc::channel();
+        let mut host = Host::new(&config, Box::new(Offline), events).unwrap();
+        host.begin_render(11).unwrap();
+        assert!(host.begin_render(12).is_err(), "must not reuse a pending target");
+        let frame = finish(&mut host).expect("original capture should complete");
+        assert_eq!((frame.width, frame.height, frame.presentation_revision), (64, 48, 11));
+
+        host.begin_render(12).unwrap();
+        host.resize(80, 60);
+        assert!(finish(&mut host).is_none(), "old viewport must not be published");
+        host.begin_render(13).unwrap();
+        let frame = finish(&mut host).expect("resized capture should complete");
+        assert_eq!((frame.width, frame.height, frame.presentation_revision), (80, 60, 13));
+        assert_eq!(frame.rgba.len(), 80 * 60 * 4);
+
+        host.begin_render(14).unwrap();
+        let pending = host.pending_readback.as_ref().unwrap();
+        let (buffer, device) = (pending.buffer.clone(), pending.device.clone());
+        drop(host);
+        // A new map on the retained buffer proves teardown canceled/unmapped
+        // the old request, even if its callback had not run before shutdown.
+        let (completion, receiver) = mpsc::sync_channel(1);
+        buffer.slice(..).map_async(wgpu::MapMode::Read, move |result| {
+            let _ = completion.try_send(result);
+        });
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            device.poll(wgpu::PollType::Poll).unwrap();
+            match receiver.try_recv() {
+                Ok(result) => { result.unwrap(); break; }
+                Err(TryRecvError::Empty) => (),
+                Err(error) => panic!("remap callback disconnected: {error}"),
+            }
+            assert!(Instant::now() < deadline, "retained buffer remap did not complete");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        buffer.unmap();
+    }
+
+    #[test]
     fn fetched_loader_identity_is_absolute_and_content_stays_local() {
         use super::*;
         use futures::executor::block_on;
