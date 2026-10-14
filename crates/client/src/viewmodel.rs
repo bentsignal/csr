@@ -232,6 +232,7 @@ pub struct ViewModelState {
     /// Last shell insert seen (for the debug trace).
     shell_seen: Option<i32>,
     planting: bool,
+    grenade_seen: Option<(u64, sim::utility::ThrowPhase)>,
     light_timer: f32,
     /// Persistent bone-local pose: sequences only overwrite the bones they
     /// animate (weighted), as the game layers masked viewmodel sequences.
@@ -251,6 +252,7 @@ impl ViewModelState {
         self.reloading = false;
         self.shell_seen = None;
         self.planting = false;
+        self.grenade_seen = None;
         self.light_timer = 0.0;
         // Masked clips deliberately preserve untouched bones within one life.
         // They must never inherit the reload/inspect pose of a previous life.
@@ -306,7 +308,7 @@ pub fn load(
                 match src.decode_animation(first as usize, ani.as_deref()) {
                     Ok(c) => {
                         let same = std::ptr::eq(src, &model);
-                        let (clip, weights) = if same {
+                        let (mut clip, weights) = if same {
                             (c, (0..model.bones.len()).map(|b| seq.weight(b)).collect())
                         } else {
                             (
@@ -314,6 +316,10 @@ pub fn load(
                                 mdl::anim::retarget_weights(seq, &src.bones, &model.bones),
                             )
                         };
+                        if def.class==weapons::WeaponClass::Grenade
+                            && matches!(seq.activity.to_ascii_uppercase().as_str(),"ACT_VM_PULLPIN"|"ACT_VM_THROW"|"ACT_VM_RELEASE") {
+                            clip.looping=false;
+                        }
                         clips.entry(if seq.name == "lookat01" || seq.name == "inspect" {"INSPECT".into()}else{seq.activity.to_ascii_uppercase()}).or_default().push(SeqClip {
                             clip: Arc::new(clip),
                             weights: Arc::new(weights),
@@ -512,6 +518,16 @@ pub fn update(
     // Pick the activity from the weapon state.
     let w = p.active_weapon();
     let grenade = w.and_then(|w|w.grenade_throw);
+    let grenade_key=grenade.map(|s|(s.pull_started_tick,s.phase));
+    if grenade_key!=state.grenade_seen {
+        // The smoke pull/throw clips animate different bone masks. A pin from
+        // the old release must not survive into the next sandbox Draw/throw.
+        state.pose=mdl::skeleton::rest_pose(&view.asset.model.bones);
+        if grenade_key.is_none() && state.grenade_seen.is_some() {
+            state.activity="ACT_VM_DRAW".into();state.started=now;state.clip_index=0;
+        }
+        state.grenade_seen=grenade_key;
+    }
     let inspect_requested=state.inspect_seen!=request.0;state.inspect_seen=request.0;
     let reloading = w.is_some_and(|w| w.reload_end.is_some());
     let attack = effects.consume_attack(p.id, &name, &mut state.last_attack_seen);
@@ -574,6 +590,7 @@ pub fn update(
     let mut t = now - state.started;
     if let Some(grenade)=grenade {
         let started=grenade.throw_started_tick.unwrap_or(grenade.pull_started_tick);
+        // Grenade phase clips are loaded non-looping: holding keeps the final pose.
         t=(sim_now-started as f32*world.0.dt()).clamp(0.,clip.duration());
     }
     if let (Some((_, frac)), "ACT_SHOTGUN_RELOAD_START" | "ACT_VM_RELOAD") = (shell, state.activity.as_str()) {

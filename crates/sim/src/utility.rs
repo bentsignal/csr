@@ -159,7 +159,11 @@ impl World {
         }
         let pos = from + forward * 18.0 * tr.fraction;
         let owner = p.id;
-        let velocity = forward * 750.0 + p.movement.velocity * 0.5;
+        let strength=p.active_weapon().and_then(|w|w.grenade_throw).map_or(1.,|s|s.mode.strength());
+        // Read the release tick's actual movement, not the pull-pin tick. This
+        // includes running/backpedalling/jumping; crouch uses the current eye.
+        // The inherited 0.5 coefficient remains an uncalibrated approximation.
+        let velocity = forward * (750.0*strength) + p.movement.velocity * 0.5;
         self.next_item += 1;
         self.projectiles.push(Projectile {
             id: self.next_item,

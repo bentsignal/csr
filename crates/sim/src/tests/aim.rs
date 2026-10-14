@@ -180,6 +180,16 @@ fn obstructed_melee_and_grenade_use_the_admitted_eye() {
             1,
         )))];
         world.step(&[(shooter, tracked(Vec3::new(40.0, 0.0, 64.0), Vec3::X))]);
+        if kind==WeaponClass::Grenade {
+            // Pin-pull is now authoritative. Keep supplying the obstructed
+            // tracked ray while releasing, until the real release event.
+            for _ in 0..world.tick_rate {
+                let mut input=tracked(Vec3::new(40.0,0.0,64.0),Vec3::X);
+                input.buttons=0;
+                world.step(&[(shooter,input)]);
+                if !world.projectiles.is_empty(){break;}
+            }
+        }
         let actor = world.player(shooter).unwrap();
         assert_eq!(world.player(target).unwrap().health, 100);
         assert_eq!(
