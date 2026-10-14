@@ -229,6 +229,7 @@ impl Plugin for CsgoPlugin {
             .init_resource::<effects::Effects>()
             .init_resource::<characters::Characters>()
             .init_resource::<viewmodel::ViewModelState>()
+            .init_resource::<viewmodel::HeldWick>()
             .add_systems(
                 Update,
                 (
@@ -239,7 +240,7 @@ impl Plugin for CsgoPlugin {
                     effects::draw,
                     characters::sync,
                     items::sync,
-                    viewmodel::update,
+                    (viewmodel::update, utility_fx::update_wick).chain(),
                     tracers::draw,
                     scope::update,
                     buymenu::draw,
