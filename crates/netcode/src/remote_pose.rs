@@ -14,6 +14,8 @@ pub struct RenderPose {
     pub eye: Vec3,
     pub view_angles: Vec3,
     pub punch: Vec2,
+    /// Bone animation uses this same delayed snapshot timeline.
+    pub animation: sim::model_pose::Sample,
     pub on_ground: bool,
     pub alive: bool,
     pub team: Team,
@@ -113,7 +115,7 @@ impl PoseHistory {
             if player.id == 0 || players.contains_key(&player.id) {
                 return Err("invalid remote player id".into());
             }
-            players.insert(player.id, RenderPose::capture(player)?);
+            players.insert(player.id, RenderPose::capture(player, state.tick, state.tick_rate)?);
         }
         if self
             .frames
@@ -224,13 +226,14 @@ impl PoseHistory {
 }
 
 impl RenderPose {
-    fn capture(player: &Player) -> Result<Self, String> {
+    fn capture(player: &Player, tick: u64, rate: u32) -> Result<Self, String> {
         let mut pose = Self {
             origin: player.movement.origin,
             velocity: player.movement.velocity,
             eye: player.eye(),
             view_angles: player.view_angles.map(wrap_angle),
             punch: player.view_punch().into(),
+            animation: sim::model_pose::sample(player, tick, rate),
             on_ground: player.movement.on_ground,
             alive: player.alive,
             team: player.team,
@@ -247,6 +250,16 @@ impl RenderPose {
             || !pose.eye.length_squared().is_finite()
             || !pose.view_angles.is_finite()
             || !pose.punch.is_finite()
+            || !pose.animation.move_cycle.is_finite()
+            || !(0.0..1.0).contains(&pose.animation.move_cycle)
+            || !pose.animation.input.speed.is_finite()
+            || !pose.animation.input.move_yaw.is_finite()
+            || !pose.animation.input.pitch.is_finite()
+            || !pose.animation.input.time_since_fire.is_finite()
+            || !pose.animation.input.air_time.is_finite()
+            || !(0.0..=60.0).contains(&pose.animation.input.air_time)
+            || pose.animation.input.reload_progress.is_some_and(|v| !v.is_finite() || !(0.0..=1.0).contains(&v))
+            || pose.animation.last_fire_tick.is_some_and(|at| at > tick)
             || (pose.alive && pose.life == 0)
         {
             return Err("nonfinite remote pose".into());
@@ -314,6 +327,7 @@ impl RenderPose {
             },
             tracked,
             aim,
+            animation: self.animation.interpolate(next.animation, alpha),
             ..next.clone()
         }
     }
@@ -364,6 +378,59 @@ mod tests {
         assert_eq!(sample.mode, SampleMode::Interpolated);
         assert_eq!(world.state(), before);
     }
+    #[test]
+    fn animation_uses_delayed_transform_timeline_and_holds_later_stance_and_shots() {
+        for rate in [64, 128] {
+            let (mut world, id) = world(); world.set_tick_rate(rate); world.tick = rate as u64;
+            let actor = &mut world.players[0];
+            actor.movement.origin = Vec3::ZERO; actor.movement.on_ground = true;
+            actor.movement.velocity = Vec3::X * 130.; actor.view_angles.x = 0.;
+            actor.animation.move_cycle = 0.95;
+            let mut history = history(rate); history.push(&world.state()).unwrap();
+            world.tick += 4;
+            let actor = &mut world.players[0];
+            actor.movement.origin = Vec3::X * 8.; actor.view_angles.x = 40.;
+            actor.animation.move_cycle = 0.05;
+            history.push(&world.state()).unwrap();
+            let before = world.state();
+            let middle = history.sample(id, (world.tick - 2) as f64).unwrap().unwrap().pose;
+            assert_eq!(middle.origin.x, 4.);
+            assert!(middle.animation.move_cycle.min(1. - middle.animation.move_cycle) < 0.00001);
+            assert_eq!(middle.animation.input.pitch, middle.view_angles.x);
+            assert_eq!(middle.animation.input.pitch, 20.);
+            assert_ne!(middle.animation.move_cycle, world.players[0].animation.move_cycle);
+            assert_eq!(world.state(), before);
+            world.tick += 4;
+            let actor = &mut world.players[0]; actor.movement.ducked = true;
+            actor.animation.move_cycle = 0.4; actor.animation.last_fire_tick = Some(world.tick - 1);
+            history.push(&world.state()).unwrap();
+            let held = history.sample(id, (world.tick - 2) as f64).unwrap().unwrap().pose;
+            assert!(!held.animation.input.ducked);
+            assert_eq!(held.animation.last_fire_tick, None);
+            let exact = history.sample(id, world.tick as f64).unwrap().unwrap().pose;
+            assert!(exact.animation.input.ducked);
+            assert_eq!(exact.animation.last_fire_tick, Some(world.tick - 1));
+            assert_eq!(exact.animation.input.time_since_fire, 1. / rate as f32);
+        }
+    }
+
+    #[test]
+    fn invalid_animation_snapshots_do_not_replace_the_sampled_history() {
+        let (mut world, _) = world(); let mut history = history(128);
+        history.push(&world.state()).unwrap(); world.tick = 4;
+        for invalid in 0..3 {
+            world.players[0].animation = sim::model_pose::PoseState::default();
+            match invalid {
+                0 => world.players[0].animation.move_cycle = f32::NAN,
+                1 => world.players[0].animation.air_time = f32::INFINITY,
+                _ => world.players[0].animation.last_fire_tick = Some(world.tick + 1),
+            }
+            assert!(history.push(&world.state()).is_err());
+            assert_eq!(history.latest_tick(), Some(0));
+            assert_eq!(history.len(), 1);
+        }
+    }
+
     #[test]
     fn extrapolation_is_capped_by_ticks_and_scales_at_64_and_128() {
         for rate in [64, 128] {
