@@ -4,6 +4,27 @@
 //! reply can restore it. Register every OnLoadFinished, including cached paths.
 use scaleform::Value;
 
+/// Keep the previous raster hidden until the worker has completed the entire
+/// current Pause show transaction. A late frame from an earlier open cannot
+/// reveal the menu after close/reopen.
+#[derive(Default)]
+pub(crate) struct Presentation {
+    revision: u64,
+    waiting: bool,
+}
+impl Presentation {
+    pub(crate) fn open(&mut self) {
+        self.revision = self.revision.checked_add(1).expect("menu presentation limit");
+        self.waiting = true;
+    }
+    pub(crate) fn close(&mut self) { self.waiting = false; }
+    pub(crate) fn revision(&self) -> u64 { self.revision }
+    pub(crate) fn presented(&mut self, revision: u64) {
+        if revision == self.revision { self.waiting = false; }
+    }
+    pub(crate) fn ready(&self) -> bool { !self.waiting }
+}
+
 /// One deferred show per open cycle. Readiness callbacks can arrive in either
 /// order; Options cancellation already owns its native return-to-Pause show.
 #[derive(Default)]
@@ -26,8 +47,6 @@ impl DeferredPause {
     }
 }
 
-pub(crate) const SAMPLER_PATH: &str = "_global.csrBindings";
-pub(crate) const SAMPLER_METHOD: &str = "samplePauseSurface";
 pub(crate) const RECEIVER: &str = "OwnedPauseSurface";
 pub(crate) const CALLBACK: &str = "Visibility";
 
@@ -230,6 +249,24 @@ fn surface(args: &[Value]) -> Option<(bool, f64)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pause_reopen_never_reveals_old_or_partial_transition_frames() {
+        let mut presentation = Presentation::default();
+        assert!(presentation.ready());
+        presentation.open();
+        let first = presentation.revision();
+        presentation.presented(0);
+        assert!(!presentation.ready());
+        presentation.presented(first);
+        assert!(presentation.ready());
+        presentation.close();
+        presentation.open();
+        presentation.presented(first);
+        assert!(!presentation.ready(), "previous open must remain hidden");
+        presentation.presented(presentation.revision());
+        assert!(presentation.ready());
+    }
 
     fn tracker() -> Tracker {
         let mut tracker = Tracker::default();
