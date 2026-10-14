@@ -651,7 +651,7 @@ pub fn update(
         state.clip_index = (state.clip_index + 1) % 3;
         state.started = now;
     }
-    if attack.is_none() && !reloading && p.plant_start.is_none() && w.is_some_and(|w|w.zoom_level==0 && w.next_attack<=world.0.time()) && inspect_requested && view.clips.contains_key("INSPECT") {
+    if suppressor.is_none() && attack.is_none() && !reloading && p.plant_start.is_none() && w.is_some_and(|w|w.zoom_level==0 && w.next_attack<=world.0.time()) && inspect_requested && view.clips.contains_key("INSPECT") {
         state.activity="INSPECT".into();state.started=now;state.clip_index=0;
     }
     if state.activity=="INSPECT" && w.is_some_and(|w|w.zoom_level>0) {state.activity="ACT_VM_IDLE".into();state.started=now;}

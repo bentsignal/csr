@@ -18,7 +18,11 @@ SHOW/HIDE events, uses the declared attached/detached Draw activity, and schedul
 the authored screw/movement sound cues. Holstering/death cancels queued cues;
 joining during a transition skips cues already in the past. Held world models
 and dropped weapons hide only the model's named silencer bodypart when detached.
-World character attach/detach gestures are not implemented by this change.
+World character attach/detach gestures are not implemented by this change; their
+bodypart visibility follows committed attachment state rather than borrowing
+first-person event timing. Inspect requests during a transition are consumed
+and discarded, so holding/requesting inspect cannot override or queue a later
+animation.
 
 Shots choose the original schema's sound_special1 or sound_single_shot binding
 from the event's mode, so later switching/dropping cannot alter a delayed shot's
@@ -36,6 +40,7 @@ or game asset bytes enter the repository.
 
 Validation so far: two focused sim tests pass at 64/128 tick, including authority
 versus snapshot replay/prediction identity, trigger/reload lockout, held secondary
-input, holster cancellation and drop/pickup preservation. Installed-profile,
-protocol, full workspace, rendered and audio validation are pending. This draft
+input, holster cancellation and drop/pickup preservation. The installed profile check
+also passes for M4A1-S/USP-S and confirms MP5-SD stays nonremovable. Protocol, full
+workspace, rendered and audio validation are pending. This draft
 is separate from the current staged playtest candidate.
