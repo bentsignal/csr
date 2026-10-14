@@ -19,6 +19,7 @@ struct Body {
     pending: Option<Task<Option<ragdoll::Corpse>>>,
     captured_pose: Vec<glam::Mat4>,
     last_time: f32,
+    trace_pending: bool,
 }
 
 #[derive(Default)]
@@ -67,6 +68,11 @@ pub(super) fn update(
         if state.bodies.len()==MAX_BODIES {despawn_instance(commands,&state.bodies.pop_front().unwrap().instance);}
         let pose = captured_pose.unwrap_or_else(|| mdl::skeleton::model_space(
             &model.asset.model.bones, &mdl::skeleton::rest_pose(&model.asset.model.bones)));
+        let trace_pending = std::env::var_os("CSR_DEATH_TRACE").is_some();
+        if trace_pending {
+            info!("death body initial: origin={:?} yaw={} velocity={:?} pelvis={:?} rig={}",
+                death.pose.origin, death.pose.view_angles.y, death.pose.velocity, pose.first().map(|m|m.w_axis), model.ragdoll.is_some());
+        }
         // Cooking nearby prop/brush geometry can span several frames. Keep it
         // off the render thread; the bounded body owns and cancels its task.
         let pending = model.ragdoll.as_ref().map(|rig| {
@@ -76,7 +82,7 @@ pub(super) fn update(
                     death.pose.velocity, death.hit.map(|hit| (hit.position, hit.direction)))
             })
         });
-        state.bodies.push_back(Body {death,born:now,instance,materials:Vec::new(),corpse:None,pending,captured_pose:pose,last_time:now});
+        state.bodies.push_back(Body {death,born:now,instance,materials:Vec::new(),corpse:None,pending,captured_pose:pose,last_time:now,trace_pending});
     }
     for body in &mut state.bodies {
         let model=match body.death.victim_team {sim::Team::Terrorist=>models.terrorist.as_mut(),_=>models.counter_terrorist.as_mut()};
@@ -96,6 +102,12 @@ pub(super) fn update(
             let rotation=rotation_to_bevy(mdl::angles_to_mat3(glam::Vec3::new(0.,body.death.pose.view_angles.y,0.)));
             (pose,Mat4::from_rotation_translation(rotation,to_bevy(body.death.pose.origin)))
         };
+        if body.trace_pending && body.corpse.is_some() && now-body.born > 0.5 {
+            body.trace_pending=false;
+            let floor=level.collision.trace_ray(body.death.pose.origin+glam::Vec3::Z*16.,body.death.pose.origin-glam::Vec3::Z*256.,collision::contents::MASK_SOLID);
+            let (low,high)=pose.iter().fold((glam::Vec3::splat(f32::MAX),glam::Vec3::splat(f32::MIN)),|(low,high),m| (low.min(m.w_axis.truncate()),high.max(m.w_axis.truncate())));
+            info!("death body physical: age={} pelvis={:?} bone_low={low:?} bone_high={high:?} floor={:?} floor_hit={}",now-body.born,pose.first().map(|m|m.w_axis),floor.end,floor.hit());
+        }
         // Deferred entities stay hidden until their actual pose can be written.
         if body.instance.joints.iter().any(|e| transforms.get(*e).is_err()) {continue;}
         skinning::apply_pose(&body.instance,world,&pose,transforms);
