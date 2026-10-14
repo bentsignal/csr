@@ -191,8 +191,7 @@ impl Scene {
                 }
                 let index = *value as usize;
                 *selected = Some(index);
-                // Native selection already updates its authored caption.
-
+                set_dropdown_caption(&control, &choices[index].0, calls);
                 choices[index].1
             }
         };
@@ -367,10 +366,8 @@ impl Scene {
                     // An older saved value need not be offered by this schema.
                     // Preserve it, show it truthfully and leave no list choice
                     // selected until the player explicitly picks one.
-                    if selected.is_none() {
-                        calls.set(&control, "m_nSelectedIndex", native_index.into());
-                        calls.call(&control, "SetDropDownSelectedText", vec![caption.into()]);
-                    }
+                    calls.set(&control, "m_nSelectedIndex", native_index.into());
+                    set_dropdown_caption(&control, &caption, calls);
                 }
             }
             calls.set(
@@ -381,6 +378,15 @@ impl Scene {
         }
         calls.call(path, "RefreshWidgetLayout", vec![]);
     }
+}
+
+fn set_dropdown_caption(control: &str, caption: &str, calls: &mut Calls) {
+    // Cached authored buttons retain their initial `buttonText` binding.
+    // Update that binding and its existing TextField together, as numeric
+    // entry does, keeping the same display object across cached selections.
+    let button = format!("{control}.Catagory.ButtonText");
+    calls.set(&button, "buttonText", caption.into());
+    calls.set(&format!("{button}.Text"), "text", caption.into());
 }
 
 fn dropdown_presentation(
