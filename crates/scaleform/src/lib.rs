@@ -579,37 +579,43 @@ fn run(
                         let dt = now - last;
                         last = now;
                         if active {
-                            // Host::step pumps the executor, advances the player and drains
-                            // engine commands. Separate render spans identify GPU readback waits.
+                            // Movie time and all handlers continue while a prior raster's
+                            // GPU readback is pending. Submission never waits for mapping.
                             trace.event("step_begin", active, serial, count, budget_exhausted);
                             host.step(dt);
                             trace.event("step_end", active, serial, count, budget_exhausted);
-                            if host.needs_render() {
-                                trace.event(
-                                    "render_begin",
-                                    active,
-                                    serial,
-                                    count,
-                                    budget_exhausted,
-                                );
-                                let (width, height, rgba) =
-                                    host.render().map_err(|e| e.to_string())?;
-                                serial += 1;
-                                trace.event("render_end", active, serial, count, budget_exhausted);
-                                if let Ok(mut slot) = frame.lock() {
-                                    *slot = Some(Frame {
-                                        width,
-                                        height,
-                                        rgba,
-                                        serial,
-                                        presentation_revision,
-                                    });
-                                }
-                            }
                         } else {
                             trace.event("executor_begin", active, serial, count, budget_exhausted);
                             host.pump_loads();
                             trace.event("executor_end", active, serial, count, budget_exhausted);
+                        }
+                        if let Some(capture) = host.poll_render()? {
+                            trace.event("readback_complete", active, serial, count, budget_exhausted);
+                            if active {
+                                serial += 1;
+                                if let Ok(mut slot) = frame.lock() {
+                                    *slot = Some(Frame {
+                                        width: capture.width,
+                                        height: capture.height,
+                                        rgba: capture.rgba,
+                                        serial,
+                                        // Completion can follow a newer Present input. Only the
+                                        // revision captured at submission describes these pixels.
+                                        presentation_revision: capture.presentation_revision,
+                                    });
+                                }
+                            }
+                        }
+                        if active && !host.readback_pending() && host.needs_render() {
+                            trace.event(
+                                "render_begin",
+                                active,
+                                serial,
+                                count,
+                                budget_exhausted,
+                            );
+                            host.begin_render(presentation_revision)?;
+                            trace.event("render_end", active, serial, count, budget_exhausted);
                         }
                     }
                 }
