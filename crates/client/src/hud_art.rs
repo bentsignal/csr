@@ -81,7 +81,10 @@ pub fn update(mut commands: Commands, art: Res<UiAssets>, world: Res<SimWorld>, 
     let Some(p) = w.player(local.view_target()) else { return };
     let to_uv = |pos: glam::Vec3| Vec2::new(pos.x-radar.origin.x, radar.origin.y-pos.y) / (1024.0 * radar.scale);
     let camera = poses.sample(p, time.overstep_fraction());
-    let map_view = crate::radar_view::view(to_uv(camera.origin), settings.radar_scale, settings.radar_rotate, camera.angles.y);
+    // Local mouse look is current even between simulation ticks, matching the
+    // camera's update_camera branch. Spectated players retain sampled angles.
+    let yaw = if local.spectating.is_some() && !local.noclip { camera.angles.y } else { local.yaw };
+    let map_view = crate::radar_view::view(to_uv(camera.origin), settings.radar_scale, settings.radar_rotate, yaw);
     if radar.scale > 0.0 {
         if let Some(mut material) = radar.material.as_ref().and_then(|handle| materials.get_mut(handle)) {
             material.view = map_view;
