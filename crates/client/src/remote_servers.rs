@@ -726,7 +726,7 @@ fn run(
             netcode::lan::collect(cancel)
                 .map_err(|error| format!("LAN discovery unavailable: {error}. Direct addresses and Favorites remain available."))?
                 .into_iter().map(|address| Endpoint(address.to_string())).collect(),
-            "LAN refresh completed. Only verified local announcements are listed; network filtering may hide servers.",
+            "LAN servers refreshed.",
         ),
         Action::Probe(endpoint) => (
             vec![endpoint.clone()],
