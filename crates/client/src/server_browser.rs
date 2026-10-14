@@ -114,6 +114,7 @@ fn tab(tab: ui::Tab) -> net::Tab {
     match tab {
         ui::Tab::Internet => net::Tab::Internet,
         ui::Tab::Favorites => net::Tab::Favorites,
+        ui::Tab::Lan => net::Tab::Lan,
     }
 }
 fn intent(intent: ui::Intent) -> net::Intent {

@@ -325,6 +325,7 @@ pub enum Tab {
     #[default]
     Internet,
     Favorites,
+    Lan,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Intent {

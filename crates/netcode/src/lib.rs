@@ -2,6 +2,7 @@
 //! The same API can be driven by a dedicated server or a menu-owned host.
 pub mod host;
 pub mod lag;
+pub mod lan;
 pub mod prediction;
 pub mod protocol;
 pub mod remote_pose;

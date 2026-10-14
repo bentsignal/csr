@@ -37,6 +37,7 @@ pub enum Tab {
     #[default]
     Internet,
     Favorites,
+    Lan,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Intent {
@@ -193,6 +194,7 @@ struct ResultSet {
     status: String,
 }
 struct Job {
+    lan: bool,
     generation: u64,
     address: Option<Endpoint>,
     cancel: Arc<AtomicBool>,
@@ -201,13 +203,16 @@ struct Job {
 }
 impl Job {
     fn start(generation: u64, task: Task) -> Result<Self, String> {
+        let lan = matches!(&task.action, Action::Refresh(Tab::Lan));
         let address = match &task.action {
             Action::Probe(endpoint) | Action::Add(endpoint) => Some(endpoint.clone()),
             _ => None,
         };
-        Self::start_with(generation, address, move |cancel| {
+        let mut job = Self::start_with(generation, address, move |cancel| {
             run(task, cancel, Endpoint::resolve)
-        })
+        })?;
+        job.lan = lan;
+        Ok(job)
     }
     fn start_with(
         generation: u64,
@@ -224,6 +229,7 @@ impl Job {
             })
             .map_err(|e| format!("Could not start server discovery: {e}"))?;
         Ok(Self {
+            lan: false,
             generation,
             address,
             cancel,
@@ -234,6 +240,7 @@ impl Job {
 }
 
 pub struct Backend {
+    lan: BTreeSet<Endpoint>,
     root: PathBuf,
     tab: Tab,
     rows: BTreeMap<Endpoint, Row>,
@@ -250,6 +257,7 @@ impl Backend {
             return Err("Server favorites require an absolute player data root.".into());
         }
         Ok(Self {
+            lan: BTreeSet::new(),
             root,
             tab: Tab::Internet,
             rows: BTreeMap::new(),
@@ -273,9 +281,10 @@ impl Backend {
             rows: self
                 .rows
                 .iter()
-                .filter(|(_, row)| match self.tab {
+                .filter(|(endpoint, row)| match self.tab {
                     Tab::Favorites => row.favorite,
                     Tab::Internet => row.manual,
+                    Tab::Lan => self.lan.contains(*endpoint),
                 })
                 .map(|(endpoint, row)| ServerRow {
                     key: row.key,
@@ -378,6 +387,7 @@ impl Backend {
         let action = match intent {
             Intent::Refresh(tab) => {
                 self.tab = tab;
+                if tab == Tab::Lan { self.lan.clear(); }
                 Action::Refresh(tab)
             }
             Intent::ProbeAddress(input) | Intent::AddFavorite(input) => {
@@ -494,6 +504,13 @@ impl Backend {
         match result.and_then(|result| result) {
             Ok(result) => {
                 self.error = None;
+                if job.lan {
+                    // Hints alone never create connectable rows. A new LAN
+                    // refresh replaces membership with successful Inspect results.
+                    self.lan = result.observations.iter()
+                        .filter(|(_, observation)| observation.is_ok())
+                        .map(|(endpoint, _)| endpoint.clone()).collect();
+                }
                 let mut previous = std::mem::take(&mut self.rows);
                 let endpoints: BTreeSet<_> = result
                     .favorites
@@ -505,6 +522,7 @@ impl Backend {
                             .filter(|(_, row)| row.manual)
                             .map(|(endpoint, _)| endpoint.clone()),
                     )
+                    .chain(self.lan.iter().cloned())
                     .collect();
                 for endpoint in endpoints {
                     let mut row = match previous.remove(&endpoint) {
@@ -700,6 +718,12 @@ fn run(
         Action::Refresh(Tab::Internet) => (
             task.manual,
             "Internet directory unavailable. Showing only manually probed addresses.",
+        ),
+        Action::Refresh(Tab::Lan) => (
+            netcode::lan::collect(cancel)
+                .map_err(|error| format!("LAN discovery unavailable: {error}. Direct addresses and Favorites remain available."))?
+                .into_iter().map(|address| Endpoint(address.to_string())).collect(),
+            "LAN refresh completed. Only verified local announcements are listed; network filtering may hide servers.",
         ),
         Action::Probe(endpoint) => (
             vec![endpoint.clone()],
@@ -961,6 +985,41 @@ mod tests {
             4,
         )
         .unwrap()
+    }
+
+    #[test]
+    fn lan_refresh_admits_only_verified_rows_and_drops_missing_members_without_losing_favorites() {
+        fn publish_lan(backend: &mut Backend, favorite: Endpoint, observations: BTreeMap<Endpoint, Result<Observed, String>>) {
+            backend.bump().unwrap();
+            let mut job = Job::start_with(backend.generation, None, move |_| Ok(ResultSet {
+                favorites: BTreeSet::from([favorite]), observations, status: "LAN fixture".into(),
+            })).unwrap();
+            job.lan = true;
+            backend.job = Some(job);
+            drain(backend, None);
+        }
+        let fixture = Fixture::new();
+        let mut backend = fixture.backend();
+        backend.tab = Tab::Lan;
+        let good = Endpoint::parse("127.0.0.1:27018").unwrap();
+        let bad = Endpoint::parse("127.0.0.1:27019").unwrap();
+        publish_lan(&mut backend, good.clone(), BTreeMap::from([
+            (good.clone(), Ok(observed("127.0.0.1:27018".parse().unwrap()))),
+            (bad.clone(), Err("Inspect rejected the hint".into())),
+        ]));
+        let snapshot = backend.snapshot();
+        assert_eq!(snapshot.rows.len(), 1);
+        let row = &snapshot.rows[0];
+        assert!(row.connectable && row.favorite);
+        assert_eq!(row.endpoint, good.0);
+        assert!(backend.apply(Intent::Connect { key: row.key, generation: snapshot.generation }).unwrap().is_some());
+        assert!(!backend.rows.contains_key(&bad), "unverified advertisement created a row");
+        publish_lan(&mut backend, good.clone(), BTreeMap::new());
+        assert!(backend.snapshot().rows.is_empty(), "vanished server remained in LAN results");
+        assert!(backend.apply(Intent::Connect { key: row.key, generation: snapshot.generation }).is_err(), "stale LAN ticket survived refresh");
+        backend.tab = Tab::Favorites;
+        assert_eq!(backend.snapshot().rows.len(), 1);
+        assert_eq!(backend.snapshot().rows[0].key, row.key);
     }
 
     #[test]
