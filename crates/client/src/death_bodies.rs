@@ -54,7 +54,7 @@ pub(super) fn update(
         if !admitted(&death,round) || state.seen.contains(&death.key) { continue; }
         state.seen.push_back(death.key);
         if state.seen.len()>128 { state.seen.pop_front(); }
-        let model=match death.victim_team {sim::Team::Terrorist=>models.terrorist.as_ref(),_=>models.counter_terrorist.as_ref()};
+        let model=match death.victim_team {sim::Team::Terrorist=>models.terrorist.as_mut(),_=>models.counter_terrorist.as_mut()};
         let Some(model)=model else {continue};
         // Reuse the already loaded meshes/textures/skeleton. No weapon remains
         // in hand: the existing authoritative dropped item owns that visual.
@@ -66,7 +66,11 @@ pub(super) fn update(
         }
         for e in &instance.meshes {commands.entity(*e).insert(Visibility::Hidden);}
         if state.bodies.len()==MAX_BODIES {despawn_instance(commands,&state.bodies.pop_front().unwrap().instance);}
-        let pose = captured_pose.unwrap_or_else(|| mdl::skeleton::model_space(
+        // A victim can die before its first rendered animation. Raw MDL rest
+        // bones are authored Y-up, unlike evaluated Source character poses;
+        // placing that pose at the feet embeds its hulls in the floor. Start
+        // from the installed death clip's evaluated first frame in this case.
+        let pose = captured_pose.or_else(|| model.anims.death_pose(0.)).unwrap_or_else(|| mdl::skeleton::model_space(
             &model.asset.model.bones, &mdl::skeleton::rest_pose(&model.asset.model.bones)));
         let trace_pending = std::env::var_os("CSR_DEATH_TRACE").is_some();
         if trace_pending {
