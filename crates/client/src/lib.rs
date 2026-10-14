@@ -38,6 +38,7 @@ pub mod utility_fx;
 pub mod buymenu;
 pub mod items;
 pub mod interpolation;
+mod input_latency;
 pub mod characters;
 pub mod player_anim;
 pub mod skinning;
@@ -114,6 +115,8 @@ pub struct ClientOptions {
     pub terrorist: bool,
     /// Deathmatch (respawns, fixed loadout) instead of competitive rounds.
     pub deathmatch: bool,
+    /// Offline utility sandbox: full grenade inventory on every respawn.
+    pub grenade_practice: bool,
     pub direct: bool,
 }
 
@@ -130,6 +133,7 @@ impl Default for ClientOptions {
             bots: 5,
             terrorist: false,
             deathmatch: false,
+            grenade_practice: false,
             direct: false,
         }
     }
@@ -271,7 +275,7 @@ pub fn run(opts: ClientOptions) -> i32 {
     let load_request = menu::LoadRequest::default();
     let mut app = App::new();
     app.add_plugins(
-        DefaultPlugins
+        input_latency::desktop_plugins()
             .set(WindowPlugin {
                 close_when_requested: false,
                 primary_window: Some(Window {
@@ -283,6 +287,7 @@ pub fn run(opts: ClientOptions) -> i32 {
                         Ok("fifo") => PresentMode::Fifo,
                         _ => PresentMode::AutoNoVsync,
                     },
+                    desired_maximum_frame_latency: input_latency::surface_frame_latency(),
                     ..default()
                 }),
                 ..default()
@@ -506,8 +511,29 @@ fn spawn_level(
     if !remote && !opts.deathmatch {
         world.set_mode(sim::GameMode::Competitive, competitive_rules(&level));
     }
+    if !remote && opts.grenade_practice {
+        let rules = sim::RulesConfig { grenade_practice: true, ..Default::default() };
+        world.set_mode(sim::GameMode::Deathmatch, rules);
+        world.respawn(id);
+    }
     // Deterministic visual checks only; interactive sessions ignore these controls.
     if !remote && opts.screenshot.is_some() {
+        if std::env::var_os("CSR_TEST_DEATH_BODY").is_some() {
+            // Screenshot fixture only. Initialize a fragile target in front
+            // of the spawn; CSR_AUTOFIRE drives the ordinary TickInput/fire/
+            // damage/death path. Presentation receives a real death receipt.
+            let shooter = world.player(id).unwrap();
+            let angles = shooter.view_angles;
+            let (forward, _, _) = movement::angle_vectors(angles);
+            let origin = shooter.movement.origin + forward * 96.0;
+            let victim = world.add_player("Death preview", theirs);
+            let target = world.player_mut(victim).unwrap();
+            target.movement.origin = origin;
+            target.view_angles = glam::Vec3::new(0.0, angles.y + 180.0, 0.0);
+            target.health = 1;
+            target.armor = 0;
+            target.helmet = false;
+        }
         if let Ok(name) = std::env::var("CSR_TEST_WEAPON") {
             if let Some(def) = world.catalog.get(&name).cloned() {
                 let p = world.player_mut(id).unwrap();

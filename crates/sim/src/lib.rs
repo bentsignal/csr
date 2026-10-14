@@ -735,6 +735,12 @@ impl World {
             let mut guns = self.loadout(team);
             if let Some(p) = self.player(id) {
                 p.loadout.practice_weapons(&self.catalog, team, &mut guns);
+                if self.mode == GameMode::Deathmatch && self.rules.grenade_practice && !p.is_bot {
+                    for name in ["weapon_hegrenade", "weapon_flashbang", "weapon_smokegrenade",
+                        "weapon_molotov", "weapon_incgrenade", "weapon_decoy"] {
+                        if let Some(grenade) = self.weapon(name) { guns.push(grenade); }
+                    }
+                }
             }
             guns
         };

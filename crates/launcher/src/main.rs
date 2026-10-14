@@ -65,6 +65,7 @@ fn main() {
               --direct                Skip the menu and enter the match\n\
               --team t|ct             Your side (default: ct)\n\
               --deathmatch            Respawns and a fixed loadout\n\
+              --grenade-practice      Full reusable grenade set, offline respawns\n\
               --bots N                Enemy bots; N-1 teammates (default: 5)\n\
               --size W H              Window resolution (default: 1600 900)\n\
               --exposure F            Brightness (default: 2)\n\
@@ -229,6 +230,11 @@ fn parse_play(map: &str, args: &[String]) -> Result<client::ClientOptions, Strin
                 i += 1;
             }
             "--deathmatch" => opts.deathmatch = true,
+            "--grenade-practice" => {
+                opts.grenade_practice = true;
+                opts.deathmatch = true;
+                opts.direct = true;
+            }
             "--direct" => opts.direct = true,
             "--bots" => {
                 opts.bots = num(args.get(i + 1), "--bots")? as u32;

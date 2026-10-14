@@ -24,6 +24,9 @@ pub enum GameMode {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RulesConfig {
+    /// Explicit sandbox option: humans spawn with renewable utility in deathmatch.
+    /// Never enabled by competitive defaults or by a client's loadout request.
+    pub grenade_practice: bool,
     pub freeze_time: f32,
     /// Seconds after the freeze time ends during which buying is allowed.
     pub buy_time: f32,
@@ -59,6 +62,7 @@ pub struct RulesConfig {
 impl Default for RulesConfig {
     fn default() -> Self {
         Self {
+            grenade_practice: false,
             freeze_time: 15.0,
             buy_time: 20.0,
             round_time: 1.92 * 60.0,

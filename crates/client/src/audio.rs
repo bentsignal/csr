@@ -17,7 +17,7 @@
 use crate::coords::to_bevy;
 use bevy::audio::{AudioPlayer, AudioSink, AudioSinkPlayback, AudioSource, PlaybackSettings, SpatialAudioSink, SpatialListener, SpatialScale, Volume};
 use bevy::prelude::*;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -146,6 +146,27 @@ pub fn gunfire_crossfade(distance: f32, distant: bool) -> f32 {
     if distant { 1.0 - (1.0 - t).powf(1.2) } else { 1.0 - t.powf(1.2) }
 }
 
+/// Retained literal weapon bounds. The existing fitted stack shape remains;
+/// an authored curve_amount is metadata, not a calibrated operator formula.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct WeaponFalloff { min: f32, max: f32, floor: f32, curve_amount: f32 }
+impl Default for WeaponFalloff {
+    fn default() -> Self { Self { min: 400.0, max: 3937.0, floor: 0.05, curve_amount: 0.7 } }
+}
+impl WeaponFalloff {
+    fn gain(self, distance: f32) -> f32 { stack_curve(distance, self.min, self.max).max(self.floor) }
+}
+#[derive(Clone, Copy)]
+struct GunfireFade { start: f32, end: f32, distant: bool }
+impl GunfireFade {
+    fn gain(self, distance: f32) -> f32 {
+        let t = ((distance - self.start) / (self.end - self.start)).clamp(0.0, 1.0);
+        if self.distant { 1.0 - (1.0 - t).powf(1.2) } else { 1.0 - t.powf(1.2) }
+    }
+}
+// A device which never creates sinks must not retain unbounded gun requests.
+const MAX_PENDING_GUN_VOICES: usize = 64;
+
 /// Source sound channels that hold one sound per entity: a new sound on the
 /// same channel stops the old one. `CHAN_AUTO` and `CHAN_STATIC` overlap.
 fn channel_number(name: &str) -> u8 {
@@ -201,6 +222,9 @@ struct Entry {
     soundlevel: f32,
     channel: u8,
     category: Category,
+    weapon_falloff: Option<WeaponFalloff>,
+    xfade_bounds: (f32, f32),
+    explicit_near_fade: bool,
     /// `play_distant_version_*` partner entry.
     distant: Option<String>,
     /// Older instances of this entry an entity may keep when it starts
@@ -223,13 +247,15 @@ pub struct Emitter {
     base: f32,
     category: Category,
     soundlevel: f32,
-    gunfire: Option<bool>,
+    gunfire: Option<GunfireFade>,
+    weapon_falloff: Option<WeaponFalloff>,
 }
 
 impl Emitter {
     fn gain(&self, distance: f32) -> f32 {
-        let fade = self.gunfire.map_or(1.0, |distant| gunfire_crossfade(distance, distant));
-        self.base * self.category.falloff(self.soundlevel, distance) * fade
+        let fade = self.gunfire.map_or(1.0, |fade| fade.gain(distance));
+        let falloff = self.weapon_falloff.map_or_else(|| self.category.falloff(self.soundlevel, distance), |curve| curve.gain(distance));
+        self.base * falloff * fade
     }
 }
 
@@ -261,6 +287,8 @@ struct Playing {
     entry: String,
     request_clock: f64,
     player_observed: bool,
+    sink_observed: bool,
+    deferred_limit: Option<usize>,
 }
 
 /// Opt-in diagnostic of a deferred playback request. A sink observed in a
@@ -442,6 +470,26 @@ fn parse_entry(b: &kv::Block) -> Option<Entry> {
     } else {
         None
     };
+    let mut weapon_falloff = (category == Category::Weapon).then(WeaponFalloff::default);
+    let mut xfade_bounds = (800.0, 2800.0);
+    let mut explicit_near_fade = false;
+    if let Some(update) = b.block("operator_stacks").and_then(|s| s.block("update_stack")) {
+        let literal = |block: Option<&kv::Block>, field: &str| block.and_then(|v| v.str(field))
+            .and_then(kv::parse_f32).filter(|v| v.is_finite());
+        if let Some(curve) = &mut weapon_falloff {
+            let falloff = update.block("volume_falloff");
+            let min = literal(falloff, "input_min").or_else(|| literal(update.block("volume_falloff_min"), "input2")).unwrap_or(curve.min);
+            let max = literal(falloff, "input_max").or_else(|| literal(update.block("volume_falloff_max"), "input2")).unwrap_or(curve.max);
+            if min >= 0.0 && max > min { curve.min = min; curve.max = max; }
+            if let Some(floor) = literal(falloff, "input_volume_min").filter(|v| (0.0..=1.0).contains(v)) { curve.floor = floor; }
+            if let Some(amount) = literal(falloff, "input_curve_amount").filter(|v| *v >= 0.0) { curve.curve_amount = amount; }
+            let start = literal(update.block("volume_xfade_start_dist"), "input2").unwrap_or(xfade_bounds.0);
+            let end = literal(update.block("volume_xfade_end_dist"), "input2").unwrap_or(xfade_bounds.1);
+            if start >= 0.0 && end > start { xfade_bounds = (start, end); }
+            let remap = update.block("volume_distance_xfade");
+            explicit_near_fade = literal(remap, "input_map_min") == Some(0.0) && literal(remap, "input_map_max") == Some(1.0);
+        }
+    }
     Some(Entry {
         waves,
         volume,
@@ -449,6 +497,7 @@ fn parse_entry(b: &kv::Block) -> Option<Entry> {
         soundlevel: b.str("soundlevel").map_or(75.0, parse_soundlevel),
         channel: b.str("channel").map_or(0, channel_number),
         category,
+        weapon_falloff, xfade_bounds, explicit_near_fade,
         distant,
         limit,
         distant_layer: false,
@@ -608,6 +657,11 @@ impl SoundLibrary {
     ) {
         let key = name.to_ascii_lowercase();
         let Some(entry) = self.entries.get(&key).cloned() else { return };
+        let defer_limit = entry.category == Category::Weapon && matches!(entry.channel, 0 | 6) && entry.limit.is_some();
+        if defer_limit && emit.owner.is_some_and(|owner| self.playing.iter().filter(|p| p.owner == owner && p.entry == key).count() >= MAX_PENDING_GUN_VOICES) {
+            if self.trace { info!("audio_trace pending_gun_voice_bound owner {:?} entry {key:?}", emit.owner); }
+            return;
+        }
         if let Some(distant) = entry.distant.as_deref().filter(|_| emit.at.is_some()) {
             self.play_with(commands, fs, sources, distant, emit);
         }
@@ -644,7 +698,9 @@ impl SoundLibrary {
                     base: volume * entry.category.field() * spatial_normalization(channels),
                     category: entry.category,
                     soundlevel: entry.soundlevel,
-                    gunfire: (entry.category == Category::Weapon && (entry.distant.is_some() || entry.distant_layer)).then_some(entry.distant_layer),
+                    gunfire: (entry.category == Category::Weapon && (entry.distant.is_some() || entry.distant_layer || entry.explicit_near_fade))
+                        .then_some(GunfireFade { start: entry.xfade_bounds.0, end: entry.xfade_bounds.1, distant: entry.distant_layer }),
+                    weapon_falloff: entry.weapon_falloff,
                 };
                 let gain = emitter.gain(emitter.pos.distance(self.listener));
                 initial_gain = gain * self.master_volume;
@@ -685,7 +741,8 @@ impl SoundLibrary {
         }
         if let Some(owner) = emit.owner {
             self.playing.push(Playing { entity, owner, channel: entry.channel, entry: key,
-                request_clock: self.clock, player_observed: false });
+                request_clock: self.clock, player_observed: false, sink_observed: false,
+                deferred_limit: defer_limit.then(|| entry.limit.unwrap().max(1)) });
         }
     }
 
@@ -704,7 +761,7 @@ impl SoundLibrary {
                 same.push(i);
             }
         }
-        if let Some(limit) = entry.limit {
+        if let Some(limit) = entry.limit.filter(|_| entry.category != Category::Weapon || !matches!(entry.channel, 0 | 6)) {
             // `limit` counts the new sound too: stop the oldest until it fits.
             let excess = (same.len() + 1).saturating_sub(limit.max(1));
             stop.extend(same.into_iter().take(excess));
@@ -773,7 +830,7 @@ impl SoundLibrary {
         }
         let mut e = match raw.at {
             Some(pos) => {
-                let emitter = Emitter { pos: to_bevy(pos), base: raw.volume * category.field() * spatial_normalization(channels), category, soundlevel: raw.soundlevel, gunfire: None };
+                let emitter = Emitter { pos: to_bevy(pos), base: raw.volume * category.field() * spatial_normalization(channels), category, soundlevel: raw.soundlevel, gunfire: None, weapon_falloff: None };
                 let gain = emitter.gain(emitter.pos.distance(self.listener)) * start;
                 commands.spawn((
                     AudioPlayer(handle),
@@ -847,18 +904,45 @@ pub fn update(
 /// Last runs after their final deferred flush and PostUpdate's audio cleanup.
 /// Do not retain missing, never-observed players: cancelled requests must also
 /// disappear. A future Last audio producer must flush before this system.
-pub fn prune(mut sounds: ResMut<SoundLibrary>, active: Query<(), With<AudioPlayer>>) {
+pub fn prune(mut commands: Commands, mut sounds: ResMut<SoundLibrary>,
+    active: Query<(Has<AudioSink>, Has<SpatialAudioSink>), With<AudioPlayer>>) {
     let trace_enabled = sounds.trace;
     let prune_clock = sounds.clock;
+    let mut eligible = HashSet::new();
     sounds.playing.retain_mut(|p| {
-        let present = active.contains(p.entity);
-        if trace_enabled && !present {
+        let present = active.get(p.entity).ok();
+        if trace_enabled && present.is_none() {
             info!("audio_trace prune_missing_player entity {:?} clock {prune_clock:.6} request_clock {:.6} entry {:?} owner {} channel {} player_previously_observed {} stage last",
                 p.entity, p.request_clock, p.entry, p.owner, p.channel, p.player_observed);
         }
-        p.player_observed |= present;
-        present
+        p.player_observed |= present.is_some();
+        if let Some((ordinary, spatial)) = present {
+            // Never delete an unresolved or newly observed start in this turn.
+            // A sink is not a measured PCM onset; catch-up can still bunch starts.
+            if p.sink_observed && (ordinary || spatial) { eligible.insert(p.entity); }
+            p.sink_observed = ordinary || spatial;
+        }
+        present.is_some()
     });
+    let mut counts: HashMap<(u32, String), (usize, usize)> = HashMap::new();
+    for p in &sounds.playing {
+        if let Some(limit) = p.deferred_limit.filter(|_| p.sink_observed) {
+            let group = counts.entry((p.owner, p.entry.clone())).or_insert((0, limit));
+            group.0 += 1;
+        }
+    }
+    let mut stopped = Vec::new();
+    for (index, p) in sounds.playing.iter().enumerate() {
+        if !eligible.contains(&p.entity) { continue; }
+        if let Some((count, limit)) = counts.get_mut(&(p.owner, p.entry.clone())) {
+            if *count > *limit { *count -= 1; stopped.push(index); }
+        }
+    }
+    for index in stopped.into_iter().rev() {
+        let p = sounds.playing.remove(index);
+        if trace_enabled { info!("audio_trace limit_after_sink entity {:?} clock {prune_clock:.6} entry {:?} owner {}", p.entity, p.entry, p.owner); }
+        commands.entity(p.entity).try_despawn();
+    }
 }
 
 #[cfg(test)]
@@ -918,7 +1002,7 @@ mod tests {
         Entry {
             waves: vec!["sound/synthetic.wav".into()], volume: (1.0, 1.0),
             pitch: (100.0, 100.0), soundlevel: 79.0, channel: 6,
-            category: Category::Weapon, distant: distant.map(str::to_owned),
+            category: Category::Weapon, weapon_falloff: Some(WeaponFalloff::default()), xfade_bounds: (800.0, 2800.0), explicit_near_fade: false, distant: distant.map(str::to_owned),
             limit: Some(limit), distant_layer: distant.is_none(),
             // No AudioPlugin is installed; only entity lifecycle is exercised.
             frozen_wave: Some(classic::FrozenWave { bytes: Arc::from([0u8; 4]), channels: 1 }),
@@ -957,6 +1041,16 @@ mod tests {
         app
     }
 
+    fn start_pending_voices(app: &mut App) {
+        let ids: Vec<Entity> = app.world().resource::<SoundLibrary>().playing.iter()
+            .filter(|p| !p.sink_observed).map(|p| p.entity).collect();
+        for id in ids {
+            // An actual rodio queue, without a device or a claim of PCM onset.
+            let (player, _queue) = rodio::Player::new();
+            app.world_mut().entity_mut(id).insert(AudioSink::new(player));
+        }
+    }
+
     fn local_voice(owner: u32) -> Emit { Emit { owner: Some(owner), local: true, ..default() } }
 
     #[test]
@@ -980,6 +1074,8 @@ mod tests {
         for shot in 1..=5 {
             app.world_mut().resource_mut::<VoiceFixture>().requests.push(local_voice(7));
             app.update();
+            start_pending_voices(&mut app);
+            app.update();
             assert_eq!(app.world().resource::<SoundLibrary>().playing.len(), shot.min(2));
             let count = app.world_mut().query::<&AudioPlayer>().iter(app.world()).count();
             assert_eq!(count, shot.min(2), "Steal despawns are applied, not just forgotten");
@@ -997,6 +1093,8 @@ mod tests {
                 });
             }
             app.update();
+            start_pending_voices(&mut app);
+            app.update();
         }
         let sounds = app.world().resource::<SoundLibrary>();
         for owner in [7, 8] {
@@ -1005,6 +1103,67 @@ mod tests {
         }
         let count = app.world_mut().query::<&AudioPlayer>().iter(app.world()).count();
         assert_eq!(count, 6);
+    }
+
+    #[test]
+    fn three_deferred_shots_keep_each_start_before_active_limit() {
+        let mut app = voices();
+        app.world_mut().resource_mut::<VoiceFixture>().requests.extend([local_voice(7); 3]);
+        app.update();
+        let ids: Vec<Entity> = app.world().resource::<SoundLibrary>().playing.iter().map(|p| p.entity).collect();
+        assert_eq!(ids.len(), 3, "No third-shot request may erase an unresolved onset");
+        assert!(ids.iter().all(|id| app.world().get::<AudioPlayer>(*id).is_some()));
+        assert!(app.world().resource::<SoundLibrary>().playing.iter().all(|p| !p.sink_observed));
+        start_pending_voices(&mut app);
+        app.update();
+        assert_eq!(app.world().resource::<SoundLibrary>().playing.len(), 3, "Newly observed starts receive one turn");
+        app.update();
+        assert_eq!(app.world().resource::<SoundLibrary>().playing.len(), 2);
+        assert!(app.world().get::<AudioPlayer>(ids[0]).is_none(), "Oldest active voice retires");
+        assert!(app.world().get::<AudioPlayer>(ids[1]).is_some());
+        assert!(app.world().get::<AudioPlayer>(ids[2]).is_some());
+    }
+
+    #[test]
+    fn a_device_without_sinks_has_bounded_pending_gunfire() {
+        let mut app = voices();
+        app.world_mut().resource_mut::<VoiceFixture>().requests.extend([local_voice(7); MAX_PENDING_GUN_VOICES + 1]);
+        app.update();
+        assert_eq!(app.world().resource::<SoundLibrary>().playing.len(), MAX_PENDING_GUN_VOICES);
+        app.update();
+        assert_eq!(app.world().resource::<SoundLibrary>().playing.len(), MAX_PENDING_GUN_VOICES);
+    }
+
+    #[test]
+    fn suppressed_entry_keeps_literal_bounds_and_fades_without_distant_partner() {
+        let doc = kv::parse(r#""Shot" { "wave" "synthetic.wav"
+            "operator_stacks" { "update_stack" { "import_stack" "CS_update_weapon"
+                "volume_falloff" { "input_max" "800" "input_curve_amount" "0.9" }
+                "volume_xfade_end_dist" { "input2" "1500" }
+                "volume_distance_xfade" { "input_map_min" "0" "input_map_max" "1" } } } }"#).unwrap();
+        let entry = parse_entry(doc.block("Shot").unwrap()).unwrap();
+        assert_eq!(entry.distant, None);
+        assert!(entry.explicit_near_fade);
+        let curve = entry.weapon_falloff.unwrap();
+        assert_eq!((curve.min, curve.max, curve.floor, curve.curve_amount), (400.0, 800.0, 0.05, 0.9));
+        let emitter = Emitter { pos: Vec3::ZERO, base: 1.0, category: entry.category, soundlevel: entry.soundlevel,
+            weapon_falloff: entry.weapon_falloff, gunfire: Some(GunfireFade { start: entry.xfade_bounds.0, end: entry.xfade_bounds.1, distant: false }) };
+        assert_eq!(emitter.gain(100.0), 1.0);
+        assert_eq!(emitter.gain(800.0), 0.05);
+        assert!(emitter.gain(1100.0) < 0.05);
+        assert_eq!(emitter.gain(1500.0), 0.0);
+        assert_eq!(emitter.gain(5000.0), 0.0);
+    }
+
+    #[test]
+    fn malformed_literal_bounds_do_not_produce_nonfinite_gain() {
+        let doc = kv::parse(r#""Shot" { "wave" "synthetic.wav"
+            "operator_stacks" { "update_stack" { "import_stack" "CS_update_weapon"
+                "volume_falloff" { "input_min" "900" "input_max" "800" "input_volume_min" "NaN" }
+                "volume_xfade_end_dist" { "input2" "-5" } } } }"#).unwrap();
+        let entry = parse_entry(doc.block("Shot").unwrap()).unwrap();
+        assert_eq!(entry.weapon_falloff, Some(WeaponFalloff::default()));
+        assert_eq!(entry.xfade_bounds, (800.0, 2800.0));
     }
 
     #[test]

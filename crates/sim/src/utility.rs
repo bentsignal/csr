@@ -158,7 +158,13 @@ impl World {
         let owner = p.id;
         let velocity = forward * 750.0 + p.movement.velocity * 0.5;
         let active = p.active;
-        self.players[i].take(active, time);
+        if self.mode == crate::GameMode::Deathmatch && self.rules.grenade_practice && !p.is_bot {
+            // Keep the selected utility for repeated sandbox throws. Retain a
+            // cooldown so an automatic definition cannot spawn one every tick.
+            self.players[i].weapons[active].next_attack = time + 1.0;
+        } else {
+            self.players[i].take(active, time);
+        }
         self.next_item += 1;
         self.projectiles.push(Projectile {
             id: self.next_item,

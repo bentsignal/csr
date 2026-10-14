@@ -540,7 +540,11 @@ mod tests {
         let mut spec = spec(&hash, "");
         spec.distant = None;
         let mut entries = entries();
-        entries.get_mut("test.single").unwrap().distant = None;
+        let installed = entries.get_mut("test.single").unwrap();
+        installed.distant = None;
+        installed.weapon_falloff = Some(super::super::WeaponFalloff { min: 400.0, max: 800.0, floor: 0.05, curve_amount: 0.9 });
+        installed.xfade_bounds = (800.0, 1500.0);
+        installed.explicit_near_fade = true;
         let mut profile = Profile::default();
         // Unrouted/missing distant bytes do not affect a near-only definition.
         let fs = fs(near.clone(), vec![]);
@@ -549,6 +553,9 @@ mod tests {
         assert!(!entries.contains_key("csr.test.distant"));
         assert!(entries["csr.test.near"].distant.is_none());
         assert!(!entries["csr.test.near"].distant_layer);
+        assert_eq!(entries["csr.test.near"].weapon_falloff, entries["test.single"].weapon_falloff);
+        assert_eq!(entries["csr.test.near"].xfade_bounds, (800.0, 1500.0));
+        assert!(entries["csr.test.near"].explicit_near_fade);
         assert!(entries["test.single"].distant.is_none());
         let mut library = super::super::SoundLibrary {
             entries,

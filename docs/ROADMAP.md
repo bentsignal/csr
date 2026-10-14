@@ -521,3 +521,16 @@ selection border. Inventory provides 36 base weapon cards, filters, rotating
 3D previews and saved team-specific primary/pistol choices for Deathmatch.
 Steam inventories, skins, online friends/store services, exact Panorama option
 parity and the gameplay gaps listed above remain unfinished.
+
+### Offline grenade practice (owner playtest feedback)
+
+- [x] `csr play de_dust2 --grenade-practice --bots 0` starts directly with
+  respawns and HE, flash, smoke, Molotov, incendiary and decoy in inventory.
+  Press 4 repeatedly to cycle utility; click to throw again after the sandbox
+  cooldown. Grenades remain available after throws and respawns. Bots and
+  competitive inventories are unchanged. This exposes existing grenade
+  simulation/effects for testing; throw timing, trajectories and particle
+  fidelity are still unfinished.
+- [x] Retain bounded death bodies using the installed full death animation;
+  verified with a lethal simulation shot and rendered pose. Authentic ragdoll
+  physics, impulse response and airborne settling remain unfinished.

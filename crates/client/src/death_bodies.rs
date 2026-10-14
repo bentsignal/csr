@@ -1,0 +1,85 @@
+//! Bounded presentation of immutable authoritative deaths using installed models.
+//! The authored low-violence death clip is not CS:GO ragdoll physics.
+use bevy::prelude::*;
+use super::{CharacterModels, own_materials, despawn_instance, lighting_at};
+use crate::{coords::{rotation_to_bevy,to_bevy}, material::WorldMaterial, skinning::{self,SkinnedInstance}};
+use sim::death::{DeathReceipt,DeathKey};
+use std::collections::VecDeque;
+
+const MAX_BODIES: usize = 16;
+const BODY_LIFETIME: f32 = 20.;
+
+struct Body {
+    death: DeathReceipt,
+    born: f32,
+    instance: SkinnedInstance,
+    materials: Vec<Handle<WorldMaterial>>,
+}
+
+#[derive(Default)]
+pub(super) struct DeathBodies {
+    bodies: VecDeque<Body>,
+    seen: VecDeque<DeathKey>,
+    round: Option<u32>,
+}
+
+fn admitted(death: &DeathReceipt, round: u32) -> bool {
+    death.round == round && death.pose.origin.is_finite() && death.pose.view_angles.is_finite()
+        && matches!(death.victim_team,sim::Team::Terrorist|sim::Team::CounterTerrorist)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn update(
+    commands: &mut Commands, state: &mut DeathBodies, deaths: Vec<DeathReceipt>,
+    round: u32, now: f32, models: &mut CharacterModels,
+    materials: &mut Assets<WorldMaterial>, level: &level::Level,
+    mat_query: &Query<&MeshMaterial3d<WorldMaterial>>,
+    transforms: &mut Query<&mut Transform>, visibility: &mut Query<&mut Visibility>,
+) {
+    let sun = models.sun;
+    if state.round != Some(round) {
+        for body in state.bodies.drain(..) { despawn_instance(commands,&body.instance); }
+        state.seen.clear();state.round=Some(round);
+    }
+    while state.bodies.front().is_some_and(|b| now-b.born >= BODY_LIFETIME) {
+        despawn_instance(commands,&state.bodies.pop_front().unwrap().instance);
+    }
+    for death in deaths {
+        if !admitted(&death,round) || state.seen.contains(&death.key) { continue; }
+        state.seen.push_back(death.key);
+        if state.seen.len()>128 { state.seen.pop_front(); }
+        let model=match death.victim_team {sim::Team::Terrorist=>models.terrorist.as_ref(),_=>models.counter_terrorist.as_ref()};
+        let Some(model)=model else {continue};
+        // Reuse the already loaded meshes/textures/skeleton. No weapon remains
+        // in hand: the existing authoritative dropped item owns that visual.
+        let instance=skinning::spawn(commands,&model.asset,None,Some(materials));
+        // Explicit ownership supplements the Transform Add observer. Session
+        // teardown despawns every joint/mesh and resets Characters together.
+        for e in instance.joints.iter().chain(&instance.meshes) {
+            commands.entity(*e).insert(crate::session::MatchEntity);
+        }
+        for e in &instance.meshes {commands.entity(*e).insert(Visibility::Hidden);}
+        if state.bodies.len()==MAX_BODIES {despawn_instance(commands,&state.bodies.pop_front().unwrap().instance);}
+        state.bodies.push_back(Body {death,born:now,instance,materials:Vec::new()});
+    }
+    for body in &mut state.bodies {
+        let model=match body.death.victim_team {sim::Team::Terrorist=>models.terrorist.as_mut(),_=>models.counter_terrorist.as_mut()};
+        let Some(model)=model else {continue};
+        let Some(pose)=model.anims.death_pose(now-body.born) else {continue};
+        // Deferred entities stay hidden until their actual pose can be written.
+        if body.instance.joints.iter().any(|e| transforms.get(*e).is_err()) {continue;}
+        let rotation=rotation_to_bevy(mdl::angles_to_mat3(glam::Vec3::new(0.,body.death.pose.view_angles.y,0.)));
+        let world=Mat4::from_rotation_translation(rotation,to_bevy(body.death.pose.origin));
+        skinning::apply_pose(&body.instance,world,&pose,transforms);
+        if body.materials.is_empty() {
+            body.materials=own_materials(&body.instance,mat_query);
+            let (cube,sun_dir,sun_color)=lighting_at(level,sun,body.death.pose.origin+glam::Vec3::Z*32.);
+            for handle in &body.materials {
+                if let Some(mut m)=materials.get_mut(handle) {m.params.ambient_cube=cube;m.params.sun_dir=sun_dir;m.params.sun_color=sun_color;}
+            }
+        }
+        for e in &body.instance.meshes {
+            if let Ok(mut v)=visibility.get_mut(*e) {*v=Visibility::Inherited;}
+        }
+    }
+}
