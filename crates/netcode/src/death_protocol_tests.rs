@@ -125,9 +125,9 @@ fn tracked_receipt_must_already_satisfy_existing_admission_limits() {
 }
 
 #[test]
-fn older_protocol_versions_cannot_admit_a_peer_to_directional_inventory_v16() {
-    assert_eq!(VERSION, 16);
-    assert_eq!(PROTOCOL_ID, 0x4353_5257_0000_0010);
+fn older_protocol_versions_cannot_admit_a_peer_to_settled_projectiles_v17() {
+    assert_eq!(VERSION, 17);
+    assert_eq!(PROTOCOL_ID, 0x4353_5257_0000_0011);
     let content = ContentManifest {
         map_id: "csgo_map_test".into(),
         map_name: "test".into(),
@@ -140,7 +140,7 @@ fn older_protocol_versions_cannot_admit_a_peer_to_directional_inventory_v16() {
     )
     .unwrap();
     let before = session.world().state();
-    for version in [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15] {
+    for version in [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16] {
         let reply = session.join(
             version as u64,
             ClientControl::Hello {
