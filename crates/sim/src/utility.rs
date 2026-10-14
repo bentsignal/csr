@@ -50,6 +50,9 @@ pub struct Projectile {
     pub pos: Vec3,
     pub velocity: Vec3,
     pub born: f32,
+    /// Immutable weapon ContentId captured when a decoy leaves the hand.
+    /// Other grenade kinds carry no copied gun identity.
+    pub decoy_weapon: Option<String>,
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Field {
@@ -59,6 +62,7 @@ pub struct Field {
     pub pos: Vec3,
     pub born: f32,
     pub until: f32,
+    pub decoy_weapon: Option<String>,
 }
 
 /// Low ballistic arc, rejecting out-of-range targets. Source angles, gravity 320.
@@ -159,6 +163,18 @@ impl World {
         }
         let pos = from + forward * 18.0 * tr.fraction;
         let owner = p.id;
+        let decoy_weapon = (kind == Kind::Decoy).then(|| {
+            p.weapons.iter()
+                .filter(|w| matches!(w.def.class, weapons::WeaponClass::Pistol |
+                    weapons::WeaponClass::Smg | weapons::WeaponClass::Rifle |
+                    weapons::WeaponClass::Sniper | weapons::WeaponClass::Shotgun |
+                    weapons::WeaponClass::MachineGun))
+                .min_by_key(|w| crate::weapon::slot(&w.def))
+                .map(|w| w.def.id.to_string())
+                .or_else(|| self.catalog.get(if p.team == crate::Team::Terrorist {
+                    "weapon_glock"
+                } else { "weapon_usp_silencer" }).map(|w| w.id.to_string()))
+        }).flatten();
         let strength=p.active_weapon().and_then(|w|w.grenade_throw).map_or(1.,|s|s.mode.strength());
         // Read the release tick's actual movement, not the pull-pin tick. This
         // includes running/backpedalling/jumping; crouch uses the current eye.
@@ -172,6 +188,7 @@ impl World {
             pos,
             velocity,
             born: time,
+            decoy_weapon,
         });
         self.events.push(GameEvent::UtilityThrown {
             player: owner,
@@ -263,6 +280,7 @@ impl World {
                         } else {
                             7.0
                         },
+                    decoy_weapon: p.decoy_weapon,
                 }),
             }
         }
@@ -279,10 +297,11 @@ impl World {
         // Decoys fire twice a second; fire burns about five times a second.
         if self.tick % (self.tick_rate as u64 / 2).max(1) == 0 {
             for f in self.utility_fields.iter().filter(|f| f.kind == Kind::Decoy) {
-                self.events.push(GameEvent::DecoyShot {
+                if let Some(weapon) = &f.decoy_weapon { self.events.push(GameEvent::DecoyShot {
                     player: f.owner,
                     pos: f.pos,
-                });
+                    weapon: weapon.clone(),
+                }); }
             }
         }
         if self.tick % (13 * self.tick_rate as u64 / 64).max(1) == 0 {
@@ -343,6 +362,77 @@ impl World {
 mod tests {
     use super::*;
     use crate::Team;
+
+    #[test]
+    fn decoy_captures_primary_else_pistol_through_throw_death_and_snapshot_restore() {
+        use crate::{TickInput, weapon::WeaponState};
+        use movement::buttons;
+        use std::sync::Arc;
+        for rate in [64, 128] {
+            for primary in [Some("weapon_ak47"), Some("weapon_awp"), None] {
+                let mut catalog = weapons::Catalog::from_items_game(r#"items_game { items {
+                    "7" { name weapon_ak47 baseitem 1 }
+                    "9" { name weapon_awp baseitem 1 }
+                    "4" { name weapon_glock baseitem 1 }
+                    "47" { name weapon_decoy attributes { "primary default clip size" 1 } }
+                } }"#).unwrap();
+                catalog.weapons.iter_mut().find(|d| d.class_name == "weapon_decoy").unwrap()
+                    .grenade_animations = Some(weapons::GrenadeAnimations {
+                        pull_pin_duration: 0.25,
+                        overhand: weapons::GrenadeReleaseAnimation { duration: 0.5, release_time: 0.125 },
+                        underhand: weapons::GrenadeReleaseAnimation { duration: 0.5, release_time: 0.125 },
+                    });
+                let mut collision = collision::CollisionWorld::new();
+                collision.finalize();
+                let mut world = World::with_catalog(Arc::new(collision), Arc::new(catalog));
+                world.set_tick_rate(rate);
+                let owner = world.add_player("thrower", Team::Terrorist);
+                let mut carried = vec![world.weapon("weapon_decoy").unwrap(), world.weapon("weapon_glock").unwrap()];
+                if let Some(name) = primary { carried.push(world.weapon(name).unwrap()); }
+                world.players[0].weapons = carried;
+                world.players[0].active = 0;
+                for _ in 0..rate / 2 {
+                    world.step(&[(owner, TickInput { buttons: buttons::ATTACK, ..Default::default() })]);
+                }
+                assert!(world.projectiles.is_empty(), "holding the pin does not emit a decoy");
+                for _ in 0..rate {
+                    world.step(&[(owner, TickInput::default())]);
+                    if !world.projectiles.is_empty() { break; }
+                }
+                let expected = world.catalog.get(primary.unwrap_or("weapon_glock")).unwrap().id.to_string();
+                assert_eq!(world.projectiles.len(), 1);
+                assert_eq!(world.projectiles[0].decoy_weapon.as_deref(), Some(expected.as_str()));
+                // A different inventory/life after release must not rewrite the cue.
+                world.players[0].weapons = vec![WeaponState::new(Arc::new(world.catalog.get("weapon_glock").unwrap().clone()))];
+                world.players[0].alive = false;
+                world.players[0].health = 0;
+                world.players[0].respawn_at = 1000.;
+                let state = world.decode(&world.encode_state()).unwrap();
+                let mut restored = world.clone();
+                restored.restore(state);
+                let mut heard = 0;
+                let mut checked_field = false;
+                for _ in 0..rate * 4 {
+                    world.step(&[]);
+                    restored.step(&[]);
+                    assert_eq!(world.state(), restored.state());
+                    assert_eq!(world.events, restored.events);
+                    if !checked_field && !world.utility_fields.is_empty() {
+                        let state: crate::WorldState = world.decode(&world.encode_state()).unwrap();
+                        assert_eq!(state.utility_fields[0].decoy_weapon.as_deref(), Some(expected.as_str()));
+                        checked_field = true;
+                    }
+                    for event in &world.events {
+                        if let GameEvent::DecoyShot { player, weapon, .. } = event {
+                            assert_eq!((*player, weapon), (owner, &expected));
+                            heard += 1;
+                        }
+                    }
+                }
+                assert!(checked_field && heard > 0, "flight must become a persistent audible field");
+            }
+        }
+    }
     #[test]
     fn lethal_he_and_fire_capture_notice_without_inventing_hit_rays() {
         for rate in [64, 128] {
@@ -448,6 +538,7 @@ mod tests {
             pos: Vec3::new(200.0, 0.0, 64.0),
             velocity: Vec3::ZERO,
             born: 0.0,
+            decoy_weapon: None,
         });
         w.step_utility();
         assert!(w.player(a).unwrap().flash_until > w.player(b).unwrap().flash_until + 2.0);
@@ -464,6 +555,7 @@ mod tests {
             pos: Vec3::ZERO,
             born: 0.0,
             until: 7.0,
+            decoy_weapon: None,
         });
         w.utility_fields.push(Field {
             id: 2,
@@ -472,6 +564,7 @@ mod tests {
             pos: Vec3::ZERO,
             born: 0.0,
             until: 18.0,
+            decoy_weapon: None,
         });
         assert!(w.fire_at(Vec3::ZERO));
         w.step_utility();

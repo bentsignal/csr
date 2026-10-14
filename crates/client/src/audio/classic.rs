@@ -330,9 +330,13 @@ mod tests {
             let mut queue = CommandQueue::default();
             let mut sources = Assets::<AudioSource>::default();
             let pos = glam::Vec3::new(100.0, 200.0, 300.0);
+            let catalog = weapons::Catalog::from_items_game(r#"items_game { items {
+                "7" { name weapon_ak47 baseitem 1 visuals { sound_single_shot Weapon_AK47.Single } }
+            } }"#).unwrap();
+            let weapon = catalog.get("weapon_ak47").unwrap();
             {
                 let mut commands = Commands::new(&mut queue, &world);
-                sounds.play_decoy(&mut commands, &fs, &mut sources, pos);
+                sounds.play_decoy(&mut commands, &fs, &mut sources, weapon, pos);
             }
             queue.apply(&mut world);
             let mut played = Vec::new();
