@@ -95,3 +95,28 @@ fn partial_clip_and_holster_drop_death_cannot_emit_queued_offhand_bullets() {
         assert!(world.items.iter().all(|item| match &item.kind { GroundKind::Weapon(w) => w.burst.is_none(), _ => true }));
     }
 }
+
+#[test]
+fn reload_waits_for_followups_and_freeze_cancels_them() {
+    let (mut world, id) = fixture(128, false);
+    world.step(&[(id, input(buttons::ATTACK2))]);
+    world.step(&[(id, input(buttons::ATTACK))]);
+    world.step(&[(id, input(buttons::RELOAD))]);
+    assert!(world.players[0].weapons[0].reload_end.is_none());
+    for _ in 0..32 { world.step(&[(id, input(buttons::RELOAD))]); }
+    assert_eq!(world.players[0].shots, 3);
+    assert!(world.players[0].weapons[0].burst.is_none());
+    assert!(world.players[0].weapons[0].reload_end.is_some());
+    world.step(&[(id, TickInput { weapon_slot: 3, ..Default::default() })]);
+    assert!(world.players[0].weapons[0].reload_end.is_none());
+
+    let (mut world, id) = fixture(128, false);
+    world.step(&[(id, input(buttons::ATTACK2))]);
+    world.step(&[(id, input(buttons::ATTACK))]);
+    world.mode = GameMode::Competitive;
+    world.round.phase = Phase::Freeze;
+    world.round.live_start = world.time() + 10.;
+    for _ in 0..32 { world.step(&[(id, TickInput::default())]); }
+    assert_eq!(world.players[0].shots, 1);
+    assert!(world.players[0].weapons[0].burst.is_none());
+}
