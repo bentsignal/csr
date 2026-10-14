@@ -161,6 +161,20 @@ pub(crate) fn install(app: &mut App) {
 // First precedes InputPlugin's PreUpdate: these messages exercise its normal
 // ButtonInput state, then the production look/grab/sample/fixed-tick chain.
 fn emit(world: &mut World) {
+    // Optional bounded Pause pressure case: exercise the production pointer
+    // bridge at the game update cadence without moving the OS cursor. The
+    // Scaleform queue trace records age at consumption, not an Inspect ACK.
+    if std::env::var("CSR_TEST_PAUSE_HOVER").as_deref() == Ok("1") {
+        let proof = world.resource::<Proof>();
+        if proof.stage == Stage::Paused {
+            let seconds = proof.elapsed();
+            if let Some(mut window) = world.query_filtered::<&mut Window, With<PrimaryWindow>>().iter_mut(world).next() {
+                let x = window.physical_width() as f64 * 0.32;
+                let y = window.physical_height() as f64 * (0.48 + 0.19 * (seconds * 12.).sin().abs());
+                window.set_physical_cursor_position(Some(glam::DVec2::new(x, y)));
+            }
+        }
+    }
     let window = world
         .query_filtered::<Entity, With<PrimaryWindow>>()
         .iter(world)
@@ -412,7 +426,8 @@ fn step(world: &mut World, p: &mut Proof, frame: f64) -> Result<(), String> {
                 ));
             }
         }
-        Stage::Paused if p.captures & 4 != 0 && p.elapsed() >= 0.25 => {
+        Stage::Paused if p.captures & 4 != 0 && p.elapsed() >=
+            if std::env::var("CSR_TEST_PAUSE_HOVER").as_deref() == Ok("1") { 5.0 } else { 0.25 } => {
             if !paused || tick != p.tick {
                 return Err("offline simulation advanced while paused".into());
             }

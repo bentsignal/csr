@@ -674,6 +674,7 @@ pub struct Frontend {
     actions: Arc<Mutex<Vec<Action>>>,
     image: Handle<Image>,
     presented_serial: u64,
+    pause_presentation: crate::frontend_pause_surface::Presentation,
     performance_ack: Option<(u64, std::time::Instant)>,
     worker_generation: u64,
     root: Entity,
@@ -866,6 +867,7 @@ pub(crate) fn setup(
         actions,
         image,
         presented_serial: 0,
+        pause_presentation: Default::default(),
         performance_ack: None,
         worker_generation: 0,
         root,
@@ -921,6 +923,7 @@ pub(crate) fn update(
 ) {
     let remote_loading = crate::remote_join::loading(remote.as_deref());
     let scene = if remote_loading { AppState::Loading } else { *state.get() };
+    if scene != AppState::Match { front.pause_presentation.close(); }
     {
         let mut snapshot = front.data.lock().unwrap();
         snapshot.state = scene;
@@ -1062,6 +1065,13 @@ pub(crate) fn update(
     }
     if front.visible != visible {
         front.visible = visible;
+        if visible && scene == AppState::Match {
+            // Never flash a cached closed/previous menu raster while the worker
+            // is still preparing this Escape transition.
+            front.pause_presentation.open();
+        } else {
+            front.pause_presentation.close();
+        }
         if visible && scene == AppState::Menu && front.ready {
             front.send(Input::Call {
                 path: "_global.MainMenuMovie".into(),
@@ -1097,18 +1107,20 @@ pub(crate) fn update(
     if let Some(path) = pause_show {
         // The previous show consumed this open cycle. Existing native OnCancel
         // restores Pause itself; it never rearms this deferred request.
-        for root in ["_global.MainMenuMovie", "_global.SinglePlayerMovie", "_global.LobbyMovie", "_level17"] {
-            front.send(Input::Set { path: root.into(), property: "_visible".into(), value: false.into() });
-        }
+        let mut commands: Vec<_> = ["_global.MainMenuMovie", "_global.SinglePlayerMovie", "_global.LobbyMovie", "_level17"]
+            .into_iter().map(|root| scaleform::Command::Set {
+                path: root.into(), property: "_visible".into(), value: false.into(),
+            }).collect();
         if let Some(path) = options_to_hide {
-            front.send(Input::Set { path, property: "_visible".into(), value: false.into() });
+            commands.push(scaleform::Command::Set { path, property: "_visible".into(), value: false.into() });
         }
-        front.send(Input::Set { path: path.clone(), property: "_visible".into(), value: true.into() });
-        front.send(Input::Call { path, function: "showPanel".into(), args: vec![] });
+        commands.push(scaleform::Command::Set { path: path.clone(), property: "_visible".into(), value: true.into() });
+        commands.push(scaleform::Command::Call { path, function: "showPanel".into(), args: vec![] });
+        front.send(Input::Present { commands, revision: front.pause_presentation.revision() });
     }
     let sample = front.data.lock().unwrap().pause_surface.request(front.presented_serial);
     if let Some(sample) = sample {
-        front.send(Input::Call { path: crate::frontend_pause_surface::SAMPLER_PATH.into(), function: crate::frontend_pause_surface::SAMPLER_METHOD.into(), args: sample.args() });
+        front.send(Input::ObservePauseSurface { args: sample.args() });
     }
     if scene != AppState::Menu && front.lobby.lock().unwrap().active() { front.lobby.lock().unwrap().cancel(); }
     if front.scene != Some(scene) {
@@ -1210,7 +1222,7 @@ pub(crate) fn update(
         };
     }
     if let Ok(mut root) = nodes.get_mut(front.root) {
-        root.display = if (visible && front.failed.is_none()) || loading {
+        root.display = if (visible && front.failed.is_none() && front.pause_presentation.ready()) || loading {
             Display::Flex
         } else {
             Display::None
@@ -1258,6 +1270,7 @@ pub(crate) fn update(
                 depth_or_array_layers: 1,
             };
             image.data = Some(frame.rgba);
+            front.pause_presentation.presented(frame.presentation_revision);
             front.presented_serial = front.presented_serial.saturating_add(1);
         }
     }
