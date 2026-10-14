@@ -6,7 +6,7 @@ that playback. It uses the selected installed viewmodel's declarative sequence
 duration and throw event, not a guessed windup delay. It is an authored-animation
 policy; those declarations alone do not prove the native command-phase law.
 
-[Valve's February2014 update](https://blog.counter-strike.net/2014/02/8505/)
+[Valve's February2014 update](https://blog.counter-strike.net/page/24/?s=update)
 describes secondary underhand throws and combined primary/secondary input.
 [srctools' public MDL event API](https://srctools.readthedocs.io/en/latest/modules/mdl.html)
 identifies event3005 as EVENT_WEAPON_THROW. Only installed model metadata and
@@ -39,16 +39,37 @@ until release. Existing model-event sound playback schedules pin sounds from
 the same producer tick. No render system creates a projectile, consumes a
 grenade or mutates authority.
 
-Remaining fidelity: existing projectile velocity, fuse, collision and bounce
+Secondary now makes a shorter toss and combined input an intermediate toss.
+The current strength factors (1.0 / 0.3 / 0.65) are explicitly provisional;
+0.65 is the arithmetic midpoint of the endpoints, not a native measurement.
+The official announcement establishes short and adjustable throws, but does
+not supply these numbers. Do not use this milestone as trajectory evidence.
+The existing movement-velocity inheritance factor (0.5) is retained, sampling
+actual velocity at release rather than at pin-pull. Running, backpedalling and
+jumping therefore influence the throw; crouching lowers the actual eye origin.
+The amount of each effect is not yet calibrated against native observations.
+
+Remaining fidelity: existing base projectile velocity, fuse, collision and bounce
 math are retained. Numeric underhand/combined launch strength, charge blend,
 native minimum windup, native inventory-consumption phase, grenade deploy
 cooldown, cancellation and airborne/VR release laws need independent observed
-targets. The current milestone distinguishes secondary state/animation; it
-does not claim the shorter native underhand range. No response constants were
-fit to a residual. Retained grenade state during release playback keeps the
+targets. No response constants were fit to a residual. Retained grenade state
+during release playback keeps the
 viewmodel available; this is explicit presentation policy, not native phase
 admission.
 
-Source-only checkpoint: no Cargo, Native, GPU or CI run yet. The new serialized
-weapon field requires the next semantic protocol version after PR84 is merged;
-this branch must be rebased and that version finalized before publication.
+Practice replenishes on release-clip completion, clears the old throw state,
+and draws a fresh grenade. Presentation clears the bone pose when changing
+grenade phases so a masked smoke/pin clip cannot leave the old hand pose in
+the next throw. Phase clips are decoded as non-looping; Holding clamps the
+final pull-pin pose without cloning the animation every render frame.
+
+Protocol11 admits the new serialized WeaponState field and rejects older
+peers. Snapshot admission checks producer ticks and phase invariants before
+exposing throw state. Catalogs compare timing-header identities too.
+
+Verification: focused sim/level/netcode tests passed after replacing the old
+instant-throw fixtures. Additional tests cover both tick rates, every button
+mode, indefinite holding, exact once-only release, tap windup, cancellation,
+and snapshot restoration. Native ballistic calibration and rendered phase
+captures remain integration checks; public metadata is not engine behavior.
