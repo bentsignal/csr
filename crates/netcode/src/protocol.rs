@@ -4,7 +4,7 @@ use sim::{GameEvent, PlayerId, Snapshot, Team, TickInput};
 
 // v19 includes authoritative roster counts in inspected server metadata.
 pub const VERSION: u32 = 20;
-pub const PROTOCOL_ID: u64 = 0x4353_5257_0000_0013;
+pub const PROTOCOL_ID: u64 = 0x4353_5257_0000_0014;
 pub const CONTROL: u8 = 0;
 pub const INPUT: u8 = 1;
 pub const SNAPSHOT: u8 = 2;
