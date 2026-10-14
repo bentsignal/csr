@@ -515,6 +515,7 @@ pub fn update(
 
     // Pick the activity from the weapon state.
     let w = p.active_weapon();
+    let grenade = w.and_then(|w|w.grenade_throw);
     let inspect_requested=state.inspect_seen!=request.0;state.inspect_seen=request.0;
     let reloading = w.is_some_and(|w| w.reload_end.is_some());
     let attack = effects.consume_attack(p.id, &name, &mut state.last_attack_seen);
@@ -544,6 +545,10 @@ pub fn update(
     if state.activity=="INSPECT" && w.is_some_and(|w|w.zoom_level>0) {state.activity="ACT_VM_IDLE".into();state.started=now;}
     state.reloading = reloading;
     state.planting = p.plant_start.is_some();
+    if let Some(grenade)=grenade {
+        let activity=if grenade.phase==sim::utility::ThrowPhase::Throwing {grenade.mode.activity()}else{"ACT_VM_PULLPIN"};
+        state.activity=activity.into();state.clip_index=0;
+    }
     if let Some((stage, _)) = shell {
         if stage != state.shell_seen && stage.is_some() && std::env::var_os("CSR_WEAPON_TRACE").is_some() {
             info!("weapon activity: {} shell insert {}", name, stage.unwrap_or(0) + 1);
@@ -571,6 +576,10 @@ pub fn update(
     let mut seq = clips[state.clip_index % clips.len()].clone();
     let mut clip = seq.clip.clone();
     let mut t = now - state.started;
+    if let Some(grenade)=grenade {
+        let started=grenade.throw_started_tick.unwrap_or(grenade.pull_started_tick);
+        t=(sim_now-started as f32*world.0.dt()).clamp(0.,clip.duration());
+    }
     if let (Some((_, frac)), "ACT_SHOTGUN_RELOAD_START" | "ACT_VM_RELOAD") = (shell, state.activity.as_str()) {
         // One pass of the start or insert clip per simulated stage.
         t = frac * clip.duration();
@@ -580,7 +589,7 @@ pub fn update(
             t = frac * clip.duration();
         }
     }
-    if state.activity != "ACT_VM_IDLE" && t > clip.duration() && !reloading {
+    if grenade.is_none() && state.activity != "ACT_VM_IDLE" && t > clip.duration() && !reloading {
         state.activity = "ACT_VM_IDLE".into();
         state.started = now;
         if let Some(idle) = view.clips.get("ACT_VM_IDLE").and_then(|c| c.first()) {

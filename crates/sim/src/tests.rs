@@ -112,6 +112,7 @@ fn ray_box_hits_and_misses() {
 
 fn def(name: &str, index: u32, class: WeaponClass, side: Side, price: i32, clip: i32) -> WeaponDefinition {
     WeaponDefinition {
+        grenade_animations: None,
         id: content::ContentId::csgo(content::ContentKind::Weapon, name.trim_start_matches("weapon_")),
         class_name: name.into(),
         def_index: index,

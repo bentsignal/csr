@@ -273,6 +273,7 @@ impl Player {
         // A dropped gun cannot finish its owner's reload on the ground or
         // in another player's hands.
         w.reload_end = None;
+        w.grenade_throw = None;
         w.reset_zoom(time);
         let was_active = self.active == index;
         if self.active > index {
@@ -295,7 +296,9 @@ impl Player {
         if index >= self.weapons.len() {
             return;
         }
+        if index!=self.active && self.active_weapon().is_some_and(|w| w.grenade_throw.is_some_and(|s|s.phase==utility::ThrowPhase::Throwing)) {return;}
         if let Some(old) = self.weapons.get_mut(self.active) {
+            if index!=self.active {old.grenade_throw=None;}
             old.reset_zoom(time);
             old.reload_end = None;
         }
@@ -1018,6 +1021,7 @@ impl World {
 
     /// Drops one inventory item on the ground.
     fn drop_weapon(&mut self, i: usize, index: usize, distance: f32) {
+        if self.players[i].weapons.get(index).is_some_and(|w|w.grenade_throw.is_some_and(|s|s.phase==utility::ThrowPhase::Throwing)) {return;}
         let time = self.time();
         let pos = self.throw_point(&self.players[i], distance);
         let p = &mut self.players[i];
@@ -1511,7 +1515,7 @@ impl World {
                         self.events.push(GameEvent::Scope { player: id, weapon: w.def.class_name.clone(), origin: eye, level: w.zoom_level });
                     }
                     stab = secondary && w.is_melee();
-                    let can_fire = w.def.class_name != C4;
+                    let can_fire = w.def.class_name != C4 && w.def.class!=weapons::WeaponClass::Grenade;
                     // Pulling the trigger stops a shell-by-shell reload once
                     // a shell is in, as in the game.
                     if attack && (pressed || w.def.full_auto) && w.reload_end.is_some() && w.shell_reload().is_some() && w.clip > 0 {
@@ -1539,11 +1543,12 @@ impl World {
                 }
             }
             if fire {
-                if self.players[i].active_weapon().is_some_and(|w| w.def.class==weapons::WeaponClass::Grenade) {
-                    self.throw_grenade(i);
-                } else if self.players[i].active_weapon().is_some_and(|w| w.is_melee()) {
+                if self.players[i].active_weapon().is_some_and(|w| w.is_melee()) {
                     self.melee_attack(i, time, stab);
                 } else { self.fire(i, time, input.rewind_tick); }
+            }
+            if !frozen && !busy && self.players[i].active_weapon().is_some_and(|w|w.def.class==weapons::WeaponClass::Grenade) {
+                self.step_grenade(i,input.buttons);
             }
             if self.players[i].alive && !self.items.is_empty() {
                 self.pickups(i, time);

@@ -725,6 +725,9 @@ impl Bots {
                 if input.utility==def && angle_diff(angles.x,brain.pitch).abs()<1.5 && angle_diff(angles.y,brain.yaw).abs()<1.5
                     && bot.movement.velocity.length()<35.0 && bot.active_weapon().is_some_and(|w|w.def.def_index==def && time>=w.next_attack)
                     && world.clear_lob(eye,target,angles) {input.buttons|=buttons::ATTACK;}
+                if bot.active_weapon().and_then(|w|w.grenade_throw).is_some_and(|s|s.phase==crate::utility::ThrowPhase::Holding) {
+                    input.buttons&=!(buttons::ATTACK|buttons::ATTACK2);
+                }
             }
             if world.flash_amount(bot.id)>0.4 { input.buttons &= !buttons::ATTACK; input.buttons|=buttons::WALK; }
             // Jumping needs the key released in between (no auto-bhop), so
