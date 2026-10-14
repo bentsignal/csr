@@ -2,23 +2,40 @@ use super::*;
 
 fn fixture(rate: u32) -> (World, PlayerId) {
     let mut catalog = catalog();
-    let mut gun = def("weapon_m4a1_silencer", 60, WeaponClass::Rifle, Side::CounterTerrorist, 2900, 20);
+    let mut gun = def(
+        "weapon_m4a1_silencer",
+        60,
+        WeaponClass::Rifle,
+        Side::CounterTerrorist,
+        2900,
+        20,
+    );
     gun.attributes.insert("has silencer".into(), "1".into());
     gun.suppressor_animations = Some(weapons::SuppressorAnimations {
-        attach: weapons::SuppressorAnimation { duration: 0.5, complete_time: 0.25,
-            visibility: vec![(0., false), (0.125, true)] },
-        detach: weapons::SuppressorAnimation { duration: 0.5, complete_time: 0.25,
-            visibility: vec![(0., true), (0.375, false)] },
-        draw_attached: "ACT_VM_DRAW_SILENCED".into(), draw_detached: "ACT_VM_DRAW".into(),
+        attach: weapons::SuppressorAnimation {
+            duration: 0.5,
+            complete_time: 0.25,
+            visibility: vec![(0., false), (0.125, true)],
+        },
+        detach: weapons::SuppressorAnimation {
+            duration: 0.5,
+            complete_time: 0.25,
+            visibility: vec![(0., true), (0.375, false)],
+        },
+        draw_attached: "ACT_VM_DRAW_SILENCED".into(),
+        draw_detached: "ACT_VM_DRAW".into(),
     });
     catalog.weapons.push(gun);
     let mut world = World::with_catalog(Arc::new(CollisionWorld::new()), Arc::new(catalog));
     world.set_tick_rate(rate);
     let id = world.add_player("suppressor player", Team::CounterTerrorist);
-    let gun = WeaponState::new(Arc::new(world.catalog.get("weapon_m4a1_silencer").unwrap().clone()));
+    let gun = WeaponState::new(Arc::new(
+        world.catalog.get("weapon_m4a1_silencer").unwrap().clone(),
+    ));
     let knife = WeaponState::new(Arc::new(world.catalog.get("weapon_knife").unwrap().clone()));
     let p = world.player_mut(id).unwrap();
-    p.weapons = vec![gun, knife]; p.active = 0;
+    p.weapons = vec![gun, knife];
+    p.active = 0;
     (world, id)
 }
 
@@ -26,56 +43,139 @@ fn fixture(rate: u32) -> (World, PlayerId) {
 fn suppressor_hold_blocks_fire_reload_and_repeats_and_replays_from_snapshot() {
     for rate in [64, 128] {
         let (mut world, id) = fixture(rate);
-        assert!(world.players[0].active_weapon().unwrap().suppressor_attached);
-        let right = TickInput { buttons: buttons::ATTACK2, ..Default::default() };
+        assert!(
+            world.players[0]
+                .active_weapon()
+                .unwrap()
+                .suppressor_attached
+        );
+        let right = TickInput {
+            buttons: buttons::ATTACK2,
+            ..Default::default()
+        };
         world.step(&[(id, right)]);
-        let start = world.players[0].active_weapon().unwrap().suppressor_transition.unwrap();
+        let start = world.players[0]
+            .active_weapon()
+            .unwrap()
+            .suppressor_transition
+            .unwrap();
         assert!(!start.attached);
-        let snapshot = world.decode::<Snapshot>(&state::encode(&world.snapshot())).unwrap();
-        let mut restored = world.clone(); restored.restore(snapshot.state);
+        let snapshot = world
+            .decode::<Snapshot>(&state::encode(&world.snapshot()))
+            .unwrap();
+        let mut restored = world.clone();
+        restored.restore(snapshot.state);
         let mut predicted = world.clone();
-        let held = TickInput { buttons: buttons::ATTACK2 | buttons::ATTACK | buttons::RELOAD, ..Default::default() };
+        let held = TickInput {
+            buttons: buttons::ATTACK2 | buttons::ATTACK | buttons::RELOAD,
+            ..Default::default()
+        };
         while world.tick < rate as u64 / 2 {
-            world.step(&[(id, held)]); restored.step(&[(id, held)]); predicted.step_prediction(&[(id, held)]);
+            world.step(&[(id, held)]);
+            restored.step(&[(id, held)]);
+            predicted.step_prediction(&[(id, held)]);
             assert_eq!(world.state_hash(), restored.state_hash());
             assert_eq!(world.state_hash(), predicted.state_hash());
-            assert!(!world.events.iter().any(|e| matches!(e, GameEvent::Fire {..} | GameEvent::Reload {..})));
+            assert!(
+                !world
+                    .events
+                    .iter()
+                    .any(|e| matches!(e, GameEvent::Fire { .. } | GameEvent::Reload { .. }))
+            );
             let gun = world.players[0].active_weapon().unwrap();
             assert_eq!(gun.suppressor_transition, Some(start));
-            if world.tick > rate as u64 / 4 { assert!(!gun.suppressor_attached); }
+            if world.tick > rate as u64 / 4 {
+                assert!(!gun.suppressor_attached);
+            }
         }
         world.step(&[(id, right)]); // full clip has finished; held right must not toggle again
         let gun = world.players[0].active_weapon().unwrap();
-        assert!(gun.suppressor_transition.is_none()); assert!(!gun.suppressor_attached);
-        world.step(&[(id, TickInput { buttons: buttons::ATTACK, ..Default::default() })]);
-        assert!(world.events.iter().any(|e| matches!(e, GameEvent::Fire { suppressed: false, .. })));
-        while world.players[0].active_weapon().unwrap().next_attack > world.time() { world.step(&[(id, TickInput::default())]); }
+        assert!(gun.suppressor_transition.is_none());
+        assert!(!gun.suppressor_attached);
+        world.step(&[(
+            id,
+            TickInput {
+                buttons: buttons::ATTACK,
+                ..Default::default()
+            },
+        )]);
+        assert!(world.events.iter().any(|e| matches!(
+            e,
+            GameEvent::Fire {
+                suppressed: false,
+                ..
+            }
+        )));
+        while world.players[0].active_weapon().unwrap().next_attack > world.time() {
+            world.step(&[(id, TickInput::default())]);
+        }
         world.step(&[(id, right)]);
-        assert!(world.players[0].active_weapon().unwrap().suppressor_transition.unwrap().attached);
+        assert!(
+            world.players[0]
+                .active_weapon()
+                .unwrap()
+                .suppressor_transition
+                .unwrap()
+                .attached
+        );
     }
 }
 
 #[test]
 fn completed_suppressor_mode_survives_drop_pickup_and_incomplete_holster_cancels() {
     let (mut world, id) = fixture(128);
-    let right = TickInput { buttons: buttons::ATTACK2, ..Default::default() };
+    let right = TickInput {
+        buttons: buttons::ATTACK2,
+        ..Default::default()
+    };
     world.step(&[(id, right)]);
-    world.step(&[(id, TickInput { weapon_slot: 3, ..Default::default() })]);
+    world.step(&[(
+        id,
+        TickInput {
+            weapon_slot: 3,
+            ..Default::default()
+        },
+    )]);
     assert!(world.players[0].weapons[0].suppressor_transition.is_none());
     assert!(world.players[0].weapons[0].suppressor_attached);
-    world.players[0].select(0, world.time());
+    let time = world.time();
+    world.players[0].select(0, time);
     world.players[0].weapons[0].next_attack = 0.;
     world.step(&[(id, right)]);
     let completion = world.tick + 32;
-    while world.tick <= completion { world.step(&[(id, TickInput::default())]); }
+    while world.tick <= completion {
+        world.step(&[(id, TickInput::default())]);
+    }
     assert!(!world.players[0].weapons[0].suppressor_attached);
-    world.step(&[(id, TickInput { drop: true, ..Default::default() })]);
-    let item = world.items.iter().find(|i| i.class_name() == "weapon_m4a1_silencer").unwrap();
-    let GroundKind::Weapon(gun) = &item.kind else { unreachable!() };
-    assert!(!gun.suppressor_attached); assert!(gun.suppressor_transition.is_none());
+    world.step(&[(
+        id,
+        TickInput {
+            drop: true,
+            ..Default::default()
+        },
+    )]);
+    let item = world
+        .items
+        .iter()
+        .find(|i| i.class_name() == "weapon_m4a1_silencer")
+        .unwrap();
+    let GroundKind::Weapon(gun) = &item.kind else {
+        unreachable!()
+    };
+    assert!(!gun.suppressor_attached);
+    assert!(gun.suppressor_transition.is_none());
     let pos = item.pos;
     let pickup_after = item.pickup_after;
     world.players[0].movement.origin = pos;
-    while world.time() <= pickup_after + world.dt() { world.step(&[(id, TickInput::default())]); }
-    assert!(!world.players[0].weapons.iter().find(|w| w.def.class_name == "weapon_m4a1_silencer").unwrap().suppressor_attached);
+    world.tick = (pickup_after * world.tick_rate as f32).ceil() as u64;
+    world.players[0].movement.velocity = Vec3::ZERO;
+    world.step(&[(id, TickInput::default())]);
+    assert!(
+        !world.players[0]
+            .weapons
+            .iter()
+            .find(|w| w.def.class_name == "weapon_m4a1_silencer")
+            .unwrap()
+            .suppressor_attached
+    );
 }
