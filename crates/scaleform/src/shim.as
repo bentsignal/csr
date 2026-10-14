@@ -199,12 +199,19 @@ _global.csrBindings.focusWidget = function(path, index) {
 // selected index but does not notify our engine bridge, so observe that public
 // notification boundary once. Each new scene replaces our wrapper around the
 // retained base; old closures retain their own revision and are rejected.
-_global.csrBindings.bindOptionsDropdown = function(path, revision, index, convar) {
+_global.csrBindings.bindOptionsDropdown = function(path, revision, index, convar, trace) {
     var root = _global.csrResolve(path);
     var slot = root.TopPanel.Panel.arraySlots[index];
     var widget = slot.Widget;
-    if (slot.TypeID != 2 || widget.Convar != convar ||
-        typeof widget.NotifyValueChange != "function" || typeof widget.GetSelectedIndex != "function") {
+    var ready = slot.TypeID == 2 && widget.Convar == convar &&
+        typeof widget.NotifyValueChange == "function" && typeof widget.GetSelectedIndex == "function";
+    if (trace) {
+        _global.csrProbeTrace("DropdownBinding", path + "#" + revision + "[" + index + "]",
+            "ready=" + ready + ", type=" + slot.TypeID + ", convar=" + widget.Convar +
+            ", notify=" + typeof widget.NotifyValueChange + ", selected=" + typeof widget.GetSelectedIndex +
+            ", widget=" + String(widget));
+    }
+    if (!ready) {
         return false;
     }
     var original = widget.csrOwnedDropdownNotify;

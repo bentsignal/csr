@@ -379,18 +379,6 @@ impl Scene {
                     vec![(*min).into(), (*max).into()],
                 );
             }
-            if matches!(widget.kind, Kind::Dropdown { .. }) {
-                calls.call(
-                    "_global.csrBindings",
-                    "bindOptionsDropdown",
-                    vec![
-                        path.into(),
-                        self.revision.to_string().into(),
-                        (index as u32).into(),
-                        widget.convar.clone().into(),
-                    ],
-                );
-            }
         }
         self.refresh_values(path, settings, calls);
     }
@@ -459,6 +447,23 @@ impl Scene {
             );
         }
         calls.call(path, "RefreshWidgetLayout", vec![]);
+        // Authored setup/refresh establishes the native widget's properties.
+        // Bind after those calls finish, including on a cached scene refresh.
+        for (index, widget) in self.widgets.iter().enumerate() {
+            if matches!(widget.kind, Kind::Dropdown { .. }) {
+                calls.call(
+                    "_global.csrBindings",
+                    "bindOptionsDropdown",
+                    vec![
+                        path.into(),
+                        self.revision.to_string().into(),
+                        (index as u32).into(),
+                        widget.convar.clone().into(),
+                        std::env::var_os("CSR_UI_TRACE").is_some().into(),
+                    ],
+                );
+            }
+        }
     }
 }
 
