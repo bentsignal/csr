@@ -46,6 +46,7 @@ pub struct Layer {
     roll: [f32; 2],
     spin: f32,
     ground: bool,
+    upright: bool,
 }
 
 /// Last possible particle death for these instantaneous layers. The enclosing
@@ -295,6 +296,7 @@ pub fn load(
                 .map_or(0.0, |e| e.number("spin_rate_degrees", 0.0))
                 .to_radians(),
             ground: render.is_some_and(|r| r.number("orientation_type", 0.0) == 3.0),
+            upright: render.is_some_and(|r| r.number("orientation_type", 0.0) == 1.0),
         });
     }
     layers
@@ -568,6 +570,8 @@ impl Emitter {
                     )
                 } else if self.fire {
                     (Vec3::new(p.yaw.cos(), 0.0, p.yaw.sin()), Vec3::Y)
+                } else if l.upright {
+                    upright_basis(eye - self.origin - center)
                 } else {
                     let normal = (eye - self.origin - center).normalize_or(Vec3::Z);
                     let right = Vec3::Y.cross(normal).normalize_or(Vec3::X);
@@ -608,6 +612,15 @@ impl Emitter {
         }
     }
 }
+
+/// Authored orientation 1 rotates toward the eye around Source Z (Bevy Y),
+/// rather than tilting the entire card toward an elevated/lowered camera.
+/// Particle roll still applies within this vertical plane afterward.
+fn upright_basis(to_eye: Vec3) -> (Vec3, Vec3) {
+    let normal = Vec3::new(to_eye.x, 0.0, to_eye.z).normalize_or(Vec3::Z);
+    (Vec3::Y.cross(normal), Vec3::Y)
+}
+
 // Temporary render control points cover the authoritative circular field;
 // authored PCF emission rates explicitly scale by used control-point count.
 // These are not native inferno spread cells and never affect damage.
@@ -683,6 +696,22 @@ impl Rng {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn authored_upright_cards_do_not_tilt_with_eye_height() {
+        let level = upright_basis(Vec3::new(3.0, 0.0, 4.0));
+        for height in [-200.0, 200.0] {
+            let raised = upright_basis(Vec3::new(3.0, height, 4.0));
+            assert_eq!(raised, level);
+            assert_eq!(raised.1, Vec3::Y);
+            assert!(raised.0.y.abs() < 1e-6);
+            assert!((raised.0.length() - 1.0).abs() < 1e-6);
+        }
+        // Directly above the card must remain finite even without a bearing.
+        assert_eq!(upright_basis(Vec3::Y), (Vec3::X, Vec3::Y));
+        assert_ne!(upright_basis(Vec3::X).0, level.0);
+    }
+
     #[test]
     fn expiry_fades_opacity_without_collapsing_positions() {
         assert_eq!(fade(4.0, 18.0, 0.5, 3.0), 1.0);
