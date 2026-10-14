@@ -164,3 +164,22 @@ Their unknown laws are not replaced with a guessed tint or gain. This change
 targets hard frame cuts and does not claim to solve white fire, dark uniform
 smoke or native/2015 material parity. Runtime shader validation and rendered
 checks must establish the visible result before delivery.
+
+## Authored particle ordering
+
+Installed `explosions_fx.pcf` explicitly sets `Sort particles` false on
+`explosion_child_smoke_bottom`. Installed `inferno_fx.pcf` does the same for
+`molotov_groundfire_child_base` and `molotov_groundfire_main_fancy`. The
+renderer previously sorted every batch by camera distance each frame,
+discarding those explicit settings. These layers now retain their emission
+order as particles expire and new particles append. Definitions without this
+field keep the previous enabled behavior; this fallback is compatibility,
+not a measured native default.
+
+Enabled sorting uses the same current particle center as the drawn card,
+including its existing velocity and gravity displacement. Sorting by birth
+position could disagree with the displayed positions of rising late smoke.
+No trajectories, billboard orientations, emission, tint, opacity, shader or
+blend laws change. This addresses ordering only; it does not establish native
+sorting parity or fix the remaining dark-smoke/bright-fire material limits.
+Focused checks and rendered verification are pending.
