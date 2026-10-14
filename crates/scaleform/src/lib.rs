@@ -154,6 +154,9 @@ pub enum Input {
     Call { path: String, function: String, args: Vec<Value> },
     Set { path: String, property: String, value: Value },
     RequestElement(String),
+    /// One display transition. No movie tick or frame publication can split
+    /// these commands; resulting frames carry this presentation revision.
+    Present { commands: Vec<Command>, revision: u64 },
     /// Read-only names/types of a runtime object's public properties.
     Inspect(String),
     /// Advance the movies only while visible (saves CPU in a match).
@@ -168,7 +171,7 @@ pub enum MouseButton {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) enum Command {
+pub enum Command {
     Call { path: String, function: String, args: Vec<Value> },
     Set { path: String, property: String, value: Value },
     RequestElement(String),
@@ -181,6 +184,8 @@ pub struct Frame {
     pub rgba: Vec<u8>,
     /// Increments with every new frame.
     pub serial: u64,
+    /// Most recent completed display transition (zero before any transition).
+    pub presentation_revision: u64,
 }
 
 /// Notifications from the menu thread.
@@ -456,6 +461,7 @@ fn run(
     trace.event("host_end", true, 0, 0, false);
     let mut active = true;
     let mut serial = 0u64;
+    let mut presentation_revision = 0u64;
     let mut requested = false;
     let mut last = Instant::now();
     loop {
@@ -497,6 +503,12 @@ fn run(
                             host.run_command(Command::RequestElement(element));
                             trace.event("request_end", active, serial, 0, false);
                         }
+                        Input::Present { commands, revision } => {
+                            for command in commands {
+                                host.run_command(command);
+                            }
+                            presentation_revision = revision;
+                        }
                         other => host.input(other),
                     },
                     InputTurn::Progress {
@@ -521,12 +533,21 @@ fn run(
                         }
                         let now = Instant::now();
                         let dt = now - last;
-                        last = now;
                         if active {
                             // Host::step pumps the executor, advances the player and drains
                             // engine commands. Separate render spans identify GPU readback waits.
                             trace.event("step_begin", active, serial, count, budget_exhausted);
-                            host.step(dt);
+                            // Ruffle's deadline includes both timeline frames and
+                            // ActionScript timers. Calling tick before that deadline
+                            // still traverses the whole display list for mouse picking,
+                            // despite having no frame/timer to run. Input already updates
+                            // hover synchronously and may render below without waiting.
+                            if dt >= host.time_til_next_frame() {
+                                host.step(dt);
+                                last = now;
+                            } else {
+                                host.pump_loads();
+                            }
                             trace.event("step_end", active, serial, count, budget_exhausted);
                             if host.needs_render() {
                                 trace.event(
@@ -546,10 +567,12 @@ fn run(
                                         height,
                                         rgba,
                                         serial,
+                                        presentation_revision,
                                     });
                                 }
                             }
                         } else {
+                            last = now;
                             trace.event("executor_begin", active, serial, count, budget_exhausted);
                             host.pump_loads();
                             trace.event("executor_end", active, serial, count, budget_exhausted);

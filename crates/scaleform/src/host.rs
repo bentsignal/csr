@@ -380,6 +380,10 @@ impl Host {
         self.executor.run();
     }
 
+    pub fn time_til_next_frame(&self) -> Duration {
+        self.player.lock().unwrap().time_til_next_frame()
+    }
+
     pub fn step(&mut self, dt: Duration) {
         self.executor.run();
         self.player.lock().unwrap().tick(FloatDuration::from_secs(dt.as_secs_f64()));
