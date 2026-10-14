@@ -491,6 +491,7 @@ impl Engine for Bridge {
                 "OpenVideoSettingsDialog"
                 | "OpenAudioSettingsDialog"
                 | "OpenGameSettingsDialog"
+                | "OpenSettingsDialog"
                 | "OpenMouseDialog"
                 | "OpenKeyboardMouseDialog" => {
                     self.lobby.lock().unwrap().cancel();
