@@ -90,13 +90,7 @@ fn apply_setting(settings: &mut Settings, name: &str, value: &Value) -> bool {
     let Some(number) = number.filter(|number| number.is_finite()) else {
         return false;
     };
-    match name {
-        "volume" => settings.volume = number.clamp(0.0, 1.0) as f32,
-        "sensitivity" => settings.sensitivity = number.clamp(0.1, 10.0) as f32,
-        "m_pitch" => settings.invert_y = number < 0.0,
-        _ => return false,
-    }
-    true
+    settings.set_convar_number(name, number)
 }
 
 fn keyvalues(block: &kv::Block, localization: &crate::localize::Localization) -> Value {
@@ -319,6 +313,19 @@ impl Engine for Bridge {
         }
         if object == crate::frontend_pause_surface::RECEIVER && method == crate::frontend_pause_surface::CALLBACK {
             self.data.lock().unwrap().pause_surface.accept(args);
+            return Some(Value::Undefined);
+        }
+        if object == "OwnedOptions" && method == "DropdownSelection" {
+            let mut data = self.data.lock().unwrap();
+            if data.pause_surface.options_requested() {
+                if let Some(path) = self.roots.get("OptionsMenu") {
+                    if let Some((name, value)) = self.options.dropdown_value(args, path, calls) {
+                        if apply_setting(&mut data.settings, &name, &value) {
+                            self.actions.lock().unwrap().push(Action::Convar(name, value));
+                        }
+                    }
+                }
+            }
             return Some(Value::Undefined);
         }
         if object == "OptionsMenu" && method == "OnCancel" {
@@ -618,20 +625,11 @@ impl Engine for Bridge {
                 None
             }
             ("GameInterface", "GetConvarNumber") => Some(Value::Number(match arg(0).as_str() {
-                "volume" => data.settings.volume as f64,
-                "sensitivity" => data.settings.sensitivity as f64,
-                "m_pitch" => {
-                    if data.settings.invert_y {
-                        -0.022
-                    } else {
-                        0.022
-                    }
-                }
                 "safezonex" | "safezoney" => 1.0,
                 "hud_scaling" => 0.85,
                 "game_type" => 0.0,
                 "game_mode" => 1.0,
-                _ => return None,
+                name => data.settings.convar_number(name)?,
             })),
             ("MyPersona", "GetXuid") => Some("0".into()),
             ("MyPersona", "GetXpPerLevel") => Some(5000.0.into()),

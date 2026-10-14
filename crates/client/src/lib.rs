@@ -50,6 +50,7 @@ pub mod effects;
 pub mod hud;
 pub mod ui_assets;
 pub mod hud_art;
+mod radar_view;
 pub mod localize;
 pub mod material;
 pub mod shadow_diagnostic;
@@ -178,7 +179,9 @@ pub struct CsgoPlugin;
 impl Plugin for CsgoPlugin {
     fn build(&self, app: &mut App) {
         embedded_asset!(app, "shaders/world.wgsl");
+        embedded_asset!(app, "shaders/radar.wgsl");
         app.add_plugins(menu_blur::PostProcessPlugin)
+            .add_plugins(UiMaterialPlugin::<radar_view::RadarMaterial>::default())
             .add_plugins(MaterialPlugin::<WorldMaterial>::default())
             .init_state::<AppState>()
             .init_resource::<session::Loader>()
