@@ -2,6 +2,7 @@
 
 pub mod maps;
 mod grenade_animations;
+mod suppressor_animations;
 
 use collision::{CollisionWorld, MapCollisionOptions};
 use content::{ContentId, ContentKind, GameOrigin};
@@ -224,6 +225,7 @@ impl Level {
             })
             .unwrap_or_default();
         let catalog_sha1=grenade_animations::import(&mut catalog,&fs,catalog_sha1);
+        let catalog_sha1=suppressor_animations::import(&mut catalog,&fs,catalog_sha1);
         timings.push(("weapons", t.elapsed().as_secs_f32()));
 
         let nav = scoped_map_resource(&fs, &id, name, "maps", "nav", metadata_pack.as_deref())

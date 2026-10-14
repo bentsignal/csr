@@ -383,11 +383,33 @@ pub fn tick(
         }
     }
     if !enabled.0 && std::env::var_os("CSR_TEST_SWITCH").is_some() {
-        match world.0.tick {
-            64 => input.buttons |= buttons::ATTACK,
-            80 => input.weapon_slot = 3,
-            144 => input.weapon_slot = 1,
-            _ => {}
+        if std::env::var("CSR_TEST_SWITCH").as_deref() == Ok("suppressor") {
+            // Screenshot-only fixed input schedule, not gameplay timers. The
+            // imported transition/deploy durations still decide readiness.
+            input.buttons &= !(buttons::ATTACK | buttons::ATTACK2);
+            let at = |seconds| world.0.tick == world.0.ticks(seconds);
+            if at(0.5) || at(5.75) { input.buttons |= buttons::ATTACK; }
+            if at(0.75) || at(7.5) { input.buttons |= buttons::ATTACK2; }
+            if at(6.0) { input.weapon_slot = 3; }
+            if at(6.25) {
+                input.weapon_slot = std::env::var("CSR_TEST_WEAPON").ok()
+                    .and_then(|name| world.0.catalog.get(&name).map(|def| sim::weapon::slot(def)))
+                    .unwrap_or(1);
+            }
+            if input.buttons != 0 || input.weapon_slot != 0 {
+                let weapon = world.0.player(local.id).and_then(|p| p.active_weapon());
+                info!("suppressor fixture: tick={} time={:.5} buttons={} slot={} weapon={:?} attached={:?} transition={:?} next_attack={:?}",
+                    world.0.tick, world.0.time(), input.buttons, input.weapon_slot,
+                    weapon.map(|w| w.def.class_name.as_str()), weapon.map(|w| w.suppressor_attached),
+                    weapon.and_then(|w| w.suppressor_transition), weapon.map(|w| w.next_attack));
+            }
+        } else {
+            match world.0.tick {
+                64 => input.buttons |= buttons::ATTACK,
+                80 => input.weapon_slot = 3,
+                144 => input.weapon_slot = 1,
+                _ => {}
+            }
         }
     }
 

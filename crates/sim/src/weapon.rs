@@ -45,6 +45,18 @@ impl PartialEq for RecoilPatternCache {
     fn eq(&self, _other: &Self) -> bool { true }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SuppressorTransition {
+    pub started_tick: u64,
+    pub attached: bool,
+}
+
+impl SuppressorTransition {
+    pub fn activity(self) -> &'static str {
+        if self.attached { "ACT_VM_ATTACH_SILENCER" } else { "ACT_VM_DETACH_SILENCER" }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct WeaponState {
     #[serde(with = "crate::state::weapon_def")]
@@ -52,6 +64,8 @@ pub struct WeaponState {
     pub cosmetic: Option<Cosmetic>,
     pub cosmetic_owner: Option<crate::PlayerId>,
     pub grenade_throw: Option<crate::utility::ThrowState>,
+    pub suppressor_attached: bool,
+    pub suppressor_transition: Option<SuppressorTransition>,
     pub clip: i32,
     pub reserve: i32,
     /// Sim time at which the next shot may fire.
@@ -83,7 +97,10 @@ impl WeaponState {
     pub fn new(def: Arc<WeaponDefinition>) -> Self {
         let clip = def.clip_size.max(0);
         let reserve = def.reserve_ammo.max(0);
+        let suppressor_attached = def.attr_f32("has silencer").is_some_and(|v| v > 0.);
         Self {
+            suppressor_attached,
+            suppressor_transition: None,
             def,
             cosmetic: None,
             cosmetic_owner: None,
@@ -110,6 +127,57 @@ impl WeaponState {
     pub fn set_def(&mut self, def: Arc<WeaponDefinition>) {
         self.def = def;
         self.pattern = RecoilPatternCache::default();
+    }
+
+    pub fn draw_activity(&self) -> &str {
+        self.def.suppressor_animations.as_ref().map_or("ACT_VM_DRAW", |profile|
+            if self.suppressor_attached { profile.draw_attached.as_str() }
+            else { profile.draw_detached.as_str() })
+    }
+
+    pub fn suppressor_animation(&self) -> Option<&weapons::SuppressorAnimation> {
+        let state = self.suppressor_transition?;
+        let profile = self.def.suppressor_animations.as_ref()?;
+        Some(if state.attached { &profile.attach } else { &profile.detach })
+    }
+
+    pub fn begin_suppressor(&mut self, tick: u64, dt: f32) -> bool {
+        let time = tick as f32 * dt;
+        if self.reload_end.is_some() || self.suppressor_transition.is_some()
+            || time < self.next_attack || time < self.next_secondary_attack { return false; }
+        let Some(profile) = &self.def.suppressor_animations else { return false; };
+        let attached = !self.suppressor_attached;
+        let animation = if attached { &profile.attach } else { &profile.detach };
+        self.next_attack = time + animation.duration;
+        self.next_secondary_attack = self.next_attack;
+        self.suppressor_transition = Some(SuppressorTransition { started_tick: tick, attached });
+        true
+    }
+
+    pub fn advance_suppressor(&mut self, tick: u64, dt: f32) {
+        let Some(state) = self.suppressor_transition else { return; };
+        let Some(animation) = self.suppressor_animation() else { return; };
+        let elapsed = tick.saturating_sub(state.started_tick) as f32 * dt;
+        let (complete, finished) = (elapsed >= animation.complete_time, elapsed >= animation.duration);
+        if complete { self.suppressor_attached = state.attached; }
+        if finished { self.suppressor_transition = None; }
+    }
+
+    /// Holstering interrupts the animation; only a completed attachment change
+    /// persists. The transition's lockout does not become an unrelated deploy delay.
+    pub fn cancel_suppressor(&mut self, time: f32) {
+        if self.suppressor_transition.take().is_some() {
+            self.next_attack = time;
+            self.next_secondary_attack = time;
+        }
+    }
+
+    pub fn suppressor_visible(&self, time: f32, dt: f32) -> bool {
+        let Some(state) = self.suppressor_transition else { return self.suppressor_attached; };
+        let Some(animation) = self.suppressor_animation() else { return self.suppressor_attached; };
+        let elapsed = (time - state.started_tick as f32 * dt).max(0.);
+        animation.visibility.iter().filter(|(at, _)| *at <= elapsed)
+            .last().map_or(!state.attached, |(_, show)| *show)
     }
 
     fn pattern(&self) -> &[[f32; 2]] {
@@ -162,7 +230,7 @@ impl WeaponState {
     }
 
     pub fn can_reload(&self) -> bool {
-        self.uses_ammo() && self.reload_end.is_none() && self.clip < self.def.clip_size && self.reserve > 0
+        self.uses_ammo() && self.suppressor_transition.is_none() && self.reload_end.is_none() && self.clip < self.def.clip_size && self.reserve > 0
     }
 
     /// Shell-by-shell timing if this weapon loads one shell at a time.
@@ -470,6 +538,7 @@ mod tests {
     fn ak() -> WeaponDefinition {
         WeaponDefinition {
             grenade_animations: None,
+            suppressor_animations: None,
             id: ContentId::csgo(ContentKind::Weapon, "ak47"),
             class_name: "weapon_ak47".into(),
             def_index: 7,
@@ -508,6 +577,7 @@ mod tests {
             },
             view_model: String::new(),
             world_model: String::new(),
+            unsuppressed_fire_sound: String::new(),
             fire_sound: String::new(),
             zoom_in_sound: String::new(),
             zoom_out_sound: String::new(),

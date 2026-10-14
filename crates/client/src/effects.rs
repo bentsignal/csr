@@ -102,9 +102,9 @@ pub fn process(
     for event in pending.0.drain(..) {
         if matches!(event, GameEvent::Damage {..} | GameEvent::Impact {..} | GameEvent::RoundStart {..}) { effects.feedback.push(event.clone()); }
         match event {
-            GameEvent::Fire { player, weapon, origin } => {
+            GameEvent::Fire { player, weapon, origin, suppressed } => {
                 effects.attack(player, weapon.clone(), "ACT_VM_PRIMARYATTACK", now);
-                let sound = world.0.catalog.get(&weapon).map(|d| sounds.weapon_shot_entry(d).to_string()).unwrap_or_default();
+                let sound = world.0.catalog.get(&weapon).map(|d| sounds.weapon_shot_mode_entry(d, suppressed).to_string()).unwrap_or_default();
                 if !sound.is_empty() {
                     sounds.play_with(&mut commands, fs, &mut sources, &sound, emit(player, origin));
                 }

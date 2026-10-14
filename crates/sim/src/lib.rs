@@ -274,6 +274,7 @@ impl Player {
         // in another player's hands.
         w.reload_end = None;
         w.grenade_throw = None;
+        w.cancel_suppressor(time);
         w.reset_zoom(time);
         let was_active = self.active == index;
         if self.active > index {
@@ -298,7 +299,7 @@ impl Player {
         }
         if index!=self.active && self.active_weapon().is_some_and(|w| w.grenade_throw.is_some_and(|s|s.phase==utility::ThrowPhase::Throwing)) {return;}
         if let Some(old) = self.weapons.get_mut(self.active) {
-            if index!=self.active {old.grenade_throw=None;}
+            if index!=self.active {old.grenade_throw=None; old.cancel_suppressor(time);}
             old.reset_zoom(time);
             old.reload_end = None;
         }
@@ -375,7 +376,7 @@ pub enum GameEvent {
     UtilityDetonated { player: PlayerId, kind: utility::Kind, pos: Vec3 },
     Melee { player: PlayerId, weapon: String, origin: Vec3, secondary: bool, hit: MeleeHit },
     Scope { player: PlayerId, weapon: String, origin: Vec3, level: u8 },
-    Fire { player: PlayerId, weapon: String, origin: Vec3 },
+    Fire { player: PlayerId, weapon: String, origin: Vec3, suppressed: bool },
     Tracer { player: PlayerId, start: Vec3, end: Vec3 },
     /// A bullet hit the world. `player` fired it.
     Impact { player: PlayerId, pos: Vec3, normal: Vec3, surface: u32 },
@@ -1376,6 +1377,7 @@ impl World {
             if !think_bots || self.players[i].is_bot {
                 input.rewind_tick = None;
             }
+            for weapon in &mut self.players[i].weapons { weapon.advance_suppressor(self.tick, dt); }
             // Buying and dropping.
             {
                 let (mn, mx) = self.players[i].bounds();
@@ -1520,6 +1522,7 @@ impl World {
                         w.next_secondary_attack = time + 0.3;
                         self.events.push(GameEvent::Scope { player: id, weapon: w.def.class_name.clone(), origin: eye, level: w.zoom_level });
                     }
+                    if secondary_pressed { w.begin_suppressor(self.tick, dt); }
                     stab = secondary && w.is_melee();
                     let can_fire = w.def.class_name != C4 && w.def.class!=weapons::WeaponClass::Grenade;
                     // Pulling the trigger stops a shell-by-shell reload once
@@ -1629,6 +1632,7 @@ impl World {
         let (eye, aim_angles) = p.aim_origin_angles();
         let Some(w) = p.weapons.get(p.active) else { return };
         let def = w.def.clone();
+        let suppressed = w.suppressor_attached;
         let punch = w.aim_punch();
         let ctx = AccuracyContext {
             speed: p.movement.speed_2d(),
@@ -1647,6 +1651,7 @@ impl World {
             player: id,
             weapon: def.class_name.clone(),
             origin: eye,
+            suppressed,
         });
 
         // Seeded by the shooter's shot count, not the tick, so a predicting

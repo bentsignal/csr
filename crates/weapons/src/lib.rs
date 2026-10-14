@@ -74,6 +74,23 @@ pub struct GrenadeAnimations {
     pub underhand: GrenadeReleaseAnimation,
 }
 
+/// Authored viewmodel transition metadata; gameplay lockout follows the clip
+/// until native attack timing is independently measured.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SuppressorAnimation {
+    pub duration: f32,
+    pub complete_time: f32,
+    pub visibility: Vec<(f32, bool)>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct SuppressorAnimations {
+    pub attach: SuppressorAnimation,
+    pub detach: SuppressorAnimation,
+    pub draw_attached: String,
+    pub draw_detached: String,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct WeaponDefinition {
     pub id: ContentId,
@@ -102,11 +119,13 @@ pub struct WeaponDefinition {
     pub recoil: Recoil,
     pub view_model: String,
     pub grenade_animations: Option<GrenadeAnimations>,
+    pub suppressor_animations: Option<SuppressorAnimations>,
     pub world_model: String,
     /// Soundscript entry for the default equipped shot, e.g. `Weapon_AK47.Single`.
     /// Suppressor-equipped definitions use their `sound_special1` entry.
-    /// Removing a suppressor is not currently represented in weapon state.
     pub fire_sound: String,
+    /// Ordinary shot binding, before the equipped-suppressor override.
+    pub unsuppressed_fire_sound: String,
     pub zoom_in_sound: String,
     pub zoom_out_sound: String,
     pub kill_award: i32,
@@ -266,6 +285,7 @@ fn build(index: &str, class_name: &str, r: &Resolved) -> WeaponDefinition {
     };
     WeaponDefinition {
         grenade_animations: None,
+        suppressor_animations: None,
         id: ContentId::csgo(ContentKind::Weapon, short),
         class_name: class_name.to_string(),
         def_index: index.parse().unwrap_or(0),
@@ -305,6 +325,7 @@ fn build(index: &str, class_name: &str, r: &Resolved) -> WeaponDefinition {
         view_model: f("model_player"),
         world_model: f("model_world"),
         fire_sound: default_fire_sound(r),
+        unsuppressed_fire_sound: f("visuals/sound_single_shot"),
         zoom_in_sound: f("zoom_in_sound"),
         zoom_out_sound: f("zoom_out_sound"),
         kill_award: ai("kill award").unwrap_or(300),

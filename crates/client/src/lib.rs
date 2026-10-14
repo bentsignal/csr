@@ -764,9 +764,10 @@ fn smoke_test(
     }
     if *frame == capture_frame {
         if let (Some(w),Some(l))=(world.as_ref(),local.as_ref()) {
-            info!("capture authority: time={:.5} weapon={:?} grenade={:?} projectiles={} fields={}",
-                w.0.time(),w.0.player(l.id).and_then(|p|p.active_weapon()).map(|g|g.def.class_name.as_str()),
-                w.0.player(l.id).and_then(|p|p.active_weapon()).and_then(|g|g.grenade_throw),
+            let weapon = w.0.player(l.id).and_then(|p| p.active_weapon());
+            info!("capture authority: time={:.5} weapon={:?} grenade={:?} suppressor_attached={:?} suppressor_transition={:?} projectiles={} fields={}",
+                w.0.time(), weapon.map(|g| g.def.class_name.as_str()), weapon.and_then(|g| g.grenade_throw),
+                weapon.map(|g| g.suppressor_attached), weapon.and_then(|g| g.suppressor_transition),
                 w.0.projectiles.len(),w.0.utility_fields.len());
         }
     }

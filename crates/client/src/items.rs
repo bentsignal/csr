@@ -163,6 +163,13 @@ pub fn sync(
             &mut materials,
             ground_transform(&asset.model, item.pos, item.yaw, on_side),
         );
+        if let sim::GroundKind::Weapon(weapon) = &item.kind {
+            for (index, entity) in instance.meshes.iter().enumerate() {
+                if skinning::suppressor_mesh_hidden(&asset.model, index, weapon.suppressor_attached) {
+                    commands.entity(*entity).insert(Visibility::Hidden);
+                }
+            }
+        }
         crate::skin_finish::tag(&mut commands,&instance,crate::skin_finish::Target::Ground(item.id));
         crate::decorations::tag(&mut commands,asset,&instance,crate::skin_finish::Target::Ground(item.id),0);
         placed.items.insert(
