@@ -539,6 +539,10 @@ parity and the gameplay gaps listed above remain unfinished.
   practice redraws a replenished grenade after the release clip. Numeric
   strengths and inherited velocity remain provisional; trajectories, native
   command timing and particle fidelity are still unfinished.
+- [x] Timed decoy expiry emits a separate positional near/distant cue from
+  installed soundscripts, matching observed terminal sound requests. Round
+  cleanup is silent. Cadence/lifetime stay provisional; damage and visual
+  expiry behaviour remain unmeasured. [Evidence](research/decoy-expiry-audio.md).
 - [x] Authoritative grenade contact audio uses installed HE/flash/smoke/incendiary
   entries at the projectile position, with resting chatter and contact-fire
   duplication suppressed. Decoy/Molotov bindings and final soft settling taps

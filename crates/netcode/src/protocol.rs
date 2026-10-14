@@ -2,9 +2,9 @@
 use serde::{Deserialize, Serialize};
 use sim::{GameEvent, PlayerId, Snapshot, Team, TickInput};
 
-// Appended authoritative grenade contact cues; v12 carries decoy weapon ids.
-pub const VERSION: u32 = 13;
-pub const PROTOCOL_ID: u64 = 0x4353_5257_0000_000d;
+// Appended timed decoy expiry; v13 adds contacts, v12 decoy weapon ids.
+pub const VERSION: u32 = 14;
+pub const PROTOCOL_ID: u64 = 0x4353_5257_0000_000e;
 pub const CONTROL: u8 = 0;
 pub const INPUT: u8 = 1;
 pub const SNAPSHOT: u8 = 2;
@@ -72,7 +72,8 @@ pub(crate) fn validate_events(batch: &EventBatch) -> Result<(), String> {
             DecoyShot { player, pos, weapon } => *player != 0 && position(*pos)
                 && valid_decoy_weapon(sim::utility::Kind::Decoy, Some(weapon)),
             UtilityThrown { player, pos, .. }
-            | UtilityDetonated { player, pos, .. } => *player != 0 && position(*pos),
+            | UtilityDetonated { player, pos, .. }
+            | DecoyExpired { player, pos } => *player != 0 && position(*pos),
             UtilityBounced { player, kind, pos } => *player != 0 && position(*pos)
                 && matches!(kind, sim::utility::Kind::Smoke | sim::utility::Kind::Flash
                     | sim::utility::Kind::He | sim::utility::Kind::Molotov
@@ -536,6 +537,18 @@ mod death_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn decoy_expiry_roundtrip_and_admission_keep_authoritative_position() {
+        let pos = glam::Vec3::new(-100., 20., 2.);
+        let batch = EventBatch { tick: 960, events: vec![GameEvent::DecoyExpired { player: 7, pos }] };
+        validate_events(&batch).unwrap();
+        assert_eq!(decode::<EventBatch>(&encode(&batch).unwrap()).unwrap(), batch);
+        for (player, pos) in [(0, pos), (7, glam::Vec3::NAN), (7, glam::Vec3::splat(f32::MAX))] {
+            let invalid = EventBatch { tick: 960, events: vec![GameEvent::DecoyExpired { player, pos }] };
+            assert!(validate_events(&invalid).is_err());
+        }
+    }
+
     #[test]
     fn grenade_contact_batch_round_trips_and_rejects_invalid_authority() {
         let event = GameEvent::UtilityBounced {

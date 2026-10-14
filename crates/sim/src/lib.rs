@@ -401,6 +401,8 @@ pub enum GameEvent {
     /// A moving grenade contacted the world; the cue stays at the contact.
     /// Appended to preserve all earlier event discriminants.
     UtilityBounced { player: PlayerId, kind: utility::Kind, pos: Vec3 },
+    /// Timed decoy expiry, distinct from activation and round cleanup.
+    DecoyExpired { player: PlayerId, pos: Vec3 },
 }
 
 /// The whole game: map data shared by every copy (`Arc`s), the replicated
