@@ -423,7 +423,11 @@ lightmaps, props and sun, HUD, and the weapon catalog.
 
 - [x] 3D skybox (`sky_camera`, drawn by a second camera at 16x)
 - [x] 2D skybox cube faces loaded from the original materials
-- [ ] Overlays and decals (`info_overlay`): [affine static-world subset](BSP_OVERLAYS.md), rendered verification pending
+- [ ] Complete overlays and decals: non-affine mapping, distance fading,
+      dynamic brush receivers and hardware quality filters remain open.
+- [x] Render the [affine static-world overlay subset](BSP_OVERLAYS.md):
+      87 of Dust II's 90 overlays supported, with actual rendered verification.
+      [PR #103](https://github.com/bentsignal/global-offensive/pull/103).
 - [ ] Detail props (grass and bushes from `detail.vbsp`)
 - [ ] Static prop vertex lighting from the pakfile's `sp_hdr_*.vhv` (replaces the ambient-cube approximation)
 - [x] Bump-mapped directional lightmaps, `$bumpmap`/`$bumpmap2`, SSBump and model normal maps
@@ -547,7 +551,7 @@ parity and the gameplay gaps listed above remain unfinished.
   entries at the projectile position, with resting chatter and contact-fire
   duplication suppressed. Decoy/Molotov bindings and final soft settling taps
   remain unsupported; native cadence/mix parity is unmeasured.
-- [x] Retain bounded articulated death bodies from installed MDL/PHY rigs,
+- [x] Retain bounded Rapier death bodies with installed MDL/PHY convex rigs,
   captured live poses, velocity and hit context, with asynchronous nearby
   collision cooking. An evaluated authored pose covers a death before its
   first rendered frame. Actual kill captures show the full body resting on
@@ -558,11 +562,20 @@ parity and the gameplay gaps listed above remain unfinished.
   current posed attachment. Actual captures verify the effects and repeated
   throw pose cleanup. Fire/HE brightness, complete SpriteCard behavior and
   original appearance remain unfinished. [Particle subset](research/utility-particles.md).
+- [x] Honor authored single-sequence `$BLENDFRAMES` interpolation; landed in
+  `34900ea`, [PR #106](https://github.com/bentsignal/global-offensive/pull/106).
+  Fire remains too bright and smoke too dark; dual-sequence modes and complete
+  SpriteCard/native appearance parity remain open.
 - [x] Preserve the throw-time primary/pistol ContentId for positional decoy
   playback through inventory changes, death and snapshots. The existing 2 Hz
   cadence is still provisional; native burst/tap timing is not established.
   [PR #90](https://github.com/bentsignal/global-offensive/pull/90).
 - [x] Remove look-driven viewmodel lag; retain authored weapon animations.
+- [x] Tick-authoritative M4A1-S/USP-S suppressor toggling, installed transition
+  clips and cues, shot-time sound routing and held/dropped bodypart visibility;
+  landed in `aefad89`, [PR #105](https://github.com/bentsignal/global-offensive/pull/105).
+  Mode-dependent ballistics, native attack timing and third-person transition
+  gestures remain open. [Scope and evidence](SUPPRESSORS.md).
 - [x] Present Pause transitions atomically, reject obsolete open-cycle
   rasters, and coalesce stale pointer motion across the passive visibility
   observation. Rendered checks support reduced hover backlog; overall menu
