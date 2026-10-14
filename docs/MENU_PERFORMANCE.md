@@ -28,3 +28,20 @@ The menu fixture uses normal startup/settings and the production Bevy input brid
 | Fixture exit status | Menu and bot owned exit 0; source clean |
 
 Both final fixtures used normal 1600×900 physical pixels at DPI scale 1. Frame assignments and engine input receipts do not measure OS input, compositor presentation or physical input-to-photon latency. The moving-menu fixture owns programmatic focus; the bot fixture uses its documented normal-input scope. Runtime captures use installed Legacy assets kept private. These measurements establish responsiveness within the stated fixtures, not complete menu/gameplay parity or 1:1 visual fidelity. Inherited News and unsupported UI surfaces remain separate gaps. No authored movie instructions, clock rate or VM timeout were changed.
+
+## Live presentation diagnostics
+
+`CSR_PRESENT=immediate|mailbox|fifo` overrides the requested presentation mode
+both at startup and when normal display preferences are reapplied. Without a
+valid override, the saved VSync choice controls the request. The override does
+not change that saved choice. Previously live preference application silently
+replaced this startup-only override; screenshot runs skipped that application.
+The `display presentation` log reports the requested mode, saved VSync choice
+and surface queue hint. Backend fallback or compositor behavior can differ.
+
+`CSR_FRAME_LOG=<milliseconds>` now logs app-frame intervals above a finite,
+nonnegative threshold in ordinary menu/gameplay runs as well as screenshots.
+It previously lived only in the screenshot system. The opt-in logger does not
+control capture timing or process exit. These intervals and existing menu input
+receipts can reveal frame/worker stalls; they do not measure physical mouse
+latency, GPU presentation or scanout.

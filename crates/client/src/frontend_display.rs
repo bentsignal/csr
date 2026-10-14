@@ -6,7 +6,7 @@ use bevy::window::{MonitorSelection, PresentMode, Window, WindowMode};
 struct Preferences {
     fullscreen: bool,
     resolution: usize,
-    vsync: bool,
+    present_mode: PresentMode,
 }
 
 #[derive(Default)]
@@ -18,7 +18,7 @@ impl DisplayState {
         let current = Preferences {
             fullscreen: settings.fullscreen,
             resolution: settings.resolution.min(RESOLUTIONS.len() - 1),
-            vsync: settings.vsync,
+            present_mode: crate::input_latency::present_mode(settings.vsync),
         };
         let previous = self.applied;
         if previous.is_none_or(|old| old.fullscreen != current.fullscreen) {
@@ -37,12 +37,10 @@ impl DisplayState {
             let (width, height) = RESOLUTIONS[current.resolution];
             window.resolution.set_physical_resolution(width, height);
         }
-        if previous.is_none_or(|old| old.vsync != current.vsync) {
-            window.present_mode = if current.vsync {
-                PresentMode::AutoVsync
-            } else {
-                PresentMode::AutoNoVsync
-            };
+        if previous.is_none_or(|old| old.present_mode != current.present_mode) {
+            window.present_mode = current.present_mode;
+            bevy::log::info!("display presentation: requested {:?}, saved_vsync={}, surface_latency={:?}",
+                current.present_mode, settings.vsync, window.desired_maximum_frame_latency);
         }
         self.applied = Some(current);
     }
