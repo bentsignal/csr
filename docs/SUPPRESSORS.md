@@ -42,6 +42,27 @@ Validation so far: two focused sim tests pass at 64/128 tick, including authorit
 versus snapshot replay/prediction identity, trigger/reload lockout, held secondary
 input, holster cancellation and drop/pickup preservation. The installed profile check
 also passes for M4A1-S/USP-S and confirms MP5-SD stays nonremovable. Twelve focused protocol
-tests pass, including rejection of pre-v15 peers before admission. Full workspace,
-rendered and audio validation are pending. This draft
-is separate from the current staged playtest candidate.
+tests pass, including rejection of pre-v15 peers before admission. Two existing
+level selection tests also pass with the original raw-byte catalog digest
+assertions preserved: importing no suppressor definitions leaves that digest
+unchanged.
+
+Three actual 1920x1080 captures from combined play build `ac727d6` passed and were
+inspected: late M4 detach at sim 5.000 (bare barrel with the transition still
+active), M4 Draw at 7.000 after knife/return (completed detached mode preserved),
+and USP idle at 12.40625 after detach/reattach (visible suppressor, no transition).
+The screenshot-only `CSR_TEST_SWITCH=suppressor` fixture supplies ordinary
+TickInput shots/secondary attacks/slot switches; it never changes weapon state
+from a render system. Actual input traces confirm ready right-click starts at
+0.750 and 7.500 and the model's attach/detach clips and screw cues.
+
+Fire-event sound requests selected the attached M4 classic alias and detached
+`Weapon_M4A1.SilencedSingle` (the installed ordinary-shot binding), and selected
+`Weapon_USP.SilencedShot` / `Weapon_USP.Single` for USP. All four shot variants
+reached an observed audio sink (6.710?9.517 ms after request in these runs).
+These observations establish routing, not audible PCM/mixer or native timing
+parity. All three captures exited normally with no errors or new warnings; the
+three known nonaffine map-overlay skips remain. World/dropped bodypart rendering
+was not captured in this focused proof. Full required combined-build checks and
+CI are tracked by the integrating agent. This feature follows the earlier staged
+playtest candidate.
