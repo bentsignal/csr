@@ -109,7 +109,7 @@ _global.csrDeathNotices.layout = function(row) {
         // and headshot ink is about 12px high (canvas ink26px). Font-height
         // canvas sizing independently agrees for both within footage/HUD-scale
         // uncertainty. Retain the populated row-height bound for other packs.
-        var scale = Math.min(fontSize, height) / icon.height;
+        var scale = Math.min(1, fontSize / icon.height, height / icon.height);
         icon.clip._xscale = scale * 100;
         icon.clip._yscale = scale * 100;
         offsets.push(offset);
