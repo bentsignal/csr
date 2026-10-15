@@ -9,6 +9,7 @@ fn main() {
     let mut unsuppressed = false;
     let mut restart_gap = None;
     let mut restart_shots = 6;
+    let mut resumed_shots = 1;
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--unsuppressed" => unsuppressed = true,
@@ -31,7 +32,17 @@ fn main() {
                     .parse::<usize>()
                     .expect("integer shot count");
             }
-            _ => panic!("expected --unsuppressed, --restart-gap seconds or --restart-shots count"),
+            "--restart-count" => {
+                resumed_shots = args
+                    .next()
+                    .expect("resumed shot count")
+                    .parse::<usize>()
+                    .expect("integer shot count");
+                assert!((1..=32).contains(&resumed_shots));
+            }
+            _ => panic!(
+                "expected --unsuppressed, --restart-gap seconds, --restart-shots count or --restart-count count"
+            ),
         }
     }
     let level = level::Level::load("de_dust2", None).expect("installed Legacy map/catalog");
@@ -91,7 +102,7 @@ fn main() {
         p.weapons = vec![state];
         p.active = 0;
         let total = if restart_gap.is_some() {
-            restart_shots + 1
+            restart_shots + resumed_shots
         } else {
             profile.bullet_angles.len()
         };

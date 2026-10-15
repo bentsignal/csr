@@ -22,7 +22,7 @@ pub const RECOIL_DEGREES_PER_UNIT: f32 = 0.02;
 pub const RECOIL_SCALE: f32 = 2.0;
 /// Fraction of the (scaled) aim punch shown by the camera.
 pub const VIEW_PUNCH_FRACTION: f32 = 0.5;
-/// Recoil recovery when not firing, in pattern steps per second.
+/// Fallback phase recovery without an independently observed content policy.
 pub const RECOIL_RECOVERY_RATE: f32 = 12.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -308,6 +308,10 @@ impl WeaponState {
 
     pub fn has_recoil_response(&self) -> bool { self.motion_profile().is_some() }
 
+    fn phase_recovery(&self) -> Option<&weapons::RecoilPhaseRecovery> {
+        self.motion_profile()?.response.as_ref()?.phase_recovery.as_ref()
+    }
+
     pub fn reset_recoil_motion(&mut self) {
         self.recoil_motion = None;
         self.impulses = RecoilImpulseCache::default();
@@ -335,15 +339,17 @@ impl WeaponState {
     /// An impulse is added after sampling the actual authoritative ray.
     pub(crate) fn recoil_shot(&mut self, tick: u64, rate: u32) {
         if self.motion_profile().is_none() { return; }
+        let discrete_phase = self.phase_recovery().is_some();
         if self.recoil_motion.is_none() {
             self.recoil_motion = Some(crate::recoil_motion::RecoilMotion::new(tick, rate));
         }
-        if self.recoil_index <= 0. {
+        if self.recoil_index <= 0. || (discrete_phase && self.recoil_index < 1.) {
             self.recoil_motion.as_mut().unwrap().anchor_tick = tick;
             self.impulses = RecoilImpulseCache::default();
         }
         let Some(impulses) = self.impulses.0.get_or_init(|| self.derive_recoil_impulses()).as_ref() else { return; };
-        let index = self.recoil_index.clamp(0., (impulses.len() - 1) as f32);
+        let index = if discrete_phase { self.recoil_index.floor() } else { self.recoil_index }
+            .clamp(0., (impulses.len() - 1) as f32);
         let lo = index.floor() as usize;
         let hi = (lo + 1).min(impulses.len() - 1);
         let impulse = [
@@ -665,7 +671,17 @@ pub fn think(w: &mut WeaponState, time: f32, dt: f32, ducked: bool, firing: bool
     // Decays to 10 % over the recovery time.
     w.accuracy_penalty *= 0.1f32.powf(dt / recovery);
     if !firing {
-        w.recoil_index = (w.recoil_index - RECOIL_RECOVERY_RATE * dt).max(0.0);
+        if let Some(phase) = w.phase_recovery() {
+            // Direct weapon-state observations establish a plateau followed
+            // by this multiplicative decay. The ordinary attack deadline
+            // supplies the cooldown gate; receive-time captures do not prove
+            // its exact native boundary tick.
+            if time > w.next_attack {
+                w.recoil_index *= 0.1f32.powf(phase.decay_decades_per_second * dt);
+            }
+        } else {
+            w.recoil_index = (w.recoil_index - RECOIL_RECOVERY_RATE * dt).max(0.0);
+        }
     }
     if let Some(end) = w.reload_end {
         if let Some(s) = shell_reload(&w.def) {
