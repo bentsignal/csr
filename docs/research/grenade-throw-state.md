@@ -231,3 +231,25 @@ availability alone does not establish an actual projectile position/velocity
 receiver. Launch pitch, origin, speed, movement inheritance and throw-strength
 blending remain uncalibrated; no numeric launch policy changes follow from
 this capability checkpoint. Raw installed-game images and logs remain private.
+
+A subsequent finite packet admitted only the fields actually exposed above,
+including the viewmodel's explicit HE weapon handle, and executed one held
+primary release. The held viewmodel reports sequence 1, playback rate 1 and
+animation time 205.679688. By the first post-release viewmodel capture,
+bounded at 0.0652 to 0.0724 scaled seconds, it reports sequence 2, playback
+rate 1 and animation time 207.171875. Sequence 2 and that rate/time persist
+through the 0.3278 to 0.3349-second capture. The independently read installed
+sequence order identifies these as pullpin and throw. A world HE projectile
+and throwing arm are visible at 0.1398 to 0.1481 seconds. This supports
+retaining the selected natural release clip; it does not identify an exact
+spawn tick, establish a cycle field, or justify compressing playback to the
+authored event marker. Exact arm-pose comparison also needs matched arm
+models and viewmodel settings.
+
+The ordinary server entity dump independently identifies a real
+`hegrenade_projectile`, reporting gravity 0.40 and friction 0.20. Two dumps
+expose no position or velocity, so this is a negative numeric-trajectory
+receiver rather than a launch measurement. A client lookup restricted to
+the substring `hegrenade` finds the held weapon only; no projectile entity
+index is invented from that result. The packet completed 17 captures,
+restored all 12 preferences exactly and left no native process.
