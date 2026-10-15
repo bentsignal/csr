@@ -158,7 +158,7 @@ pub fn input(
         return;
     }
     let shop = can_shop(&world.0, local.id);
-    if keys.just_pressed(settings.binds[9]) {
+    if settings.action_just_pressed(9, &keys, &mouse, local.capture_mouse) {
         if menu.open {
             menu.open = false;
             menu.just_closed = true;

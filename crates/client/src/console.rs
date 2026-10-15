@@ -7,6 +7,7 @@ use bevy::{
     window::{CursorGrabMode, CursorOptions, PrimaryWindow},
 };
 use std::collections::VecDeque;
+use crate::settings::ACTION_COMMANDS;
 
 #[derive(Resource)]
 pub struct DeveloperConsole {
@@ -300,21 +301,6 @@ const COMMANDS: &[&str] = &[
     "status",
     "quit",
 ];
-const ACTION_COMMANDS: [&str; 13] = [
-    "+forward",
-    "+back",
-    "+moveleft",
-    "+moveright",
-    "+jump",
-    "+duck",
-    "+speed",
-    "+use",
-    "+reload",
-    "buymenu",
-    "drop",
-    "+showscores",
-    "+lookatweapon",
-];
 
 /// One command at a time, with quoted arguments; no shell/exec/eval path.
 fn words(line: &str) -> Result<Vec<String>, String> {
@@ -371,9 +357,18 @@ fn bind(
     unbind: bool,
 ) -> Result<String, String> {
     if args.is_empty() || args.len() > 2 || (unbind && args.len() != 1) {
-        return Err("Usage: bind <key|mwheelup|mwheeldown> [command]; unbind <wheel>".into());
+        return Err("Usage: bind <key|mouse1..5|mwheelup|mwheeldown> [command]; unbind <mouse|wheel>".into());
     }
     let name = args[0].to_ascii_lowercase();
+    if let Some(index) = ["mouse1", "mouse2", "mouse3", "mouse4", "mouse5"].iter().position(|value| *value == name) {
+        let action = &mut settings.mouse_binds[index];
+        if unbind { *action = crate::settings::MouseAction::None; }
+        else if let Some(command) = args.get(1) {
+            *action = crate::settings::MouseAction::parse(&command.to_ascii_lowercase())
+                .ok_or("Unsupported mouse command. Use +attack, +attack2, a bindlist action, invprev, invnext, lastinv or \"\".")?;
+        }
+        return Ok(format!("{name} = \"{}\"", action.command()));
+    }
     if matches!(name.as_str(), "mwheelup" | "mwheeldown") {
         let action = if name == "mwheelup" {
             &mut settings.wheel_up
@@ -455,7 +450,7 @@ fn run(world: &mut World, line: &str) -> Result<String, String> {
         "bindlist" if args.is_empty() => {
             let settings = world.resource::<crate::settings::Settings>();
             Ok(format!(
-                "{}\nmwheelup = {}\nmwheeldown = {}\nKeyboard binds swap an occupied key's previous action. Number slots, Q, mouse attacks and ` remain fixed.",
+                "{}\n{}\nmwheelup = {}\nmwheeldown = {}\nKeyboard binds swap an occupied key's previous action. Mouse binds replace that button's action; keyboard binds remain available. Number slots, Q and ` remain fixed.",
                 settings
                     .binds
                     .iter()
@@ -467,6 +462,7 @@ fn run(world: &mut World, line: &str) -> Result<String, String> {
                     ))
                     .collect::<Vec<_>>()
                     .join("\n"),
+                settings.mouse_binds.iter().enumerate().map(|(index, action)| format!("mouse{} = {}", index + 1, action.command())).collect::<Vec<_>>().join("\n"),
                 settings.wheel_up.command(),
                 settings.wheel_down.command()
             ))
@@ -651,6 +647,23 @@ fn draw(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn mouse_bind_replaces_only_its_button_and_round_trips_with_keyboard_and_wheel() {
+        let mut settings = crate::settings::Settings::default();
+        bind(&mut settings, &["mouse4".into(), "+jump".into()], false).unwrap();
+        bind(&mut settings, &["mouse5".into(), "+attack2".into()], false).unwrap();
+        bind(&mut settings, &["mouse2".into()], true).unwrap();
+        assert_eq!(settings.mouse_binds[3], crate::settings::MouseAction::Action(4));
+        assert_eq!(settings.mouse_binds[4], crate::settings::MouseAction::Attack2);
+        assert_eq!(settings.mouse_binds[1], crate::settings::MouseAction::None);
+        assert_eq!(settings.binds[4], KeyCode::Space);
+        assert_eq!(settings.wheel_down, crate::settings::WheelAction::Next);
+        assert_eq!(crate::settings::Settings::parse(&settings.encode()), settings);
+        let before = settings.clone();
+        assert!(bind(&mut settings, &["mouse4".into(), "quit".into()], false).is_err());
+        assert_eq!(settings, before);
+    }
+
     #[test]
     fn quoted_bind_persists_wheel_jump_without_overwriting_other_settings() {
         let mut settings = crate::settings::Settings::default();

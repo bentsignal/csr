@@ -39,12 +39,14 @@ not input-to-photon latency measurements. Crosshair values use the existing
 renderer/settings ranges; command support does not establish Source pixel
 parity for every cvar.
 
-## Keyboard and mouse wheel
+## Keyboard, mouse buttons and mouse wheel
 
 ```text
 bind mwheeldown +jump
 bind mwheelup +jump
 bind space +jump
+bind mouse4 +jump
+bind mouse5 lastinv
 bindlist
 ```
 
@@ -63,9 +65,20 @@ support the existing 13 configurable actions shown by `bindlist`: movement,
 jump, crouch, walk, use, reload, buy, drop, scoreboard and inspect. For example,
 `bind f +use` uses the existing key-swapping behavior: if F already belongs to
 inspect, inspect takes Use's former key. Letters and the existing modifier,
-space, tab, arrow/navigation keys are supported. Keyboard unbind, arbitrary
-command binds, attack/mouse-button rebinding and slot/Q/console rebinding are
-not implemented in this first version. The classic keyboard settings page
+space, tab, arrow/navigation keys are supported.
+
+`mouse1` through `mouse5` mean left, right, middle, back and forward buttons.
+Each accepts any of those 13 actions, `+attack`, `+attack2`, `invprev`, `invnext`
+or `lastinv`. A bind replaces only that button's action; other buttons and
+keyboard bindings remain available. For example, `bind mouse5 +attack2` and
+`unbind mouse2` move secondary fire to the forward side button. `bind mouse1
++attack` and `bind mouse2 +attack2` restore the default attacks. `unbind mouse4`
+or `bind mouse4 ""` clears that button. These bindings save and load with the
+other settings. Pointer-capture clicks remain suppressed until release,
+including when the click has been rebound to jump.
+
+Keyboard unbind, arbitrary command binds and slot/Q/console rebinding remain
+open. The classic keyboard settings page
 currently exposes only its connected sensitivity/inversion controls; the
 console makes these action bindings reachable from the classic frontend.
 
