@@ -34,11 +34,11 @@ mod tests {
         let mut catalog=weapons::Catalog::from_items_game(r#""items_game" { "items" { "44" { "name" "weapon_hegrenade" "baseitem" "0" "attributes" { "primary default clip size" "1" } } } }"#).unwrap();
         catalog.weapons[0].grenade_animations = Some(weapons::GrenadeAnimations {
             pull_pin_duration: 0.25,
-            overhand: weapons::GrenadeReleaseAnimation {
+            overhand: weapons::GrenadeReleaseAnimation { command_release_time: None,
                 duration: 0.5,
                 release_time: 0.125,
             },
-            underhand: weapons::GrenadeReleaseAnimation {
+            underhand: weapons::GrenadeReleaseAnimation { command_release_time: None,
                 duration: 0.5,
                 release_time: 0.125,
             },
@@ -108,6 +108,31 @@ mod tests {
                 assert_eq!(throws, 1);
                 assert!(world.players[0].weapons.is_empty());
             }
+        }
+    }
+    #[test]
+    fn observed_release_profile_drives_projectile_and_authored_pose_event_together() {
+        for rate in [64, 128] {
+            let (mut world, id) = fixture(rate);
+            let definition = std::sync::Arc::make_mut(&mut world.players[0].weapons[0].def);
+            let profile = definition.grenade_animations.as_mut().unwrap();
+            profile.overhand = weapons::GrenadeReleaseAnimation {
+                duration: 0.4, release_time: 1. / 3., command_release_time: Some(0.1),
+            };
+            let release = profile.overhand.clone();
+            assert!((release.sample_time(0.1) - release.release_time).abs() < 0.000001);
+            assert!((release.sample_time(0.1 + release.duration - release.release_time) - release.duration).abs() < 0.000001);
+            world.step(&[(id, TickInput { buttons: buttons::ATTACK, ..Default::default() })]);
+            let release_tick = world.tick;
+            let expected_tick = release_tick + (0.1 / world.dt()).ceil() as u64;
+            let mut actual = None;
+            for _ in 0..rate / 2 {
+                world.step(&[(id, TickInput::default())]);
+                if world.events.iter().any(|e| matches!(e, GameEvent::UtilityThrown { .. })) {
+                    actual = Some(world.tick - 1);
+                }
+            }
+            assert_eq!(actual, Some(expected_tick));
         }
     }
     #[test]
@@ -201,7 +226,7 @@ impl ThrowMode {
             "ACT_VM_THROW"
         }
     }
-    fn animation(self, profile: &weapons::GrenadeAnimations) -> &weapons::GrenadeReleaseAnimation {
+    pub fn animation(self, profile: &weapons::GrenadeAnimations) -> &weapons::GrenadeReleaseAnimation {
         if self == Self::Underhand {
             &profile.underhand
         } else {
@@ -263,7 +288,7 @@ impl World {
         let animation = state.mode.animation(profile);
         let started = state.throw_started_tick.unwrap();
         let spawn =
-            !state.spawned && tick >= started.saturating_add(ticks(animation.release_time, dt));
+            !state.spawned && tick >= started.saturating_add(ticks(animation.projectile_delay(), dt));
         let finish = state.spawned && tick >= started.saturating_add(ticks(animation.duration, dt));
         if spawn {
             if self.spawn_grenade(i) {

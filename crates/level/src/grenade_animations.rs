@@ -26,7 +26,34 @@ fn release(model: &mdl::Model, activity: &str) -> Option<GrenadeReleaseAnimation
     Some(GrenadeReleaseAnimation {
         duration,
         release_time: cycle * duration,
+        command_release_time: None,
     })
+}
+
+/// These installed MDL headers were observed in an owned Legacy 1.38.8.1
+/// session. Header identity prevents assigning native timing to a content
+/// pack's different animation merely because it reuses a CS item name.
+const OBSERVED_HEADERS: &[(&str, &str)] = &[
+    ("weapon_hegrenade", "7b0a6c02bc3f3993831d0d5ac32fab2855be027d"),
+    ("weapon_flashbang", "0226e812fe86e2203dd30d7168e552a0ccb60f39"),
+    ("weapon_smokegrenade", "43e9d797e8c9e219b1917a3a608ba1a091c0c4cb"),
+    ("weapon_molotov", "644f500876241e0607746bf8be968e945f8392f0"),
+    ("weapon_incgrenade", "1941079ae2bcd012d2aeae9af190b0edf799a2ea"),
+    ("weapon_decoy", "b59b9ec5629f1f713acfb726b8c8a2034b0b3b67"),
+];
+
+fn apply_observed_release(weapon: &weapons::WeaponDefinition, bytes: &[u8], profile: Option<&mut GrenadeAnimations>) {
+    let Some((_, expected)) = OBSERVED_HEADERS.iter().find(|(name, _)| *name == weapon.class_name) else { return; };
+    if format!("{:x}", Sha1::digest(bytes)) != *expected { return; }
+    if let Some(profile) = profile {
+        // All six primary/secondary throws and HE combined visibly launch by
+        // ~0.12..0.17s, rather than the authored marker's ~0.333s. Tight HE
+        // overhand/tap captures narrow first visibility to ~0.105..0.120s.
+        // A 0.1s delay quantizes to 0.109375s at 64Hz. This is an
+        // observed profile, not proof of an exact server spawn tick or 2015.
+        profile.overhand.command_release_time = Some(0.1);
+        profile.underhand.command_release_time = Some(0.1);
+    }
 }
 
 pub(super) fn import(
@@ -36,7 +63,7 @@ pub(super) fn import(
 ) -> Option<[u8; 20]> {
     let mut digest = Sha1::new();
     digest.update(previous_hash?);
-    digest.update(b"grenade-animation-timing-v2-release-edge");
+    digest.update(b"grenade-animation-timing-v4-observed-release");
     let mut definitions: Vec<_> = catalog
         .weapons
         .iter_mut()
@@ -75,6 +102,8 @@ pub(super) fn import(
                 underhand: release(&model, "ACT_VM_RELEASE")?,
             })
         })();
+        let mut profile = profile;
+        apply_observed_release(weapon, &bytes, profile.as_mut());
         weapon.grenade_animations = profile;
     }
     Some(digest.finalize().into())
