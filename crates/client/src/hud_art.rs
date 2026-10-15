@@ -26,9 +26,10 @@ pub fn setup(mut commands: Commands, art: Res<UiAssets>, level: Res<crate::Loade
     for (key, x) in [("health", 24.0), ("armor", 178.0)] {
         if let Some(image) = art.image(key) {
             let entity = icon(&mut commands, image, Node { position_type: PositionType::Absolute, left: px(x), bottom: px(24.0), width: px(27.0), height: px(27.0), ..default() });
+            commands.entity(entity).insert(crate::combat_hud::Fallback::Health);
             if key == "armor" { commands.entity(entity).insert(ArmorIcon); }
         }
-        commands.spawn((Node { position_type: PositionType::Absolute, left: px(x), bottom: px(12.0), width: px(118.0), height: px(2.0), ..default() }, BackgroundColor(Color::srgba(0.9, 0.9, 0.88, 0.7))));
+        commands.spawn((crate::combat_hud::Fallback::Health, Node { position_type: PositionType::Absolute, left: px(x), bottom: px(12.0), width: px(118.0), height: px(2.0), ..default() }, BackgroundColor(Color::srgba(0.9, 0.9, 0.88, 0.7))));
     }
     if let Some(image) = art.image("cart") {
         let entity = icon(&mut commands, image, Node { position_type: PositionType::Absolute, left: px(160.0), top: px(291.0), width: px(28.0), height: px(28.0), ..default() });
