@@ -99,7 +99,14 @@ fn team_color(team: sim::Team) -> &'static str {
 }
 fn weapon_linkage(entry: &KillFeedEntry) -> String {
     let weapon = entry.weapon.trim_start_matches("weapon_");
-    let weapon = if weapon == "planted_c4" { "c4" } else { weapon };
+    let weapon = match weapon {
+        // The installed public HUD exports name the two default knife art
+        // variants explicitly; their gameplay class names omit this suffix.
+        "knife" => "knife_default_ct",
+        "knife_t" => "knife_default_t",
+        "planted_c4" => "c4",
+        _ => weapon,
+    };
     let off = entry.suppressed == Some(false) && matches!(weapon, "m4a1_silencer" | "usp_silencer");
     format!("icon-{weapon}{}.png", if off { "_off" } else { "" })
 }
@@ -147,7 +154,7 @@ fn update(
     local: Option<Res<LocalPlayer>>,
     time: Res<Time>,
     mut images: ResMut<Assets<Image>>,
-    mut surfaces: Query<&mut Visibility, With<Surface>>,
+    mut surfaces: Query<(&mut Visibility, &mut Node), With<Surface>>,
     mut fallback: Query<&mut Text, With<Fallback>>,
 ) {
     let matched = *state.get() == AppState::Match
@@ -159,6 +166,7 @@ fn update(
         window.resolution.physical_width().max(1),
         window.resolution.physical_height().max(1),
     );
+    let surface_height = px(size.1.div_ceil(2) as f32 / window.scale_factor());
     if feed.movie.is_none() && matched && !feed.failed.load(Ordering::Acquire) {
         let image = images.add(Image::new(
             Extent3d {
@@ -181,7 +189,7 @@ fn update(
                     left: px(0),
                     top: px(0),
                     width: percent(100),
-                    height: percent(50),
+                    height: surface_height,
                     ..default()
                 },
                 GlobalZIndex(90),
@@ -220,7 +228,7 @@ fn update(
         // Disconnecting input terminates only our dedicated worker. A missing
         // export or failed movie must never erase the last usable text feed.
         feed.movie = None;
-        for mut surface in &mut surfaces {
+        for (mut surface, _) in &mut surfaces {
             *surface = Visibility::Hidden;
         }
         return;
@@ -282,7 +290,9 @@ fn update(
                 revision: feed.revision,
             });
     }
-    let active = matched && (!ready || !entries.is_empty());
+    // Finish an in-flight bare-root load even if the match ends before it
+    // announces readiness; otherwise a parked loader could time out on Home.
+    let active = !ready || (matched && !entries.is_empty());
     if active != feed.active {
         feed.movie
             .as_ref()
@@ -325,7 +335,11 @@ fn update(
     }
     let frame = feed.movie.as_ref().unwrap().lock().unwrap().take_frame();
     if let Some(frame) = frame.filter(|frame| frame.presentation_revision == feed.revision) {
-        if let Some(mut image) = images.get_mut(&feed.image) {
+        if let Some(image) = images.get_mut(&feed.image) {
+            if !feed.presented && ready && std::env::var_os("CSR_KILL_FEED_TRACE").is_some() {
+                info!(revision = feed.revision, notices = entries.len(), width = frame.width,
+                    height = frame.height, keys = ?feed.entries, "Classic kill feed raster admitted");
+            }
             image.texture_descriptor.size = Extent3d {
                 width: frame.width,
                 height: frame.height,
@@ -340,7 +354,10 @@ fn update(
         && feed.presented
         && !feed.failed.load(Ordering::Acquire)
         && !entries.is_empty();
-    for mut surface in &mut surfaces {
+    for (mut surface, mut node) in &mut surfaces {
+        // An odd physical height must not stretch a ceil(height/2) raster into
+        // a fractional-height box. Preserve one authored pixel per screen pixel.
+        node.height = surface_height;
         *surface = if visible {
             Visibility::Inherited
         } else {

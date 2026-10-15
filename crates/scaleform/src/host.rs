@@ -423,7 +423,7 @@ impl Host {
             .with_autoplay(true)
             .with_max_execution_duration(Duration::from_secs(15))
             .build();
-// The selected player's authored background paints Home; Pause and the
+        // The selected player's authored background paints Home; Pause and the
         // dedicated HUD surface preserve the world beneath authored alpha.
         player.lock().unwrap().set_window_mode("transparent");
         player.lock().unwrap().fetch_root_movie(
