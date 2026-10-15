@@ -5,6 +5,7 @@
 // footage, but its exact native pixels/HUD scaling remain uncalibrated.
 _global.csrDeathNotices = new Object();
 _global.csrDeathNotices.rows = new Object();
+_global.csrDeathNotices.order = [];
 _global.csrDeathNotices.generation = 0;
 _global.csrDeathNotices.ready = false;
 
@@ -67,6 +68,46 @@ _global.csrDeathNotices.fitHorizontal = function(clip, parent, left, right) {
     var after = clip.getBounds(parent);
     clip._x += left - after.xMin;
     return true;
+};
+_global.csrDeathNotices.place = function(row, index) {
+    // Public AddPanel returns independent children at y=0. Its caller owns
+    // receipt ordering. The movie exposes its HUD-scaled pitch in root units.
+    // The 2015 reference's box/font heights independently agree with applying
+    // the public hud_scaling value to each returned row; exact pitch is still
+    // being compared against dated multi-notice footage.
+    var scale = Number(csrEI.call("GameInterface.GetConvarNumber", "hud_scaling"));
+    var pitch = Number(this.root.nScaledHeight);
+    if (!(scale > 0) || scale > 4 || !(pitch > 0) || pitch > 4096) { return false; }
+    var start = {x: 0, y: 0};
+    var end = {x: 0, y: pitch};
+    this.root.localToGlobal(start);
+    this.root.localToGlobal(end);
+    row.panel._parent.globalToLocal(start);
+    row.panel._parent.globalToLocal(end);
+    var step = end.y - start.y;
+    if (!(step > 0) || step > 4096) { return false; }
+    row.panel._xscale = row.baseScaleX * scale;
+    row.panel._yscale = row.baseScaleY * scale;
+    row.panel._x = row.baseX;
+    row.panel._y = row.baseY + index * step;
+    return true;
+};
+_global.csrDeathNotices.reflow = function() {
+    var i = 0;
+    while (i < this.order.length) {
+        var id = this.order[i];
+        var row = this.rows[id];
+        if (row != undefined) {
+            var placed = false;
+            try { placed = this.place(row, i) === true; }
+            catch (error) { placed = false; }
+            if (!placed) {
+                row.panel._visible = false;
+                csrEI.call("csr.DeathNoticeResult", id.substr(8), false);
+            }
+        }
+        i += 1;
+    }
 };
 _global.csrDeathNotices.layout = function(row) {
     var panel = row.panel;
@@ -154,6 +195,9 @@ _global.csrDeathNotices.layout = function(row) {
         icon.clip._y = (top.y + bottom.y) / 2 - (icon.bounds.yMin + icon.height / 2) * scale;
         i += 1;
     }
+    var index = 0;
+    while (index < this.order.length && this.order[index] != row.id) { index += 1; }
+    if (index == this.order.length || !this.place(row, index)) { return false; }
     panel._visible = true;
     return true;
 };
@@ -199,15 +243,17 @@ _global.csrDeathNotices.load = function(url) {
 };
 _global.csrDeathNotices.addImpl = function(key, killer, victim, killerColor, victimColor, weaponLinkage, headshot, localAttacker, localVictim) {
     var id = this.key(key);
-    if (!this.ready || id == undefined || this.rows[id] != undefined ||
+    if (!this.ready || id == undefined || this.rows[id] != undefined || this.order.length >= 16 ||
         typeof killer != "string" || killer.length > 256 || typeof victim != "string" || victim.length > 256 ||
         !this.color(killerColor) || !this.color(victimColor) || !this.linkage(weaponLinkage)) { return false; }
     var panel = this.root.AddPanel(false);
     if (typeof panel != "movieclip") { return false; }
     // Register ownership before any later public movie call can fail. The add
     // wrapper can then hide/remove this partial row without touching siblings.
-    var row = {panel: panel};
+    var row = {panel: panel, id: id, baseX: panel._x, baseY: panel._y,
+        baseScaleX: panel._xscale, baseScaleY: panel._yscale};
     this.rows[id] = row;
+    this.order.push(id);
     if (panel.TextPanel.Text == undefined) { return false; }
     row.killer = this.escape(killer);
     row.victim = this.escape(victim);
@@ -258,6 +304,14 @@ _global.csrDeathNotices.discard = function(id, row) {
     try { this.root.RemovePanel(row.panel); }
     catch (error) { }
     delete this.rows[id];
+    var remaining = [];
+    var i = 0;
+    while (i < this.order.length) {
+        if (this.order[i] != id) { remaining.push(this.order[i]); }
+        i += 1;
+    }
+    this.order = remaining;
+    this.reflow();
     return true;
 };
 _global.csrDeathNotices.remove = function(key) {
