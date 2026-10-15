@@ -98,3 +98,46 @@ positively isolates running lowering from lateral/vertical oscillation,
 with actual225 speed and exact preference restoration. Installed idle
 geometry diagnostics provide bounded front/rear vertex candidates; image
 region membership alone does not prove point visibility or a bob formula.
+
+
+## Standing forward speed-settling candidate (CT08, periodic bob still open)
+
+The M4A4's mean held pose also lowers and moves back while moving forward.
+A separate presentation transform now uses the cycle mean from12 ordinary
+normal-time installed Legacy1.38.8.1 frames, each with actual225u/s readout.
+The current camera and aim stay unchanged. The model and its authored offset
+rotate together in the eye-model frame; delayed-look translation remains a
+separate world-space offset. Authored weapon clips and simulated movement,
+shot rays, recoil and network state are unchanged.
+
+The reference framing is FOV60, offsets1,1,-1 and the same exact raw schema/M4
+identity as the look response. Its actual bob settings were lower21,
+lateral0.33 and vertical0.14; these were customized values, not a historical
+default claim. Five manually identified visible landmarks per frame were
+reprojected using the player's installed model. The pose fit carries2px
+manual-pick uncertainty. Across the12 frames the forward-axis roll balances
+zero; mean pitch is about1.924degrees, yaw about-0.536degrees and translation
+about(-1.803,-0.246,-0.201)eye-model units. Pitch spans1.845..2.009degrees;
+forward translation spans-1.891..-1.594units. First/second-half averages and
+unweighted/time-weighted means agree within the stated uncertainty.
+
+Capture intervals are retained privately. Their midpoint span is1.595seconds;
+one screenshot has a0.424second acquisition window. The public cycle setting
+was0.98seconds, but that does not establish exact animation phase. No periodic
+curve or phase was inferred. The dense temporal tracker was rejected when
+its low residual lost actual weapon-edge identity on held-out images.
+
+The bounded candidate scales the observed mean with actual forward speed up
+to225u/s. Independent117u/s walk frames support its lowering/backtranslation
+within the manual pose uncertainty. Instantaneous held-out visible landmark
+errors reach about9.4px; one walk handle error is8.2px. Periodic motion is
+omitted, so this is a mean speed-settling feature, not per-frame bob parity.
+Some run handle landmarks were hidden by the public dump legend and excluded.
+
+Only local, flat, standing-ground forward M4 movement is admitted. Air,
+crouch, strafing/backward motion, spectator/tracked poses, other weapons and
+content packs remain outside this measured slice. No new timing filter or
+invented return rate is added: actual speed drives the pose and a stopped
+player has a neutral transform. The screenshot fixture uses ordinary
+TickInput movement; rendered checks must admit actual speed and ground state.
+Final runtime verification is pending on the frozen feature candidate.
