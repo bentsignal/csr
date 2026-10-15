@@ -1,10 +1,10 @@
-﻿# Developer console and controls
+# Developer console and controls
 
 Open or close the console with the backquote key (`), above Tab on a US
 keyboard. Escape closes it without opening the pause menu. The console works
-on Home, during loading and in matches. The game cannot receive movement,
-shooting, weapon switches, menu clicks or typed commands while it owns input.
-Closing clears queued actions and recaptures the game cursor when appropriate.
+on Home, during loading and in matches. It captures new movement, shooting, weapon-switch and menu device input while
+open. The match continues, so already committed gameplay actions may finish.
+Closing clears queued local controls and recaptures the cursor when appropriate.
 
 Enter runs one command. Up/Down recall history; Left/Right/Home/End edit the
 line; Tab completes command names. Quoted arguments are accepted. `help` lists

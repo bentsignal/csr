@@ -39,7 +39,7 @@ impl DeveloperConsole {
         }
     }
     fn recall(&mut self, up: bool) {
-        if self.history.is_empty() {
+        if self.history.is_empty() || (!up && self.history_at.is_none()) {
             return;
         }
         let at = if up {
@@ -79,7 +79,9 @@ pub(crate) fn install(app: &mut App) {
         )
         .add_systems(
             Update,
-            (execute, draw).chain().before(crate::frontend::input),
+            (execute.run_if(has_pending), draw)
+                .chain()
+                .before(crate::frontend::input),
         );
 }
 pub(crate) fn allows_input(console: Res<DeveloperConsole>) -> bool {
@@ -150,7 +152,8 @@ fn input(
 ) {
     console.blocked_frame = false;
     if !enabled.0 {
-        events.clear();
+        // Disabled screenshot/input proofs retain their existing message paths.
+        reader.read(&events).for_each(drop);
         return;
     }
     let (window, cursor) = &mut *cursor;
@@ -159,9 +162,11 @@ fn input(
         if !window.focused || event.state != ButtonState::Pressed {
             continue;
         }
-        if event.key_code == KeyCode::Backquote && !event.repeat {
-            console.open = !console.open;
-            console.blocked_frame = true;
+        if event.key_code == KeyCode::Backquote {
+            if !event.repeat {
+                console.open = !console.open;
+                console.blocked_frame = true;
+            }
             continue;
         }
         if !console.open {
@@ -198,10 +203,11 @@ fn input(
                     .map_or(0, |(i, _)| i)
             }
             KeyCode::ArrowRight => {
-                console.cursor += console.line[console.cursor..]
+                let width = console.line[console.cursor..]
                     .chars()
                     .next()
-                    .map_or(0, char::len_utf8)
+                    .map_or(0, char::len_utf8);
+                console.cursor += width;
             }
             KeyCode::Home => console.cursor = 0,
             KeyCode::End => console.cursor = console.line.len(),
@@ -402,6 +408,9 @@ fn bind(
             .unwrap_or("unbound")
     ))
 }
+fn has_pending(console: Res<DeveloperConsole>) -> bool {
+    !console.pending.is_empty()
+}
 fn execute(world: &mut World) {
     let pending = std::mem::take(&mut world.resource_mut::<DeveloperConsole>().pending);
     for command in pending {
@@ -460,6 +469,11 @@ fn run(world: &mut World, line: &str) -> Result<String, String> {
         }
         "maps" if args.is_empty() => Ok(world.resource::<crate::menu::Menu>().maps.join("\n")),
         "map" if args.len() == 1 => {
+            if world.resource::<crate::hosting::Hosting>().exiting() {
+                return Err(
+                    "The hosted server is closing. Try again after shutdown finishes.".into(),
+                );
+            }
             if *world.resource::<State<crate::AppState>>().get() == crate::AppState::Loading {
                 return Err(
                     "A map is loading. Use disconnect to cancel it before choosing another map."
@@ -495,6 +509,14 @@ fn run(world: &mut World, line: &str) -> Result<String, String> {
             Ok("Disconnected.".into())
         }
         "connect" if args.len() == 1 => {
+            if world.resource::<crate::hosting::Hosting>().exiting() {
+                return Err(
+                    "The hosted server is closing. Try again after shutdown finishes.".into(),
+                );
+            }
+            if *world.resource::<State<crate::AppState>>().get() == crate::AppState::Loading {
+                return Err("A session is loading. Use disconnect to cancel it before connecting elsewhere.".into());
+            }
             let address = parse_address(&args[0])?;
             *world
                 .resource::<crate::remote_join::JoinRequest>()
@@ -579,12 +601,18 @@ fn draw(
     mut texts: Query<(&mut Text, &ConsoleText)>,
 ) {
     for (mut visibility, mut node) in &mut roots {
-        *visibility = if console.open {
+        let target = if console.open {
             Visibility::Visible
         } else {
             Visibility::Hidden
         };
-        node.width = px((window.width() - 24.0).clamp(240.0, 1200.0));
+        if *visibility != target {
+            *visibility = target;
+        }
+        let width = px((window.width() - 24.0).clamp(240.0, 1200.0));
+        if node.width != width {
+            node.width = width;
+        }
     }
     if !console.open {
         return;

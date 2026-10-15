@@ -397,6 +397,8 @@ pub fn update(
         .get(&FrameTimeDiagnosticsPlugin::FPS)
         .and_then(|d| d.smoothed())
         .unwrap_or(0.0);
+    let frame_ms = diagnostics.get(&FrameTimeDiagnosticsPlugin::FRAME_TIME)
+        .and_then(|d| d.smoothed()).unwrap_or(0.0);
     let w = &world.0;
     let now = time.elapsed_secs();
     let sim_now = w.time();
@@ -430,7 +432,7 @@ pub fn update(
     for (mut t, mut color, kind) in &mut texts {
         let value: String = match kind {
             HudText::Speed if !*debug => String::new(),
-            HudText::Debug if !*debug && settings.show_fps => format!("{fps:.0} fps | {:.1} ms", if fps > 0.0 { 1000.0 / fps } else { 0.0 }),
+            HudText::Debug if !*debug && settings.show_fps => format!("{fps:.0} fps | {frame_ms:.1} ms"),
             HudText::Debug if !*debug => String::new(),
             HudText::Speed => format!("{:.0}", p.movement.velocity.truncate().length()),
             HudText::Debug => format!(
