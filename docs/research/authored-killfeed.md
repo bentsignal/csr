@@ -15,10 +15,13 @@ Public values observed at 1920 x 1080 include CT color `#6f9ce6`, T color
 modifier, and one-second fade. These are observations of the installed
 historical movie, not a claim of exact 2015 runtime parity.
 
-The first three bounded private probes established that the movie loads and
+The first four bounded private probes established that the movie loads and
 initializes, but did **not** display a notice. Calling a public function is
 not evidence that its argument contract is correct. The next probe checks
-standard Flash root scoping before changing production presentation.
+standard Flash root scoping before changing production presentation. Setting
+`_lockroot` did not by itself produce a visible notice. Public function arity
+and returned-clip observations are now exposed by the explicitly invoked
+diagnostic bridge; normal menus never call that path.
 
 Private evidence is under `C:\Users\shawn\csr-fidelity\` in
 `killfeed-*-runtime-20261015`. Those captures contain installed game artwork

@@ -287,6 +287,18 @@ _global.csrProbeRecord = function(value, path, depth) {
 // Explicit probe-only observation of absent runtime member lookups. Existing
 // resolvers are preserved, and absent members still resolve to undefined.
 _global.csrDiagnostics = new Object();
+// Observe public call contracts without reading authored instructions. Retain
+// a returned clip only in this explicitly invoked diagnostic namespace.
+_global.csrDiagnostics.observeCall = function(path, name, args) {
+    var target = _global.csrResolve(path);
+    if (target == undefined || typeof target[name] != "function") {
+        return false;
+    }
+    this.lastResult = target[name].apply(target, args == undefined ? [] : args);
+    csrEI.call("csr.PublicCallResult", path, name, typeof this.lastResult,
+        _global.csrToHost(this.lastResult));
+    return true;
+};
 _global.csrDiagnostics.observeRecord = function(path) {
     var split = path.lastIndexOf(".");
     var parent = _global.csrResolve(path.substr(0, split));
@@ -364,6 +376,9 @@ csrEI.addCallback("csrGet", null, function(path) {
 csrEI.addCallback("csrInspect", null, function(path) {
     var o = _global.csrResolve(path);
     var entries = [];
+    if (typeof o == "function") {
+        entries.push("length:number=" + o.length);
+    }
     if (typeof o == "movieclip") {
         var localBounds = o.getBounds(o);
         var bounds = o._parent == undefined ? localBounds : o.getBounds(o._parent);
