@@ -88,3 +88,23 @@ normal admission/content-validation path. Hostnames are not resolved yet.
 `disconnect` cancels preparation/owned hosting and returns Home. `quit` requests
 the ordinary application shutdown. No console command writes gameplay state
 directly or bypasses the network authority.
+
+## Runtime verification and limits
+
+The final `db8d1f4` client was checked in two bounded desktop launches using a
+private player profile. Real focused keyboard input opened the console,
+executed settings/bind commands and left a partially typed `sens` line visible.
+Escape resumed the normal match. A second launch read back saved
+`cl_showfps 1` and `bind mwheeldown +jump`; the owner's separate config hash
+was unchanged, and both clients exited successfully with clean raw logs.
+
+All four 1920×1080 captures were visually reviewed by the implementing agent
+and the coordinating agent: `initial-console.png`, `initial-resumed.png`,
+`persisted-console.png` and `persisted-resumed.png`. They establish readable
+header/prompt rows, typed command output and normal match rendering after
+closing. Private captures are retained outside the repository.
+
+This verifies command entry and persisted wheel binding, not physical mouse
+wheel timing or native VGUI appearance. Wheel-jump delivery also has a focused
+TickInput test; full movement/bhop fidelity and the unsupported commands listed
+above remain separate work.
