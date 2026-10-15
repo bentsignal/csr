@@ -196,6 +196,52 @@ const GALIL_BULLET_ANGLES: [[f32; 2]; 35] = [
     [-6.44, -3.69],
 ];
 
+// Normal full-auto only: sustained actual receiver/HUD admission, two ordered
+// 25-shot magazines and a normal-speed aggregate. Native markers have 2px
+// uncertainty. Burst-mode pattern selection excludes this observed profile.
+const FAMAS_NORMAL_BULLET_ANGLES: [[f32; 2]; 25] = [
+    [0.00, 0.00],
+    [-0.05, -0.05],
+    [-0.24, -0.10],
+    [-0.81, -0.54],
+    [-1.86, -0.54],
+    [-3.05, -0.49],
+    [-3.91, 0.19],
+    [-4.58, 1.06],
+    [-5.29, 0.77],
+    [-5.62, -0.29],
+    [-5.90, -1.15],
+    [-6.00, -1.92],
+    [-6.38, -1.63],
+    [-6.56, -0.38],
+    [-6.70, 0.14],
+    [-6.66, 1.25],
+    [-6.85, 1.63],
+    [-6.71, 2.39],
+    [-6.85, 2.49],
+    [-7.08, 2.34],
+    [-7.13, 1.00],
+    [-7.17, 0.77],
+    [-7.13, 1.34],
+    [-6.75, 2.16],
+    [-6.34, 3.07],
+];
+
+fn is_observed_famas_normal(def: &WeaponDefinition) -> bool {
+    def.id == ContentId::csgo(ContentKind::Weapon, "famas")
+        && def.class_name == "weapon_famas"
+        && def.def_index == 10
+        && def.clip_size == 25
+        && def.bullets == 1
+        && def.full_auto
+        && def.cycle_time == 0.09
+        && def.attr_f32("has burst mode") == Some(1.)
+        && def.recoil == Recoil {
+            seed: 39623, angle: 0., angle_variance: 60.,
+            magnitude: 20., magnitude_variance: 1.,
+        }
+}
+
 fn is_observed_galil(def: &WeaponDefinition) -> bool {
     def.id == ContentId::csgo(ContentKind::Weapon, "galilar")
         && def.class_name == "weapon_galilar"
@@ -269,7 +315,7 @@ pub(super) fn import(catalog: &mut Catalog, schema: Option<[u8; 20]>) -> Option<
     digest.update(schema);
     // A peer with the same assets but the previous recoil policy must fail
     // content admission before prediction/snapshots can silently disagree.
-    digest.update(b"observed-recoil-trajectory-v4-ak-m4-m4s-galil-legacy-1.38.8.1");
+    digest.update(b"observed-recoil-trajectory-v5-ak-m4-m4s-galil-famas-normal-legacy-1.38.8.1");
     let mut applied = false;
     {
         for def in &mut catalog.weapons {
@@ -280,6 +326,8 @@ pub(super) fn import(catalog: &mut Catalog, schema: Option<[u8; 20]>) -> Option<
                     "legacy-1.38.8.1-m4a4-held-standing-128hz",
                     &M4A4_BULLET_ANGLES,
                 )
+            } else if is_observed_famas_normal(def) {
+                ("legacy-1.38.8.1-famas-normal-held-standing-128hz", &FAMAS_NORMAL_BULLET_ANGLES)
             } else if is_observed_galil(def) {
                 ("legacy-1.38.8.1-galil-held-standing-128hz", &GALIL_BULLET_ANGLES)
             } else if is_observed_m4s(def) {
@@ -350,7 +398,21 @@ mod tests {
         assert_ne!(m4_profile.bullet_angles, profile.bullet_angles);
         let galil = catalog.get("weapon_galilar").unwrap();
         assert_eq!(galil.recoil_trajectory.as_ref().unwrap().bullet_angles.len(), 35);
-        assert!(catalog.get("weapon_famas").unwrap().recoil_trajectory.is_none());
+        let famas = catalog.get("weapon_famas").unwrap();
+        assert_eq!(famas.recoil_trajectory.as_ref().unwrap().bullet_angles.len(), 25);
+        assert!(famas.recoil_trajectory_unsuppressed.is_none());
+        for case in 0..4 {
+            let mut changed = famas.clone(); changed.recoil_trajectory = None;
+            match case {
+                0 => changed.recoil.seed += 1,
+                1 => changed.cycle_time = 0.1,
+                2 => changed.id = ContentId::csgo(ContentKind::Weapon, "pack_famas"),
+                _ => { changed.attributes.insert("has burst mode".into(), "0".into()); }
+            }
+            let mut unmeasured = Catalog { weapons: vec![changed] };
+            assert_eq!(import(&mut unmeasured, Some(schema)), Some(schema));
+            assert!(unmeasured.weapons[0].recoil_trajectory.is_none());
+        }
         for case in 0..3 {
             let mut changed = galil.clone(); changed.recoil_trajectory = None;
             match case {

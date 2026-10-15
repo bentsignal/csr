@@ -399,3 +399,45 @@ This is a standing, held, no-spread **2023 installed-game baseline**. It does
 not establish 2015 behavior, recoil recovery, arbitrary camera parity or a
 native seeded recoil algorithm. Raw screenshots, sound logs and game data
 remain private. Actual rewrite ray/render verification is pending.
+
+
+## FAMAS normal full-auto standing held baseline
+
+The installed FAMAS now has a separate 25-shot trajectory for normal
+full-auto. Attachment requires the exact observed schema, canonical FAMAS
+ContentId, definition 10, clip 25, one bullet, full-auto flag, 0.09-second
+cycle, burst capability and normal recoil inputs. Changed identities/stats
+and other schemas do not inherit it. The existing authoritative burst-mode
+pattern selector explicitly excludes observed normal-mode trajectories;
+this observation does not establish burst recoil. Profile identity and
+angles enter the catalog policy digest; earlier rifle tables are unchanged.
+
+Normal mode was established behaviorally: one uninterrupted primary hold
+emitted seven identified own FAMAS near waves with sound-start gaps
+0.091, 0.085, 0.102, 0.087, 0.084 and 0.102 seconds, matching the actual
+25-to-18 HUD decrement. The prior native burst receiver emitted only three
+shots during a longer hold. No default-mode assumption or absent caption
+was used. An earlier caption-required run was rejected with zero magazine
+cases and remains negative evidence. A fresh single-shot 25-to-24 decrement,
+new impact, zero velocity and unchanged eye/background admitted the series.
+
+Two ordered no-spread magazines at 0.1 timescale and one normal-speed held
+aggregate each emitted 25 identified near waves and showed HUD 25 to 0
+(reserves 82, 57 and 32). Sound-start spans were 2.165, 2.164 and 2.150
+engine seconds; these are not exact server-fire timestamps. All 12 native
+preference entries were restored exactly, and no native process remained.
+
+Four independent camera rotations checked in two regions reproduce focal
+lengths 599.825 to 600.325 pixels at 1600 by 900; the fitted basis uses 600.
+Two unchanged background regions were checked across all 151 magazine
+frames. Both complete shot/HUD sequences and early/late overlaps were
+reviewed. Early shots 1-3 and late shots 22-24 overlap older boxes; their
+rounded centers retain explicit 2-pixel marker uncertainty. The independent
+ordered repeat differs by at most 1.0 pixel (RMS 0.490), and every selected
+center lies within 2 pixels of the normal-speed marker cloud.
+
+This is an installed Legacy 1.38.8.1 (2023) standing, held, normal full-auto
+baseline. It does not establish requested 2015 parity, burst recoil,
+recovery, moving/crouched firing, camera punch or native 64-tick behavior.
+Raw game data, logs and screenshots remain private. Actual rewrite
+ray/render verification is pending.
