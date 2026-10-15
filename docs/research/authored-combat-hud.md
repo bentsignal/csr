@@ -125,7 +125,7 @@ placement prevent an exact pixel-parity claim.
 
 ## Production ownership and remaining gates
 
-The pending production change shares one transparent full-viewport player with
+The production change shares one transparent full-viewport player with
 notices. Three nonoverlapping physical-pixel regions retain independent raster
 receipts/fallbacks. Snapshot commands are sent on actual value/life/viewport
 changes. A readiness callback alone never hides ordinary values; a successful
@@ -135,8 +135,8 @@ load/result failure preserves other components. Only worker failure is global.
 Idle admission parks the worker; no second continually rendering HUD player is
 created. Unchanged image regions and Node/Visibility values are retained.
 
-Production render/lifecycle/performance checks remain pending. Initial native
-numeric fields and steady bar art are admitted; low-health colors, damage
+Initial native numeric fields and steady bar art are admitted. The bounded
+production checks below do not admit every original state: low-health colors, damage
 pulse/trail, low/empty-ammo tint, shot/eject animation, grenade/bomb/defuser/burst
 subcomponents and weapon-name/kill-counter state remain open fidelity work.
 Unsupported sample decorations are hidden, never presented as authoritative
@@ -177,7 +177,8 @@ own observer when complete. Unsupported or stuck timelines fail after a bounded
 60 observer turns, retaining component fallback rather than running forever.
 This guard is not a claimed animation duration. Rust's existing pending-receipt
 state keeps the shared worker active until both completion and raster admission.
-The corrected actual damage, lifecycle and idle-cost checks remain pending.
+The corrected actual damage and lifecycle observations follow below. Idle
+parking is measured; a controlled frame-cost comparison remains open.
 
 Immutable4ba's exact ordinary HE repeat passed the previously failing gate:
 health/armor changed to56/57 through simulation, the native raster shows those
@@ -187,11 +188,57 @@ parking; the hidden grenade-ammo component legitimately reports1/15. Actual
 1920x1080 PNG inspection confirms readable steady ammo without the earlier
 partial fade, no duplicate fallback or sample art. The process exited0 with
 clean logs and unchanged settings. Historical colors and low-health behavior
-remain uncalibrated; ordinary fire/reload/Pause/new-match lifecycle and cost
-checks are still pending.
+remain uncalibrated. Later ordinary fire/reload/Pause/new-match observations
+are recorded below; a controlled frame-cost comparison remains open.
 
 A newer stamped command also clears only that component's previous result
 rejection. Otherwise an earlier failure could park a retry while its owned
 Show observer is pending. One behavioral regression exercises failure, newer
 pending retry, ignored old-stamp failure, success without raster, and final
 matching raster before parking. Other components and load failures are unchanged.
+
+## Production lifecycle evidence
+
+Frozen333 passed that six-test component suite and the launcher build. Its
+full workspace/installed-data CI was green. A separate all-workspace-package
+RELEASE clean/build and the required Dust II probe/simulation both completed
+with `failures: 0`. Immutable executable/source/cwd/hash receipts and original
+failed14 receipts remain private; no game screenshots or assets are published.
+
+The normal engine-input five-bot run rendered four actual1920x1080 images:
+initial100health/100armor with20/80ammo, ordinary firing19/80, Pause with the HUD
+hidden, and Resume with20/79 after reload. The capture requested immediately
+when reload completed retained the last valid19/80 raster; the matching reload
+raster arrived38ms later and is visible in the resumed image. Authoritative
+snapshots agree, and no other component or fallback duplicated the native art.
+The worker parked between value changes. The observed frame cadence was
+7.973ms mean/10.069ms p95, with77.5ms initial Pause response; these are bounded
+engine-input observations, not OS-input, GPU-present or comparative gain claims.
+
+Normal Home startup then exercised Dust II, Pause, Audio, Back, Resume, Home,
+and a second match on Inferno. All eight actual images were reviewed. Both
+matches rendered100health/0armor with the original empty armor bar and13/52
+P2000 ammunition. The HUD hid during Pause/Audio and cleared on Home; both
+components admitted fresh second-match rasters. Home readiness was101.7ms.
+Only one ready callback per component occurred across both matches: the same
+parsed modules were retained, cleared and reused. Whole-client map-loading
+memory peaked at12,395.5MiB private and ended at1,485.8MiB; this is not an
+isolated HUD memory-cost measurement or a general leak-test claim.
+
+Two existing ordinary underhand Molotov input cases then exercised real
+self-death and respawn, with no artificial damage or life changes. The6s image
+has actual life1/dead0health and no native health/ammo; the9s image has actual
+life2/alive28health/100armor and20/80ammo. Continued fire damage explains the
+low respawn health. The image agrees with its9s snapshot, while a later log
+records20health after capture. The existing periodic secondary-input fixture
+also starts a suppressor transition after weapon selection; that animation is
+not a HUD admission. All cases exited0 with clean logs and unchanged settings.
+The agent and parent independently reviewed all production lifecycle images.
+
+Remaining fidelity work includes historical color/low-health pulse and trail,
+low/empty-ammo tint and ejection, extra native HUD states, live window-resize
+behavior, exact historical scaling/CVars, and a controlled isolated cost check.
+The menu screenshots also retain known incomplete Audio content (Master Volume
+only and an empty microphone panel) and Home placeholder/clipped news content.
+Those are open defects, not complete-menu or typography passes. Original
+inventory, radar, money and round HUD presentation remain separate work.
