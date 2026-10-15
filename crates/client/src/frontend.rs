@@ -1255,7 +1255,7 @@ pub(crate) fn update(
         front.resume_worker(window.focused, window.physical_width(), window.physical_height());
         // An unbooted Loading domain must not show the parked Home raster.
         if scene == AppState::Loading {
-            if let Some(image) = images.get_mut(&front.image) {
+            if let Some(mut image) = images.get_mut(&front.image) {
                 image.texture_descriptor.size = Extent3d { width: 1, height: 1, depth_or_array_layers: 1 };
                 image.data = Some(vec![0, 0, 0, 0]);
             }
