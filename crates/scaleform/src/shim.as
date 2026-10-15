@@ -27,6 +27,16 @@ _global.csrToHost = function(v) {
     return v;
 };
 
+// An explicit host-side clip reference is distinct from a player's literal
+// string. Public HUD setters accept the clip returned by AddPanel.
+_global.csrFromHost = function(v) {
+    if (typeof v == "object" && v != null && typeof v.__csrMovieClip == "string") {
+        var clip = _global.csrResolve(v.__csrMovieClip);
+        return typeof clip == "movieclip" ? clip : undefined;
+    }
+    return v;
+};
+
 _global.csrMakeProxy = function(prefix) {
     var proxy = new Object();
     proxy.__resolve = function(name) {
@@ -287,6 +297,24 @@ _global.csrProbeRecord = function(value, path, depth) {
 // Explicit probe-only observation of absent runtime member lookups. Existing
 // resolvers are preserved, and absent members still resolve to undefined.
 _global.csrDiagnostics = new Object();
+// Observe public call contracts without reading authored instructions. Retain
+// a returned clip only in this explicitly invoked diagnostic namespace.
+_global.csrDiagnostics.observeCall = function(path, name, args) {
+    var target = _global.csrResolve(path);
+    if (target == undefined || typeof target[name] != "function") {
+        return false;
+    }
+    if (args == undefined) { args = []; }
+    var i = 0;
+    while (i < args.length) {
+        args[i] = _global.csrFromHost(args[i]);
+        i += 1;
+    }
+    this.lastResult = target[name].apply(target, args);
+    csrEI.call("csr.PublicCallResult", path, name, typeof this.lastResult,
+        _global.csrToHost(this.lastResult));
+    return true;
+};
 _global.csrDiagnostics.observeRecord = function(path) {
     var split = path.lastIndexOf(".");
     var parent = _global.csrResolve(path.substr(0, split));
@@ -339,6 +367,7 @@ csrEI.addCallback("csrCall", null, function(path, fname, args) {
     }
     var i = 0;
     while (i < args.length) {
+        args[i] = _global.csrFromHost(args[i]);
         if (typeof args[i] == "object" && args[i] != null && args[i].__csrProbe === true) {
             _global.csrProbeBudget = 128;
             args[i] = _global.csrProbeRecord(args[i].value, path + "." + fname + ".arg" + i, 0);
@@ -364,6 +393,9 @@ csrEI.addCallback("csrGet", null, function(path) {
 csrEI.addCallback("csrInspect", null, function(path) {
     var o = _global.csrResolve(path);
     var entries = [];
+    if (typeof o == "function") {
+        entries.push("length:number=" + o.length);
+    }
     if (typeof o == "movieclip") {
         var localBounds = o.getBounds(o);
         var bounds = o._parent == undefined ? localBounds : o.getBounds(o._parent);

@@ -268,7 +268,7 @@ pub fn setup(mut commands: Commands) {
             ..default()
         },
     );
-    commands.entity(feed).insert(TextLayout::justify(Justify::Right));
+    commands.entity(feed).insert((TextLayout::justify(Justify::Right), crate::kill_feed::Fallback));
     let center = text(&mut commands, HudText::Center, 32.0, Color::WHITE, centered_row(percent(24), Val::Auto));
     commands.entity(center).insert(TextLayout::justify(Justify::Center));
     let hint = text(&mut commands, HudText::Hint, 20.0, Color::WHITE, centered_row(Val::Auto, px(150.0)));
