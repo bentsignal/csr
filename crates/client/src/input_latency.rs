@@ -58,6 +58,18 @@ struct ScheduleTime {
     section: Option<Instant>,
 }
 
+#[derive(Resource, Default)]
+struct SurfaceTime(Option<Instant>);
+
+fn before_surface(mut clock: ResMut<SurfaceTime>) {
+    clock.0 = Some(Instant::now());
+}
+fn after_surface(mut clock: ResMut<SurfaceTime>) {
+    if let Some(start) = clock.0.take() {
+        record_stage("render.surface", start.elapsed().as_secs_f64() * 1000.);
+    }
+}
+
 fn start_schedule(mut clock: ResMut<ScheduleTime>) {
     let now = Instant::now();
     clock.start = Some(now);
@@ -122,6 +134,19 @@ pub(crate) fn install_frame_log(app: &mut App) {
             use bevy::render::{Render, RenderSystems};
             render
                 .init_resource::<ScheduleTime>()
+                .init_resource::<SurfaceTime>()
+                .add_systems(
+                    Render,
+                    before_surface
+                        .in_set(RenderSystems::PrepareViews)
+                        .before(bevy::render::view::window::prepare_windows),
+                )
+                .add_systems(
+                    Render,
+                    after_surface
+                        .in_set(RenderSystems::PrepareViews)
+                        .after(bevy::render::view::window::prepare_windows),
+                )
                 .add_systems(
                     Render,
                     start_schedule.before(RenderSystems::ExtractCommands),

@@ -362,11 +362,18 @@ pub fn update(
                 }
                 if let Some(light) = light {
                     for h in &part.materials {
-                        if let Some(mut m) = materials.get_mut(h) {
-                            m.params.ambient_cube = light.ambient_cube;
-                            m.params.sun_dir = light.sun_dir;
-                            m.params.sun_color = light.sun_color;
-                            m.params.exposure = light.exposure;
+                        let changed = materials.get(h).is_some_and(|m|
+                            m.params.ambient_cube != light.ambient_cube
+                                || m.params.sun_dir != light.sun_dir
+                                || m.params.sun_color != light.sun_color
+                                || m.params.exposure != light.exposure);
+                        if changed {
+                            if let Some(mut m) = materials.get_mut(h) {
+                                m.params.ambient_cube = light.ambient_cube;
+                                m.params.sun_dir = light.sun_dir;
+                                m.params.sun_color = light.sun_color;
+                                m.params.exposure = light.exposure;
+                            }
                         }
                     }
                 }

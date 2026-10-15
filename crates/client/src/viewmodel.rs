@@ -788,7 +788,13 @@ pub fn update(
         })
     } else { Vec4::ZERO };
     if let Some((_, _, _, mats)) = &state.weapon {
-        for handle in mats { if let Some(mut material) = materials.get_mut(handle) { material.params.scope_aperture = aperture; } }
+        for handle in mats {
+            // Unscoped weapons normally retain ZERO. Rewriting it every
+            // frame otherwise recreates their texture bind groups too.
+            if materials.get(handle).is_some_and(|m| m.params.scope_aperture != aperture) {
+                if let Some(mut material) = materials.get_mut(handle) { material.params.scope_aperture = aperture; }
+            }
+        }
     }
     state.light_timer -= dt;
     if state.light_timer <= 0.0 {
@@ -796,10 +802,14 @@ pub fn update(
         let (cube, sun_dir, sun_color) = crate::characters::lighting_at(&level.0, characters.sun, eye);
         if let Some((_, _, _, mats)) = &state.weapon {
             for h in mats {
-                if let Some(mut m) = materials.get_mut(h) {
-                    m.params.ambient_cube = cube;
-                    m.params.sun_dir = sun_dir;
-                    m.params.sun_color = sun_color;
+                let changed = materials.get(h).is_some_and(|m|
+                    m.params.ambient_cube != cube || m.params.sun_dir != sun_dir || m.params.sun_color != sun_color);
+                if changed {
+                    if let Some(mut m) = materials.get_mut(h) {
+                        m.params.ambient_cube = cube;
+                        m.params.sun_dir = sun_dir;
+                        m.params.sun_color = sun_color;
+                    }
                 }
             }
         }
