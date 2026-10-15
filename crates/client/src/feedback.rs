@@ -37,6 +37,7 @@ pub fn setup(
     mut commands: Commands,
     local: Res<LocalPlayer>,
     level: Res<crate::LoadedLevel>,
+    time: Res<Time>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut images: ResMut<Assets<Image>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
@@ -97,6 +98,7 @@ pub fn setup(
     // short-lived hit puff is not lost to asynchronous shader compilation.
     let (forward, _, _) = movement::angle_vectors(glam::Vec3::new(local.pitch, local.yaw, 0.0));
     let pos = to_bevy(local.curr_eye + forward * 16.0);
+    let now = time.elapsed_secs();
     for (blood, moving) in [(true, true), (false, true), (false, false)] {
         spawn(
             &mut commands,
@@ -107,15 +109,17 @@ pub fn setup(
             blood,
             moving,
             Vec3::ZERO,
-            0.0,
+            now,
             2.0,
         );
     }
     if let Some(decal) = assets.decals.prewarm() {
         commands.spawn((
             Mesh3d(decal.mesh.clone()), MeshMaterial3d(decal.material.clone()),
-            Transform::from_translation(pos).with_scale(Vec3::splat(0.00001)),
-            ImpactFx { born: 0., life: 2., velocity: Vec3::ZERO, billboard: false },
+            Transform::from_translation(pos)
+                .with_rotation(Quat::from_rotation_arc(Vec3::Z, -to_bevy(forward)))
+                .with_scale(Vec3::splat(0.00001)),
+            ImpactFx { born: now, life: 2., velocity: Vec3::ZERO, billboard: false },
         ));
     }
     commands.insert_resource(assets);
