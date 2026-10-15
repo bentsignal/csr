@@ -1,7 +1,92 @@
 //! Desktop rendering policy: present the current input frame without CPU pipelining.
-use bevy::{app::PluginGroupBuilder, prelude::*, render::pipelined_rendering::PipelinedRenderingPlugin};
-use std::num::NonZeroU32;
 use bevy::window::PresentMode;
+use bevy::{
+    app::PluginGroupBuilder, prelude::*, render::pipelined_rendering::PipelinedRenderingPlugin,
+};
+use std::num::NonZeroU32;
+use std::{
+    collections::BTreeMap,
+    sync::{
+        Mutex, OnceLock,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Instant,
+};
+
+static TIMING_ENABLED: AtomicBool = AtomicBool::new(false);
+static STAGES: OnceLock<Mutex<BTreeMap<&'static str, StageTiming>>> = OnceLock::new();
+
+#[derive(Default)]
+struct StageTiming {
+    calls: u64,
+    total_ms: f64,
+    max_ms: f64,
+}
+
+/// Diagnostic wall time, including any waits inside this scope. Disabled play
+/// pays one relaxed flag load and does not acquire a clock or a lock.
+pub(crate) struct FrameScope {
+    name: &'static str,
+    start: Option<Instant>,
+}
+
+pub(crate) fn frame_scope(name: &'static str) -> FrameScope {
+    FrameScope {
+        name,
+        start: TIMING_ENABLED.load(Ordering::Relaxed).then(Instant::now),
+    }
+}
+
+impl Drop for FrameScope {
+    fn drop(&mut self) {
+        let Some(start) = self.start else { return };
+        record_stage(self.name, start.elapsed().as_secs_f64() * 1000.);
+    }
+}
+
+fn record_stage(name: &'static str, ms: f64) {
+    let mut stages = STAGES.get_or_init(Default::default).lock().unwrap();
+    let stage = stages.entry(name).or_default();
+    stage.calls += 1;
+    stage.total_ms += ms;
+    stage.max_ms = stage.max_ms.max(ms);
+}
+
+#[derive(Resource, Default)]
+struct ScheduleTime {
+    start: Option<Instant>,
+    section: Option<Instant>,
+}
+
+fn start_schedule(mut clock: ResMut<ScheduleTime>) {
+    let now = Instant::now();
+    clock.start = Some(now);
+    clock.section = Some(now);
+}
+fn finish_main(mut clock: ResMut<ScheduleTime>) {
+    if let Some(start) = clock.start.take() {
+        record_stage("main", start.elapsed().as_secs_f64() * 1000.);
+    }
+}
+fn finish_render(mut clock: ResMut<ScheduleTime>) {
+    if let Some(start) = clock.start.take() {
+        record_stage("render", start.elapsed().as_secs_f64() * 1000.);
+    }
+}
+fn before_submit(mut clock: ResMut<ScheduleTime>) {
+    let now = Instant::now();
+    if let Some(start) = clock.section.replace(now) {
+        record_stage(
+            "render.prepare",
+            now.duration_since(start).as_secs_f64() * 1000.,
+        );
+    }
+}
+fn after_submit(mut clock: ResMut<ScheduleTime>) {
+    if let Some(start) = clock.section.take() {
+        record_stage("render.submit", start.elapsed().as_secs_f64() * 1000.);
+    }
+}
 
 /// A valid diagnostic override wins over saved preferences at startup and
 /// during live preference application. It never changes the saved choice.
@@ -22,15 +107,74 @@ fn resolve_present_mode(vsync: bool, requested: Option<&str>) -> PresentMode {
 /// Log app-frame intervals in ordinary interactive play as well as captures.
 /// This is not a measurement of mouse-to-display or compositor latency.
 pub(crate) fn install_frame_log(app: &mut App) {
-    let limit = std::env::var("CSR_FRAME_LOG").ok()
+    let limit = std::env::var("CSR_FRAME_LOG")
+        .ok()
         .and_then(|v| v.parse::<f32>().ok())
         .filter(|v| v.is_finite() && *v >= 0.);
     if let Some(limit) = limit {
-        app.add_systems(Last, move |real: Res<Time<Real>>, mut frame: Local<u64>| {
-            *frame += 1;
-            let ms = real.delta_secs() * 1000.;
-            if ms > limit { info!("slow frame {}: {ms:.1} ms", *frame); }
-        });
+        TIMING_ENABLED.store(true, Ordering::Relaxed);
+        app.init_resource::<ScheduleTime>()
+            .add_systems(First, start_schedule)
+            .add_systems(Last, finish_main);
+        // RenderSystems order verified against Bevy 0.19's base schedule.
+        // Extraction precedes Render and is deliberately outside this timer.
+        if let Some(render) = app.get_sub_app_mut(bevy::render::RenderApp) {
+            use bevy::render::{Render, RenderSystems};
+            render
+                .init_resource::<ScheduleTime>()
+                .add_systems(
+                    Render,
+                    start_schedule.before(RenderSystems::ExtractCommands),
+                )
+                .add_systems(
+                    Render,
+                    before_submit
+                        .after(RenderSystems::Prepare)
+                        .before(RenderSystems::Render),
+                )
+                .add_systems(
+                    Render,
+                    after_submit
+                        .after(RenderSystems::Render)
+                        .before(RenderSystems::Cleanup),
+                )
+                .add_systems(Render, finish_render.after(RenderSystems::PostCleanup));
+        }
+        app.add_systems(
+            Last,
+            (
+                move |real: Res<Time<Real>>, mut frame: Local<u64>| {
+                    *frame += 1;
+                    let ms = real.delta_secs() * 1000.;
+                    if ms > limit {
+                        info!("slow frame {}: {ms:.1} ms", *frame);
+                    }
+                },
+                report_stages.after(finish_main),
+            ),
+        );
+    }
+}
+
+fn report_stages(mut last: Local<Option<Instant>>) {
+    let now = Instant::now();
+    let Some(previous) = *last else {
+        *last = Some(now);
+        return;
+    };
+    if now.duration_since(previous).as_secs_f64() < 1. {
+        return;
+    }
+    *last = Some(now);
+    let stages = std::mem::take(&mut *STAGES.get_or_init(Default::default).lock().unwrap());
+    for (name, stage) in stages {
+        info!(
+            "frame stage {name}: calls={} total={:.3}ms mean={:.3}ms max={:.3}ms",
+            stage.calls,
+            stage.total_ms,
+            stage.total_ms / stage.calls as f64,
+            stage.max_ms
+        );
     }
 }
 
@@ -53,12 +197,18 @@ mod tests {
     #[test]
     fn explicit_present_override_wins_and_invalid_override_keeps_saved_vsync() {
         for vsync in [false, true] {
-            for (name, expected) in [("immediate", PresentMode::Immediate),
-                ("mailbox", PresentMode::Mailbox), ("fifo", PresentMode::Fifo)]
-            {
+            for (name, expected) in [
+                ("immediate", PresentMode::Immediate),
+                ("mailbox", PresentMode::Mailbox),
+                ("fifo", PresentMode::Fifo),
+            ] {
                 assert_eq!(resolve_present_mode(vsync, Some(name)), expected);
             }
-            let saved = if vsync { PresentMode::AutoVsync } else { PresentMode::AutoNoVsync };
+            let saved = if vsync {
+                PresentMode::AutoVsync
+            } else {
+                PresentMode::AutoNoVsync
+            };
             for requested in [None, Some(""), Some("invalid")] {
                 assert_eq!(resolve_present_mode(vsync, requested), saved);
             }

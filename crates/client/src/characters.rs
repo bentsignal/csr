@@ -200,6 +200,7 @@ pub fn sync(
     mut transforms: Query<&mut Transform>,
     mut visibility: Query<&mut Visibility>,
 ) {
+    let _frame_scope = crate::input_latency::frame_scope("characters");
     muzzles.world.clear();
     let dt = time.delta_secs();
     let sim_now = world.0.time();

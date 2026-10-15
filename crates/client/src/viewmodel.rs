@@ -537,6 +537,7 @@ pub fn update(
     mut transforms: Query<&mut Transform>,
     mut visibility: Query<&mut Visibility>,
 ) {
+    let _frame_scope = crate::input_latency::frame_scope("viewmodel");
     muzzles.first=None;
     // Clear before every early return, including death, noclip and switching.
     wick.sample = None;
