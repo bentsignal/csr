@@ -425,6 +425,22 @@ pub fn tick(
                     }
                 }
             }
+        } else if std::env::var("CSR_TEST_SWITCH").as_deref() == Ok("automatic-release") {
+            // Screenshot-only normal magazine: keep the trigger held after
+            // its declared shots, then release. The sim alone owns ammo,
+            // firing deadlines and the subsequent automatic reload.
+            input.buttons &= !(buttons::ATTACK | buttons::ATTACK2);
+            if let Some(player) = world.0.player(local.id) {
+                if let Some(gun) = player.active_weapon().filter(|gun| gun.def.full_auto && gun.def.clip_size > 0) {
+                    let now = world.0.time();
+                    let release = 1.5 + (gun.def.clip_size - 1) as f32 * gun.def.cycle_time + 4.0;
+                    if (1.5..release).contains(&now) { input.buttons |= buttons::ATTACK; }
+                    if input.buttons != player.last_input.buttons {
+                        info!("automatic release fixture: tick={} time={now:.5} buttons={} weapon={} mode={} clip={} reserve={} shots={} reload={:?}",
+                            world.0.tick, input.buttons, gun.def.class_name, gun.burst_mode, gun.clip, gun.reserve, player.shots, gun.reload_end);
+                    }
+                }
+            }
         } else if std::env::var("CSR_TEST_SWITCH").as_deref() == Ok("buy-close") {
             // Screenshot-only purchase through normal simulation validation.
             // Competitive spawn money, armor and buy-zone checks stay intact.
