@@ -70,8 +70,9 @@ by seed plus definition ID, independent angle/magnitude sampling, a
 first-three-shot angle multiplier of 0.25, conversion of 0.02 degrees per
 unit, and accumulated offsets. Recovery moves backwards through that
 pattern at 12 steps per second. These choices have not been validated by
-this historical data. Mode-specific recoil fields are not used by the
-pattern cache. Matching seed values and deterministic tests do not
+this historical data. The pattern cache now selects the declared alternate
+recoil fields in burst mode; that selects data, not a measured procedure.
+Matching seed values and deterministic tests do not
 establish the original sampler, filtering, impulse decay or trajectory.
 
 The held-automatic-trigger cooldown correction prevents recovery between
@@ -110,6 +111,30 @@ A 2023 trace can establish an installed-game profile. It cannot establish
 matching native execution. Landing remains a separate measurement problem;
 the completed 2023 reference session observed real landing slowdown.
 
+## Bounded installed-game spray observation
+
+The next observation first admits one real AK shot. Acknowledged settings
+alone are insufficient: before/after captures must show the actual AK ammo
+count changing and a new impact marker. `weapon_accuracy_nospread` and
+`sv_showimpacts` must report their requested values before this shot.
+`cl_pdump` is an attempted public prediction overlay, not an assumed punch
+receiver. Earlier `net_showevents` attempts produced no shots or events and
+are not calibration evidence.
+
+Only after that admission can full-magazine capture proceed. Any change to
+view-only recoil settings is recorded separately from the unchanged bullet
+recoil scale. A fixed camera must be established from static scene features,
+not inferred from a cvar name. Slow-time capture records image begin/end
+intervals and actual ammo transitions; console receipt times are not exact
+server shot ticks. Repeated magazines must have fresh, expired prior impact
+overlays and a recovered, reloaded weapon.
+
+A usable result needs derived angular ray observations and independent
+repeat agreement before replacing the current generator. Native images,
+console logs, settings, executable identity and account-bearing session
+receipts stay outside the repository. Any resulting profile identifies the
+installed 2023 reference and its limitations; unchanged historical recoil
+configuration alone does not establish a 2015 trajectory.
 ## Private provenance
 
 Research output: `csr-fidelity/recoil-reference-2015`, outside the repo.
