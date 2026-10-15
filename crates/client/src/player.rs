@@ -34,6 +34,9 @@ pub struct LocalPlayer {
     pub render_angles: glam::Vec3,
     /// Buttons pressed since the last tick, so short taps are not lost.
     pub latched: u32,
+    /// Fresh pointer edges retain their own capture admission when two physical
+    /// buttons share an attack command.
+    pub(crate) pointer_attacks: u32,
     /// Inventory slot requested since the last tick (0 = none).
     pub pending_slot: u8,
     /// Purchases waiting to be sent, one per tick.
@@ -61,6 +64,7 @@ impl LocalPlayer {
             render_eye: eye,
             render_angles: glam::Vec3::new(0.0, yaw, 0.0),
             latched: 0,
+            pointer_attacks: 0,
             pending_slot: 0,
             pending_buys: Vec::new(),
             pending_drop: false,
@@ -83,6 +87,7 @@ impl LocalPlayer {
         self.was_alive = false;
         self.spectating = None;
         self.latched = 0;
+        self.pointer_attacks = 0;
         self.pending_slot = 0;
         self.pending_drop = false;
         self.pending_buys.clear();
@@ -182,6 +187,7 @@ pub fn grab_cursor(
             if mouse.pressed(*button) { local.capture_mouse |= 1 << index; }
         }
         local.latched &= !local.capture_tick_mask(&settings);
+        local.pointer_attacks &= !local.capture_attack_mask(&settings);
         cursor.grab_mode = CursorGrabMode::Locked;
         cursor.visible = false;
     }
@@ -274,10 +280,10 @@ pub fn look(
     }
     // The shared sampler also guards held attacks after grab_cursor captures.
     if grabbed && alive && settings.mouse_just_pressed(crate::settings::MouseAction::Attack, &mouse, blocked_mouse) {
-        b |= buttons::ATTACK;
+        local.pointer_attacks |= buttons::ATTACK;
     }
     if grabbed && alive && settings.mouse_just_pressed(crate::settings::MouseAction::Attack2, &mouse, blocked_mouse) {
-        b |= buttons::ATTACK2;
+        local.pointer_attacks |= buttons::ATTACK2;
     }
     local.latched |= b;
 
@@ -366,10 +372,12 @@ pub fn sample_tick_input(local: &mut LocalPlayer, controls: &Controls<'_>) -> Ti
         if controls.settings.mouse_pressed(crate::settings::MouseAction::Attack, controls.mouse, blocked_mouse) { held |= buttons::ATTACK; }
         if controls.settings.mouse_pressed(crate::settings::MouseAction::Attack2, controls.mouse, blocked_mouse) { held |= buttons::ATTACK2; }
     }
+    let pointer_attacks = std::mem::take(&mut local.pointer_attacks);
     TickInput {
         view_angles: glam::Vec3::new(local.pitch, local.yaw, 0.),
         forward_move, side_move,
-        buttons: (held | std::mem::take(&mut local.latched)) & !local.capture_attack_mask(controls.settings),
+        buttons: held | (if mouse_allowed { pointer_attacks } else { 0 })
+            | (std::mem::take(&mut local.latched) & !local.capture_attack_mask(controls.settings)),
         weapon_slot: std::mem::take(&mut local.pending_slot),
         buy: if local.pending_buys.is_empty() { Purchase::None } else { local.pending_buys.remove(0) },
         drop: std::mem::take(&mut local.pending_drop),
@@ -696,6 +704,24 @@ mod remote_input_tests {
         }));
         app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::KeyW);
         app
+    }
+
+    #[test]
+    fn fresh_shared_attack_button_is_independent_of_another_capture_held_button() {
+        let mut app = capture_app();
+        app.world_mut().resource_mut::<crate::settings::Settings>().mouse_binds[3] = crate::settings::MouseAction::Attack;
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Left);
+        app.update(); // Pointer capture suppresses this held left button.
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().clear();
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Back);
+        app.world_mut().run_system_cached(look).unwrap();
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().release(MouseButton::Back);
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().clear();
+        app.world_mut().run_system_cached(sample_after_capture).unwrap();
+        assert_ne!(app.world().resource::<Sampled>().0.buttons & buttons::ATTACK, 0,
+            "the fresh side-button tap must survive while capture-left remains held");
+        app.world_mut().run_system_cached(sample_after_capture).unwrap();
+        assert_eq!(app.world().resource::<Sampled>().0.buttons & buttons::ATTACK, 0);
     }
 
     #[test]
