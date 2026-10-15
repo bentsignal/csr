@@ -183,3 +183,31 @@ No trajectories, billboard orientations, emission, tint, opacity, shader or
 blend laws change. This addresses ordering only; it does not establish native
 sorting parity or fix the remaining dark-smoke/bright-fire material limits.
 Focused checks and rendered verification are pending.
+
+## Authored ground-fire surface normals
+
+The installed `inferno_fx.pcf` definition `molotov_groundfire_child_base`
+explicitly enables `set normal` on its `Position Modify Place On Ground`
+initializer and uses renderer orientation 3. The existing floor trace found
+the supporting surface but discarded its normal, leaving every ground card
+horizontal. On slopes, half of a card could therefore intersect the ground
+while the other half floated above it.
+
+That explicit initializer flag now retains the sampled collision normal.
+Ground-card axes are projected into its plane before applying their existing
+random yaw and roll. Flat-floor axes remain unchanged; cards without the
+explicit flag keep their previous orientation. The trace, emission, particle
+centers, material, brightness, fire coverage and authoritative damage are
+unchanged. This does not implement native inferno spread cells or the remaining
+SpriteCard composition laws.
+
+Source `f64c964` passed all five focused utility-particle tests and a play
+launcher build after cleaning all 23 workspace packages for that profile.
+Two bounded 1920x1080 Dust II captures then showed the field on the mid ramp
+and a flat-floor control. Both were reviewed by the implementing and
+coordinating agents. Both clients exited zero, acknowledged the saved image
+with one live utility field, had clean raw logs and preserved the owner's
+separate configuration. Private receipts retain the immutable executable and
+image hashes. These establish rendered placement, without a matched native
+or before/after brightness claim. Fire is still visibly too bright; GR07 and
+authoritative spread GR08 remain open.
