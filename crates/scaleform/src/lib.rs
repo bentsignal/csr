@@ -96,6 +96,10 @@ impl From<i32> for Value {
 
 /// The game side of the Scaleform API. Runs on the menu thread.
 pub trait Engine: Send + 'static {
+    /// Ordered host-owned cached-player boundary, never an authored callback.
+    /// Returning false refuses reactivation after an exhausted owner lifetime.
+    fn lifecycle(&mut self, _active: bool, _calls: &mut Calls) -> bool { true }
+
     /// Engine-generated image URLs, resolved from the game's local data.
     /// Returning encoded image bytes keeps runtime art outside the repository.
     fn image(&mut self, _url: &str) -> Option<Vec<u8>> { None }
@@ -165,9 +169,13 @@ pub enum Input {
     Inspect(String),
     /// Advance the movies only while visible (saves CPU in a match).
     SetActive(bool),
+    /// Drop queued input before parking/resuming a cached, isolated player.
+    /// Unlike SetActive this also resets native held input and engine ownership.
+    Park,
+    Resume { focused: bool },
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum MouseButton {
     Left,
     Right,
@@ -224,13 +232,20 @@ impl Menu {
     /// Starts the player on its own thread. Loading the main menu takes a few
     /// seconds; frames arrive once something is drawn.
     pub fn spawn(config: Config, engine: Box<dyn Engine>) -> Self {
+        Self::spawn_named(config, engine, "menu".into())
+    }
+
+    /// Separate cached domains retain distinct diagnostic identities.
+    pub fn spawn_named(config: Config, engine: Box<dyn Engine>, label: String) -> Self {
         let (input_tx, input_rx) = input_queue();
         let (event_tx, event_rx) = channel();
         let frame = Arc::new(Mutex::new(None));
         let shared = frame.clone();
         std::thread::Builder::new()
-            .name("scaleform".into())
+            .name(format!("scaleform-{label}"))
             .spawn(move || {
+                let span = tracing::info_span!("menu_worker", worker = %label);
+                let _entered = span.enter();
                 let events = event_tx.clone();
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     run(config, engine, input_rx, event_tx, shared)
@@ -254,6 +269,12 @@ impl Menu {
     pub fn send(&self, input: Input) {
         self.input.send(input);
     }
+
+    /// Cancel obsolete queued clicks/calls before parking a cached domain.
+    pub fn park(&self) { self.input.replace_pending(Input::Park); }
+
+    /// Resume only after the caller has refreshed this domain's data snapshot.
+    pub fn resume(&self, focused: bool) { self.input.replace_pending(Input::Resume { focused }); }
 
     /// The newest frame, if one arrived since the last call.
     pub fn take_frame(&self) -> Option<Frame> {
@@ -291,6 +312,12 @@ fn input_queue() -> (InputSender, InputReceiver) {
     (InputSender(shared.clone()), InputReceiver(shared))
 }
 impl InputSender {
+    fn replace_pending(&self, input: Input) {
+        let mut queue = self.0.lock().unwrap();
+        if !queue.receiver_alive { return; }
+        queue.pending.clear();
+        queue.pending.push_back((input, Instant::now()));
+    }
     fn send(&self, input: Input) {
         let mut queue = self.0.lock().unwrap();
         if !queue.receiver_alive {
@@ -509,6 +536,20 @@ fn run(
             service_input_turn(&input, INPUT_TURN_BUDGET, |turn| -> Result<(), String> {
                 match turn {
                     InputTurn::Input(message) => match message {
+                        Input::Park => {
+                            host.lifecycle(false)?;
+                            host.cancel_input();
+                            active = false;
+                            trace.event("park", active, serial, 0, false);
+                        }
+                        Input::Resume { focused } => {
+                            active = false;
+                            // Old held releases cannot generate new-domain actions.
+                            host.cancel_input();
+                            host.lifecycle(true)?;
+                            host.input(Input::Focus(focused));
+                            trace.event("resume", active, serial, 0, false);
+                        }
                         Input::SetActive(value) => {
                             active = value;
                             trace.event("set_active", active, serial, 0, false);
@@ -636,6 +677,24 @@ fn run(
 
 #[cfg(test)]
 mod worker_tests {
+    #[test]
+    fn cached_player_boundary_discards_queued_clicks_calls_and_old_resume() {
+        use super::{Input, MouseButton, InputSource, input_queue};
+        let (sender, receiver) = input_queue();
+        sender.send(Input::MouseDown { x: 1., y: 2., button: MouseButton::Left });
+        sender.send(Input::Call { path: "old".into(), function: "old".into(), args: vec![] });
+        sender.replace_pending(Input::Park);
+        assert!(matches!(receiver.try_input(), Ok(Input::Park)));
+        assert!(receiver.try_input().is_err());
+        sender.send(Input::MouseUp { x: 1., y: 2., button: MouseButton::Left });
+        sender.replace_pending(Input::Resume { focused: true });
+        sender.replace_pending(Input::Park);
+        sender.replace_pending(Input::Resume { focused: false });
+        sender.send(Input::MouseMove { x: 8., y: 9. });
+        assert!(matches!(receiver.try_input(), Ok(Input::Resume { focused: false })));
+        assert!(matches!(receiver.try_input(), Ok(Input::MouseMove { x: 8., y: 9. })));
+        assert!(receiver.try_input().is_err());
+    }
     use super::{INPUT_TURN_BUDGET, Input, InputSource, InputTurn, MouseButton, Value, input_queue, service_input_turn_until};
     use std::sync::mpsc::channel;
 

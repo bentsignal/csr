@@ -6,7 +6,7 @@
 use std::any::Any;
 use std::borrow::Cow;
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::sync::mpsc::{self, Receiver as MapReceiver, Sender as EventSender, TryRecvError};
 use std::sync::{Arc, Mutex};
@@ -343,6 +343,8 @@ pub(crate) struct Host {
     dispatcher: Rc<RefCell<Dispatcher>>,
     executor: NullExecutor,
     mouse: (f64, f64),
+    held_keys: HashMap<String, u32>,
+    held_buttons: HashSet<MouseButton>,
     render_trace_remaining: usize,
     work_trace_remaining: usize,
     pending_readback: Option<PendingReadback>,
@@ -409,6 +411,9 @@ impl Host {
             .with_autoplay(true)
             .with_max_execution_duration(Duration::from_secs(15))
             .build();
+        // The selected player's authored background paints Home; Pause keeps
+        // the world beneath its translucent controls through existing alpha.
+        player.lock().unwrap().set_window_mode("transparent");
         player.lock().unwrap().fetch_root_movie(
             format!("{BASE_URL}{SHIM_NAME}"),
             vec![
@@ -417,7 +422,7 @@ impl Host {
             ],
             Box::new(|_| {}),
         );
-        Ok(Self { player, dispatcher, executor, mouse: (0.0, 0.0),
+        Ok(Self { player, dispatcher, executor, mouse: (0.0, 0.0), held_keys: HashMap::new(), held_buttons: HashSet::new(),
             pending_readback: None, viewport_generation: 0,
             work_trace_remaining: if std::env::var("CSR_UI_WORKER_TRACE").as_deref() == Ok("1") { 2048 } else { 0 },
             render_trace_remaining: if std::env::var("CSR_UI_RENDER_TRACE").as_deref() == Ok("1") { 1024 } else { 0 },
@@ -548,6 +553,28 @@ impl Host {
         });
     }
 
+    pub fn lifecycle(&mut self, active: bool) -> Result<(), Error> {
+        let mut calls = Calls::default();
+        let accepted = self.dispatcher.borrow().engine.borrow_mut().lifecycle(active, &mut calls);
+        self.dispatcher.borrow_mut().calls.queue.extend(calls.queue);
+        self.drain_calls();
+        if accepted { Ok(()) } else { Err("The menu session limit was reached. Restart the game.".into()) }
+    }
+
+    /// Focus loss alone does not release Ruffle's pressed-key bookkeeping.
+    /// Deliver ordinary releases while the engine action domain is inactive.
+    pub fn cancel_input(&mut self) {
+        for (name, vkey) in std::mem::take(&mut self.held_keys) {
+            self.input(Input::Key { name, vkey, down: false });
+        }
+        for button in std::mem::take(&mut self.held_buttons) {
+            self.input(Input::MouseUp { x: self.mouse.0, y: self.mouse.1, button });
+        }
+        self.input(Input::MouseLeave);
+        self.input(Input::Focus(false));
+        self.player.lock().unwrap().mutate_with_update_context(|context| { *context.drag_object = None; });
+    }
+
     pub fn input(&mut self, input: Input) {
         let button = |b: MouseButton| match b {
             MouseButton::Left => RuffleButton::Left,
@@ -560,6 +587,8 @@ impl Host {
                 PlayerEvent::MouseMove { x, y }
             }
             Input::MouseDown { x, y, button: b } => {
+                self.mouse = (x, y);
+                self.held_buttons.insert(b);
                 if b == MouseButton::Right {
                     // The engine also reported the right button as a key
                     // (`MOUSE_RIGHT` opens context menus).
@@ -568,6 +597,8 @@ impl Host {
                 PlayerEvent::MouseDown { x, y, button: button(b), index: None }
             }
             Input::MouseUp { x, y, button: b } => {
+                self.mouse = (x, y);
+                self.held_buttons.remove(&b);
                 if b == MouseButton::Right {
                     self.key("MOUSE_RIGHT", 0, false);
                 }
@@ -576,6 +607,7 @@ impl Host {
             Input::MouseWheel { lines } => PlayerEvent::MouseWheel { delta: MouseWheelDelta::Lines(lines) },
             Input::MouseLeave => PlayerEvent::MouseLeave,
             Input::Key { name, vkey, down } => {
+                if down { self.held_keys.insert(name.clone(), vkey); } else { self.held_keys.remove(&name); }
                 let key = flash_key(&name, vkey);
                 self.player.lock().unwrap().handle_event(if down { PlayerEvent::KeyDown { key } } else { PlayerEvent::KeyUp { key } });
                 self.key(&name, vkey, down);

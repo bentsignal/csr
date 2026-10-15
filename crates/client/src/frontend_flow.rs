@@ -20,6 +20,11 @@ pub(crate) struct Flow {
     phase: u8,
     step: usize,
     tick: u64,
+    options_roundtrip: bool,
+    home_ready_ms: Option<f64>,
+    pause_hover: bool,
+    pause_hover_started: Option<Instant>,
+    pause_ready_serial: Option<u64>,
 }
 impl Default for Flow {
     fn default() -> Self {
@@ -29,6 +34,11 @@ impl Default for Flow {
             phase: 0,
             step: 0,
             tick: 0,
+            options_roundtrip: std::env::var("CSR_TEST_FLOW_OPTIONS").as_deref() == Ok("1"),
+            home_ready_ms: None,
+            pause_hover: std::env::var("CSR_TEST_PAUSE_HOVER").as_deref() == Ok("1"),
+            pause_hover_started: None,
+            pause_ready_serial: None,
         }
     }
 }
@@ -59,7 +69,9 @@ fn click(front: &Frontend, window: &Window, x: f64, y: f64) {
     });
 }
 fn capture(commands: &mut Commands, options: &Options, name: &str) {
-    let path = options.0.screenshot.as_ref().unwrap().with_file_name(name);
+    let path = std::env::var_os("CSR_TEST_FLOW_OUTPUT").map(std::path::PathBuf::from)
+        .map(|folder| folder.join(name))
+        .unwrap_or_else(|| options.0.screenshot.as_ref().unwrap().with_file_name(name));
     commands
         .spawn(bevy::render::view::screenshot::Screenshot::primary_window())
         .observe(bevy::render::view::screenshot::save_to_disk(path));
@@ -81,7 +93,7 @@ pub(crate) fn update(
     mut commands: Commands,
     mut exit: MessageWriter<AppExit>,
 ) {
-    if options.0.screenshot.is_none()
+    if (options.0.screenshot.is_none() && std::env::var_os("CSR_TEST_FLOW_OUTPUT").is_none())
         || front.failed.is_some()
         || flow.start.elapsed().as_secs() > 180
     {
@@ -170,10 +182,63 @@ pub(crate) fn update(
             if !menu.open() || flow.seconds() < 3. {
                 return;
             }
-            capture(&mut commands, &options, "flow-pause.png");
-            flow.tick = world.as_ref().unwrap().0.tick;
-            click(&front, &window, 650., 530.);
-            flow.next();
+            // A cold match worker can still be booting after the old fixed
+            // delay. Do not turn a click on the world into a claimed UI test.
+            if flow.step == 0 {
+                if !front.pause_presented() { return; }
+                let serial = *flow.pause_ready_serial.get_or_insert(front.presented_serial());
+                // The image acknowledgment precedes the next root visibility
+                // update. Require a subsequent raster before capturing/clicking.
+                if front.presented_serial() <= serial { return; }
+                if flow.pause_hover {
+                    let started = *flow.pause_hover_started.get_or_insert_with(|| {
+                        capture(&mut commands, &options, "flow-pause.png");
+                        info!("frontend flow: normal-start Pause hover begin");
+                        Instant::now()
+                    });
+                    let seconds = started.elapsed().as_secs_f64();
+                    if seconds < 5. {
+                        // Same menu pointer positions/cadence as the bounded
+                        // Pause pressure case; never moves the system cursor.
+                        front.send(scaleform::Input::MouseMove {
+                            x: window.physical_width() as f64 * 0.32,
+                            y: window.physical_height() as f64 * (0.48 + 0.19 * (seconds * 12.).sin().abs()),
+                        });
+                        return;
+                    }
+                    info!("frontend flow: normal-start Pause hover end");
+                }
+            }
+            if flow.options_roundtrip {
+                match flow.step {
+                    0 => {
+                        if !flow.pause_hover { capture(&mut commands, &options, "flow-pause.png"); }
+                        click(&front, &window, 650., 665.);
+                    }
+                    1 => click(&front, &window, 650., 817.),
+                    2 => {
+                        if !front.options_requested() || !front.movie_ready("OptionsMenu") { return; }
+                        capture(&mut commands, &options, "flow-pause-audio.png");
+                        click(&front, &window, 380., 970.);
+                    }
+                    _ => {
+                        if front.options_requested() || !front.pause_surface_visible() { return; }
+                        info!("frontend flow: native Audio Back restored Pause");
+                        capture(&mut commands, &options, "flow-pause-options-returned.png");
+                        flow.tick = world.as_ref().unwrap().0.tick;
+                        click(&front, &window, 650., 530.);
+                        flow.next();
+                        return;
+                    }
+                }
+                flow.step += 1;
+                flow.entered = Instant::now();
+            } else {
+                if !flow.pause_hover { capture(&mut commands, &options, "flow-pause.png"); }
+                flow.tick = world.as_ref().unwrap().0.tick;
+                click(&front, &window, 650., 530.);
+                flow.next();
+            }
         }
         3 => {
             if menu.open() || clock.is_paused() || world.as_ref().unwrap().0.tick <= flow.tick {
@@ -209,9 +274,24 @@ pub(crate) fn update(
             flow.next();
         }
         5 => {
-            if *state.get() != AppState::Menu || flow.seconds() < 3. {
+            if *state.get() != AppState::Menu { return; }
+            if front.home_presented() && flow.home_ready_ms.is_none() {
+                let elapsed_ms = flow.seconds() * 1000.;
+                flow.home_ready_ms = Some(elapsed_ms);
+                info!(elapsed_ms, "frontend flow: native Exit reached fresh Ready Home");
+            }
+            if flow.seconds() < 3. { return; }
+            if !front.home_presented() {
+                if flow.step == 0 {
+                    // Preserve the actual slow-return state rather than
+                    // treating a fixed-delay capture as restored Home.
+                    capture(&mut commands, &options, "flow-home-pending.png");
+                    info!("frontend flow: Home still pending after {:.3}s", flow.seconds());
+                    flow.step = 1;
+                }
                 return;
             }
+            info!(elapsed_ms = flow.home_ready_ms.unwrap_or_default(), "frontend flow: capture restored Home");
             if !entities.is_empty() || world.is_some() || level.is_some() {
                 error!("frontend flow retained match entities/resources after Exit");
                 exit.write(AppExit::error());
