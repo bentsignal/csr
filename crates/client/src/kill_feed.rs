@@ -160,7 +160,8 @@ fn update(
     let matched = *state.get() == AppState::Match
         && local.is_some()
         && effects.is_some()
-        && std::env::var_os("CSR_NO_HUD").is_none();
+        && std::env::var_os("CSR_NO_HUD").is_none()
+        && std::env::var_os("CSR_NO_CLASSIC_KILL_FEED").is_none();
     let Ok(window) = windows.single() else { return };
     let size = (
         window.resolution.physical_width().max(1),
@@ -280,6 +281,10 @@ fn update(
             .checked_add(1)
             .expect("kill-feed revision limit");
         feed.presented = false;
+        if std::env::var_os("CSR_KILL_FEED_TRACE").is_some() {
+            info!(revision = feed.revision, notices = feed.entries.len(), keys = ?feed.entries,
+                "Classic kill feed receipts updated");
+        }
         feed.movie
             .as_ref()
             .unwrap()
