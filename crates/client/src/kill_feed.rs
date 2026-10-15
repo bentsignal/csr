@@ -335,7 +335,7 @@ fn update(
     }
     let frame = feed.movie.as_ref().unwrap().lock().unwrap().take_frame();
     if let Some(frame) = frame.filter(|frame| frame.presentation_revision == feed.revision) {
-        if let Some(image) = images.get_mut(&feed.image) {
+        if let Some(mut image) = images.get_mut(&feed.image) {
             if !feed.presented && ready && std::env::var_os("CSR_KILL_FEED_TRACE").is_some() {
                 info!(revision = feed.revision, notices = entries.len(), width = frame.width,
                     height = frame.height, keys = ?feed.entries, "Classic kill feed raster admitted");
