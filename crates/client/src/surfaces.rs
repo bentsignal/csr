@@ -106,8 +106,8 @@ mod tests {
     #[test]
     fn properties_inherit_from_base() {
         let doc = kv::parse(r#"
-            "default" { "stepleft" "Default.StepLeft" "stepright" "Default.StepRight" "bulletimpact" "Default.BulletImpact" }
-            "concrete" { "base" "default" "bulletimpact" "Concrete.BulletImpact" "stepleft" "Concrete.StepLeft" }
+            "default" { "stepleft" "Default.StepLeft" "stepright" "Default.StepRight" "bulletimpact" "Default.BulletImpact" "gamematerial" "C" }
+            "concrete" { "base" "default" "bulletimpact" "Concrete.BulletImpact" "stepleft" "Concrete.StepLeft" "gamematerial" "R" }
             "rock" { "base" "concrete" }
             "gravel" { "base" "rock" "stepleft" "Gravel.StepLeft" "stepright" "Gravel.StepRight" }
         "#).unwrap();
@@ -116,6 +116,7 @@ mod tests {
         let gravel = props.get("gravel").unwrap();
         assert_eq!(gravel.step_left.as_deref(), Some("Gravel.StepLeft"));
         assert_eq!(gravel.bullet_impact.as_deref(), Some("Concrete.BulletImpact"));
+        assert_eq!(gravel.game_material.as_deref(), Some("R"));
         assert_eq!(props.get("rock").unwrap().step_right.as_deref(), Some("Default.StepRight"));
         assert_eq!(props.get("unknown").unwrap().step_left.as_deref(), Some("Default.StepLeft"));
     }

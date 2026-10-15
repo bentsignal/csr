@@ -23,7 +23,7 @@ pub struct ImpactFx {
     billboard: bool,
 }
 #[derive(Component)]
-struct ImpactArtwork(content::ContentId);
+pub struct ImpactArtwork(pub content::ContentId);
 #[derive(Component)]
 pub struct HurtEdge(pub u8);
 #[derive(Resource, Default)]
