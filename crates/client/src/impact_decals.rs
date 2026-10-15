@@ -208,6 +208,11 @@ impl Catalog {
         out
     }
 
+    /// One tiny startup entity warms the shared Multiply pipeline before fire.
+    pub(crate) fn prewarm(&self) -> Option<&Decal> {
+        self.groups.values().find_map(|variants| variants.first())
+    }
+
     pub(crate) fn choose(&mut self, code: &str) -> Option<Decal> {
         let key = code.to_ascii_lowercase();
         let group = self.translations.get(&key)?;

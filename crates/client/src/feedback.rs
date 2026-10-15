@@ -111,6 +111,13 @@ pub fn setup(
             2.0,
         );
     }
+    if let Some(decal) = assets.decals.prewarm() {
+        commands.spawn((
+            Mesh3d(decal.mesh.clone()), MeshMaterial3d(decal.material.clone()),
+            Transform::from_translation(pos).with_scale(Vec3::splat(0.00001)),
+            ImpactFx { born: 0., life: 2., velocity: Vec3::ZERO, billboard: false },
+        ));
+    }
     commands.insert_resource(assets);
     commands.init_resource::<Hurt>();
     for side in 0..4 {
@@ -316,6 +323,9 @@ pub fn update(
                     .and_then(|code| assets.decals.choose(code)) {
                     let normal = to_bevy(normal).normalize_or_zero();
                     if normal.length_squared() > 0.5 && pos.is_finite() {
+                        if std::env::var_os("CSR_WEAPON_TRACE").is_some() {
+                            info!("impact artwork: {:?} at {:?}; surface={prop}, game_material={:?}", decal.id, pos, props.get(&prop).and_then(|p| p.game_material.as_deref()));
+                        }
                         commands.spawn((Mesh3d(decal.mesh), MeshMaterial3d(decal.material), ImpactArtwork(decal.id),
                             Transform::from_translation(to_bevy(pos) + normal * 0.12)
                                 .with_rotation(Quat::from_rotation_arc(Vec3::Z, normal)),
