@@ -38,3 +38,23 @@ The paper identifies a Mac OS X test environment. Its dated screenshot proves
 the historical dialog and labels, not exact 2015/2018 PC geometry or picker
 input behavior. A private copy/render was inspected; copyrighted screenshots
 are not committed. The installed widget still needs a public runtime contract.
+
+## First public callback observation (dfc9beb)
+
+At 1920x1080, the visible power glyph's center is (1584, 28). Both the Home
+click and a click after requesting StartSinglePlayer emitted the original
+`MainMenu.BasePanelRunCommand("Quit", "false")`. No confirmation appeared:
+the standalone probe records commands without implementing application exit.
+Production currently forwards that command to immediate application exit, so
+the original confirmation handoff is missing from our bridge.
+
+This is not a production picker-availability pass. The standalone picker
+request rendered partly behind Home panels; its callback only establishes
+that the power control still received input with that movie loaded. The
+native Escape function attempt returned false and changed no visible dialog;
+Escape/cancel delivery was not established.
+
+The process exited 0, preserved owner settings and left no game running, but
+the strict helper failed on missing modern map thumbnail exports while the
+original picker loaded. That raw failure remains preserved. Public MessageBox
+metadata is the next prerequisite for implementing its original controls.
