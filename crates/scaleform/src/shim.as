@@ -195,40 +195,17 @@ _global.csrBindings.focusWidget = function(path, index) {
     }
 };
 
-// The installed horizontal Scaleform slider rests its pip above local zero
-// (observed y=5), but its Flash drag constraints use y=0. Preserve the measured
-// resting axis for this exact owned pip, while retaining the movie's x bounds,
-// mouse callbacks, value conversion, sound and button highlight behavior.
+// Register the measured resting axis of this exact installed horizontal pip.
+// The host adjusts only its native zero-height drag constraint, retaining the
+// authored callbacks and Flash dragging (including the original x bounds).
 _global.csrBindings.preserveSliderDragAxis = function(path) {
     var widget = _global.csrResolve(path);
     var pip = widget.ScrollPip;
-    if (typeof pip != "movieclip" || typeof pip.startDrag != "function" ||
-        typeof widget.m_nSlideMin != "number" || typeof widget.m_nSlideMax != "number") {
+    if (typeof pip != "movieclip" || typeof widget.m_nSlideMin != "number" ||
+        typeof widget.m_nSlideMax != "number") {
         return false;
     }
-    if (pip.csrSliderDragBase != undefined) {
-        return true;
-    }
-    var base = pip.startDrag;
-    var axis = pip._y;
-    if (typeof axis != "number" || !isFinite(axis)) {
-        return false;
-    }
-    pip.csrSliderDragBase = base;
-    pip.startDrag = function() {
-        var args = [];
-        var i = 0;
-        while (i < arguments.length) {
-            args.push(arguments[i]);
-            i = i + 1;
-        }
-        if (args.length == 5 && args[2] == 0 && args[4] == 0) {
-            args[2] = axis;
-            args[4] = axis;
-        }
-        return base.apply(this, args);
-    };
-    return true;
+    return csrEI.call("csr.RegisterSliderDragAxis", "mc:" + String(pip), pip._y);
 };
 
 // Resolves "_global.MainMenuMovie.Panel" or "_level31.Panel" to an object.

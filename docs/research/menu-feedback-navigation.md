@@ -1,4 +1,4 @@
-﻿# Menu navigation follow-up (2026-10-14 playtest)
+# Menu navigation follow-up (2026-10-14 playtest)
 
 The owner's Home hover response is acceptable. Two reproducible problems are
 separate: leaving Audio for Offline with Bots retained the Options movie, and
@@ -32,11 +32,13 @@ there after release. The reproduction moved the pointer off the horizontal
 track; the value still changed correctly. No movie instructions or function
 bodies were read.
 
-A per-widget compatibility adapter preserves the existing pip's measured
-resting y for its zero-height drag constraint, while delegating its original
-startDrag method, x constraints, callbacks, value conversion and sounds. It
-does not replace the slider or globally patch Flash dragging. The adapter must
-be validated with a newly built client before calling this fixed.
+An initial instance startDrag wrapper did not intercept the installed path;
+the 386966a production drag screenshot still shows the bug. The replacement
+registers the exact pip's public runtime path/resting y and uses Ruffle's public
+UpdateContext drag object to correct only its native zero-height y constraint.
+It retains the original x constraint, drag offset, callbacks, value conversion
+and sounds. A fresh Options load clears the registry. The replacement must be
+validated with a newly built client before calling this fixed.
 
 ## Pause response investigation
 
@@ -55,11 +57,26 @@ The release linker was active during this shared-PC comparison. This is worker
 CPU/readback cadence, not physical input or compositor latency, and is not a
 claim that gameplay matches a native frame rate.
 
-The next trace splits the existing opt-in `CSR_UI_WORKER_TRACE=1` into bounded
-slow MouseMove, movie tick, callback and passive visibility sampling phases.
+The 386966a opt-in subphase trace measured 94 MouseMove handlers averaging
+27.75 ms and 70 movie ticks averaging 26.89 ms during the fixed Pause hover
+window; passive visibility sampling never reached the 5 ms reporting threshold.
 It records timing labels only, never authored movie instructions. Do not rewrite
 or disable the backdrop blur on the strength of this A/B: it did not explain
 the measured slowdown.
+
+A concrete queue path permits unnecessary pointer work after the elapsed input
+budget: without a real click/key/lifecycle boundary, [MouseMove, passive sample]
+was still treated as a completion pair. The pending correction drains only a
+leading passive prefix in that case, allowing presentation before the next
+pointer handler. Actual boundaries retain their original FIFO completion rule.
+A focused regression exercises both passive/motion orders and preserves the
+existing click/key/remaining-cap coverage. Runtime improvement is still pending.
+
+Pinned Ruffle source review also confirms hidden AVM1 clips still receive frame
+and global MouseMove work. This is normal Flash behavior, not a reason to skip
+hidden helpers globally. Passive call_internal_interface does not call the
+generic Player::update; an early hypothesis that it repeated hit tests was
+incorrect and is not used by the implementation.
 
 Still open: final slider proof; sustained Pause performance fix; power button
 availability while the offline picker owns navigation; all original menu

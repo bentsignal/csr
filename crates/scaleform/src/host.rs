@@ -17,6 +17,8 @@ use ruffle_core::backend::navigator::{
     ErrorResponse, NavigationMethod, NavigatorBackend, NullExecutor, NullSpawner, OwnedFuture,
     Request, SuccessResponse, create_fetch_error,
 };
+use ruffle_core::display_object::TDisplayObject;
+use ruffle_core::swf::Twips;
 use ruffle_core::events::{KeyDescriptor, KeyLocation, LogicalKey, NamedKey, PhysicalKey, MouseButton as RuffleButton, MouseWheelDelta, PlayerEvent, TextControlCode};
 use ruffle_core::external::{ExternalInterfaceProvider, Value as ExtValue};
 use ruffle_core::indexmap::IndexMap;
@@ -234,6 +236,7 @@ struct Dispatcher {
     calls: Calls,
     events: EventSender<Event>,
     root_ready: bool,
+    slider_axes: HashMap<String, f64>,
 }
 
 impl Dispatcher {
@@ -244,7 +247,18 @@ impl Dispatcher {
                 self.root_ready = true;
                 return Value::Undefined;
             }
+            ("csr", "RegisterSliderDragAxis") => {
+                let [Value::String(handle), Value::Number(axis)] = args else { return Value::Bool(false) };
+                let Some(path) = handle.strip_prefix("mc:") else { return Value::Bool(false) };
+                if !path.starts_with("_level") || !path.ends_with(".Widget.ScrollPip")
+                    || !axis.is_finite() || axis.abs() > 16_384. {
+                    return Value::Bool(false);
+                }
+                self.slider_axes.insert(path.to_owned(), *axis);
+                return Value::Bool(true);
+            }
             (_, "OnLoadFinished") if !object.starts_with("CScaleformComponent_") => {
+                if object == "OptionsMenu" { self.slider_axes.clear(); }
                 let _ = self.events.send(Event::Loaded(object.to_string()));
             }
             _ => {}
@@ -362,6 +376,7 @@ impl Host {
             calls: Calls::default(),
             events,
             root_ready: false,
+            slider_axes: HashMap::new(),
         }));
         let executor = NullExecutor::new();
         let navigator = InstallNavigator {
@@ -519,6 +534,25 @@ impl Host {
         self.player.lock().unwrap().call_internal_interface(callback, args)
     }
 
+    /// Scaleform's horizontal pip rests at y=5, but its installed native drag
+    /// requests a y=0 constraint. Correct only registered current Options pips;
+    /// arbitrary Flash drags, x bounds, offsets and callbacks are untouched.
+    fn preserve_slider_drag_axis(&mut self) {
+        let dispatcher = self.dispatcher.borrow();
+        if dispatcher.slider_axes.is_empty() { return; }
+        self.player.lock().unwrap().mutate_with_update_context(|context| {
+            let Some(drag) = context.drag_object.as_mut() else { return };
+            if drag.display_object.avm1_removed() || drag.constraint.y_min != Twips::ZERO
+                || drag.constraint.y_max != Twips::ZERO { return; }
+            let path = drag.display_object.path();
+            let Some(axis) = dispatcher.slider_axes.get(path.to_utf8_lossy().as_ref()) else { return };
+            let axis = Twips::from_pixels(*axis);
+            drag.constraint.y_min = axis;
+            drag.constraint.y_max = axis;
+            drag.display_object.set_y(axis);
+        });
+    }
+
     pub fn input(&mut self, input: Input) {
         let button = |b: MouseButton| match b {
             MouseButton::Left => RuffleButton::Left,
@@ -578,6 +612,7 @@ impl Host {
         };
         let started = self.work_started();
         self.player.lock().unwrap().handle_event(event);
+        self.preserve_slider_drag_axis();
         self.work_finished(phase, started);
         let started = self.work_started();
         self.drain_calls();
