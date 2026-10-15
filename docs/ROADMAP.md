@@ -8,6 +8,14 @@ them are listed. Every item ends in a verified state (`cargo test`,
 
 ## Where we are (assessed 2026-10-12)
 
+Owner return-home playtest on 2026-10-14: all reported defects, required
+features, accepted improvements and priorities are retained in
+[PLAYTEST-2026-10-14.md](PLAYTEST-2026-10-14.md). Work continues without another
+test request until the owner asks. Immediate parallel tracks are coherent
+menu navigation/pause performance, grenade release synchronization, and a
+usable console with persistent wheel/key bindings; movement/surfing, spray,
+lighting and original HUD remain high-priority alongside them.
+
 The inherited code is a **real, playable single-player base**. Phase 0 and
 the installer/updater release are complete. Gameplay now lives in the fixed
 tick sim; dedicated multiplayer, prediction and local content packs have
