@@ -50,6 +50,7 @@ pub mod skinning;
 pub mod viewmodel;
 pub mod coords;
 pub mod effects;
+mod kill_feed;
 pub mod hud;
 pub mod ui_assets;
 pub mod hud_art;
@@ -274,6 +275,7 @@ impl Plugin for CsgoPlugin {
         if let Err(error) = remote_render_gate::install(app) { error!("Remote render preparation unavailable: {error:?}"); }
         shadow_diagnostic::install(app);
         console::install(app);
+        kill_feed::install(app);
     }
 }
 

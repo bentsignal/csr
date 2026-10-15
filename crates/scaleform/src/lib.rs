@@ -237,6 +237,17 @@ impl Menu {
 
     /// Separate cached domains retain distinct diagnostic identities.
     pub fn spawn_named(config: Config, engine: Box<dyn Engine>, label: String) -> Self {
+        Self::spawn_surface(config, engine, label, false)
+    }
+
+    /// Transparent, noninteractive HUD surface. Keep the full authored viewport
+    /// for resizing, but return only its top half for the seven death notices.
+    /// GPU readback still uses the full target; this reduces CPU copies/uploads.
+    pub fn spawn_overlay(config: Config, engine: Box<dyn Engine>) -> Self {
+        Self::spawn_surface(config, engine, "death-notices".into(), true)
+    }
+
+    fn spawn_surface(config: Config, engine: Box<dyn Engine>, label: String, overlay: bool) -> Self {
         let (input_tx, input_rx) = input_queue();
         let (event_tx, event_rx) = channel();
         let frame = Arc::new(Mutex::new(None));
@@ -248,7 +259,7 @@ impl Menu {
                 let _entered = span.enter();
                 let events = event_tx.clone();
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    run(config, engine, input_rx, event_tx, shared)
+                    run(config, engine, input_rx, event_tx, shared, overlay)
                 }));
                 let message = match result {
                     Ok(Ok(())) => return,
@@ -520,10 +531,15 @@ fn run(
     input: InputReceiver,
     events: Sender<Event>,
     frame: Arc<Mutex<Option<Frame>>>,
+    overlay: bool,
 ) -> Result<(), String> {
     let mut trace = WorkerTrace::from_env();
     trace.event("host_begin", true, 0, 0, false);
-    let mut host = host::Host::new(&config, engine, events).map_err(|e| e.to_string())?;
+    let mut host = if overlay {
+        host::Host::overlay(&config, engine, events)
+    } else {
+        host::Host::new(&config, engine, events)
+    }.map_err(|e| e.to_string())?;
     trace.event("host_end", true, 0, 0, false);
     let mut active = true;
     let mut serial = 0u64;
