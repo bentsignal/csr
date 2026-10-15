@@ -706,11 +706,7 @@ pub fn update(
     if let Some(grenade)=grenade {
         let started=grenade.throw_started_tick.unwrap_or(grenade.pull_started_tick);
         // Grenade phase clips are loaded non-looping: holding keeps the final pose.
-        let elapsed = sim_now - started as f32 * world.0.dt();
-        t = if grenade.phase == sim::utility::ThrowPhase::Throwing {
-            w.and_then(|w| w.def.grenade_animations.as_ref())
-                .map_or(elapsed, |profile| grenade.mode.animation(profile).sample_time(elapsed))
-        } else { elapsed }.clamp(0., clip.duration());
+        t=(sim_now-started as f32*world.0.dt()).clamp(0.,clip.duration());
     }
     if let Some(transition) = suppressor {
         t = (sim_now - transition.started_tick as f32 * world.0.dt()).clamp(0., clip.duration());

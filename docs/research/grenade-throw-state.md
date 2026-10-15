@@ -194,10 +194,9 @@ identity includes the changed timing-policy generation. No velocity, movement
 inheritance, pitch, spawn-offset, fuse or bounce coefficient was adjusted.
 
 Simulation creates the projectile from this command-relative delay through
-TickInput alone. Rendering compresses the positive authored marker's lead-in
-so its release pose agrees with the authoritative release phase, retaining the
-authored post-marker speed. Molotov's zero-cycle marker cannot establish a
-pose-release anchor, so that clip keeps its natural playback clock. Inventory
-completion retains the authored full clip duration; only physical release and
-presentation alignment change. Further native animation-frame comparison and
-movement/VR trajectory calibration remain required.
+TickInput alone. Viewmodel clips retain their natural producer-tick clock and
+authored full-duration inventory completion. A private pre-release marker-remap
+trial was rejected after rendered comparison: event3005 does not establish the
+native visible hand-release phase. Physical release/audio timing are verified
+independently; exact hand-phase matching, native animation speed, movement/VR
+trajectories and historical parity remain open.

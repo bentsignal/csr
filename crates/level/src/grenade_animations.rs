@@ -64,7 +64,7 @@ pub(super) fn import(
 ) -> Option<[u8; 20]> {
     let mut digest = Sha1::new();
     digest.update(previous_hash?);
-    digest.update(b"grenade-animation-timing-v4-observed-release");
+    digest.update(b"grenade-animation-timing-v5-observed-release-natural");
     let mut definitions: Vec<_> = catalog
         .weapons
         .iter_mut()

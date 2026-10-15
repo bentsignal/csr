@@ -111,7 +111,7 @@ mod tests {
         }
     }
     #[test]
-    fn observed_release_profile_drives_projectile_and_authored_pose_event_together() {
+    fn observed_release_profile_drives_command_relative_projectile_at_both_rates() {
         for rate in [64, 128] {
             let (mut world, id) = fixture(rate);
             let definition = std::sync::Arc::make_mut(&mut world.players[0].weapons[0].def);
@@ -119,9 +119,6 @@ mod tests {
             profile.overhand = weapons::GrenadeReleaseAnimation {
                 duration: 0.4, release_time: 1. / 3., command_release_time: Some(0.1),
             };
-            let release = profile.overhand.clone();
-            assert!((release.sample_time(0.1) - release.release_time).abs() < 0.000001);
-            assert!((release.sample_time(0.1 + release.duration - release.release_time) - release.duration).abs() < 0.000001);
             world.step(&[(id, TickInput { buttons: buttons::ATTACK, ..Default::default() })]);
             let release_tick = world.tick;
             let expected_tick = release_tick + (0.1 / world.dt()).ceil() as u64;
@@ -226,7 +223,7 @@ impl ThrowMode {
             "ACT_VM_THROW"
         }
     }
-    pub fn animation(self, profile: &weapons::GrenadeAnimations) -> &weapons::GrenadeReleaseAnimation {
+    fn animation(self, profile: &weapons::GrenadeAnimations) -> &weapons::GrenadeReleaseAnimation {
         if self == Self::Underhand {
             &profile.underhand
         } else {
