@@ -29,6 +29,7 @@ pub(crate) struct Presentation {
     movie: Option<Mutex<scaleform::Menu>>,
     ready: Arc<AtomicBool>,
     failed: Arc<AtomicBool>,
+    rejected: Arc<Mutex<Vec<sim::death::DeathKey>>>,
     started: Option<std::time::Instant>,
     node: Option<Entity>,
     image: Handle<Image>,
@@ -43,6 +44,7 @@ pub(crate) struct Presentation {
 struct Bridge {
     ready: Arc<AtomicBool>,
     failed: Arc<AtomicBool>,
+    rejected: Arc<Mutex<Vec<sim::death::DeathKey>>>,
 }
 impl Engine for Bridge {
     fn call(
@@ -67,12 +69,26 @@ impl Engine for Bridge {
                 );
                 self.failed.store(true, Ordering::Release);
             }
-            "DeathNoticeResult" if matches!(args.get(1), Some(Value::Bool(false))) => {
-                warn!(
-                    ?args,
-                    "Classic kill feed could not draw a receipt; preserving text fallback"
-                );
-                self.failed.store(true, Ordering::Release);
+            "DeathNoticeResult" => {
+                let (Some(Value::String(raw)), Some(Value::Bool(success))) =
+                    (args.first(), args.get(1))
+                else {
+                    return None;
+                };
+                let Some(key) = parse_key(raw) else {
+                    return None;
+                };
+                let mut rejected = self.rejected.lock().unwrap();
+                rejected.retain(|old| *old != key);
+                if !success {
+                    // At most seven notices are live; retain a little room for
+                    // callbacks from a just-expired presentation revision.
+                    if rejected.len() == 16 {
+                        rejected.remove(0);
+                    }
+                    rejected.push(key);
+                    warn!(?key, "Classic kill feed receipt uses text fallback");
+                }
             }
             _ => return None,
         }
@@ -82,6 +98,15 @@ impl Engine for Bridge {
 
 fn key(key: sim::death::DeathKey) -> String {
     format!("{}:{}:{}", key.victim, key.life_epoch, key.tick)
+}
+fn parse_key(raw: &str) -> Option<sim::death::DeathKey> {
+    let mut parts = raw.split(':');
+    let key = sim::death::DeathKey {
+        victim: parts.next()?.parse().ok()?,
+        life_epoch: parts.next()?.parse().ok()?,
+        tick: parts.next()?.parse().ok()?,
+    };
+    parts.next().is_none().then_some(key)
 }
 fn call(function: &str, args: Vec<Value>) -> Command {
     Command::Call {
@@ -154,9 +179,12 @@ fn update(
     local: Option<Res<LocalPlayer>>,
     time: Res<Time>,
     mut images: ResMut<Assets<Image>>,
-    mut surfaces: Query<(&mut Visibility, &mut Node), With<Surface>>,
-    mut fallback: Query<&mut Text, With<Fallback>>,
+    mut surfaces: Query<(&mut Visibility, &mut Node), (With<Surface>, Without<Fallback>)>,
+    mut fallback: Query<(&mut Text, &mut Node), With<Fallback>>,
 ) {
+    for (_, mut node) in &mut fallback {
+        node.top = px(60.0);
+    }
     let matched = *state.get() == AppState::Match
         && local.is_some()
         && effects.is_some()
@@ -208,6 +236,7 @@ fn update(
             Box::new(Bridge {
                 ready: feed.ready.clone(),
                 failed: feed.failed.clone(),
+                rejected: feed.rejected.clone(),
             }),
         );
         feed.movie = Some(Mutex::new(movie));
@@ -226,8 +255,8 @@ fn update(
         error!("Classic kill feed readiness timed out; preserving text fallback");
     }
     if feed.failed.load(Ordering::Acquire) {
-        // Disconnecting input terminates only our dedicated worker. A missing
-        // export or failed movie must never erase the last usable text feed.
+        // Disconnecting input terminates only our dedicated worker. A failed
+        // movie must never erase the last usable text feed.
         feed.movie = None;
         for (mut surface, _) in &mut surfaces {
             *surface = Visibility::Hidden;
@@ -244,6 +273,10 @@ fn update(
         .map(|effects| effects.kill_feed.iter().collect())
         .unwrap_or_default();
     let keys: Vec<_> = entries.iter().map(|entry| entry.death.key).collect();
+    feed.rejected
+        .lock()
+        .unwrap()
+        .retain(|key| keys.contains(key));
     let ready = feed.ready.load(Ordering::Acquire);
     let mut batch = vec![];
     if feed.viewport != size {
@@ -297,7 +330,13 @@ fn update(
     }
     // Finish an in-flight bare-root load even if the match ends before it
     // announces readiness; otherwise a parked loader could time out on Home.
-    let active = !ready || (matched && !entries.is_empty());
+    let has_drawable_row = {
+        let rejected = feed.rejected.lock().unwrap();
+        entries
+            .iter()
+            .any(|entry| !rejected.contains(&entry.death.key))
+    };
+    let active = !ready || (matched && (!feed.presented || has_drawable_row));
     if active != feed.active {
         feed.movie
             .as_ref()
@@ -339,10 +378,17 @@ fn update(
         }
     }
     let frame = feed.movie.as_ref().unwrap().lock().unwrap().take_frame();
+    // Snapshot after processing worker output: a failed row's keyed callback
+    // must be visible before we replace its ordinary text with the raster.
+    let rejected = feed.rejected.lock().unwrap().clone();
+    let rendered_count = entries
+        .iter()
+        .filter(|entry| !rejected.contains(&entry.death.key))
+        .count();
     if let Some(frame) = frame.filter(|frame| frame.presentation_revision == feed.revision) {
         if let Some(mut image) = images.get_mut(&feed.image) {
             if !feed.presented && ready && std::env::var_os("CSR_KILL_FEED_TRACE").is_some() {
-                info!(revision = feed.revision, notices = entries.len(), width = frame.width,
+                info!(revision = feed.revision, notices = rendered_count, width = frame.width,
                     height = frame.height, keys = ?feed.entries, "Classic kill feed raster admitted");
             }
             image.texture_descriptor.size = Extent3d {
@@ -358,7 +404,7 @@ fn update(
         && ready
         && feed.presented
         && !feed.failed.load(Ordering::Acquire)
-        && !entries.is_empty();
+        && rendered_count > 0;
     for (mut surface, mut node) in &mut surfaces {
         // An odd physical height must not stretch a ceil(height/2) raster into
         // a fractional-height box. Preserve one authored pixel per screen pixel.
@@ -370,8 +416,93 @@ fn update(
         };
     }
     if matched && ready && feed.presented && !feed.failed.load(Ordering::Acquire) {
-        for mut text in &mut fallback {
-            text.0.clear();
+        let plain = entries
+            .iter()
+            .filter(|entry| rejected.contains(&entry.death.key))
+            .map(|entry| {
+                if entry.local_involved {
+                    format!("> {}", entry.text)
+                } else {
+                    entry.text.clone()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        for (mut text, mut node) in &mut fallback {
+            text.0.clone_from(&plain);
+            if rendered_count > 0 && !plain.is_empty() {
+                // Exceptional plain rows sit below the cropped authored HUD
+                // rather than covering a healthy notice at the same anchor.
+                node.top = px((size.1.div_ceil(2) + 16) as f32 / window.scale_factor());
+            }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rejected_content_is_keyed_bounded_and_does_not_disable_other_notices() {
+        let mut bridge = Bridge {
+            ready: Arc::new(AtomicBool::new(true)),
+            failed: Arc::new(AtomicBool::new(false)),
+            rejected: Arc::default(),
+        };
+        let mut calls = Calls::default();
+        let rejected = sim::death::DeathKey {
+            victim: 2,
+            life_epoch: 4,
+            tick: 90,
+        };
+        let healthy = sim::death::DeathKey {
+            victim: 3,
+            ..rejected
+        };
+        bridge.call(
+            "csr",
+            "DeathNoticeResult",
+            &[key(rejected).into(), false.into()],
+            &mut calls,
+        );
+        assert_eq!(*bridge.rejected.lock().unwrap(), [rejected]);
+        assert!(!bridge.rejected.lock().unwrap().contains(&healthy));
+        assert!(!bridge.failed.load(Ordering::Acquire));
+        assert!(bridge.ready.load(Ordering::Acquire));
+        for invalid in ["", "2:4", "2:4:90:extra", "invalid:4:90", "2:-4:90"] {
+            bridge.call(
+                "csr",
+                "DeathNoticeResult",
+                &[invalid.into(), false.into()],
+                &mut calls,
+            );
+        }
+        assert_eq!(*bridge.rejected.lock().unwrap(), [rejected]);
+        bridge.call(
+            "csr",
+            "DeathNoticeResult",
+            &[key(rejected).into(), true.into()],
+            &mut calls,
+        );
+        assert!(bridge.rejected.lock().unwrap().is_empty());
+        for tick in 0..40 {
+            let receipt = sim::death::DeathKey { tick, ..rejected };
+            bridge.call(
+                "csr",
+                "DeathNoticeResult",
+                &[key(receipt).into(), false.into()],
+                &mut calls,
+            );
+        }
+        assert_eq!(bridge.rejected.lock().unwrap().len(), 16);
+        assert!(!bridge.failed.load(Ordering::Acquire));
+        bridge.call(
+            "csr",
+            "DeathNoticesFailed",
+            &["missing movie".into()],
+            &mut calls,
+        );
+        assert!(bridge.failed.load(Ordering::Acquire));
     }
 }
