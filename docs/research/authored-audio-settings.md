@@ -35,3 +35,23 @@ catalog or sound mix. Historical option availability, music-event timing/gains,
 full rendered page content, real playback, persistence, focus transitions and
 Home/Pause navigation remain verification gates. No fidelity pass is claimed at
 this initial checkpoint.
+
+The first implementation checkpoint adds the original `snd_mute_losefocus`
+choice and persistent audio-options delegation. It applies zero actual playback
+gain while unfocused when selected, retaining the saved master value and
+restoring current sounds on focus return. Focus-only changes do not reapply
+display/material settings. This is pending compilation, actual original-widget
+render and playback/focus verification; it is not an overall Audio Settings pass.
+
+Original-only music metadata is available under
+`sound/music/valve_csgo_01/game_sounds_music.txt` in the Legacy VPK. The retained
+item definitions currently label id1 as `valve_cs2_01` and original-CSGO as70;
+neither a first-entry/default-id assumption nor any CS2-named music is admitted.
+Only explicit original-CSGO declarations can supply future cue paths/gains.
+
+The black-center diagnosis also remains open. Public placement metadata names
+`ResizeTop.ResizePanel`, horizontal/vertical resize controls, `DeadZone` and
+safe-zone brackets, with no microphone-named placed clip. The actual Audio trace
+queries safe-zone bounds. The "microphone panel" description was an inference;
+public runtime geometry/visibility must identify the stray art before changing
+its ownership. No timeline action bodies were inspected.

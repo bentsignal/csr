@@ -69,7 +69,7 @@ impl Scene {
                     }
                     (
                         kind @ ("choice" | "dropdown"),
-                        "m_pitch" | "cl_radar_rotate" | "cl_crosshaircolor" | "closeonbuy",
+                        "m_pitch" | "cl_radar_rotate" | "cl_crosshaircolor" | "closeonbuy" | "snd_mute_losefocus",
                     ) => {
                         let choices = block
                             .block(if kind == "dropdown" {
