@@ -265,3 +265,33 @@ field capture. The late console output confirms the requested clock value;
 it does not retroactively admit the interrupted packet or establish a missing
 projectile receiver. All 12 preferences were restored and no process remained.
 No launch constants follow from this transport/scheduling negative.
+
+
+The bounded transport correction used a positively reported 0.01 clock rate
+without lengthening any command, admission or global deadline. It completed
+one fresh held HE release and discovered exactly one actual non-weapon client
+projectile, `C_BaseCSGrenadeProjectile`, before selecting its public dump. The
+actual entity index came from that session's lookup. Five captured states
+expose changing network origins and nonzero `m_vecVelocity`, duplicated under
+`CBaseGrenade`; the generic `m_vecAbsVelocity` remains zero and is not treated
+as the moving body's velocity. Server debug text and the visible body move
+consistently with the network origin. Render/absolute origin lags the network
+origin and is recorded separately.
+
+At actual standing pitch 15 degrees and yaw 0, horizontal projectile velocity
+is 670.435852 units/second throughout those samples. Vertical velocity changes
+from -123.362717 to -175.862717 as network X advances from 1094.15625 to
+1204.15625. Pairwise position/velocity differences are consistent with downward
+acceleration 320: conservative one-thirty-second-unit endpoint bounds encompass
+approximately 319.25 to 320.79, and trapezoid vertical-position residuals stay
+below 0.012 units. Two disjoint background areas remain stable, and ordinary
+before/after position and view angles agree. All 13 captures, real timing
+bounds and exact restoration of 12 preferences are retained privately.
+
+This admits a numeric trajectory receiver and exposes a real discrepancy with
+the retained raw-pitch launch baseline. It does not yet identify native initial
+velocity, spawn position, spawn tick, moving-player inheritance or underhand
+law. No production coefficient changes follow from this single standing case.
+The installed schema separately declares throw velocity 750; that declaration
+alone is not the actual velocity law. The target here is installed 2023 Legacy,
+with historical 2015 equivalence still unmeasured.
