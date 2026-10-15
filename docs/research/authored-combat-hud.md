@@ -158,3 +158,23 @@ Hide at15. Production callbacks repeatedly report current8/total15. The last
 frame is the hidden state, not a universal settling target. Idle and lifecycle
 runtime checks remain required, but parking the observed Show state does not
 require inventing an animation duration or waiting for the hidden frame.
+
+The first ordinary underhand HE self-damage render on immutable14 is a retained
+negative. The actual simulation and native raster changed health/armor100/100
+to56/57, and the worker parked, but result callbacks were still at HudPanel
+frames2/1/2/6 rather than Show8. The actual screenshot has dim armor and ammo:
+the worker had parked during the original entrance animation. The previous
+real-kill case had a live notice keeping that same worker active, masking this
+idle-path defect. Its process exited0 with clean logs and unchanged settings;
+the helper's Show8 gate correctly failed. This is not an overall visual pass.
+
+The correction defers a visible component's success receipt until its original
+HudPanel reaches the observed Show8 state. An empty child owned by this adapter
+observes frames; authored handlers and timeline actions remain untouched. The
+pending receipt is fenced by part identity, generation and the latest revision,
+replaced on newer values, and cancelled on clear/load failure. It deletes its
+own observer when complete. Unsupported or stuck timelines fail after a bounded
+60 observer turns, retaining component fallback rather than running forever.
+This guard is not a claimed animation duration. Rust's existing pending-receipt
+state keeps the shared worker active until both completion and raster admission.
+The corrected actual damage, lifecycle and idle-cost checks remain pending.

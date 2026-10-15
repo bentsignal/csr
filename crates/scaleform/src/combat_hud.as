@@ -11,8 +11,17 @@ _global.csrCombatHud.part = function(name) {
     }
     return undefined;
 };
+_global.csrCombatHud.cancelReceipt = function(part) {
+    if (part == undefined) { return; }
+    part.pendingReceipt = undefined;
+    if (part.receiptObserver != undefined) {
+        delete part.receiptObserver.onEnterFrame;
+        part.receiptObserver.receipt = undefined;
+    }
+};
 _global.csrCombatHud.failed = function(part, reason) {
     if (part == undefined) { return; }
+    this.cancelReceipt(part);
     part.ready = false;
     part.root._visible = false;
     csrEI.call("csr.CombatHudFailed", part.name, String(reason));
@@ -74,6 +83,7 @@ _global.csrCombatHud.load = function() {
     var i = 0;
     while (i < this.parts.length) {
         var old = this.parts[i];
+        this.cancelReceipt(old);
         old.ready = false;
         old.root._visible = false;
         old.loader.removeListener(old.listener);
@@ -89,6 +99,7 @@ _global.csrCombatHud.clear = function() {
     var i = 0;
     while (i < this.parts.length) {
         var part = this.parts[i];
+        this.cancelReceipt(part);
         // Keep one parsed instance per component across matches. Visibility is
         // owned explicitly; parking the shared worker suspends all its timers.
         part.root._visible = false;
@@ -139,6 +150,7 @@ _global.csrCombatHud.updateNumbers = function(health, armor, clip, reserve) {
 };
 _global.csrCombatHud.result = function(part, stamp, success, visible) {
     if (part == undefined) { return false; }
+    this.cancelReceipt(part);
     try {
         if (success && visible && !part.shown) {
             part.root.showNow();
@@ -162,6 +174,53 @@ _global.csrCombatHud.result = function(part, stamp, success, visible) {
             }
         }
     } catch (error) { success = false; part.root._visible = false; }
+    try { if (success && visible) {
+        // Both installed HudPanel timelines label frame8 Show and frame15
+        // Hide. A raster during StartShow cannot park the worker: with no
+        // notice or further value change it would retain partially faded art.
+        // Observe completion on our own empty child, never an authored handler.
+        var panel = part.root.HudPanel;
+        if (panel._totalframes != 15) {
+            success = false;
+            part.root._visible = false;
+        } else if (panel._currentframe != 8) {
+            if (part.receiptObserver == undefined) {
+                part.receiptObserver = part.root.createEmptyMovieClip(
+                    "__csrPresentationReceipt", part.root.getNextHighestDepth());
+            }
+            var observer = part.receiptObserver;
+            if (typeof observer != "movieclip") {
+                success = false;
+                part.root._visible = false;
+            } else {
+                var receipt = {stamp: stamp, generation: part.generation, turns: 0};
+                part.pendingReceipt = receipt;
+                observer.part = part;
+                observer.receipt = receipt;
+                observer.onEnterFrame = function() {
+                    var api = _global.csrCombatHud;
+                    var part = this.part;
+                    var receipt = this.receipt;
+                    if (receipt == undefined || part.pendingReceipt != receipt ||
+                        part.generation != api.generation || receipt.generation != api.generation ||
+                        api.part(part.name) != part || part.receiptObserver != this || !part.ready) {
+                        delete this.onEnterFrame;
+                        return;
+                    }
+                    receipt.turns += 1;
+                    if (part.root.HudPanel._currentframe == 8) {
+                        // result rechecks crop bounds at the settled geometry.
+                        api.result(part, receipt.stamp, true, true);
+                    } else if (part.root.HudPanel._totalframes != 15 || receipt.turns >= 60) {
+                        // A bounded failure guard, not an animation-duration
+                        // estimate: unsupported/stuck timelines retain fallback.
+                        api.result(part, receipt.stamp, false, false);
+                    }
+                };
+                return true;
+            }
+        }
+    } } catch (error) { success = false; part.root._visible = false; this.cancelReceipt(part); }
     csrEI.call("csr.CombatHudResult", part.name, stamp, success,
         part.root.HudPanel._currentframe, part.root.HudPanel._totalframes);
     return success;
