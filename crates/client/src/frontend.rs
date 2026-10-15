@@ -2116,7 +2116,7 @@ mod tests {
             inventory: InventoryView::new(&fs),
             fs,
             settings: Settings::default(),
-            localization: crate::localize::Localization::default(),
+            localization: crate::localize::Localization::default().into(),
             game_modes: kv::Block::new(),
             state: AppState::Menu,
             menu_open: false,
