@@ -140,7 +140,10 @@ pub struct WeaponDefinition {
     pub max_player_speed: f32,
     pub accuracy: Accuracy,
     pub recoil: Recoil,
+    /// Profile for the default equipped mode (attached for detachable suppressors).
     pub recoil_trajectory: Option<RecoilTrajectory>,
+    /// Separately observed detached-suppressor profile; absence stays unmeasured.
+    pub recoil_trajectory_unsuppressed: Option<RecoilTrajectory>,
     pub view_model: String,
     pub grenade_animations: Option<GrenadeAnimations>,
     pub suppressor_animations: Option<SuppressorAnimations>,
@@ -310,6 +313,7 @@ fn build(index: &str, class_name: &str, r: &Resolved) -> WeaponDefinition {
     WeaponDefinition {
         grenade_animations: None,
         recoil_trajectory: None,
+        recoil_trajectory_unsuppressed: None,
         suppressor_animations: None,
         id: ContentId::csgo(ContentKind::Weapon, short),
         class_name: class_name.to_string(),
