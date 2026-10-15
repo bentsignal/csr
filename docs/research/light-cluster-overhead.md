@@ -57,12 +57,23 @@ bugs are not fixed by skipping unused clustered-light work.
 
 ## Production policy
 
-The candidate production policy configures only the client's own custom-lit
+The merged production policy configures only the client's own custom-lit
 cameras at spawn and selects the CPU fallback once at startup. It removes
 the experimental per-frame camera query. `CSR_TEST_LIGHT_CLUSTERS=1` retains
 the previous default camera/GPU path for bounded comparisons. This is a
 renderer diagnostic, not a player-facing option or an invented fidelity mode.
-Production release checks and actual default-path rendering remain pending.
+Production source `d39ae8c` passed an all-workspace-package release-profile
+clean, launcher build and installed Dust II `probe`/`sim` with zero failures.
+Its immutable release executable's actual default-path Nuke capture was
+independently inspected: scene, props, hands, weapon and HUD remained intact,
+the startup policy marker was present, the process exited successfully without
+renderer errors, and the owner's configuration was unchanged. This render is
+a correctness check, not a cross-profile performance comparison.
+
+Full workspace/installed-data CI and the asset guard passed before
+[PR #149](https://github.com/bentsignal/global-offensive/pull/149) merged as
+`fbe2481`. The source failure and rejected GPU allocation attempt remain
+recorded separately from successful production verification.
 
 Raw captures, account data and installed assets stay private. Numerical
 measurements and independently written renderer policy are the public output.
