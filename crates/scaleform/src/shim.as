@@ -27,6 +27,16 @@ _global.csrToHost = function(v) {
     return v;
 };
 
+// An explicit host-side clip reference is distinct from a player's literal
+// string. Public HUD setters accept the clip returned by AddPanel.
+_global.csrFromHost = function(v) {
+    if (typeof v == "object" && v != null && typeof v.__csrMovieClip == "string") {
+        var clip = _global.csrResolve(v.__csrMovieClip);
+        return typeof clip == "movieclip" ? clip : undefined;
+    }
+    return v;
+};
+
 _global.csrMakeProxy = function(prefix) {
     var proxy = new Object();
     proxy.__resolve = function(name) {
@@ -294,7 +304,13 @@ _global.csrDiagnostics.observeCall = function(path, name, args) {
     if (target == undefined || typeof target[name] != "function") {
         return false;
     }
-    this.lastResult = target[name].apply(target, args == undefined ? [] : args);
+    if (args == undefined) { args = []; }
+    var i = 0;
+    while (i < args.length) {
+        args[i] = _global.csrFromHost(args[i]);
+        i += 1;
+    }
+    this.lastResult = target[name].apply(target, args);
     csrEI.call("csr.PublicCallResult", path, name, typeof this.lastResult,
         _global.csrToHost(this.lastResult));
     return true;
@@ -351,6 +367,7 @@ csrEI.addCallback("csrCall", null, function(path, fname, args) {
     }
     var i = 0;
     while (i < args.length) {
+        args[i] = _global.csrFromHost(args[i]);
         if (typeof args[i] == "object" && args[i] != null && args[i].__csrProbe === true) {
             _global.csrProbeBudget = 128;
             args[i] = _global.csrProbeRecord(args[i].value, path + "." + fname + ".arg" + i, 0);

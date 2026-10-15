@@ -23,6 +23,13 @@ standard Flash root scoping before changing production presentation. Setting
 and returned-clip observations are now exposed by the explicitly invoked
 diagnostic bridge; normal menus never call that path.
 
+That call-result probe positively returned the clip
+`Panel.Notice.DeathText1.NoticePanel1` from `AddPanel`. Its public children
+are `TextPanel`, `IDTextBG`, `PanelVictim`, and `PanelAttacker`. Function
+`length` is undefined in this runtime, so no parameter-count claim is made.
+An explicit `__csrMovieClip` host value now allows a public setter to receive
+the returned clip without treating arbitrary player strings as handles.
+
 Private evidence is under `C:\Users\shawn\csr-fidelity\` in
 `killfeed-*-runtime-20261015`. Those captures contain installed game artwork
 and must never be committed or attached to a public release.
