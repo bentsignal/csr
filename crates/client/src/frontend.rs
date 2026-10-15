@@ -1224,13 +1224,13 @@ pub(crate) fn update(
             });
         }
         if scene != AppState::Match {
-            scene_commands.push(scaleform::Command::Set {
-                path: "_level100".into(), property: "_visible".into(), value: false.into(),
-            });
             scene_commands.push(scaleform::Command::Call {
                 path: "_level100".into(),
                 function: "hidePanel".into(),
                 args: vec![],
+            });
+            scene_commands.push(scaleform::Command::Set {
+                path: "_level100".into(), property: "_visible".into(), value: false.into(),
             });
         }
         if scene == AppState::Loading {
