@@ -113,3 +113,19 @@ commands were unsupported; `getpos` and the visible position/velocity overlay
 provide the actual camera/stationarity observations. Preferences were restored
 byte-for-byte after the owned process exited. Captures and raw identifiers
 remain private under `csr-fidelity/grenade-hold-native-20261014/held-smoke-20261014-122708`.
+
+### Owner release-timing regression (2026-10-14 playtest)
+
+The owner observed a visible delay between releasing either throw button and
+throw playback, with the projectile timing affecting jump throws. Quick taps
+also feel unlike native throws, and running throws fall short. These are open
+fidelity defects, not accepted behavior. The current state machine waits for
+the entire declared pull-pin clip and then for event3005 in the release clip;
+the renderer uses the same producer tick. Installed animation metadata alone
+does not establish the native command-to-release or minimum-preparation law.
+The existing movement inheritance coefficient remains provisional. Native
+observation must distinguish the command edge, visible throw onset, and actual
+projectile release before adjusting either timing or launch coefficients.
+
+The owner also reported missing smoke emission audio. Activation currently
+has no smoke sound route; bounce audio does not substitute for emission.
