@@ -500,6 +500,16 @@ pub fn tick(
                     }
                 }
             }
+        } else if std::env::var("CSR_TEST_SWITCH").as_deref() == Ok("viewmodel-settling") {
+            // Finite screenshot-only ordinary movement. Authority owns the
+            // real ground velocity; no pose or movement-state fabrication.
+            input.buttons = 0; input.side_move = 0.; input.forward_move = 0.;
+            local.pitch = 0.; local.yaw = 0.; input.view_angles = glam::Vec3::ZERO;
+            let case = std::env::var("CSR_VIEWMODEL_CASE").unwrap_or_default();
+            if case != "baseline" && (1.5..3.5).contains(&world.0.time()) {
+                input.forward_move = 450.;
+                if case == "walk" { input.buttons |= buttons::WALK; }
+            }
         } else if std::env::var("CSR_TEST_SWITCH").as_deref() == Ok("viewmodel-look") {
             // Finite screenshot fixture: ordinary TickInput and the same local
             // camera angles, with no ammo/weapon/animation-state fabrication.

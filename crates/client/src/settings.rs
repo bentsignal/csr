@@ -97,6 +97,7 @@ impl WheelAction {
 #[derive(Resource, Clone, Debug, PartialEq)]
 pub struct Settings {
     pub volume: f32,
+    pub audio_options: crate::audio_options::AudioOptions,
     pub show_fps: bool,
     pub wheel_up: WheelAction,
     pub wheel_down: WheelAction,
@@ -126,6 +127,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             volume: 0.5,
+            audio_options: Default::default(),
             show_fps: false,
             wheel_up: WheelAction::Previous,
             wheel_down: WheelAction::Next,
@@ -252,6 +254,7 @@ impl Settings {
                 "hitmarker" => s.hitmarker = value == "true",
                 "cross_dot" => s.cross_dot = value == "true",
                 _ => {
+                    s.audio_options.parse_entry(key, value);
                     if let Some(index) = key
                         .strip_prefix("bind")
                         .and_then(|i| i.parse::<usize>().ok())
@@ -295,6 +298,7 @@ impl Settings {
         for (i, key) in self.binds.iter().enumerate() {
             text.push_str(&format!("bind{i}={key:?}\n"));
         }
+        self.audio_options.encode_into(&mut text);
         text
     }
     pub fn save(&self) -> std::io::Result<()> {
@@ -353,7 +357,7 @@ impl Settings {
             "cl_radar_scale" => self.radar_scale as f64,
             "cl_radar_rotate" => u8::from(self.radar_rotate) as f64,
             "closeonbuy" => u8::from(self.close_on_buy) as f64,
-            _ => return None,
+            _ => return self.audio_options.convar_number(name),
         })
     }
 
@@ -374,7 +378,7 @@ impl Settings {
             "cl_radar_scale" => self.radar_scale = number.clamp(0.4, 1.0) as f32,
             "cl_radar_rotate" if number == 0.0 || number == 1.0 => self.radar_rotate = number == 1.0,
             "closeonbuy" if number == 0.0 || number == 1.0 => self.close_on_buy = number == 1.0,
-            _ => return false,
+            _ => return self.audio_options.set_convar_number(name, number),
         }
         true
     }

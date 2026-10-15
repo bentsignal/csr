@@ -5,6 +5,7 @@
 //! another Bevy app (the planned multi-game "stitch").
 
 pub mod audio;
+pub mod audio_options;
 pub mod session;
 pub mod frontend;
 mod frontend_display;
