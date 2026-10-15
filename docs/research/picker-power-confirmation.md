@@ -186,3 +186,22 @@ those are an explicit separate asset-negative, not a general clean-log pass.
 The corrected production picker route still needs its new-build check. Passed
 Home cases will not be repeated merely to obtain another receipt. Exact font
 substitution and full Audio page content/layout remain open.
+
+
+## Corrected production picker verification (407e5b0)
+
+The single failed route was rerun against the corrected immutable candidate:
+Play -> Offline -> Competitive -> first map tile -> power -> Cancel. The actual
+original Quit callback loads MessageBox, the current owned Escape callback
+cancels it, and the 1920x1080 raster returns to the picker. Inferno remains
+selected, GO remains available and the original power glyph is enabled. No
+MessageBox, Audio or Home panel overlays the picker. The client exits 0 with
+strict no-ERROR/panic checks, exact callback counts and unchanged owner settings.
+The actual image was inspected; the earlier a61 failure is retained separately.
+
+This establishes the requested bounded control/navigation behavior alongside
+the earlier actual Home cancel/reopen and real confirmation-exit checks. It
+is not a claim of complete original menu fidelity. The same-family appended
+font's exact typography remains open, as does the full Audio content/layout
+gap and the other menu requirements in the playtest ledger. No passed Home
+case was repeated for the picker-only correction.
