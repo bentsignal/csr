@@ -1,4 +1,6 @@
-// vmprobe2 <model> <activity>: muzzle/hand positions through an animation.
+// vmprobe2 <model> <activity> [--sight-rois]: installed animation geometry.
+// The optional bounded ROI report is specific to the observed M4A4 idle,
+// FOV60/offset1,1,-1 at1600x900; it does not establish visible-vertex admission.
 fn main() {
     let (_, fs) = level::mount_game(None).unwrap();
     let args: Vec<String> = std::env::args().collect();
@@ -15,6 +17,10 @@ fn main() {
         if ang > worst.0 { worst = (ang, b.name.clone()); }
     }
     println!("max quat-vs-euler rest mismatch: {:.2} deg at {}", worst.0, worst.1);
+    let sight_rois = args.iter().any(|s| s == "--sight-rois");
+    if sight_rois { assert!(path == "models/weapons/v_rif_m4a1.mdl" && act == "ACT_VM_IDLE",
+        "sight ROI framing was observed only for M4A4 idle"); }
+    let mut reported_rois = false;
     for seq in m.sequences.iter().filter(|s| &s.activity == act) {
         let desc = &m.animations[seq.anims[0] as usize];
         let clip = m.decode_animation(seq.anims[0] as usize, ani.as_deref()).unwrap();
@@ -29,9 +35,44 @@ fn main() {
             let mut local = mdl::skeleton::rest_pose(&m.bones);
             clip.sample(t, &mut local);
             let pose = mdl::skeleton::model_space(&m.bones, &local);
+            if sight_rois && !reported_rois {
+                report_sight_rois(&m, &pose);
+                reported_rois = true;
+            }
             println!("  t {:.2}: muzzle {:?} hand {:?}", t, pose[flash].transform_point3(glam::Vec3::ZERO), pose[hand].transform_point3(glam::Vec3::ZERO));
         }
     }
 }
 #[allow(dead_code)]
 fn unused() {}
+
+/// Print runtime-only vertex candidates; ROI overlap alone does not prove
+/// visibility, anatomical identity, or native animation correspondence.
+fn report_sight_rois(model: &mdl::Model, pose: &[glam::Mat4]) {
+    let focal = 600. / 30_f32.to_radians().tan();
+    let offset = glam::Vec3::new(1., -1., -1.);
+    println!("sight ROI candidates:1600x900 fov60 offsets1,1,-1; model={} checksum={}; raw installed geometry, not visibility admission",
+        model.name, model.checksum);
+    for (label, x0, y0, x1, y1) in [
+        ("front-post", 977., 498., 1008., 548.),
+        ("rear-aperture", 1184., 550., 1240., 607.),
+    ] {
+        let mut vertices = Vec::new();
+        for (mi, mesh) in model.meshes.iter().enumerate() {
+            for (vi, vertex) in mesh.vertices.iter().enumerate() {
+                let point = mdl::skeleton::skin_vertex(vertex, pose, &model.bones) + offset;
+                if point.x <= 0. { continue; }
+                let pixel = glam::Vec2::new(800. - focal * point.y / point.x,
+                    450. - focal * point.z / point.x);
+                if pixel.x >= x0 && pixel.x <= x1 && pixel.y >= y0 && pixel.y <= y1 {
+                    vertices.push((mi, vi, point, pixel));
+                }
+            }
+        }
+        vertices.sort_by(|a, b| a.2.x.total_cmp(&b.2.x));
+        println!("ROI {label}: {} candidates; bounded first128 by depth (offset already included)", vertices.len());
+        for (mesh, vertex, point, pixel) in vertices.iter().take(128) {
+            println!("  mesh={mesh} vertex={vertex} eye_model={point:?} pixel={pixel:?}");
+        }
+    }
+}
