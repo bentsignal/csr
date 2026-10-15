@@ -38,8 +38,8 @@ The local predecessor also passed an all-workspace-package-clean dev/play
 build. The final CI client was copied before the next runner build, with its
 write time, SHA256 and actual client compilation log retained privately.
 
-Root-reviewed 1920x1080 captures show distinct plaster, concrete and rock
-material selections. A normal 900-frame M4 firing run shows persistent,
+Captured-run traces select distinct plaster, concrete and rock materials.
+A root-reviewed 1920x1080, 900-frame M4 firing run shows persistent,
 irregular plaster marks on the wall, with 37 actual shots at the capture gate;
 the installed catalog loaded 25 groups / 72 material variants. Earlier
 instantaneous fixture views hit occluded prop/curb faces or retained the dust
