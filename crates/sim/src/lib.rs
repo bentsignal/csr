@@ -1581,7 +1581,7 @@ impl World {
                     } else if can_fire && (attack || stab) && w.reload_end.is_none() && time >= w.next_attack
                         && ((w.def.full_auto && !w.burst_mode) || pressed || w.is_melee()) {
                         if w.uses_ammo() && w.clip <= 0 {
-                            if w.can_reload() {
+                            if pressed && w.can_reload() {
                                 w.reset_zoom(time);
                                 w.begin_reload(time);
                                 self.events.push(GameEvent::Reload { player: id });
@@ -1590,11 +1590,11 @@ impl World {
                             fire = true;
                         }
                     }
-                    // Native Glock/FAMAS burst mode waits while an empty
-                    // trigger is held, then reloads without another click on
-                    // release. Readiness also preserves deploy/shot lockouts.
+                    // Native AK and Glock/FAMAS burst cases wait while an
+                    // empty trigger is held. AK/M4 and both burst guns start
+                    // idle reload on release, without another click. Keep
+                    // the existing weapon readiness/reload admission guards.
                     if !frozen && !busy && !muzzle_blocked && !attack && !secondary && can_fire
-                        && w.burst_mode && w.burst_profile().is_some()
                         && w.clip == 0 && w.can_reload() && time >= w.next_attack {
                         w.reset_zoom(time);
                         w.begin_reload(time);

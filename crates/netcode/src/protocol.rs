@@ -2,8 +2,8 @@
 use serde::{Deserialize, Serialize};
 use sim::{GameEvent, PlayerId, Snapshot, Team, TickInput};
 
-// v22 preserves held automatic-fire phase across tick quantization. The wire
-// fields are unchanged, but older peers predict different firing deadlines.
+// v22 preserves held automatic-fire phase and released-empty idle reloads.
+// Wire fields are unchanged, but older peers predict different weapon state.
 pub const VERSION: u32 = 22;
 pub const PROTOCOL_ID: u64 = 0x4353_5257_0000_0016;
 pub const CONTROL: u8 = 0;

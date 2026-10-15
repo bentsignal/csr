@@ -5,7 +5,12 @@ fn rifle(rate: u32) -> (World, PlayerId) {
     gun.full_auto = true;
     gun.cycle_time = 0.1;
     gun.reserve_ammo = 0;
+    equipped(rate, gun)
+}
+
+fn equipped(rate: u32, gun: WeaponDefinition) -> (World, PlayerId) {
     let mut catalog = catalog();
+    catalog.weapons.retain(|existing| existing.id != gun.id);
     catalog.weapons.push(gun.clone());
     let mut world = World::with_catalog(Arc::new(CollisionWorld::new()), Arc::new(catalog));
     world.set_tick_rate(rate);
@@ -13,6 +18,47 @@ fn rifle(rate: u32) -> (World, PlayerId) {
     world.players[0].weapons = vec![WeaponState::new(Arc::new(gun))];
     world.players[0].active = 0;
     (world, id)
+}
+
+#[test]
+fn normal_ak_and_m4_reload_released_empty_magazines_and_replay_from_snapshot() {
+    for rate in [64, 128] { for (name, index, cycle) in [("weapon_ak47", 7, 0.1), ("weapon_m4a1", 16, 0.09)] {
+        let mut gun = def(name, index, WeaponClass::Rifle, Side::Both, 1000, 30);
+        gun.full_auto = true; gun.cycle_time = cycle; gun.reserve_ammo = 60;
+        let (mut world, id) = equipped(rate, gun);
+        world.players[0].weapons[0].clip = 1;
+        for _ in 0..rate { world.step(&[(id, held())]); }
+        let weapon = &world.players[0].weapons[0];
+        assert_eq!((world.players[0].shots, weapon.clip, weapon.reserve), (1, 0, 60));
+        assert!(weapon.reload_end.is_none(), "held empty must not begin automatic reload");
+
+        let snapshot = world.decode::<Snapshot>(&state::encode(&world.snapshot())).unwrap();
+        let mut restored = world.clone(); restored.restore(snapshot.state);
+        let mut predicted = world.clone();
+        world.step(&[(id, TickInput::default())]);
+        restored.step(&[(id, TickInput::default())]);
+        predicted.step_prediction(&[(id, TickInput::default())]);
+        assert!(world.players[0].weapons[0].reload_end.is_some());
+        assert_eq!(world.events.iter().filter(|event| matches!(event,
+            GameEvent::Reload { player } if *player == id)).count(), 1);
+        for _ in 0..rate * 4 {
+            assert_eq!(world.state_hash(), restored.state_hash());
+            assert_eq!(world.state_hash(), predicted.state_hash());
+            world.step(&[(id, TickInput::default())]);
+            restored.step(&[(id, TickInput::default())]);
+            predicted.step_prediction(&[(id, TickInput::default())]);
+        }
+        let weapon = &world.players[0].weapons[0];
+        assert_eq!((weapon.clip, weapon.reserve), (30, 30));
+        assert!(weapon.reload_end.is_none());
+
+        // Preserve the prior fallback for a new press on an already empty
+        // weapon, independently of a continuous empty trigger above.
+        world.players[0].weapons[0].clip = 0;
+        world.step(&[(id, held())]);
+        assert!(world.players[0].weapons[0].reload_end.is_some());
+        assert_eq!(world.players[0].shots, 1);
+    } }
 }
 
 fn held() -> TickInput { TickInput { buttons: buttons::ATTACK, ..Default::default() } }
