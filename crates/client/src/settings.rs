@@ -59,9 +59,20 @@ pub const KEYS: [KeyCode; 40] = [
     KeyCode::CapsLock,
 ];
 
+/// A wheel detent is a one-shot request, never a held jump button.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WheelAction { None, Jump, Previous, Next }
+impl WheelAction {
+    pub fn command(self) -> &'static str { match self { Self::None => "", Self::Jump => "+jump", Self::Previous => "invprev", Self::Next => "invnext" } }
+    pub fn parse(value: &str) -> Option<Self> { Some(match value { "" => Self::None, "+jump" => Self::Jump, "invprev" => Self::Previous, "invnext" => Self::Next, _ => return None }) }
+}
+
 #[derive(Resource, Clone, Debug, PartialEq)]
 pub struct Settings {
     pub volume: f32,
+    pub show_fps: bool,
+    pub wheel_up: WheelAction,
+    pub wheel_down: WheelAction,
     pub menu_blur: bool,
     pub sensitivity: f32,
     pub invert_y: bool,
@@ -87,6 +98,9 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             volume: 0.5,
+            show_fps: false,
+            wheel_up: WheelAction::Previous,
+            wheel_down: WheelAction::Next,
             menu_blur: true,
             sensitivity: 2.0,
             invert_y: false,
@@ -145,6 +159,9 @@ impl Settings {
             let value = value.trim();
             let v = value.parse::<f32>().ok().filter(|x| x.is_finite());
             match key {
+                "cl_showfps" => s.show_fps = value == "1",
+                "mwheelup" => { if let Some(action) = WheelAction::parse(value) { s.wheel_up = action; } }
+                "mwheeldown" => { if let Some(action) = WheelAction::parse(value) { s.wheel_down = action; } }
                 "menu_blur" => s.menu_blur=value=="true",
                 "volume" => {
                     if let Some(v) = v {
@@ -234,6 +251,7 @@ impl Settings {
             self.cross_thickness,
             self.cross_dot
         );
+        text.push_str(&format!("cl_showfps={}\nmwheelup={}\nmwheeldown={}\n", u8::from(self.show_fps), self.wheel_up.command(), self.wheel_down.command()));
         text.push_str(&format!("menu_blur={}\n", self.menu_blur));
         text.push_str(&format!("radar_scale={}\nradar_rotate={}\n", self.radar_scale, self.radar_rotate));
         text.push_str(&format!("closeonbuy={}\n", u8::from(self.close_on_buy)));
@@ -273,6 +291,11 @@ impl Settings {
     pub(crate) fn convar_number(&self, name: &str) -> Option<f64> {
         Some(match name {
             "volume" => self.volume as f64,
+            "cl_showfps" => u8::from(self.show_fps) as f64,
+            "cl_crosshairsize" => self.cross_size as f64,
+            "cl_crosshairgap" => self.cross_gap as f64,
+            "cl_crosshairthickness" => self.cross_thickness as f64,
+            "cl_crosshairdot" => u8::from(self.cross_dot) as f64,
             "sensitivity" => self.sensitivity as f64,
             "m_pitch" => if self.invert_y { -0.022 } else { 0.022 },
             "cl_crosshaircolor" => [1., 3., 2., 4., 0.][self.cross_color.min(4)],
@@ -286,6 +309,11 @@ impl Settings {
     pub(crate) fn set_convar_number(&mut self, name: &str, number: f64) -> bool {
         if !number.is_finite() { return false; }
         match name {
+            "cl_showfps" if number == 0.0 || number == 1.0 => self.show_fps = number == 1.0,
+            "cl_crosshairsize" => self.cross_size = number.clamp(2.0, 20.0) as f32,
+            "cl_crosshairgap" => self.cross_gap = number.clamp(0.0, 16.0) as f32,
+            "cl_crosshairthickness" => self.cross_thickness = number.clamp(1.0, 6.0) as f32,
+            "cl_crosshairdot" if number == 0.0 || number == 1.0 => self.cross_dot = number == 1.0,
             "volume" => self.volume = number.clamp(0.0, 1.0) as f32,
             "sensitivity" => self.sensitivity = number.clamp(0.1, 10.0) as f32,
             "m_pitch" => self.invert_y = number < 0.0,

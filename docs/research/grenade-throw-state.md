@@ -1,10 +1,11 @@
 # Grenade pin, hold and release milestone
 
-This source milestone replaces instant trigger-click launches with tick-based
+This milestone initially replaced instant trigger-click launches with tick-based
 pin-pulling, indefinite holding, release playback and inventory removal after
-that playback. It uses the selected installed viewmodel's declarative sequence
-duration and throw event, not a guessed windup delay. It is an authored-animation
-policy; those declarations alone do not prove the native command-phase law.
+that playback. It initially used the selected installed viewmodel's declarative sequence
+duration and throw event. Native observation below supersedes that timing
+policy for identified models; declarations alone do not establish the native
+command-phase law.
 
 [Valve's February2014 update](https://blog.counter-strike.net/page/24/?s=update)
 describes secondary underhand throws and combined primary/secondary input.
@@ -28,7 +29,7 @@ instant-throw fallback. Dedicated include-model grenade timing is not supported.
 
 WeaponState retains the phase, button mode, pin/throw producer ticks, pending
 release and whether the projectile was spawned. TickInput alone changes it.
-Release during pin pull is latched until the declared windup finishes. Holding
+Release during pin pull interrupts it on the final button-release tick. Holding
 never starts the projectile fuse. Secondary uses ACT_VM_RELEASE; combined input
 is retained separately and uses the overhand clip. Bots release from Holding
 through their regular TickInput producer. Switching cancels an uncommitted pin;
@@ -113,3 +114,89 @@ commands were unsupported; `getpos` and the visible position/velocity overlay
 provide the actual camera/stationarity observations. Preferences were restored
 byte-for-byte after the owned process exited. Captures and raw identifiers
 remain private under `csr-fidelity/grenade-hold-native-20261014/held-smoke-20261014-122708`.
+
+### Owner release-timing regression (2026-10-14 playtest)
+
+The owner observed a visible delay between releasing either throw button and
+throw playback, with the projectile timing affecting jump throws. Quick taps
+also feel unlike native throws, and running throws fall short. These are open
+fidelity defects, not accepted behavior. The playtested state machine waited for
+the entire declared pull-pin clip and then for event3005 in the release clip;
+the renderer uses the same producer tick. Installed animation metadata alone
+does not establish the native command-to-release or minimum-preparation law.
+The existing movement inheritance coefficient remains provisional. Native
+observation must distinguish the command edge, visible throw onset, and actual
+projectile release before adjusting either timing or launch coefficients.
+
+The owner also reported missing smoke emission audio. The playtested activation
+had no smoke sound route; bounce audio does not substitute for emission.
+
+### First native release correction
+
+An owned Legacy1.38.8.1 session on Inferno used ordinary console button input,
+60FPS and acknowledged host_timescale0.25. HE held-overhand, held-underhand,
+a short HE tap, held smoke and held Molotov all emitted their throw cue on the
+release command edge. The short tap was approximately67ms of wall time (about
+17ms of scaled game time); it did not wait for the roughly0.967s pull-pin clip.
+First captured HE/underhand/smoke frames already showed the hand out of view.
+This disproves the prior full-clip preparation gate. The state now transitions
+to Throwing when the last held attack button is released; holding either button
+continues preparation. Physical projectile creation still follows the authored
+release event pending a tighter native spawn observation, so this is not yet a
+claim of exact jumpthrow or running-throw fidelity. No velocity coefficient,
+pitch law, origin offset, fuse or bounce constant was adjusted.
+
+Throw foley follows the authoritative release-phase tick, using the selected
+VFS's per-kind installed throw entry; the later projectile event no longer
+repeats that cue. An interrupted pin-pull cannot play its queued pin sounds
+over the release or the next practice grenade. The catalog policy salt changes
+so old full-pin-gate clients do not silently join this timing policy.
+
+Native smoke activation logged smoke_emit.wav and sg_explode_distant.wav.
+The installed BaseSmokeEffect.Sound entry declares those near/distant cues;
+activation now routes that entry through the existing positional sound mixer.
+Soundcheck includes both emission entries and all six throw entries. Captures,
+logs, executable hashes and exact preference restoration remain private under
+csr-fidelity/grenade-release-native-20261015/release-20261014-222257. All12
+preference targets matched the pre-launch snapshot after the owned process
+exited; no native process remained. First-frame sampling was coarse, so these
+captures do not establish an exact projectile spawn time.
+
+### Bounded physical-release correction
+
+A tighter owned HE session captured both a held throw and a quick tap with
+acknowledged host_timescale 0.05. The raw timestamps bound the first visible
+HE projectile between approximately 0.105 and 0.120 scaled seconds after the
+release command, rather than the authored marker's one-third second. Captures
+include their begin/end wall-clock timestamps, so first visibility is not
+claimed as the exact server construction tick. The tap's earlier preparation
+was visibly interrupted, independently confirming removal of the full-pin gate.
+
+A further owned session used acknowledged host_timescale 0.1 and 13 cases:
+primary and secondary throws of HE, flash, smoke, Molotov, incendiary and decoy,
+plus combined-button HE. Before-release poses and each grenade's pin/throw
+sound identities were checked. Every case visibly released the matching world
+projectile by roughly 0.12?0.17 scaled seconds, including underhand bottles and
+canisters. Godmode was explicitly acknowledged to protect repeated self-throws;
+particles were hidden only for observation. Each flash projectile was killed
+with an ordinary console command before its fuse, and subsequent captures
+showed no flash blindness. Both sessions restored all 12 preference targets
+exactly and left no owned native process. The all-type run contains 234 frames
+plus 13 before-release captures; all evidence remains private outside the repo.
+
+The identified six installed MDL header hashes now select a separate observed
+command-release delay of 0.1 seconds. At 64Hz its ceiling is 0.109375 seconds,
+consistent with the observed visibility interval. This is a bounded empirical
+profile, not proof of the internal native delay, server tick, 128-tick behavior,
+or historical 2015 parity. Different/custom MDL headers retain authored-event
+fallback timing instead of inheriting an unobserved native profile. Catalog
+identity includes the changed timing-policy generation. No velocity, movement
+inheritance, pitch, spawn-offset, fuse or bounce coefficient was adjusted.
+
+Simulation creates the projectile from this command-relative delay through
+TickInput alone. Viewmodel clips retain their natural producer-tick clock and
+authored full-duration inventory completion. A private pre-release marker-remap
+trial was rejected after rendered comparison: event3005 does not establish the
+native visible hand-release phase. Physical release/audio timing are verified
+independently; exact hand-phase matching, native animation speed, movement/VR
+trajectories and historical parity remain open.

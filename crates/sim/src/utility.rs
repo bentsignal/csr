@@ -575,8 +575,8 @@ mod tests {
                 catalog.weapons.iter_mut().find(|d| d.class_name == "weapon_decoy").unwrap()
                     .grenade_animations = Some(weapons::GrenadeAnimations {
                         pull_pin_duration: 0.25,
-                        overhand: weapons::GrenadeReleaseAnimation { duration: 0.5, release_time: 0.125 },
-                        underhand: weapons::GrenadeReleaseAnimation { duration: 0.5, release_time: 0.125 },
+                        overhand: weapons::GrenadeReleaseAnimation { command_release_time: None, duration: 0.5, release_time: 0.125 },
+                        underhand: weapons::GrenadeReleaseAnimation { command_release_time: None, duration: 0.5, release_time: 0.125 },
                     });
                 let mut collision = collision::CollisionWorld::new();
                 collision.finalize();
@@ -668,8 +668,8 @@ mod tests {
         // Installed flashbang declarations: 30fps, 30 pull frames, 23 throw
         // frames and event at 10/22 cycle. This tests our authored policy.
         def.grenade_animations=Some(weapons::GrenadeAnimations {pull_pin_duration:29./30.,
-            overhand:weapons::GrenadeReleaseAnimation {duration:22./30.,release_time:(22./30.)*(10./22.)},
-            underhand:weapons::GrenadeReleaseAnimation {duration:12./30.,release_time:(12./30.)*(10./12.)}});
+            overhand:weapons::GrenadeReleaseAnimation { command_release_time: None,duration:22./30.,release_time:(22./30.)*(10./22.)},
+            underhand:weapons::GrenadeReleaseAnimation { command_release_time: None,duration:12./30.,release_time:(12./30.)*(10./12.)}});
         assert_eq!(def.clip_size, 1);
         w.player_mut(id)
             .unwrap()
