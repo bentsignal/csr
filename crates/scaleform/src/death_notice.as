@@ -233,6 +233,14 @@ _global.csrDeathNotices.resize = function() {
     if (!this.ready) { return false; }
     this.root.onResize();
     var success = true;
-    for (var id in this.rows) { if (!this.layout(this.rows[id])) { success = false; } }
+    for (var id in this.rows) {
+        var laidOut = false;
+        try { laidOut = this.layout(this.rows[id]) === true; }
+        catch (error) { laidOut = false; }
+        if (!laidOut) {
+            success = false;
+            csrEI.call("csr.DeathNoticeResult", id.substr(8), false);
+        }
+    }
     return success;
 };
