@@ -20,6 +20,7 @@ pub(crate) struct Flow {
     phase: u8,
     step: usize,
     tick: u64,
+    options_roundtrip: bool,
 }
 impl Default for Flow {
     fn default() -> Self {
@@ -29,6 +30,7 @@ impl Default for Flow {
             phase: 0,
             step: 0,
             tick: 0,
+            options_roundtrip: std::env::var("CSR_TEST_FLOW_OPTIONS").as_deref() == Ok("1"),
         }
     }
 }
@@ -170,10 +172,36 @@ pub(crate) fn update(
             if !menu.open() || flow.seconds() < 3. {
                 return;
             }
-            capture(&mut commands, &options, "flow-pause.png");
-            flow.tick = world.as_ref().unwrap().0.tick;
-            click(&front, &window, 650., 530.);
-            flow.next();
+            if flow.options_roundtrip {
+                match flow.step {
+                    0 => {
+                        capture(&mut commands, &options, "flow-pause.png");
+                        click(&front, &window, 650., 665.);
+                    }
+                    1 => click(&front, &window, 650., 817.),
+                    2 => {
+                        if !front.options_requested() || !front.movie_ready("OptionsMenu") { return; }
+                        capture(&mut commands, &options, "flow-pause-audio.png");
+                        click(&front, &window, 380., 970.);
+                    }
+                    _ => {
+                        if front.options_requested() || !front.pause_surface_visible() { return; }
+                        info!("frontend flow: native Audio Back restored Pause");
+                        capture(&mut commands, &options, "flow-pause-options-returned.png");
+                        flow.tick = world.as_ref().unwrap().0.tick;
+                        click(&front, &window, 650., 530.);
+                        flow.next();
+                        return;
+                    }
+                }
+                flow.step += 1;
+                flow.entered = Instant::now();
+            } else {
+                capture(&mut commands, &options, "flow-pause.png");
+                flow.tick = world.as_ref().unwrap().0.tick;
+                click(&front, &window, 650., 530.);
+                flow.next();
+            }
         }
         3 => {
             if menu.open() || clock.is_paused() || world.as_ref().unwrap().0.tick <= flow.tick {
