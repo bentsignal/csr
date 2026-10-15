@@ -194,7 +194,7 @@ pub(crate) fn install_frame_log(app: &mut App) {
 
 fn disable_test_light_clusters(mut commands: Commands, cameras: Query<Entity, Added<Camera3d>>) {
     for camera in &cameras {
-        commands.entity(camera).insert(bevy::light::ClusterConfig::None);
+        commands.entity(camera).insert(bevy::light::cluster::ClusterConfig::None);
         info!("renderer experiment: disabled light clusters for camera {camera}");
     }
 }
