@@ -17,6 +17,10 @@ pub struct PendingEvents(pub Vec<GameEvent>);
 #[derive(Clone, Debug)]
 pub struct KillFeedEntry {
     pub text: String,
+    /// Keep the authoritative weapon and headshot independently of the
+    /// diagnostic text so the authored HUD can choose its exported icons.
+    pub weapon: String,
+    pub headshot: bool,
     pub local_involved: bool,
     pub time: f32,
     /// Immutable authority, retained inside the existing bounded feed rather
@@ -33,7 +37,8 @@ impl KillFeedEntry {
                 if headshot { " HS" } else { "" }, death.victim_name),
             None => format!("[{gun}]  {}", death.victim_name),
         };
-        Self { text, local_involved: attacker == local || death.key.victim == local, time, death }
+        Self { text, weapon: weapon.into(), headshot,
+            local_involved: attacker == local || death.key.victim == local, time, death }
     }
 }
 
@@ -352,6 +357,8 @@ mod attack_tests {
         death.attacker = Some(sim::death::DeathActor { id: 2, name: "original attacker".into(), team: sim::Team::Terrorist });
         let entry = KillFeedEntry::new(2, "weapon_ak47", true, death, 3, 1.);
         assert_eq!(entry.text, "original attacker  [ak47 HS]  victim");
+        assert_eq!(entry.weapon, "weapon_ak47");
+        assert!(entry.headshot);
         assert!(!entry.local_involved);
         assert_eq!(entry.death.attacker.as_ref().unwrap().team, sim::Team::Terrorist);
         assert_eq!(entry.death.victim_team, sim::Team::CounterTerrorist);
