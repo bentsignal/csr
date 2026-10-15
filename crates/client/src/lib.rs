@@ -34,6 +34,7 @@ mod menu_blur;
 pub mod settings;
 pub mod menu;
 pub mod feedback;
+mod impact_decals;
 pub mod utility_fx;
 mod particle_data;
 mod particle_material;

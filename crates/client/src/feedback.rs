@@ -13,6 +13,7 @@ pub struct FeedbackAssets {
     blood: Handle<StandardMaterial>,
     hole: Handle<StandardMaterial>,
     dust: Handle<StandardMaterial>,
+    decals: crate::impact_decals::Catalog,
 }
 #[derive(Component)]
 pub struct ImpactFx {
@@ -21,6 +22,8 @@ pub struct ImpactFx {
     velocity: Vec3,
     billboard: bool,
 }
+#[derive(Component)]
+struct ImpactArtwork(content::ContentId);
 #[derive(Component)]
 pub struct HurtEdge(pub u8);
 #[derive(Resource, Default)]
@@ -88,6 +91,7 @@ pub fn setup(
             cull_mode: None,
             ..default()
         }),
+        decals: crate::impact_decals::Catalog::load(&level.0.vfs, &mut meshes, &mut images, &mut materials),
     };
     // Queue these pipeline/material variants during startup so the first
     // short-lived hit puff is not lost to asynchronous shader compilation.
@@ -268,7 +272,8 @@ fn blood_hit(
 pub fn update(
     mut commands: Commands,
     mut effects: ResMut<Effects>,
-    assets: Res<FeedbackAssets>,
+    mut assets: ResMut<FeedbackAssets>,
+    props: Res<crate::surfaces::SurfaceProps>,
     mut hurt: ResMut<Hurt>,
     settings: Res<crate::settings::Settings>,
     world: Res<SimWorld>,
@@ -306,18 +311,17 @@ pub fn update(
                     continue;
                 }
                 budget -= 4;
-                spawn(
-                    &mut commands,
-                    &assets,
-                    to_bevy(pos),
-                    to_bevy(normal),
-                    1.7,
-                    false,
-                    false,
-                    Vec3::ZERO,
-                    now,
-                    30.0,
-                );
+                let prop = props.prop_of(&level.0.vfs, level.0.collision.surface_name(surface));
+                if let Some(decal) = props.get(&prop).and_then(|p| p.game_material.as_deref())
+                    .and_then(|code| assets.decals.choose(code)) {
+                    let normal = to_bevy(normal).normalize_or_zero();
+                    if normal.length_squared() > 0.5 && pos.is_finite() {
+                        commands.spawn((Mesh3d(decal.mesh), MeshMaterial3d(decal.material), ImpactArtwork(decal.id),
+                            Transform::from_translation(to_bevy(pos) + normal * 0.12)
+                                .with_rotation(Quat::from_rotation_arc(Vec3::Z, normal)),
+                            ImpactFx { born: now, life: 30., velocity: Vec3::ZERO, billboard: false }));
+                    }
+                }
                 for i in 0..3 {
                     let drift = to_bevy(normal) * 25.0
                         + Vec3::new(i as f32 * 9.0 - 9.0, 8.0, 5.0 - i as f32 * 5.0);
@@ -474,6 +478,7 @@ mod mob_blood_tests {
             blood: default(),
             hole: default(),
             dust: default(),
+            decals: default(),
         };
         let collision = collision::CollisionWorld::new();
         let mut queue = bevy::ecs::world::CommandQueue::default();

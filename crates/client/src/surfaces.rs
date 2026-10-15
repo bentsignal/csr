@@ -13,6 +13,8 @@ pub struct SurfaceSounds {
     pub step_left: Option<String>,
     pub step_right: Option<String>,
     pub bullet_impact: Option<String>,
+    /// Authored game-material code for impact decal translation.
+    pub game_material: Option<String>,
 }
 
 #[derive(Resource, Default)]
@@ -63,6 +65,7 @@ impl SurfaceProps {
                     step_left: lookup(raw, name, "stepleft", 0),
                     step_right: lookup(raw, name, "stepright", 0),
                     bullet_impact: lookup(raw, name, "bulletimpact", 0),
+                    game_material: lookup(raw, name, "gamematerial", 0),
                 })
             })
             .collect();
