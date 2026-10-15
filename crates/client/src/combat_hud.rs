@@ -266,6 +266,7 @@ impl Presentation {
                     part,
                     revision = frame.presentation_revision,
                     ?size,
+                    ?snapshot,
                     "Original combat HUD raster admitted"
                 );
             }

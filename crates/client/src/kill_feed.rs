@@ -407,6 +407,14 @@ fn update(
             .unwrap()
             .send(Input::SetActive(active));
         feed.active = active;
+        if std::env::var_os("CSR_COMBAT_HUD_TRACE").is_some() {
+            info!(
+                active,
+                revision = feed.revision,
+                notices = feed.entries.len(),
+                "Classic HUD worker activity"
+            );
+        }
     }
     if ready && matched && now - feed.last_alpha >= 1.0 / 30.0 {
         for entry in entries
