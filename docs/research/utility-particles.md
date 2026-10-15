@@ -199,7 +199,7 @@ random yaw and roll. Flat-floor axes remain unchanged; cards without the
 explicit flag keep their previous orientation. The trace, emission, particle
 centers, material, brightness, fire coverage and authoritative damage are
 unchanged. This does not implement native inferno spread cells or the remaining
-SpriteCard composition laws. Focused and rendered verification are pending.
+SpriteCard composition laws.
 
 Source `f64c964` passed all five focused utility-particle tests and a play
 launcher build after cleaning all 23 workspace packages for that profile.
