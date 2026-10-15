@@ -918,6 +918,10 @@ impl Frontend {
     }
 
     pub(crate) fn home_bootstrapped(&self) -> bool { self.data.lock().unwrap().home_bootstrapped }
+    pub(crate) fn pause_presented(&self) -> bool {
+        self.worker_kind == WorkerKind::Match && self.pause_surface_visible()
+            && self.pause_presentation.ready()
+    }
     pub(crate) fn home_presented(&self) -> bool {
         self.worker_kind == WorkerKind::Home && !self.home_show_pending
             && self.movie_ready("MainMenu") && self.pause_presentation.ready()
