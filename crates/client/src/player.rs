@@ -360,6 +360,7 @@ pub fn tick(
     mut probe: ResMut<crate::sound_probe::SoundProbe>,
     remote: Option<Res<crate::remote::RemoteClient>>,
 ) {
+    let _frame_scope = crate::input_latency::frame_scope("simulation");
     if remote.is_some() || front.open() {return;}
     let no_keys = ButtonInput::<KeyCode>::default();
     let keys: &ButtonInput<KeyCode> = if enabled.0 && !menu.open && block.0==0 { &real_keys } else { &no_keys };

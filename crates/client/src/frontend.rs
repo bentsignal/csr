@@ -988,6 +988,7 @@ pub(crate) fn update(
     mut sounds: ResMut<crate::audio::SoundLibrary>,
     mut sources: ResMut<Assets<AudioSource>>,
 ) {
+    let _frame_scope = crate::input_latency::frame_scope("frontend");
     let remote_loading = crate::remote_join::loading(remote.as_deref());
     let scene = if remote_loading { AppState::Loading } else { *state.get() };
     let loading_selection = if scene == AppState::Loading { loader.loading_map() } else { None };

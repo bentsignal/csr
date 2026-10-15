@@ -200,6 +200,7 @@ pub fn sync(
     mut transforms: Query<&mut Transform>,
     mut visibility: Query<&mut Visibility>,
 ) {
+    let _frame_scope = crate::input_latency::frame_scope("characters");
     muzzles.world.clear();
     let dt = time.delta_secs();
     let sim_now = world.0.time();
@@ -355,10 +356,16 @@ pub fn sync(
             c.light_current=Some((cube,sun_dir,sun_color));
             let weapon_mats = c.weapon.iter().flat_map(|w| w.2.iter());
             for h in c.materials.iter().chain(weapon_mats) {
-                if let Some(mut m) = materials.get_mut(h) {
-                    m.params.ambient_cube = cube;
-                    m.params.sun_dir = sun_dir;
-                    m.params.sun_color = sun_color;
+                // Preserve stable bindings when interpolation produces the
+                // same light. Check before obtaining mutable asset access.
+                let changed = materials.get(h).is_some_and(|m|
+                    m.params.ambient_cube != cube || m.params.sun_dir != sun_dir || m.params.sun_color != sun_color);
+                if changed {
+                    if let Some(mut m) = materials.get_mut(h) {
+                        m.params.ambient_cube = cube;
+                        m.params.sun_dir = sun_dir;
+                        m.params.sun_color = sun_color;
+                    }
                 }
             }
         }
