@@ -81,3 +81,26 @@ Separate existing follow-up: the release lifecycle Audio screenshot again
 shows only Master Volume and a large empty rounded panel with a white point.
 Its capture may precede steady state. Full Audio content/layout remains open;
 the slider/navigation fixes are not a full-page visual pass.
+
+## Missing localized MessageBox glyphs
+
+The first production confirmation draws the original box and controls but drops
+letters in its question. A delayed-setter public observation reproduces that
+failure, so delaying text assignment is not a fix. Metadata-only inspection of
+the installed movie identifies its eleven-glyph `Stratum2 Regular` subset:
+`#DTaegilotx`. The question's missing letters, space and question mark are absent
+from that subset. The same install's font library contains the complete family.
+No authored instructions or function bodies were inspected.
+
+The runtime compatibility change is limited to `message-box.swf`, its observed
+font id/family/flags/code sequence and the observed full-family library metadata.
+It appends missing installed glyphs and matching alignment records. Existing
+glyph indices, raw outline bytes, advances, bounds, global metrics, kerning and
+alignment records stay unchanged. Other movie tags, including instructions,
+pass through byte-for-byte. No font or movie assets enter the repository.
+
+This checkpoint is not a rendered fix claim. The original Cancel click emitted
+`MessageBox.OnButtonPress(52)`; the confirm value and the dialog object's stored
+API still need the bounded verbose public observation. The provisional callback
+binding is not accepted as complete until actual Cancel/reopen/OK behavior and
+the full question render have been checked.
