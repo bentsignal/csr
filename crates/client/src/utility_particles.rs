@@ -48,6 +48,7 @@ pub struct Layer {
     roll: [f32; 2],
     spin: f32,
     ground: bool,
+    ground_normal: bool,
     upright: bool,
 }
 
@@ -308,6 +309,8 @@ pub fn load(
                 .map_or(0.0, |e| e.number("spin_rate_degrees", 0.0))
                 .to_radians(),
             ground: render.is_some_and(|r| r.number("orientation_type", 0.0) == 3.0),
+            ground_normal: op(&init, "Position Modify Place On Ground")
+                .is_some_and(|o| o.number("set normal", 0.0) != 0.0),
             upright: render.is_some_and(|r| r.number("orientation_type", 0.0) == 1.0),
         });
     }
@@ -333,6 +336,7 @@ struct Particle {
     fade_out: f32,
     roll: f32,
     yaw: f32,
+    normal: Vec3,
     sequence: usize,
 }
 impl Particle {
@@ -529,6 +533,7 @@ impl Emitter {
                 );
                 let mut pos = direction * distance * l.bias.abs()
                     + rng.vector(l.offset) * if l.offset_scaled { radius } else { 1.0 };
+                let mut normal = Vec3::Y;
                 if self.fire {
                     // PCF distributes to inferno control points. Until fire-cell
                     // authority exists, sample only the sim's occupied 130-inch disc.
@@ -545,6 +550,9 @@ impl Emitter {
                     );
                     if !tr.hit() || tr.start_solid || tr.normal.z < 0.65 {
                         continue;
+                    }
+                    if l.ground_normal {
+                        normal = to_bevy(tr.normal).normalize_or(Vec3::Y);
                     }
                     pos.y = to_bevy(from.lerp(to, tr.fraction)).y - self.origin.y
                         + if l.ground { 1.0 } else { radius * 0.65 };
@@ -574,6 +582,7 @@ impl Emitter {
                     fade_out: rng.range(l.fade_out),
                     roll: rng.range(l.roll),
                     yaw: rng.unit() * std::f32::consts::TAU,
+                    normal,
                     sequence,
                 });
             }
@@ -618,10 +627,7 @@ impl Emitter {
                     })
                     .unwrap_or(([0.0, 0.0, 1.0, 1.0], [0.0, 0.0, 1.0, 1.0], 0.0));
                 let (right, up) = if l.ground {
-                    (
-                        Vec3::new(p.yaw.cos(), 0.0, p.yaw.sin()),
-                        Vec3::new(-p.yaw.sin(), 0.0, p.yaw.cos()),
-                    )
+                    ground_basis(p.normal, p.yaw)
                 } else if self.fire {
                     (Vec3::new(p.yaw.cos(), 0.0, p.yaw.sin()), Vec3::Y)
                 } else if l.upright {
@@ -668,6 +674,17 @@ impl Emitter {
             }
         }
     }
+}
+
+/// Orientation 3 cards use their ground initializer's sampled surface normal.
+/// Project the previous world-X heading onto that plane before applying yaw,
+/// preserving the flat-floor layout without turning cards toward the camera.
+fn ground_basis(normal: Vec3, yaw: f32) -> (Vec3, Vec3) {
+    let normal = normal.normalize_or(Vec3::Y);
+    let tangent = (Vec3::X - normal * normal.x).normalize_or(Vec3::Z);
+    let bitangent = tangent.cross(normal);
+    let (sin, cos) = yaw.sin_cos();
+    (tangent * cos + bitangent * sin, bitangent * cos - tangent * sin)
 }
 
 /// Authored orientation 1 rotates toward the eye around Source Z (Bevy Y),
@@ -771,6 +788,7 @@ mod tests {
             fade_out: 0.0,
             roll: 0.0,
             yaw: 0.0,
+            normal: Vec3::Y,
             sequence,
         }
     }
@@ -849,6 +867,27 @@ mod tests {
             particles.iter().map(|p| p.sequence).collect::<Vec<_>>(),
             [1, 0]
         );
+    }
+
+    #[test]
+    fn ground_cards_follow_slopes_without_changing_flat_floor_layout() {
+        for yaw in [0.0_f32, 0.7, 2.4] {
+            let (right, up) = ground_basis(Vec3::Y, yaw);
+            assert_eq!(right, Vec3::new(yaw.cos(), 0.0, yaw.sin()));
+            assert_eq!(up, Vec3::new(-yaw.sin(), 0.0, yaw.cos()));
+
+            let normal = Vec3::new(0.3, 0.9, -0.2).normalize();
+            let (right, up) = ground_basis(normal, yaw);
+            for axis in [right, up] {
+                assert!(axis.dot(normal).abs() < 1e-6);
+                assert!((axis.length() - 1.0).abs() < 1e-6);
+            }
+            assert!(right.dot(up).abs() < 1e-6);
+            // All four corners remain on the sampled floor plane.
+            for corner in [-right - up, right - up, right + up, -right + up] {
+                assert!(corner.dot(normal).abs() < 1e-6);
+            }
+        }
     }
 
     #[test]
