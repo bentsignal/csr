@@ -617,3 +617,9 @@ parity and the gameplay gaps listed above remain unfinished.
   A support query wakes the visual mark if a dynamic world removes its floor;
   translation, bounces, gravity, fuses and authored appearance are unchanged.
   Exact original angular motion and native grenade physics remain unmeasured.
+- [x] Keep the same decoy world body across projectile-to-field activation,
+  remove it at authoritative expiry/cleanup, and recreate a resting body from
+  an active-field snapshot. Native presence and rendered throw/expiry checks
+  support this bounded fix; exact lifetime, cadence and replicated orientation
+  remain open. [Evidence](research/deployed-decoy-body.md),
+  [PR #145](https://github.com/bentsignal/global-offensive/pull/145).
