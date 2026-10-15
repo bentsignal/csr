@@ -3,6 +3,7 @@
 pub mod maps;
 mod character_profiles;
 mod grenade_animations;
+mod recoil_trajectories;
 mod suppressor_animations;
 
 use collision::{CollisionWorld, MapCollisionOptions};
@@ -226,6 +227,7 @@ impl Level {
                     .map(|catalog| (catalog, Some(Sha1::digest(&bytes).into())))
             })
             .unwrap_or_default();
+        let catalog_sha1=recoil_trajectories::import(&mut catalog,catalog_sha1);
         let catalog_sha1=grenade_animations::import(&mut catalog,&fs,catalog_sha1);
         let catalog_sha1=suppressor_animations::import(&mut catalog,&fs,catalog_sha1);
         timings.push(("weapons", t.elapsed().as_secs_f32()));

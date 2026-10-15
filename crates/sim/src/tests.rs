@@ -112,6 +112,7 @@ fn ray_box_hits_and_misses() {
 
 fn def(name: &str, index: u32, class: WeaponClass, side: Side, price: i32, clip: i32) -> WeaponDefinition {
     WeaponDefinition {
+        recoil_trajectory: None,
         suppressor_animations: None,
         grenade_animations: (class==WeaponClass::Grenade).then_some(weapons::GrenadeAnimations {
             pull_pin_duration:0.25,

@@ -65,7 +65,8 @@ transition fields. Its typed `Accuracy` fields lift the old keys, and
 Thus these rifles do **not** demonstrate a missing-key fallback to 0.05;
 the unimplemented distinction is the native recovery procedure.
 
-The current `sim::weapon::recoil_pattern` uses the project's own RNG seeded
+For weapons without an admitted observed trajectory,
+`sim::weapon::recoil_pattern` still uses the project's own RNG seeded
 by seed plus definition ID, independent angle/magnitude sampling, a
 first-three-shot angle multiplier of 0.25, conversion of 0.02 degrees per
 unit, and accumulated offsets. Recovery moves backwards through that
@@ -135,6 +136,77 @@ console logs, settings, executable identity and account-bearing session
 receipts stay outside the repository. Any resulting profile identifies the
 installed 2023 reference and its limitations; unchanged historical recoil
 configuration alone does not establish a 2015 trajectory.
+## Admitted installed AK held-magazine profile
+
+The first usable trajectory is now an **observed Legacy 1.38.8.1 (2023) AK
+profile**, not a reproduction of the engine algorithm or proof of 2015
+parity. It replaces the arbitrary generator only for the exact observed
+item-schema identity and matching `csgo_weapon_ak47` statistics. Different
+schemas, origins, weapon modes and modified statistics keep their existing
+fallback. The catalog digest includes the profile policy and derived angles,
+so old peers with identical assets cannot silently use a different trajectory.
+
+The native admission positively established an actual AK **30 -> 29** ammo
+change, a fresh impact, zero velocity, equal before/after eye positions and
+stationary background. The working `cl_pdump 1` overlay exposed origin,
+velocity, view offset and punch fields. Requested no-spread, bullet recoil
+scale 2, view tracking/extra punch 0, FOV setting 90 and timescale were all
+verified from runtime values. Two held, standing, 128-tick, no-spread
+magazines at timescale 0.1 each produced 30 independently counted near-shot
+sound starts and 30 shot-ordered HUD counts from 29 through 0. Fresh prior
+impact overlays expired before each magazine. Sound receipt and capture
+intervals locate observations; they are not exact server shot ticks.
+
+Projection was independently calibrated with the same fixed native eye and
+actual camera angles at yaw +/-10 degrees and pitch 5/15/25 degrees. Pure
+rotation reprojection of 8,749 static masonry samples, without any BSP
+geometry, fitted focal lengths **599.825 .. 600.050 pixels**. At 1600x900,
+600 pixels corresponds to horizontal **106.260 degrees** and vertical
+73.740 degrees. Treating the requested 90 as the actual widescreen horizontal
+FOV would have produced the wrong angles. A clipped RGB residual favored
+600 over 800 pixels in all four independent rotations.
+
+Pixel centers are measured from the visible blue/red impact boxes with an
+approximately **2-pixel uncertainty**, including partly overlapping early
+and late shots. The independently repeated slow magazine's center differences
+are at most 1.5 pixels (RMS 0.626 pixels). A separate normal-timescale magazine
+consumed exactly 30 rounds and reproduced the aggregate marker cloud: derived
+centers are within 2.1 pixels of its marker pixels. This last check establishes
+aggregate shape at normal speed, not separately resolved normal-speed shot
+order. Raw pixel observations remain available privately; decimal degree
+rounding is not a claim of hundredth-degree measurement precision.
+
+For each pixel `(x,y)`, the ray was reconstructed as
+`normalize(forward + right*(x-800)/600 + up*(450-y)/600)` using the observed
+15-degree native pitch. Pitch/yaw were then measured relative to the base
+aim. The resulting offsets, in degrees, are:
+
+| Shots | Pitch / yaw, in shot order |
+| --- | --- |
+| 1-5 | 0/0; -0.19/0; -1.19/0; -2.86/-0.20; -4.57/-0.15 |
+| 6-10 | -6.18/0.48; -7.78/0.91; -8.81/1.66; -9.65/0.76; -9.37/-1.61 |
+| 11-15 | -9.70/-2.74; -10.30/-2.07; -10.39/-2.92; -9.94/-4.29; -10.13/-4.43 |
+| 16-20 | -10.44/-2.50; -10.85/-1.32; -11.13/-0.47; -10.99/0.94; -10.58/2.78 |
+| 21-25 | -10.67/1.79; -10.85/2.02; -11.04/1.60; -11.31/1.13; -11.04/2.16 |
+| 26-30 | -11.27/2.49; -11.54/1.50; -11.22/-0.42; -10.21/-2.83; -10.12/-3.58 |
+
+The initial climb settles into the observed sideways trajectory instead of
+continuing upward. `fire()` samples each bullet offset before incrementing
+its index; the cache converts bullet angles to aim punch once, and the
+ordinary authoritative ray path applies recoil scale once. The same loaded
+profile is available after ContentId-based snapshot decoding and prediction.
+The headless `recoilcheck` example emits actual no-spread authoritative rays
+from the installed catalog at both supported tick rates.
+
+**Still open:** release/recovery dynamics, tap and burst transitions, crouched
+or moving trajectories, camera punch phase/decay, native 64-tick calibration,
+M4/other weapons, later magazines without full recovery, and calibrated 2015
+observations. Existing backwards-index recovery and camera interpolation are
+not established as native behavior. After the last observed point, the cache
+clamps rather than inventing extra magazine shots. The observed AK profile is
+a concrete spray improvement within these limits, not completion of recoil
+fidelity.
+
 ## Private provenance
 
 Research output: `csr-fidelity/recoil-reference-2015`, outside the repo.
@@ -149,3 +221,10 @@ No assets, raw scripts, native logs or account identifiers are published.
 | Installed loose schema | `510E09B68A01D88EDBA2342972960025FD6484AAAA58365FCF47D8513DE79623` |
 | Installed event metadata | `FF9D593FC7FBEA9A5AF2CE5BC0816B7B99FE2B592AA01FC73A8347AAF26B1206` |
 | Source-only resolution audit | `A1D6D35EC3D271A779562ED4694B844319E1CD472CFDC7633CF71F4E4695797E` |
+
+Native AK observations: private `csr-fidelity/measured-recoil-20261015`, runs
+`admission-20261015-011438` and `projection-20261015-012454`. Both exact
+userdata restores passed with no remaining native process. Executable SHA256:
+`DE96C3B37E3AAEDCF4D6A24C5F6C30ACD60F3593E8D452DD9857D682EA3FB114`.
+Observed item-schema SHA1:
+`c1361d351802b7be5f55245c331f5f1d6b36ad35`.
