@@ -671,13 +671,13 @@ pub fn think(w: &mut WeaponState, time: f32, dt: f32, ducked: bool, firing: bool
     // Decays to 10 % over the recovery time.
     w.accuracy_penalty *= 0.1f32.powf(dt / recovery);
     if !firing {
-        if let Some(phase) = w.phase_recovery() {
+        if let Some(coefficient) = w.phase_recovery().map(|phase| phase.decay_decades_per_second) {
             // Direct weapon-state observations establish a plateau followed
             // by this multiplicative decay. The ordinary attack deadline
             // supplies the cooldown gate; receive-time captures do not prove
             // its exact native boundary tick.
             if time > w.next_attack {
-                w.recoil_index *= 0.1f32.powf(phase.decay_decades_per_second * dt);
+                w.recoil_index *= 0.1f32.powf(coefficient * dt);
             }
         } else {
             w.recoil_index = (w.recoil_index - RECOIL_RECOVERY_RATE * dt).max(0.0);
