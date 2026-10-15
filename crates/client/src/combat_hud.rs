@@ -21,7 +21,7 @@ pub(crate) enum Fallback {
 }
 
 #[derive(Component)]
-struct Surface(usize);
+pub(crate) struct Surface(usize);
 
 #[derive(Default)]
 pub(crate) struct State {
