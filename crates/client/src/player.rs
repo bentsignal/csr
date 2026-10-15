@@ -407,6 +407,24 @@ pub fn tick(
                     weapon.map(|w| w.def.class_name.as_str()), weapon.map(|w| w.suppressor_attached),
                     weapon.and_then(|w| w.suppressor_transition), weapon.map(|w| w.next_attack));
             }
+        } else if std::env::var("CSR_TEST_SWITCH").as_deref() == Ok("burst-release") {
+            // Screenshot-only ordinary inputs: empty the declared magazine,
+            // hold the final burst's trigger, then release to exercise idle
+            // reload. Never mutate the weapon state to manufacture a result.
+            input.buttons &= !(buttons::ATTACK | buttons::ATTACK2);
+            if world.0.tick == world.0.ticks(0.5) { input.buttons |= buttons::ATTACK2; }
+            if let Some(player) = world.0.player(local.id) {
+                if let Some(gun) = player.active_weapon().filter(|gun| gun.burst_profile().is_some()) {
+                    let now = world.0.time();
+                    let last = 1.5 + ((gun.def.clip_size - 1) / 3) as f32 * 0.85;
+                    if (1.5..last).contains(&now) && (now - 1.5).rem_euclid(0.85) < 0.2
+                        || (last..last + 4.5).contains(&now) { input.buttons |= buttons::ATTACK; }
+                    if input.buttons != player.last_input.buttons {
+                        info!("burst release fixture: tick={} time={now:.5} buttons={} weapon={} mode={} clip={} reserve={} shots={} reload={:?}",
+                            world.0.tick, input.buttons, gun.def.class_name, gun.burst_mode, gun.clip, gun.reserve, player.shots, gun.reload_end);
+                    }
+                }
+            }
         } else if std::env::var("CSR_TEST_SWITCH").as_deref() == Ok("buy-close") {
             // Screenshot-only purchase through normal simulation validation.
             // Competitive spawn money, armor and buy-zone checks stay intact.

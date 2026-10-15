@@ -413,6 +413,9 @@ pub enum GameEvent {
     UtilityBounced { player: PlayerId, kind: utility::Kind, pos: Vec3 },
     /// Timed decoy expiry, distinct from activation and round cleanup.
     DecoyExpired { player: PlayerId, pos: Vec3 },
+    /// An admitted mode change, separate from a shot or an authored animation.
+    /// Appended to preserve earlier event discriminants.
+    BurstModeChanged { player: PlayerId, weapon: String, origin: Vec3, burst: bool },
 }
 
 /// The whole game: map data shared by every copy (`Arc`s), the replicated
@@ -1560,7 +1563,11 @@ impl World {
                         self.events.push(GameEvent::Scope { player: id, weapon: w.def.class_name.clone(), origin: eye, level: w.zoom_level });
                     }
                     if secondary_pressed { w.begin_suppressor(self.tick, dt); }
-                    if secondary_pressed { w.switch_burst(time); }
+                    if secondary_pressed && w.switch_burst(time) {
+                        self.events.push(GameEvent::BurstModeChanged {
+                            player: id, weapon: w.def.class_name.clone(), origin: eye, burst: w.burst_mode,
+                        });
+                    }
                     if frozen || busy || muzzle_blocked { w.cancel_burst(); }
                     stab = secondary && w.is_melee();
                     let can_fire = w.def.class_name != C4 && w.def.class!=weapons::WeaponClass::Grenade;
@@ -1582,6 +1589,16 @@ impl World {
                         } else {
                             fire = true;
                         }
+                    }
+                    // Native Glock/FAMAS burst mode waits while an empty
+                    // trigger is held, then reloads without another click on
+                    // release. Readiness also preserves deploy/shot lockouts.
+                    if !frozen && !busy && !muzzle_blocked && !attack && !secondary && can_fire
+                        && w.burst_mode && w.burst_profile().is_some()
+                        && w.clip == 0 && w.can_reload() && time >= w.next_attack {
+                        w.reset_zoom(time);
+                        w.begin_reload(time);
+                        self.events.push(GameEvent::Reload { player: id });
                     }
                     // A loaded automatic trigger remains a burst during its
                     // shot cooldown. `fire` alone is false on those ticks and

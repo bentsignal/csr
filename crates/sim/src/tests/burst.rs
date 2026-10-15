@@ -26,8 +26,11 @@ fn three_round_release_cadence_ammo_and_pending_snapshot_replay() {
     for rate in [64, 128] { for automatic in [false, true] {
         let (mut world, id) = fixture(rate, automatic);
         world.step(&[(id, input(buttons::ATTACK2))]);
+        assert!(world.events.iter().any(|event| matches!(event,
+            GameEvent::BurstModeChanged { player, burst: true, .. } if *player == id)));
         world.step(&[(id, input(buttons::ATTACK2))]);
         assert!(world.players[0].weapons[0].burst_mode, "held secondary does not toggle twice");
+        assert!(!world.events.iter().any(|event| matches!(event, GameEvent::BurstModeChanged { .. })));
         let first = world.time();
         world.step(&[(id, input(buttons::ATTACK))]);
         assert_eq!(world.players[0].shots, 1);
@@ -64,6 +67,8 @@ fn held_burst_is_one_cycle_and_switching_back_restores_automatic_fire() {
     assert_eq!(world.players[0].shots, 3);
     world.step(&[(id, input(buttons::ATTACK2))]);
     assert!(!world.players[0].weapons[0].burst_mode);
+    assert!(world.events.iter().any(|event| matches!(event,
+        GameEvent::BurstModeChanged { player, burst: false, .. } if *player == id)));
     for _ in 0..64 { world.step(&[(id, input(buttons::ATTACK))]); }
     assert!(world.players[0].shots > 6);
 }
@@ -73,6 +78,7 @@ fn partial_clip_and_holster_drop_death_cannot_emit_queued_offhand_bullets() {
     for clip in [1, 2] {
         let (mut world, id) = fixture(128, false);
         world.players[0].weapons[0].clip = clip;
+        world.players[0].weapons[0].reserve = 0;
         world.step(&[(id, input(buttons::ATTACK2))]);
         world.step(&[(id, input(buttons::ATTACK))]);
         for _ in 0..32 { world.step(&[(id, TickInput::default())]); }
@@ -94,6 +100,45 @@ fn partial_clip_and_holster_drop_death_cannot_emit_queued_offhand_bullets() {
         assert!(world.players[0].weapons.iter().all(|w| w.burst.is_none()));
         assert!(world.items.iter().all(|item| match &item.kind { GroundKind::Weapon(w) => w.burst.is_none(), _ => true }));
     }
+}
+
+#[test]
+fn empty_burst_reloads_on_release_after_readiness_not_while_held() {
+    for rate in [64, 128] { for automatic in [false, true] {
+        let (mut world, id) = fixture(rate, automatic);
+        world.players[0].weapons[0].clip = 2;
+        world.step(&[(id, input(buttons::ATTACK2))]);
+        world.step(&[(id, input(buttons::ATTACK))]);
+        for _ in 0..rate * 4 { world.step(&[(id, input(buttons::ATTACK))]); }
+        let gun = &world.players[0].weapons[0];
+        assert_eq!((world.players[0].shots, gun.clip), (2, 0));
+        assert!(gun.reload_end.is_none());
+        let reserve = gun.reserve;
+        world.step(&[(id, TickInput::default())]);
+        assert!(world.players[0].weapons[0].reload_end.is_some());
+        assert_eq!(world.events.iter().filter(|event| matches!(event,
+            GameEvent::Reload { player } if *player == id)).count(), 1);
+        for _ in 0..rate * 4 { world.step(&[(id, TickInput::default())]); }
+        let gun = &world.players[0].weapons[0];
+        assert_eq!(gun.clip, gun.def.clip_size.min(reserve));
+        assert_eq!(gun.reserve + gun.clip, reserve);
+        assert!(gun.reload_end.is_none());
+
+        // Releasing during a pending partial burst must finish its last
+        // bullet, then wait for the existing first-shot recovery deadline.
+        let (mut world, id) = fixture(rate, automatic);
+        world.players[0].weapons[0].clip = 2;
+        world.step(&[(id, input(buttons::ATTACK2))]);
+        world.step(&[(id, input(buttons::ATTACK))]);
+        let ready = world.players[0].weapons[0].next_attack;
+        while world.time() < ready {
+            world.step(&[(id, TickInput::default())]);
+            assert!(world.players[0].weapons[0].reload_end.is_none());
+        }
+        world.step(&[(id, TickInput::default())]);
+        assert_eq!(world.players[0].shots, 2);
+        assert!(world.players[0].weapons[0].reload_end.is_some());
+    } }
 }
 
 #[test]

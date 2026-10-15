@@ -2,9 +2,9 @@
 use serde::{Deserialize, Serialize};
 use sim::{GameEvent, PlayerId, Snapshot, Team, TickInput};
 
-// v20 adds replicated burst mode and pending per-bullet timing.
-pub const VERSION: u32 = 20;
-pub const PROTOCOL_ID: u64 = 0x4353_5257_0000_0014;
+// v21 adds the authoritative burst-mode switch cue event.
+pub const VERSION: u32 = 21;
+pub const PROTOCOL_ID: u64 = 0x4353_5257_0000_0015;
 pub const CONTROL: u8 = 0;
 pub const INPUT: u8 = 1;
 pub const SNAPSHOT: u8 = 2;
@@ -45,6 +45,12 @@ pub(crate) fn validate_events(batch: &EventBatch) -> Result<(), String> {
                 ..
             }
             | Scope {
+                player,
+                weapon,
+                origin,
+                ..
+            }
+            | BurstModeChanged {
                 player,
                 weapon,
                 origin,
@@ -645,6 +651,23 @@ mod tests {
             assert!(validate_state(&invalid, Some(&welcome), 0, 0).is_err(), "inactive case {case}");
         }
     }
+    #[test]
+    fn burst_mode_cue_roundtrip_and_admission_preserve_authority() {
+        let event = GameEvent::BurstModeChanged {
+            player: 7, weapon: "weapon_glock".into(), origin: glam::Vec3::new(12., 4., 64.), burst: true,
+        };
+        let batch = EventBatch { tick: 200, events: vec![event.clone()] };
+        validate_events(&batch).unwrap();
+        assert_eq!(decode::<EventBatch>(&encode(&batch).unwrap()).unwrap(), batch);
+        for case in 0..3 {
+            let mut invalid = event.clone();
+            if let GameEvent::BurstModeChanged { player, weapon, origin, .. } = &mut invalid {
+                match case { 0 => *player = 0, 1 => *weapon = "../host/file".into(), _ => *origin = glam::Vec3::NAN }
+            }
+            assert!(validate_events(&EventBatch { tick: 200, events: vec![invalid] }).is_err());
+        }
+    }
+
     #[test]
     fn decoy_expiry_roundtrip_and_admission_keep_authoritative_position() {
         let pos = glam::Vec3::new(-100., 20., 2.);
