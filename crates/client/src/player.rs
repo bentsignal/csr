@@ -459,6 +459,18 @@ pub fn tick(
                     }
                 }
             }
+        } else if std::env::var("CSR_TEST_SWITCH").as_deref() == Ok("viewmodel-look") {
+            // Finite screenshot fixture: ordinary TickInput and the same local
+            // camera angles, with no ammo/weapon/animation-state fabrication.
+            input.buttons = 0; input.forward_move = 0.; input.side_move = 0.;
+            let changed = (1.5..3.).contains(&world.0.time());
+            let angles = match std::env::var("CSR_VIEWMODEL_CASE").as_deref() {
+                Ok("yaw10") if changed => glam::Vec3::new(0., 10., 0.),
+                Ok("yaw5") if changed => glam::Vec3::new(0., 5., 0.),
+                Ok("pitch10") if changed => glam::Vec3::new(10., 0., 0.),
+                _ => glam::Vec3::ZERO,
+            };
+            local.pitch = angles.x; local.yaw = angles.y; input.view_angles = angles;
         } else if std::env::var("CSR_TEST_SWITCH").as_deref() == Ok("buy-close") {
             // Screenshot-only purchase through normal simulation validation.
             // Competitive spawn money, armor and buy-zone checks stay intact.
