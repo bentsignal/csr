@@ -157,8 +157,8 @@ impl Level {
     /// A later VFS lookup may resolve a different source with the same filename.
     pub fn bsp_sha1(&self) -> &[u8; 20] { &self.bsp_sha1 }
 
-    /// SHA-1 identity of parsed items_game plus selected grenade timing headers after the BSP
-    /// pakfile mounts. Missing/malformed input uses the local default catalog
+    /// SHA-1 identity of parsed items_game plus attached observation profiles
+    /// and selected timing headers after the BSP pakfile mounts. Missing/malformed input uses the local default catalog
     /// and has no file identity suitable for matching network content.
     pub fn catalog_sha1(&self) -> Option<&[u8; 20]> { self.catalog_sha1.as_ref() }
 

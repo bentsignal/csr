@@ -70,13 +70,18 @@ fn is_observed_ak(def: &WeaponDefinition) -> bool {
 
 pub(super) fn import(catalog: &mut Catalog, schema: Option<[u8; 20]>) -> Option<[u8; 20]> {
     let schema = schema?;
+    if schema != OBSERVED_SCHEMA {
+        return Some(schema);
+    }
     let mut digest = Sha1::new();
     digest.update(schema);
     // A peer with the same assets but the previous recoil policy must fail
     // content admission before prediction/snapshots can silently disagree.
     digest.update(b"observed-recoil-trajectory-v1-ak-legacy-1.38.8.1");
-    if schema == OBSERVED_SCHEMA {
+    let mut applied = false;
+    {
         for def in catalog.weapons.iter_mut().filter(|def| is_observed_ak(def)) {
+            applied = true;
             def.recoil_trajectory = Some(RecoilTrajectory {
                 reference: "legacy-1.38.8.1-ak-held-standing-128hz".into(),
                 bullet_angles: AK_BULLET_ANGLES.to_vec(),
@@ -88,7 +93,11 @@ pub(super) fn import(catalog: &mut Catalog, schema: Option<[u8; 20]>) -> Option<
             }
         }
     }
-    Some(digest.finalize().into())
+    if applied {
+        Some(digest.finalize().into())
+    } else {
+        Some(schema)
+    }
 }
 
 #[cfg(test)]
