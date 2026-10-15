@@ -74,6 +74,27 @@ longitudinal discrepancy remains recorded; the first candidate was not exact.
 
 The corrected camera-frame longitudinal sign is derived from those independent
 native step/return and normal-time observations. It retains the original
-0.1/1.6, transverse response, finite window, resets, and unchanged aim. Actual
-corrected rewrite projection/render verification is pending. This document
-does not claim complete CT09, other-weapon or2015 parity.
+0.1/1.6, transverse response, finite window, resets, and unchanged aim.
+
+Frozen corrected `631a83d` passed focused client/level checks (298 client,
+6 private-map integration and13 level tests), full workspace CI, and an
+all-workspace-package-clean release build with required DustII probe/sim
+both reporting `failures: 0`. Five actual1600 by900 renders all exited0,
+retained untouched M4/HUD30/90 and owner preferences, and passed raw-log,
+image-dimension and screenshot-acknowledgment guards. The author and a
+second agent personally viewed all five complete images.
+
+Corrected front/rear relative shifts were yaw10: +9/+18 pixels; yaw5:
++4/+9; pitch10: -9/-19 vertically, with rear x-1; settled yaw: zero.
+The native reference was approximately +9/+17, +4/+9 and -9/-18. The
+inward sign now matches; the roughly1-pixel rear residual remains explicit.
+Neither scale nor delay was tuned to conceal it. These finite image checks
+do not establish all-angle, recovery, recoil, other-weapon or2015 parity.
+
+Latest master was merged normally after that immutable verification, with
+no change to the look-motion source; final integration CI remains required.
+CT08 bob is still open. A separate finite native public-parameter packet
+positively isolates running lowering from lateral/vertical oscillation,
+with actual225 speed and exact preference restoration. Installed idle
+geometry diagnostics provide bounded front/rear vertex candidates; image
+region membership alone does not prove point visibility or a bob formula.
