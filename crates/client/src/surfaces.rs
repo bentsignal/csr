@@ -13,6 +13,8 @@ pub struct SurfaceSounds {
     pub step_left: Option<String>,
     pub step_right: Option<String>,
     pub bullet_impact: Option<String>,
+    /// Authored game-material code for impact decal translation.
+    pub game_material: Option<String>,
 }
 
 #[derive(Resource, Default)]
@@ -63,6 +65,7 @@ impl SurfaceProps {
                     step_left: lookup(raw, name, "stepleft", 0),
                     step_right: lookup(raw, name, "stepright", 0),
                     bullet_impact: lookup(raw, name, "bulletimpact", 0),
+                    game_material: lookup(raw, name, "gamematerial", 0),
                 })
             })
             .collect();
@@ -103,8 +106,8 @@ mod tests {
     #[test]
     fn properties_inherit_from_base() {
         let doc = kv::parse(r#"
-            "default" { "stepleft" "Default.StepLeft" "stepright" "Default.StepRight" "bulletimpact" "Default.BulletImpact" }
-            "concrete" { "base" "default" "bulletimpact" "Concrete.BulletImpact" "stepleft" "Concrete.StepLeft" }
+            "default" { "stepleft" "Default.StepLeft" "stepright" "Default.StepRight" "bulletimpact" "Default.BulletImpact" "gamematerial" "C" }
+            "concrete" { "base" "default" "bulletimpact" "Concrete.BulletImpact" "stepleft" "Concrete.StepLeft" "gamematerial" "R" }
             "rock" { "base" "concrete" }
             "gravel" { "base" "rock" "stepleft" "Gravel.StepLeft" "stepright" "Gravel.StepRight" }
         "#).unwrap();
@@ -113,6 +116,7 @@ mod tests {
         let gravel = props.get("gravel").unwrap();
         assert_eq!(gravel.step_left.as_deref(), Some("Gravel.StepLeft"));
         assert_eq!(gravel.bullet_impact.as_deref(), Some("Concrete.BulletImpact"));
+        assert_eq!(gravel.game_material.as_deref(), Some("R"));
         assert_eq!(props.get("rock").unwrap().step_right.as_deref(), Some("Default.StepRight"));
         assert_eq!(props.get("unknown").unwrap().step_left.as_deref(), Some("Default.StepLeft"));
     }
