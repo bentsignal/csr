@@ -119,6 +119,13 @@ fn resolve_present_mode(vsync: bool, requested: Option<&str>) -> PresentMode {
 /// Log app-frame intervals in ordinary interactive play as well as captures.
 /// This is not a measurement of mouse-to-display or compositor latency.
 pub(crate) fn install_frame_log(app: &mut App) {
+    // Bounded renderer experiment: WorldMaterial supplies its own map/prop
+    // lighting and does not read Bevy's clustered point/spot light lists.
+    // Compare actual frames before considering any production camera policy.
+    if std::env::var_os("CSR_TEST_NO_LIGHT_CLUSTERS").is_some() {
+        app.add_systems(PostUpdate, disable_test_light_clusters
+            .before(bevy::light::SimulationLightSystems::AssignLightsToClusters));
+    }
     let limit = std::env::var("CSR_FRAME_LOG")
         .ok()
         .and_then(|v| v.parse::<f32>().ok())
@@ -182,6 +189,13 @@ pub(crate) fn install_frame_log(app: &mut App) {
                 report_stages.after(finish_main),
             ),
         );
+    }
+}
+
+fn disable_test_light_clusters(mut commands: Commands, cameras: Query<Entity, Added<Camera3d>>) {
+    for camera in &cameras {
+        commands.entity(camera).insert(bevy::light::ClusterConfig::None);
+        info!("renderer experiment: disabled light clusters for camera {camera}");
     }
 }
 
