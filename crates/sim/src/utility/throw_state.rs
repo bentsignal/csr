@@ -127,7 +127,7 @@ mod tests {
                 assert_eq!((state.phase, state.mode, state.throw_started_tick),
                     (ThrowPhase::Throwing, mode, Some(2)));
                 assert!(!state.spawned, "projectile still follows its installed release event");
-                let restored = world.decode(&world.encode_state()).unwrap();
+                let restored: crate::WorldState = world.decode(&world.encode_state()).unwrap();
                 assert_eq!(restored, world.state());
             }
         }
