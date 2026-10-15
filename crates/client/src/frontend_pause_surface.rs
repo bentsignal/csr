@@ -5,8 +5,8 @@
 use scaleform::Value;
 
 /// Keep the previous raster hidden until the worker has completed the entire
-/// current Pause show transaction. A late frame from an earlier open cannot
-/// reveal the menu after close/reopen.
+/// current menu presentation transaction (Pause or return to Home). A late
+/// frame from an earlier open cannot reveal the menu after close/reopen.
 #[derive(Default)]
 pub(crate) struct Presentation {
     revision: u64,

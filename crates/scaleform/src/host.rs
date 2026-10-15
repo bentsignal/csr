@@ -17,6 +17,7 @@ use ruffle_core::backend::navigator::{
     ErrorResponse, NavigationMethod, NavigatorBackend, NullExecutor, NullSpawner, OwnedFuture,
     Request, SuccessResponse, create_fetch_error,
 };
+use ruffle_core::swf::Twips;
 use ruffle_core::events::{KeyDescriptor, KeyLocation, LogicalKey, NamedKey, PhysicalKey, MouseButton as RuffleButton, MouseWheelDelta, PlayerEvent, TextControlCode};
 use ruffle_core::external::{ExternalInterfaceProvider, Value as ExtValue};
 use ruffle_core::indexmap::IndexMap;
@@ -234,6 +235,7 @@ struct Dispatcher {
     calls: Calls,
     events: EventSender<Event>,
     root_ready: bool,
+    slider_axis_pending: Option<f64>,
 }
 
 impl Dispatcher {
@@ -244,7 +246,18 @@ impl Dispatcher {
                 self.root_ready = true;
                 return Value::Undefined;
             }
+            ("csr", "RegisterSliderDragAxis") => {
+                let [Value::String(handle), Value::Number(axis)] = args else { return Value::Bool(false) };
+                let Some(path) = handle.strip_prefix("mc:") else { return Value::Bool(false) };
+                if !path.starts_with("_level") || !path.ends_with(".Widget.ScrollPip")
+                    || !axis.is_finite() || axis.abs() > 16_384. {
+                    return Value::Bool(false);
+                }
+                self.slider_axis_pending = Some(*axis);
+                return Value::Bool(true);
+            }
             (_, "OnLoadFinished") if !object.starts_with("CScaleformComponent_") => {
+                if object == "OptionsMenu" { self.slider_axis_pending = None; }
                 let _ = self.events.send(Event::Loaded(object.to_string()));
             }
             _ => {}
@@ -331,6 +344,7 @@ pub(crate) struct Host {
     executor: NullExecutor,
     mouse: (f64, f64),
     render_trace_remaining: usize,
+    work_trace_remaining: usize,
     pending_readback: Option<PendingReadback>,
     viewport_generation: u64,
 }
@@ -361,6 +375,7 @@ impl Host {
             calls: Calls::default(),
             events,
             root_ready: false,
+            slider_axis_pending: None,
         }));
         let executor = NullExecutor::new();
         let navigator = InstallNavigator {
@@ -404,6 +419,7 @@ impl Host {
         );
         Ok(Self { player, dispatcher, executor, mouse: (0.0, 0.0),
             pending_readback: None, viewport_generation: 0,
+            work_trace_remaining: if std::env::var("CSR_UI_WORKER_TRACE").as_deref() == Ok("1") { 2048 } else { 0 },
             render_trace_remaining: if std::env::var("CSR_UI_RENDER_TRACE").as_deref() == Ok("1") { 1024 } else { 0 },
         })
     }
@@ -435,11 +451,33 @@ impl Host {
         self.executor.run();
     }
 
+    fn work_started(&self) -> Option<Instant> {
+        (self.work_trace_remaining > 0).then(Instant::now)
+    }
+
+    fn work_finished(&mut self, phase: &'static str, started: Option<Instant>) {
+        let Some(started) = started else { return };
+        let elapsed = started.elapsed();
+        if elapsed >= Duration::from_millis(5) && self.work_trace_remaining > 0 {
+            self.work_trace_remaining -= 1;
+            tracing::info!(target: "scaleform::worker", phase,
+                elapsed_ms = elapsed.as_secs_f64() * 1000.0, "Slow UI work");
+        }
+    }
+
     pub fn step(&mut self, dt: Duration) {
+        let started = self.work_started();
         self.executor.run();
+        self.work_finished("load_executor", started);
+        let started = self.work_started();
         self.player.lock().unwrap().tick(FloatDuration::from_secs(dt.as_secs_f64()));
+        self.work_finished("movie_tick", started);
+        let started = self.work_started();
         self.executor.run();
+        self.work_finished("load_executor", started);
+        let started = self.work_started();
         self.drain_calls();
+        self.work_finished("movie_callbacks", started);
     }
 
     fn drain_calls(&mut self) {
@@ -456,8 +494,16 @@ impl Host {
     }
 
     pub fn run_command(&mut self, command: Command) {
+        let phase = match &command {
+            Command::Call { function, .. } if function == "samplePauseSurface" => "pause_visibility",
+            Command::Call { .. } => "movie_call",
+            Command::Set { .. } => "movie_set",
+            Command::RequestElement(_) => "movie_request",
+        };
+        let started = self.work_started();
         self.run_command_now(command);
         self.drain_calls();
+        self.work_finished(phase, started);
     }
 
     fn run_command_now(&mut self, command: Command) {
@@ -485,6 +531,21 @@ impl Host {
 
     fn call_as(&mut self, callback: &str, args: Vec<ExtValue>) -> ExtValue {
         self.player.lock().unwrap().call_internal_interface(callback, args)
+    }
+
+    /// A registered pip's own callback arms this single-event correction only
+    /// while its widget reports native dragging. Keep Flash's x bounds/offsets.
+    fn preserve_slider_drag_axis(&mut self) {
+        let Some(axis) = self.dispatcher.borrow_mut().slider_axis_pending.take() else { return };
+        let axis = Twips::from_pixels(axis);
+        if axis == Twips::ZERO { return; }
+        self.player.lock().unwrap().mutate_with_update_context(|context| {
+            let Some(drag) = context.drag_object.as_mut() else { return };
+            if drag.constraint.y_min != Twips::ZERO || drag.constraint.y_max != Twips::ZERO { return; }
+            drag.constraint.y_min = axis;
+            drag.constraint.y_max = axis;
+            Player::update_drag(context);
+        });
     }
 
     pub fn input(&mut self, input: Input) {
@@ -538,8 +599,19 @@ impl Host {
             Input::Focus(focused) => if focused { PlayerEvent::FocusGained } else { PlayerEvent::FocusLost },
             _ => return,
         };
+        let phase = match &event {
+            PlayerEvent::MouseMove { .. } => "mouse_move",
+            PlayerEvent::MouseDown { .. } => "mouse_down",
+            PlayerEvent::MouseUp { .. } => "mouse_up",
+            _ => "movie_event",
+        };
+        let started = self.work_started();
         self.player.lock().unwrap().handle_event(event);
+        self.preserve_slider_drag_axis();
+        self.work_finished(phase, started);
+        let started = self.work_started();
         self.drain_calls();
+        self.work_finished("input_callbacks", started);
     }
 
     /// Keys went to the movies through `_global.KeyDownEvent`/`KeyUpEvent`

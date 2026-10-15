@@ -82,6 +82,7 @@ struct Bridge {
     requested: HashSet<String>,
     options: crate::frontend_options::Scene,
     offline: crate::frontend_game::OfflineLaunch,
+    offline_open: bool,
     lobby: Arc<Mutex<crate::frontend_lobby::Scene>>,
 }
 
@@ -143,6 +144,18 @@ fn keyvalues(block: &kv::Block, localization: &crate::localize::Localization) ->
 }
 
 impl Bridge {
+    /// A navigation command supersedes Options even when its movie is still
+    /// loading. Revoke the pending show before hiding the registered root so
+    /// a late OnReady cannot put an old settings page over the new destination.
+    fn close_options(&mut self, calls: &mut Calls) {
+        let mut data = self.data.lock().unwrap();
+        data.pause_surface.options_cancelled();
+        data.deferred_pause.cancel_pending();
+        if let Some(path) = self.roots.get("OptionsMenu") {
+            calls.set(path, "_visible", false.into());
+        }
+    }
+
     fn close_lobby(&mut self, calls: &mut Calls) {
         self.lobby.lock().unwrap().cancel();
         for element in ["LobbyBrowser", "LobbyScreen", "StartSinglePlayer"] {
@@ -271,6 +284,8 @@ impl Engine for Bridge {
             let mut lobby = self.lobby.lock().unwrap();
             match object {
                 "StartSinglePlayer" => {
+                    self.offline_open = false;
+                    self.offline.query(None);
                     lobby.chooser_unloaded();
                     if lobby.phase() == crate::frontend_lobby::Phase::Lobby {
                         if let Some(path) = self.roots.get("LobbyScreen") {
@@ -289,7 +304,7 @@ impl Engine for Bridge {
             return Some(Value::Bool(matches!(self.data.lock().unwrap().state, AppState::Menu | AppState::Browser)));
         }
         if object == "StartSinglePlayer" {
-            if self.lobby.lock().unwrap().active() && method != "OnLoadFinished" && method != "OnReady" { return None; }
+            if (!self.offline_open || self.lobby.lock().unwrap().active()) && method != "OnLoadFinished" && method != "OnReady" { return None; }
             let text = match args {
                 [Value::String(text)] => Some(text.as_str()),
                 _ => None,
@@ -381,6 +396,11 @@ impl Engine for Bridge {
                     if self.data.lock().unwrap().state != AppState::Menu || !self.lobby.lock().unwrap().active() {
                         calls.set(path, "_visible", false.into());
                     }
+                } else if matches!(object, "OptionsMenu" | "StartSinglePlayer") {
+                    // Loader completion precedes authored Ready. Keep a cold
+                    // root hidden until the still-current destination owns its
+                    // initialization; superseded loads must never flash open.
+                    calls.set(path, "_visible", false.into());
                 } else if object == "PauseMenu" {
                     // Loaded precedes authored Ready. The deferred owner shows
                     // this exact cached root only after both movies are ready.
@@ -427,7 +447,7 @@ impl Engine for Bridge {
             }
             drop(lobby);
             if let Some(path) = self.roots.get(object) {
-                if matches!(
+                if self.offline_open && matches!(
                     self.data.lock().unwrap().state,
                     AppState::Menu | AppState::Browser
                 ) {
@@ -479,6 +499,9 @@ impl Engine for Bridge {
         }
         if method == "BasePanelRunCommand" {
             let command = arg(0);
+            self.close_options(calls);
+            self.offline_open = false;
+            self.offline.query(None);
             if arg(1) == "bHidePanel" {
                 calls.call("_global.MainMenuMovie", "hidePanelImmediate", vec![]);
             }
@@ -512,14 +535,15 @@ impl Engine for Bridge {
                     }
                 }
                 "OpenCreateSinglePlayerGameDialog" => {
+                    self.offline_open = true;
                     self.lobby.lock().unwrap().cancel();
                     for element in ["LobbyBrowser", "LobbyScreen"] {
                         if let Some(path) = self.roots.get(element) { calls.set(path, "_visible", false.into()); }
                     }
-                    if let Some(path) = self.roots.get("StartSinglePlayer") {
-                        show_single_player(path, calls);
-                    } else {
-                        if self.requested.insert("StartSinglePlayer".into()) { calls.request_element("StartSinglePlayer"); }
+                    if self.data.lock().unwrap().movie_ready.contains("StartSinglePlayer") {
+                        if let Some(path) = self.roots.get("StartSinglePlayer") { show_single_player(path, calls); }
+                    } else if self.requested.insert("StartSinglePlayer".into()) {
+                        calls.request_element("StartSinglePlayer");
                     }
                 }
                 "OpenVideoSettingsDialog"
@@ -538,10 +562,10 @@ impl Engine for Bridge {
                         &command,
                         &data.localization,
                     );
-                    if let Some(path) = self.roots.get("OptionsMenu") {
-                        self.options.show(path, &data.settings, calls);
-                    } else {
-                        if self.requested.insert("OptionsMenu".into()) { calls.request_element("OptionsMenu"); }
+                    if data.movie_ready.contains("OptionsMenu") {
+                        if let Some(path) = self.roots.get("OptionsMenu") { self.options.show(path, &data.settings, calls); }
+                    } else if self.requested.insert("OptionsMenu".into()) {
+                        calls.request_element("OptionsMenu");
                     }
                 }
                 _ => {
@@ -966,7 +990,6 @@ pub(crate) fn update(
 ) {
     let remote_loading = crate::remote_join::loading(remote.as_deref());
     let scene = if remote_loading { AppState::Loading } else { *state.get() };
-    if scene != AppState::Match { front.pause_presentation.close(); }
     let loading_selection = if scene == AppState::Loading { loader.loading_map() } else { None };
     let loading_selection_changed = front.loading_selection != loading_selection;
     front.loading_selection = loading_selection.clone();
@@ -1097,6 +1120,7 @@ pub(crate) fn update(
                 requested: HashSet::new(),
                 options: Default::default(),
                 offline: Default::default(),
+                offline_open: false,
                 lobby: front.lobby.clone(),
             }),
         )));
@@ -1173,19 +1197,25 @@ pub(crate) fn update(
     }
     if scene != AppState::Menu && front.lobby.lock().unwrap().active() { front.lobby.lock().unwrap().cancel(); }
     if front.scene != Some(scene) {
+        // Return-to-Home must not expose the last in-match Pause raster while
+        // this transaction is still in the worker queue/GPU readback pipeline.
+        if visible && scene == AppState::Menu && front.scene.is_some() {
+            front.pause_presentation.open();
+        }
+        let mut scene_commands = Vec::new();
         let options_root = {
             let mut data = front.data.lock().unwrap();
             data.pause_surface.options_cancelled();
             data.pause_surface.options_root().map(str::to_owned)
         };
-        if let Some(path) = options_root { front.send(Input::Set { path, property: "_visible".into(), value: false.into() }); }
+        if let Some(path) = options_root { scene_commands.push(scaleform::Command::Set { path, property: "_visible".into(), value: false.into() }); }
         for path in ["_global.LobbyMovie", "_level17"] {
-            front.send(Input::Set { path: path.into(), property: "_visible".into(), value: false.into() });
+            scene_commands.push(scaleform::Command::Set { path: path.into(), property: "_visible".into(), value: false.into() });
         }
         // Movie animations and late callbacks can leave cached launch panels
         // visible. Own the root visibility across scenes, including descendants.
         for path in ["_global.MainMenuMovie", "_global.SinglePlayerMovie"] {
-            front.send(Input::Set {
+            scene_commands.push(scaleform::Command::Set {
                 path: path.into(),
                 property: "_visible".into(),
                 value: (matches!(scene, AppState::Menu | AppState::Browser)
@@ -1194,43 +1224,49 @@ pub(crate) fn update(
             });
         }
         if scene != AppState::Match {
-            front.send(Input::Call {
+            scene_commands.push(scaleform::Command::Call {
                 path: "_level100".into(),
                 function: "hidePanel".into(),
                 args: vec![],
             });
+            scene_commands.push(scaleform::Command::Set {
+                path: "_level100".into(), property: "_visible".into(), value: false.into(),
+            });
         }
         if scene == AppState::Loading {
-            front.send(Input::Call {
+            scene_commands.push(scaleform::Command::Call {
                 path: "_global.MainMenuMovie".into(),
                 function: "hidePanelImmediate".into(),
                 args: vec![],
             });
-            front.send(Input::Call {
+            scene_commands.push(scaleform::Command::Call {
                 path: "_global.SinglePlayerMovie".into(),
                 function: "hidePanel".into(),
                 args: vec![true.into()],
             });
-            front.send(Input::Call {
+            scene_commands.push(scaleform::Command::Call {
                 path: "_global.SinglePlayerMovie.Panel.Panel.BotDiffPanel".into(),
                 function: "HidePanel".into(),
                 args: vec![],
             });
-            front.request("LoadingScreen");
         } else {
-            front.send(Input::Call {
+            scene_commands.push(scaleform::Command::Call {
                 path: "_level1000".into(),
                 function: "hidePanel".into(),
                 args: vec![],
             });
             if scene == AppState::Menu {
-                front.send(Input::Call {
+                scene_commands.push(scaleform::Command::Call {
                     path: "_global.MainMenuMovie".into(),
                     function: "showPanel".into(),
                     args: vec![],
                 });
             }
         }
+        front.send(Input::Present {
+            commands: scene_commands, revision: front.pause_presentation.revision(),
+        });
+        if scene == AppState::Loading { front.request("LoadingScreen"); }
         front.scene = Some(scene);
     }
     let loading_map = front.data.lock().unwrap().loading_map.clone();
@@ -1721,7 +1757,7 @@ mod tests {
         let old_lobby = scene.proxy(Api::Lobby);
         let actions = Arc::new(Mutex::new(Vec::new()));
         let mut bridge = Bridge { data, actions: actions.clone(), seen: Default::default(), roots: Default::default(), requested: Default::default(),
-            options: Default::default(), offline: Default::default(), lobby: Arc::new(Mutex::new(scene)) };
+            options: Default::default(), offline: Default::default(), offline_open: false, lobby: Arc::new(Mutex::new(scene)) };
         let mut calls = Calls::default();
         bridge.call(&old_lobby, "ChooseGameSettings", &[], &mut calls);
         let old_picker = bridge.lobby.lock().unwrap().proxy(Api::Picker);
@@ -1797,6 +1833,42 @@ mod tests {
     }
 
     #[test]
+    fn offline_navigation_revokes_audio_even_if_options_becomes_ready_late() {
+        let fs = Arc::new(vfs::Vfs::new());
+        let data = Arc::new(Mutex::new(Data {
+            inventory: InventoryView::new(&fs), fs, settings: Settings::default(),
+            localization: Default::default(), game_modes: Default::default(),
+            state: AppState::Menu, menu_open: true, loading: String::new(),
+            loading_map: None, player_name: "You".into(), movie_ready: Default::default(),
+            pause_surface: Default::default(), deferred_pause: Default::default(),
+        }));
+        let mut bridge = Bridge {
+            data: data.clone(), actions: Default::default(), seen: Default::default(),
+            roots: HashMap::from([("OptionsMenu".into(), "_level12".into()),
+                ("StartSinglePlayer".into(), "_level15".into())]),
+            requested: Default::default(), options: Default::default(),
+            offline: Default::default(), offline_open: false,
+            lobby: Arc::new(Mutex::new(crate::frontend_lobby::Scene::new(
+                crate::frontend_lobby::Catalog::installed(&crate::ClientOptions::default(), &[])))),
+        };
+        let mut calls = Calls::default();
+        bridge.call("MainMenu", "BasePanelRunCommand", &["OpenAudioSettingsDialog".into()], &mut calls);
+        assert!(data.lock().unwrap().pause_surface.options_requested());
+        bridge.call("MainMenu", "BasePanelRunCommand", &["OpenCreateSinglePlayerGameDialog".into()], &mut calls);
+        assert!(!data.lock().unwrap().pause_surface.options_requested());
+        assert!(bridge.offline_open);
+        bridge.call("OptionsMenu", "OnReady", &[], &mut calls);
+        bridge.call("OptionsMenu", "OnCancel", &[], &mut calls);
+        assert!(!data.lock().unwrap().pause_surface.options_requested());
+        assert!(bridge.offline_open, "late Audio cancellation must not replace the picker");
+        bridge.call("MainMenu", "BasePanelRunCommand", &["OpenAudioSettingsDialog".into()], &mut calls);
+        assert!(!bridge.offline_open);
+        bridge.call("StartSinglePlayer", "OnReady", &[], &mut calls);
+        assert!(data.lock().unwrap().pause_surface.options_requested());
+        assert!(!bridge.offline_open, "late picker readiness must not replace Audio");
+    }
+
+    #[test]
     fn numeric_entry_updates_the_snapshot_before_the_following_native_getter() {
         let fs = Arc::new(vfs::Vfs::new());
         let data = Arc::new(Mutex::new(Data {
@@ -1823,6 +1895,7 @@ mod tests {
             requested: HashSet::new(),
             options: crate::frontend_options::Scene::default(),
             offline: crate::frontend_game::OfflineLaunch::default(),
+            offline_open: false,
             lobby: Arc::new(Mutex::new(crate::frontend_lobby::Scene::new(
                 crate::frontend_lobby::Catalog::installed(&crate::ClientOptions::default(), &[]),
             ))),

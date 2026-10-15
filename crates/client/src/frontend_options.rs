@@ -311,6 +311,14 @@ impl Scene {
             }
         }
         self.refresh_values(path, settings, calls);
+        for (index, widget) in self.widgets.iter().enumerate() {
+            if matches!(widget.kind, Kind::Slider { .. }) {
+                calls.call(
+                    "_global.csrBindings", "preserveSliderDragAxis",
+                    vec![format!("{path}.TopPanel.Panel.arraySlots.{index}.Widget").into()],
+                );
+            }
+        }
     }
 
     /// Numeric entry commits convars before requesting a refresh; it is no longer dragging.

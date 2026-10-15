@@ -348,14 +348,6 @@ impl InputSource<Input> for InputReceiver {
     }
     fn take_boundary(&self, remaining: usize) -> Vec<Input> {
         let mut queue = self.0.lock().unwrap();
-        let fallback_count = match queue.pending.front() {
-            Some((Input::MouseMove { .. }, _)) => match queue.pending.get(1) {
-                Some((input, _)) if !matches!(input, Input::MouseMove { .. }) => 2,
-                _ => return Vec::new(),
-            },
-            Some(_) => 1,
-            None => return Vec::new(),
-        };
         // Our passive sampler is not the click/key/lifecycle boundary that
         // this completion protects. Include intervening samples in the same
         // FIFO snapshot, stopping at the first actual boundary. Inspect one
@@ -364,7 +356,14 @@ impl InputSource<Input> for InputReceiver {
         let count = queue.pending.iter().take(remaining.saturating_add(1))
             .position(|(input, _)| !matches!(input,
                 Input::MouseMove { .. } | Input::ObservePauseSurface { .. }))
-            .map_or(fallback_count, |index| index + 1);
+            .map_or_else(|| {
+                // Passive observation is not permission to run another costly
+                // pointer handler after this turn's elapsed budget. Service a
+                // leading passive prefix, then present before the next motion.
+                queue.pending.iter().take(remaining)
+                    .take_while(|(input, _)| matches!(input, Input::ObservePauseSurface { .. }))
+                    .count()
+            }, |index| index + 1);
         if count > remaining { return Vec::new(); }
         // Snapshot under one lock before running callbacks. Producer work
         // appended while these events execute cannot extend this completion.
@@ -1085,6 +1084,39 @@ mod worker_tests {
                 // release never joins the already reserved completion.
                 assert_eq!(format!("{:?}", receiver.try_input().unwrap()), format!("{next:?}"));
                 assert!(matches!(receiver.try_input(), Err(std::sync::mpsc::TryRecvError::Empty)));
+            }
+        }
+    }
+
+    #[test]
+    fn passive_sample_without_a_real_boundary_cannot_buy_another_slow_motion() {
+        for sample_first in [false, true] {
+            let (sender, receiver) = input_queue();
+            let sample = Input::ObservePauseSurface { args: vec!["sample".into()] };
+            sender.send(motion(0));
+            let mut motions = 0;
+            service_input_turn_until(&receiver, INPUT_TURN_BUDGET, || true, |turn| {
+                match turn {
+                    InputTurn::Input(Input::MouseMove { x, .. }) => {
+                        motions += 1;
+                        assert_eq!(x, 0., "new pointer work waits for presentation");
+                        if sample_first { sender.send(sample.clone()); }
+                        sender.send(motion(1));
+                        if !sample_first { sender.send(sample.clone()); }
+                    }
+                    InputTurn::Input(Input::ObservePauseSurface { .. }) => (),
+                    InputTurn::Progress { count, budget_exhausted } => {
+                        assert!(budget_exhausted);
+                        assert_eq!(motions, 1);
+                        assert_eq!(count, 1 + usize::from(sample_first));
+                    }
+                    _ => panic!("unexpected event"),
+                }
+                Ok::<_, ()>(())
+            }).unwrap();
+            assert!(matches!(receiver.try_input(), Ok(Input::MouseMove { x: 1., .. })));
+            if !sample_first {
+                assert!(matches!(receiver.try_input(), Ok(Input::ObservePauseSurface { .. })));
             }
         }
     }
