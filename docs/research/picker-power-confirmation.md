@@ -58,3 +58,26 @@ The process exited 0, preserved owner settings and left no game running, but
 the strict helper failed on missing modern map thumbnail exports while the
 original picker loaded. That raw failure remains preserved. Public MessageBox
 metadata is the next prerequisite for implementing its original controls.
+
+## Original MessageBox and implementation checkpoint
+
+The installed `RequestElement("MessageBox")` loader positively reports
+`OnLoadFinished("mc:_level500", ...)` and `OnReady`. It has no observed
+`MessageBoxMovie` alias. Public runtime properties expose `SetTitle`,
+`SetMessage`, `SetButtonLegend`, `SetFlagOk`, `SetFlagCancel`,
+`SetFlagTertiary`, `showPanel` and immediate/animated hide methods. Both
+metadata-only observations exited cleanly without ERROR/panic. They do not
+prove initialized dialog layout or button behavior.
+
+The implementation intercepts the authored `Quit` before generic navigation
+teardown. It requests the installed dialog, supplies original localized text
+through those setters, and assigns an opening-bound native API to that exact
+registered movie. Cancellation retains the picker. Parking/navigation revokes
+the opening; unowned, malformed and cancelled callbacks cannot exit. The
+first rendered production check still must establish the actual button
+callback names, original visibility/navigation and cancel/reopen/confirm.
+
+Separate existing follow-up: the release lifecycle Audio screenshot again
+shows only Master Volume and a large empty rounded panel with a white point.
+Its capture may precede steady state. Full Audio content/layout remains open;
+the slider/navigation fixes are not a full-page visual pass.

@@ -102,6 +102,8 @@ _global.csrBindings.bindOwnedApi = function(alias, name) {
         prefix = "OwnedLobby";
     } else if (alias == "SinglePlayerAPI") {
         prefix = "OwnedPicker";
+    } else if (alias == "MessageBoxAPI") {
+        prefix = "OwnedQuit";
     } else {
         return false;
     }
@@ -135,6 +137,34 @@ _global.csrBindings.bindOwnedApi = function(alias, name) {
         return false;
     }
     _global[alias] = _global.csrMakeProxy(name);
+    return true;
+};
+
+// Only our registered original quit dialog receives an opening-bound API.
+// Preserve the loader API/alias for other uses of the cached MessageBox.
+_global.csrBindings.bindOwnedQuit = function(path, name) {
+    var root = _global.csrResolve(path);
+    if (path != "_level500" || root == undefined || root.elementName != "MessageBox" ||
+        typeof root.gameAPI != "object") { return false; }
+    if (root.csrQuitBaseAPI == undefined) {
+        root.csrQuitBaseAPI = root.gameAPI;
+        root.csrQuitBaseAlias = _global.MessageBoxAPI;
+        root.csrQuitHadAlias = _global.MessageBoxAPI != undefined;
+    }
+    if (!_global.csrBindings.bindOwnedApi("MessageBoxAPI", name)) { return false; }
+    root.gameAPI = _global.MessageBoxAPI;
+    return true;
+};
+_global.csrBindings.releaseOwnedQuit = function(path) {
+    var root = _global.csrResolve(path);
+    if (path != "_level500" || root == undefined || root.elementName != "MessageBox" ||
+        typeof root.csrQuitBaseAPI != "object") { return false; }
+    root.gameAPI = root.csrQuitBaseAPI;
+    if (root.csrQuitHadAlias) { _global.MessageBoxAPI = root.csrQuitBaseAlias; }
+    else { delete _global.MessageBoxAPI; }
+    delete root.csrQuitBaseAPI;
+    delete root.csrQuitBaseAlias;
+    delete root.csrQuitHadAlias;
     return true;
 };
 
