@@ -49,8 +49,8 @@ pub(crate) fn valid(profile: &RecoilTrajectory) -> bool {
         && profile
             .bullet_angles
             .iter()
-            .flatten()
-            .all(|x| x.is_finite())
+            .all(|angle| angle[0].is_finite() && angle[1].is_finite()
+                && angle[0].abs() < 89. && angle[1].abs() <= 180.)
 }
 
 /// The order is constrained by the observed curves: radial angle shrink,
