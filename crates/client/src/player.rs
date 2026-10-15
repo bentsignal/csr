@@ -397,8 +397,6 @@ pub fn tick(
 ) {
     let _frame_scope = crate::input_latency::frame_scope("simulation");
     if remote.is_some() || front.open() {return;}
-    let no_keys = ButtonInput::<KeyCode>::default();
-    let keys: &ButtonInput<KeyCode> = if enabled.0 && !menu.open && block.0==0 { &real_keys } else { &no_keys };
     let mut input = sample_tick_input(&mut local, &Controls {
         keys: &real_keys, mouse: &mouse, settings: &settings, enabled: enabled.0,
         blocked: block.0 != 0, captured: captured(&cursor), buy_menu: menu.open,
