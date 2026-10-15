@@ -323,6 +323,9 @@ pub fn run(opts: ClientOptions) -> i32 {
         else if opts.direct || opts.screenshot.is_some() { AppState::Loading } else { AppState::Menu });
     bot_performance::install(&mut app);
     input_latency::install_frame_log(&mut app);
+    if frontend_flow::enabled() {
+        app.add_systems(Update, frontend_flow::update.after(frontend::update));
+    }
     if opts.screenshot.is_some() {
         // Automated runs never have focus; don't let the unfocused 60 Hz
         // throttle skew frame-rate readings.
@@ -330,7 +333,6 @@ pub fn run(opts: ClientOptions) -> i32 {
             focused_mode: bevy::winit::UpdateMode::Continuous,
             unfocused_mode: bevy::winit::UpdateMode::Continuous,
         })
-        .add_systems(Update, frontend_flow::update.after(frontend::update).run_if(frontend_flow::enabled))
         .add_systems(First, pack_ui::proof.run_if(pack_ui::proof_enabled))
         .add_systems(First, remote_flow::update.run_if(remote_flow::enabled))
         .add_systems(First, browser_flow::update.run_if(browser_flow::enabled))
