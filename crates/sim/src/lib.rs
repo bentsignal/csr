@@ -31,6 +31,7 @@ pub mod state;
 pub mod rng;
 pub mod rules;
 pub mod weapon;
+pub mod recoil_motion;
 pub mod utility;
 pub mod tactics;
 
@@ -537,6 +538,10 @@ impl World {
         for player in &mut self.players {
             player.animation.last_fire_tick = player.animation.last_fire_tick
                 .map(|tick| ((tick as f64 / old_rate as f64) * rate as f64).round() as u64);
+            for weapon in &mut player.weapons { weapon.retime_recoil_motion(rate); }
+        }
+        for item in &mut self.items {
+            if let GroundKind::Weapon(weapon) = &mut item.kind { weapon.retime_recoil_motion(rate); }
         }
         self.character_hitboxes.clear();
         self.tick_rate = rate;
@@ -811,6 +816,7 @@ impl World {
                 w.reset_zoom(now);
                 w.reload_end = None;
                 w.recoil_index = 0.0;
+                w.reset_recoil_motion();
                 w.accuracy_penalty = 0.0;
             }
             p.active = p.best_weapon();
@@ -1389,6 +1395,15 @@ impl World {
         self.dress_weapons();
         let frozen = self.competitive() && self.round.phase == Phase::Freeze;
 
+        // Motion continues on release, while holstered, and on the ground;
+        // render frames never advance authoritative recoil.
+        for player in &mut self.players {
+            for weapon in &mut player.weapons { weapon.advance_recoil_motion(self.tick); }
+        }
+        for item in &mut self.items {
+            if let GroundKind::Weapon(weapon) = &mut item.kind { weapon.advance_recoil_motion(self.tick); }
+        }
+
         for i in 0..self.players.len() {
             if !self.players[i].alive {
                 continue;
@@ -1830,6 +1845,7 @@ impl World {
             }
             w.shot_cooldown(time, dt, continued_trigger);
             w.accuracy_penalty += w.alt_stat("inaccuracy fire", def.accuracy.inaccuracy_fire);
+            w.recoil_shot(self.tick, self.tick_rate);
             w.recoil_index += 1.0;
             if w.zoom_level > 0 && def.attr_f32("unzoom after shot").is_some_and(|v| v != 0.0) {
                 w.resume_zoom = (w.clip > 0).then_some(w.zoom_level);

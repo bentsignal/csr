@@ -53,6 +53,36 @@ pub struct Recoil {
 pub struct RecoilTrajectory {
     pub reference: String,
     pub bullet_angles: Vec<[f32; 2]>,
+    /// Optional independently observed motion of the recoil state. A held
+    /// trajectory alone does not establish release/recovery behavior.
+    pub response: Option<RecoilResponse>,
+}
+
+/// Independently observed angle/velocity response, in degrees and seconds.
+/// The profile's held rays constrain intermediate velocity impulses; the
+/// first and final impulses require separate public-state observations.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RecoilResponse {
+    pub reference: String,
+    pub reference_hz: u32,
+    pub angle_decay: f32,
+    pub angle_linear: f32,
+    pub velocity_decay: f32,
+    pub first_impulse: [f32; 2],
+    pub final_impulse: [f32; 2],
+    /// Observational uncertainty of a held bullet, rather than a claim that
+    /// overlapping native hit boxes identify an exact angular center.
+    pub held_tolerance_degrees: f32,
+    pub phase_recovery: Option<RecoilPhaseRecovery>,
+}
+
+/// Observed phase decay after the primary-attack deadline, with discrete
+/// impulse selection. Separate from continuously evolving angle/velocity.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RecoilPhaseRecovery {
+    pub reference: String,
+    /// A value of two retains 1/100 of the phase after one decay second.
+    pub decay_decades_per_second: f32,
 }
 
 /// Accuracy model inputs, in CS:GO's units (1/1000 radians-ish "inaccuracy").
