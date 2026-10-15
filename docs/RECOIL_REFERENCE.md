@@ -244,6 +244,73 @@ camera decay, moving/crouched trajectories and native 64-tick behavior
 remain separate uncompleted measurements. M4A1-S attached/detached modes
 require their own admitted trajectories.
 
+## Admitted installed M4A1-S suppressor-mode profiles
+
+The M4A1-S now has separate observed attached and detached trajectories.
+Both derive solely from fresh full retakes requested after physical mouse
+movement contaminated an earlier observation. The entire earlier run is
+excluded; no apparently unaffected portion supplies a fitted point or a
+held-out reference.
+
+Each fresh mode independently admitted the actual visible weapon and
+suppressor state, a 20 -> 19 ammo decrement, a new impact, zero velocity,
+equal observed eye position and unchanged background. Two slow magazines
+per mode show every actual HUD count 19 through 0 and 20 independently counted
+near-shot starts. A separate normal-speed 20-round magazine per mode checks
+aggregate shape. Settings verified the minimum sensitivity 0.0001 before
+admission and each magazine. This reduces physical mouse influence; it does
+not disable input. The original mouse yaw/pitch values were recorded and
+all 12 saved preference files restored exactly.
+
+Per-frame audits cover two disjoint regions outside the impact pattern.
+Attached frames stay below 0.383 RGB mean absolute difference from the fixed
+reference; detached frames below 0.728. Independent rotation calibration
+again supports 600-pixel focal length at 1600x900. Attached fitted focal range
+is 599.850 .. 600.075 pixels; its held-out region 599.900 .. 600.175. Detached
+ranges are 599.850 .. 600.050 and 599.875 .. 600.250 respectively.
+
+The second ordered magazine's independently measured centers differ by at
+most 0.71 pixels attached (RMS 0.335) and 1.00 pixel detached (RMS 0.447). Both
+normal-speed aggregate clouds are within 2 pixels of fitted centers. The
+measurement uncertainty remains 2 pixels, including overlapping early and
+late boxes; rounded angles do not imply finer native precision.
+
+| Shot | Attached pitch/yaw | Detached pitch/yaw |
+| --- | --- | --- |
+| 1 | -0/0 | -0/0 |
+| 2 | -0.14/0 | -0.24/0.05 |
+| 3 | -0.33/0.05 | -0.86/0.05 |
+| 4 | -1/-0.15 | -2.2/-0.24 |
+| 5 | -2/0.05 | -3.24/0.1 |
+| 6 | -2.96/-0.24 | -4.57/-0.29 |
+| 7 | -4.1/-0.39 | -5.81/-0.58 |
+| 8 | -4.76/0.29 | -6.75/0.38 |
+| 9 | -5.24/0.68 | -7.5/0.91 |
+| 10 | -5.34/1.59 | -7.69/2.24 |
+| 11 | -5.76/1.25 | -8.02/1.81 |
+| 12 | -6.09/0.48 | -8.44/0.76 |
+| 13 | -5.9/-0.77 | -8.2/-0.81 |
+| 14 | -5.81/-1.73 | -7.88/-2.1 |
+| 15 | -5.44/-2.6 | -7.23/-3.2 |
+| 16 | -5.81/-2.55 | -7.23/-2.96 |
+| 17 | -6.14/-2.11 | -7.56/-2.62 |
+| 18 | -6/-2.59 | -7.51/-3.1 |
+| 19 | -5.82/-3.08 | -7.14/-3.73 |
+| 20 | -5.91/-2.98 | -7.42/-3.63 |
+
+Attachment requires the exact observed schema and `m4a1_silencer` content
+identity, definition 60, clip 20, cycle 0.1, full-auto state and both normal
+and alternate recoil-stat identities. Both reference identities and angle
+tables enter the catalog policy digest. Completed suppressor transitions
+select the separate profile through the existing authoritative cache
+boundary; no render-frame gameplay or additional wire state is introduced.
+The `recoilcheck` diagnostic accepts `weapon_m4a1_silencer` and optionally
+`--unsuppressed` to observe actual authoritative rays for each mode.
+
+These are held standing 2023 profiles. Requested 2015 parity, moving or
+crouched firing, partial-magazine/recovery dynamics, camera decay and
+native 64-tick behavior remain unestablished.
+
 ## Private provenance
 
 ### M4 observation boundary
@@ -288,3 +355,8 @@ Observed item-schema SHA1:
 Native M4A4 observations: private `csr-fidelity/measured-m4-20261015`,
 run `M4A4-20261015-084848`; exact 12-file userdata restore passed.
 The preceding pre-Steam startup failure is retained as negative evidence.
+
+Fresh native M4A1-S observations: private `csr-fidelity/measured-m4-20261015`,
+runs `M4SAttached-20261015-100848` and `M4SDetached-20261015-101424`.
+Both completed exact userdata restoration. The earlier `092314` run remains
+excluded from all profile fitting and comparison.

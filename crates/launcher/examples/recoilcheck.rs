@@ -4,15 +4,22 @@ use glam::Vec3;
 use std::sync::Arc;
 
 fn main() {
-    let weapon = std::env::args()
-        .nth(1)
-        .unwrap_or_else(|| "weapon_ak47".to_owned());
+    let mut args = std::env::args().skip(1);
+    let weapon = args.next().unwrap_or_else(|| "weapon_ak47".to_owned());
+    let unsuppressed = match args.next().as_deref() {
+        None => false,
+        Some("--unsuppressed") => true,
+        _ => panic!("expected optional --unsuppressed mode"),
+    };
+    assert!(args.next().is_none(), "unexpected extra arguments");
     let level = level::Level::load("de_dust2", None).expect("installed Legacy map/catalog");
     let installed = level.catalog.get(&weapon).expect("weapon definition");
-    let profile = installed
-        .recoil_trajectory
-        .as_ref()
-        .expect("observed installed weapon profile");
+    let profile = if unsuppressed {
+        installed.recoil_trajectory_unsuppressed.as_ref()
+    } else {
+        installed.recoil_trajectory.as_ref()
+    }
+    .expect("observed installed weapon/mode profile");
     eprintln!(
         "profile={} rays={} catalog={:?}",
         profile.reference,
@@ -48,7 +55,15 @@ fn main() {
         let id = world.add_player("ray-observer", sim::Team::Terrorist);
         let p = world.player_mut(id).unwrap();
         p.movement.origin = Vec3::new(0., 0., 1.);
-        p.weapons = vec![sim::weapon::WeaponState::new(gun)];
+        let mut state = sim::weapon::WeaponState::new(gun);
+        if unsuppressed {
+            assert!(
+                state.def.suppressor_animations.is_some(),
+                "detachable suppressor required"
+            );
+            state.suppressor_attached = false;
+        }
+        p.weapons = vec![state];
         p.active = 0;
         let input = sim::TickInput {
             buttons: movement::buttons::ATTACK,
