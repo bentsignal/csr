@@ -903,8 +903,15 @@ fn follow_path(
             input.buttons |= buttons::DUCK;
         }
     }
+    // Airborne height alone is not path progress: a bot jumping against a
+    // box can rise farther than this threshold every attempt. Counting that
+    // rise keeps resetting the recovery clock, so the route never replans.
+    // A completed step onto a different floor still counts once grounded.
+    let displacement = pos - brain.progress_pos;
+    let progressed = displacement.truncate().length() > 48.0
+        || (bot.movement.on_ground && displacement.z.abs() > 48.0);
     // Stuck handling: jump after 0.75 s without progress, re-path after 2 s.
-    if pos.distance(brain.progress_pos) > 48.0 {
+    if progressed {
         brain.progress_pos = pos;
         brain.progress_time = time;
     } else if time - brain.progress_time > 2.0 {
@@ -1039,6 +1046,62 @@ mod tests {
 
 #[cfg(test)] mod regression_tests {
     use super::*;
+
+    fn stuck_path_fixture() -> (NavMesh, World, PlayerId, Brain) {
+        let area = |id, min_x, max_x| nav::Area {
+            id, flags: 0,
+            nw: Vec3::new(min_x, -64., 0.),
+            se: Vec3::new(max_x, 64., 0.),
+            ne_z: 0., sw_z: 0.,
+            connections: Default::default(), place: 0, hiding_spots: vec![],
+        };
+        let mesh = NavMesh::from_areas(vec![area(1, -64., 64.), area(2, 64., 256.)]);
+        let mut collision = collision::CollisionWorld::new();
+        collision.finalize();
+        let mut world = World::with_catalog(Arc::new(collision),
+            Arc::new(weapons::Catalog { weapons: vec![] }));
+        let id = world.add_bot("blocked jumper", Team::Terrorist);
+        world.player_mut(id).unwrap().movement.origin = Vec3::ZERO;
+        let brain = Brain { path: vec![1, 2], goal_area: Some(2),
+            progress_pos: Vec3::ZERO, progress_time: 0.,
+            ..Brain::fresh(world.player(id).unwrap(), 0) };
+        (mesh, world, id, brain)
+    }
+
+    #[test]
+    fn jumping_in_place_does_not_keep_a_blocked_route_alive() {
+        for rate in [64, 128] {
+            let (mesh, mut world, id, mut brain) = stuck_path_fixture();
+            world.set_tick_rate(rate);
+            let mut rng = Rng::from_parts(&[17]);
+            for tick in 1..=world.ticks(2.1) {
+                world.tick = tick;
+                let now = world.time();
+                let p = world.player_mut(id).unwrap();
+                // Repeated jumps with no horizontal progress: the previous
+                // 3D distance test refreshed the timer at every 56-unit peak.
+                p.movement.origin.z = if tick % (rate as u64 / 2) < rate as u64 / 4 { 56. } else { 0. };
+                p.movement.on_ground = p.movement.origin.z == 0.;
+                follow_path(&mesh, &world, world.player(id).unwrap(), &mut brain,
+                    &mut TickInput::default(), &mut rng, now, 4., Some(2), None);
+                if now <= 2. { assert!(!brain.path.is_empty()); }
+                else { assert!(brain.path.is_empty(), "blocked route must expire at {rate} Hz"); break; }
+            }
+        }
+    }
+
+    #[test]
+    fn landed_height_change_still_counts_as_navigation_progress() {
+        let (mesh, mut world, id, mut brain) = stuck_path_fixture();
+        let p = world.player_mut(id).unwrap();
+        p.movement.origin.z = 56.;
+        p.movement.on_ground = true;
+        follow_path(&mesh, &world, world.player(id).unwrap(), &mut brain,
+            &mut TickInput::default(), &mut Rng::from_parts(&[17]), 1.9, 4., Some(2), None);
+        assert_eq!(brain.progress_time, 1.9);
+        assert_eq!(brain.progress_pos.z, 56.);
+        assert!(!brain.path.is_empty());
+    }
     #[test]
     fn removed_bot_bookkeeping_stays_bounded_through_replacement_churn() {
         for rate in [64, 128] {
