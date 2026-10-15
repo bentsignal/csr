@@ -21,6 +21,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 mod grenade_hold;
+mod look_motion;
 
 pub const VIEWMODEL_LAYER: usize = 2;
 /// CS:GO `viewmodel_fov` default (horizontal degrees at 4:3).
@@ -319,6 +320,7 @@ pub struct ViewModelState {
     grenade_seen: Option<(u64, sim::utility::ThrowPhase)>,
     suppressor_seen: Option<sim::weapon::SuppressorTransition>,
     light_timer: f32,
+    look_motion: look_motion::LookMotion,
     /// Persistent bone-local pose: sequences only overwrite the bones they
     /// animate (weighted), as the game layers masked viewmodel sequences.
     pose: Vec<(glam::Vec3, glam::Quat)>,
@@ -340,6 +342,7 @@ impl ViewModelState {
         self.grenade_seen = None;
         self.suppressor_seen = None;
         self.light_timer = 0.0;
+        self.look_motion.clear();
         // Masked clips deliberately preserve untouched bones within one life.
         // They must never inherit the reload/inspect pose of a previous life.
         self.pose = mdl::skeleton::rest_pose(bones);
@@ -611,7 +614,7 @@ pub fn update(
             *v = if show && !clear_lens && !hide_suppressor { Visibility::Inherited } else { Visibility::Hidden };
         }
     }
-    if !p.alive || local.noclip { return; }
+    if !p.alive || local.noclip { state.look_motion.clear(); return; }
     let Some(view) = models.weapons.get(&name) else { return };
 
     // Pick the activity from the weapon state.
@@ -743,9 +746,8 @@ pub fn update(
     if let Some(hold) = &view.grenade_hold { hold.apply(grenade, &mut state.pose); }
     let pose = mdl::skeleton::model_space(&model.bones, &state.pose);
 
-    // Keep the model rigidly attached to this frame's camera when looking.
-    // The authored idle/fire/reload clips still animate their own bones;
-    // mouse motion must not introduce an additional lagging weapon transform.
+    // Preserve this frame's orientation/aim. The observed Legacy look response
+    // is a small delayed-direction translation, separate from authored clips.
     let view_angles = local.render_angles;
     let rot = mdl::angles_to_mat3(view_angles);
     let eye = local.render_eye;
@@ -757,7 +759,14 @@ pub fn update(
         let rear = view.scope_rear.map_or(center, |(position, _)| position);
         offset = offset.lerp(glam::Vec3::new(8.0 - center.x, -rear.y, -rear.z), blend);
     }
-    let origin = eye + f * offset.x - r * offset.y + u * offset.z;
+    let look_translation = if show && w.is_some_and(|w|
+        w.zoom_level == 0 && look_motion::observed_profile(level.0.item_schema_sha1(), &w.def)) {
+        state.look_motion.translation(now, f)
+    } else { state.look_motion.clear(); glam::Vec3::ZERO };
+    let origin = eye + f * offset.x - r * offset.y + u * offset.z + look_translation;
+    if std::env::var_os("CSR_VIEWMODEL_MOTION_TRACE").is_some() {
+        info!("viewmodel motion: time={now:.6} angles={view_angles:?} eye={eye:?} look_translation={look_translation:?}");
+    }
     let world_from_model = Mat4::from_rotation_translation(rotation_to_bevy(rot), to_bevy(origin));
     skinning::apply_pose(&gun, world_from_model, &pose, &mut transforms);
     wick.sample = held_wick(p, show, model, &pose, world_from_model);
