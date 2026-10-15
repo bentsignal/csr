@@ -556,8 +556,34 @@ holstered and on the ground. TickInput remains the only firing authority.
 Snapshots include motion and the cadence anchor; protocol24 and the
 response-aware catalog digest reject incompatible peers. Respawn resets
 motion. Other guns retain their current recovery until independently
-observed; the existing twelve-step-per-second spray-phase recovery remains
-a separate unmeasured caveat. Camera tracking, further sustained fire after
-partial recovery, nonstanding cases, historical2015 parity and native64 Hz
-behavior are not established by these observations. Actual rewrite ray and
-runtime verification of this source change is pending.
+observed. Actual authoritative rays at source8b13a75 passed all six untouched
+restart comparisons at128 Hz:
+
+| Partial shots | Native interval (s) | Achieved sim interval (s) | Marker error (px) |
+| ---: | ---: | ---: | ---: |
+| 6 | 0.125 | 0.125 | 0.600 |
+| 6 | 0.305 | 0.304688 | 0.425 |
+| 6 (independent repeat) | 0.312 | 0.3125 | 0.217 |
+| 6 | 0.765 | 0.765625 | 0.371 |
+| 3 (untouched holdout) | 0.375 | 0.375 | 0.164 |
+| 10 (untouched holdout) | 0.376 | 0.375 | 0.787 |
+
+The64 Hz resampling counterparts differ by0.158 to1.028 pixels; this is not
+an independently observed native64 Hz reference. Actual held-ray checks
+also passed at both rates for AK, M4A4, both M4A1-S modes, Galil and normal
+FAMAS. Focused motion/lifecycle/snapshot/prediction and malformed network
+state checks passed after cleaning all23 workspace packages for the profile.
+The copied client and diagnostic contain the unique response reference;
+source fingerprints and immutable artifact hashes were recorded privately.
+Full workspace/probe/sim CI and rendered checks remain pending.
+
+A separately checked negative remains: the old twelve-step-per-second
+spray-phase counter selects the wrong impulse after partial recovery. The
+first resumed bullet is emitted before that new impulse and matches the
+rays above, but the later public velocity does not. After the ten-shot
+restart, actual source yaw velocity is positive while the native public
+post-restart value is negative; capture-phase uncertainty cannot reverse
+that sign. Continued resumed spraying therefore still fails fidelity and
+needs separately observed phase/index behavior. This patch does not claim
+to fix that counter. Camera tracking, nonstanding cases, historical2015
+parity and native64 Hz behavior also remain unestablished.
