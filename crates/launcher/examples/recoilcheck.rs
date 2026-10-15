@@ -45,7 +45,7 @@ fn main() {
         let id = world.add_player("ray-observer", sim::Team::Terrorist);
         let p = world.player_mut(id).unwrap();
         p.movement.origin = Vec3::new(0., 0., 1.);
-        p.weapons = vec![sim::WeaponState::new(gun)];
+        p.weapons = vec![sim::weapon::WeaponState::new(gun)];
         p.active = 0;
         let input = sim::TickInput {
             buttons: movement::buttons::ATTACK,
