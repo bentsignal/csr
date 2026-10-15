@@ -83,3 +83,31 @@ incorrect and is not used by the implementation.
 Still open: final slider proof; sustained Pause performance fix; power button
 availability while the offline picker owns navigation; all original menu
 features/loading artwork fidelity. The current work does not claim these done.
+
+
+## Cached Home/match player replacement (pending verification)
+
+Cold Home retirement is retained as an unready experiment in PR130 because it
+improves Pause but adds about 5.8 seconds of repeat Home initialization. The
+replacement keeps the original parsed Home worker parked with SetActive(false),
+then uses an isolated cached match worker for Loading/Pause. That worker alone
+retires its duplicate Main after actual Main/Pause bootstrap readiness. Returning
+Home reuses its existing timeline; no Ruffle visibility semantics/fork change.
+
+Each worker owns separate mutable Data/actions/lobby/readiness and root maps.
+Only immutable installation/localization lookup data is shared. Current settings
+and actual inventory items refresh before resume. Ordered park/resume replaces
+queued input, releases held keys/buttons/focus, revokes old navigation, and gates
+in-flight native actions with a worker-owned epoch. Only the selected domain
+receives new input and submits new renders; an already submitted old readback
+is discarded while inactive and cannot pass the frontend's fresh revision fence.
+Viewport is explicitly refreshed even if the global window size did not change.
+
+The first match worker boots its original LoadingScreen/Pause alongside the
+required Main globals; subsequent matches reuse it. The existing production
+flow optionally exercises native Pause -> Audio -> Back and records actual Exit
+to freshly presented Ready Home latency. A separate three-second pending capture
+remains if restoration is slow, rather than hiding the delay behind fixture waits.
+First-ever Home after a direct developer startup still needs initial Home boot;
+it clears black rather than retaining the former world target. First match
+bootstrap cost, retained memory and complete runtime roundtrip remain unverified.

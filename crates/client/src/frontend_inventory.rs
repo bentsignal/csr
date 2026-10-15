@@ -16,6 +16,7 @@ pub(super) struct Item {
     pub stickers: u32,
 }
 
+#[derive(Clone)]
 pub(super) struct InventoryView {
     items: Vec<Item>,
     visible: Vec<usize>,

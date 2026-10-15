@@ -27,7 +27,7 @@ struct Data {
     fs: Arc<vfs::Vfs>,
     settings: Settings,
     inventory: InventoryView,
-    localization: crate::localize::Localization,
+    localization: Arc<crate::localize::Localization>,
     game_modes: kv::Block,
     state: AppState,
     menu_open: bool,
@@ -35,8 +35,21 @@ struct Data {
     loading_map: Option<LoadingContext>,
     player_name: String,
     movie_ready: HashSet<String>,
+    home_bootstrapped: bool,
+    home_retired: bool,
     pause_surface: crate::frontend_pause_surface::Tracker,
     deferred_pause: crate::frontend_pause_surface::DeferredPause,
+}
+
+impl Data {
+    fn fork_worker(&self) -> Self {
+        Self { fs: self.fs.clone(), settings: self.settings.clone(), inventory: self.inventory.clone(),
+            localization: self.localization.clone(), game_modes: self.game_modes.clone(),
+            state: self.state, menu_open: self.menu_open, loading: self.loading.clone(),
+            loading_map: self.loading_map.clone(), player_name: self.player_name.clone(),
+            movie_ready: HashSet::new(), home_bootstrapped: false, home_retired: false,
+            pause_surface: Default::default(), deferred_pause: Default::default() }
+    }
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -74,9 +87,40 @@ enum Action {
     Host(crate::frontend_lobby::Start, String),
     LobbyHome,
 }
+/// Park immediately rejects in-flight old actions. Worker-ordered resume
+/// advances the epoch only after old queued input has been cancelled.
+struct ActionQueue {
+    pending: Vec<Action>,
+    epoch: u64,
+    active: bool,
+}
+impl Default for ActionQueue {
+    fn default() -> Self { Self { pending: Vec::new(), epoch: 0, active: true } }
+}
+impl std::ops::Deref for ActionQueue {
+    type Target = Vec<Action>;
+    fn deref(&self) -> &Self::Target { &self.pending }
+}
+impl ActionQueue {
+    fn current(&self) -> Option<u64> { self.active.then_some(self.epoch) }
+    fn push_at(&mut self, epoch: Option<u64>, action: Action) {
+        if self.active && epoch == Some(self.epoch) { self.pending.push(action); }
+    }
+    fn park(&mut self) { self.active = false; self.pending.clear(); }
+    fn resume(&mut self) -> bool {
+        self.park();
+        let Some(epoch) = self.epoch.checked_add(1) else { return false; };
+        self.epoch = epoch;
+        self.active = true;
+        true
+    }
+    fn take(&mut self) -> Vec<Action> { std::mem::take(&mut self.pending) }
+}
+
 struct Bridge {
+    dispatch_epoch: Option<u64>,
     data: Arc<Mutex<Data>>,
-    actions: Arc<Mutex<Vec<Action>>>,
+    actions: Arc<Mutex<ActionQueue>>,
     seen: HashMap<String, HashSet<String>>,
     roots: HashMap<String, String>,
     requested: HashSet<String>,
@@ -144,6 +188,30 @@ fn keyvalues(block: &kv::Block, localization: &crate::localize::Localization) ->
 }
 
 impl Bridge {
+    fn push_action(&self, action: Action) { self.actions.lock().unwrap().push_at(self.dispatch_epoch, action); }
+
+    fn reset_navigation(&mut self, calls: &mut Calls) {
+        self.close_options(calls);
+        self.offline_open = false;
+        self.offline.query(None);
+        self.lobby.lock().unwrap().cancel();
+        for element in ["OptionsMenu", "StartSinglePlayer", "LobbyBrowser", "LobbyScreen"] {
+            if let Some(path) = self.roots.get(element) {
+                if element != "OptionsMenu" {
+                    calls.call("_global.csrBindings", "releaseOwnedLifecycle", vec![path.clone().into()]);
+                }
+                if element == "StartSinglePlayer" {
+                    calls.call(path, "hidePanel", vec![true.into()]);
+                    calls.call(&format!("{path}.Panel.Panel.BotDiffPanel"), "HidePanel", vec![]);
+                }
+                calls.set(path, "_visible", false.into());
+            }
+        }
+        if let Some(path) = self.roots.get("PauseMenu") {
+            calls.call(path, "hidePanel", vec![]);
+            calls.set(path, "_visible", false.into());
+        }
+    }
     /// A navigation command supersedes Options even when its movie is still
     /// loading. Revoke the pending show before hiding the registered root so
     /// a late OnReady cannot put an old settings page over the new destination.
@@ -165,11 +233,22 @@ impl Bridge {
             }
         }
         calls.call("_global.MainMenuMovie", "showPanel", vec![]);
-        self.actions.lock().unwrap().push(Action::LobbyHome);
+        self.push_action(Action::LobbyHome);
     }
 }
 
 impl Engine for Bridge {
+    fn lifecycle(&mut self, active: bool, calls: &mut Calls) -> bool {
+        self.dispatch_epoch = None;
+        self.actions.lock().unwrap().park();
+        self.reset_navigation(calls);
+        let show_home = active && matches!(self.data.lock().unwrap().state, AppState::Menu | AppState::Browser);
+        if let Some(path) = self.roots.get("MainMenu") {
+            calls.call(path, if show_home { "onUIShow" } else { "onUIHide" }, vec![]);
+            calls.set(path, "_visible", show_home.into());
+        }
+        !active || self.actions.lock().unwrap().resume()
+    }
     fn image(&mut self, url: &str) -> Option<Vec<u8>> {
         let id = url.strip_prefix("img://inventory_")?;
         let data = self.data.lock().ok()?;
@@ -184,6 +263,8 @@ impl Engine for Bridge {
         args: &[Value],
         calls: &mut Calls,
     ) -> Option<Value> {
+        self.dispatch_epoch = self.actions.lock().unwrap().current();
+        if object == "MainMenu" && self.data.lock().unwrap().home_retired { return Some(Value::Undefined); }
         let seen_object = if object.starts_with("OwnedLobby") { "OwnedLobby" }
             else if object.starts_with("OwnedPicker") { "OwnedPicker" } else { object };
         // Repeated native getters are the common path. Borrow their existing
@@ -251,7 +332,7 @@ impl Engine for Bridge {
                 (Api::Picker, "CheckGameSettingsRequirements") => {
                     let text = match args { [Value::String(text)] => Some(text.as_str()), _ => None };
                     let result = lobby.check(epoch, &data.game_modes, text);
-                    if let Err(error) = &result { self.actions.lock().unwrap().push(Action::Notice(error.clone())); }
+                    if let Err(error) = &result { self.push_action(Action::Notice(error.clone())); }
                     return Some(result.is_ok().into());
                 }
                 (Api::Picker, "SetMatchmakingQuery") => {
@@ -264,7 +345,7 @@ impl Engine for Bridge {
                 }
                 (Api::Lobby, "LaunchGame") => {
                     if let Some(start) = lobby.start(epoch, args) {
-                        self.actions.lock().unwrap().push(Action::Host(start, data.player_name.clone()));
+                        self.push_action(Action::Host(start, data.player_name.clone()));
                     }
                 }
                 (Api::Lobby, "ConfirmExit") if args.is_empty() => {
@@ -323,7 +404,7 @@ impl Engine for Bridge {
                     let valid =
                         result.is_ok() && matches!(data.state, AppState::Menu | AppState::Browser);
                     if let Err(error) = result {
-                        self.actions.lock().unwrap().push(Action::Notice(error));
+                        self.push_action(Action::Notice(error));
                     }
                     if !valid {
                         self.offline.query(None);
@@ -343,10 +424,7 @@ impl Engine for Bridge {
                         )
                     {
                         if let Some((selection, no_bots)) = selection {
-                            self.actions
-                                .lock()
-                                .unwrap()
-                                .push(Action::Launch(selection, no_bots));
+                            self.push_action(Action::Launch(selection, no_bots));
                         }
                     }
                     return None;
@@ -372,7 +450,12 @@ impl Engine for Bridge {
             }
             return Some(Value::Undefined);
         }
-        if method == "OnReady" { self.data.lock().unwrap().movie_ready.insert(object.into()); }
+        if method == "OnReady" {
+            let mut data = self.data.lock().unwrap();
+            if object == "MainMenu" && data.home_retired { return Some(Value::Undefined); }
+            data.movie_ready.insert(object.into());
+            if object == "MainMenu" { data.home_bootstrapped = true; }
+        }
         if method == "OnLoadFinished" && !object.starts_with("CScaleformComponent_") {
             self.data.lock().unwrap().movie_ready.remove(object);
             if let Some(path) = arg(0).strip_prefix("mc:") {
@@ -520,7 +603,7 @@ impl Engine for Bridge {
                     if data.state != AppState::Menu { return None; }
                     let mut lobby = self.lobby.lock().unwrap();
                     if lobby.begin(&data.game_modes) {
-                        self.actions.lock().unwrap().push(Action::Notice(crate::frontend_lobby::ADDRESS_NOTICE.into()));
+                        self.push_action(Action::Notice(crate::frontend_lobby::ADDRESS_NOTICE.into()));
                         if let Some(path) = self.roots.get("LobbyBrowser") {
                             lobby.show_browser(path, &data.player_name, calls);
                         } else { if self.requested.insert("LobbyBrowser".into()) { calls.request_element("LobbyBrowser"); } }
@@ -570,7 +653,7 @@ impl Engine for Bridge {
                 }
                 _ => {
                     self.lobby.lock().unwrap().cancel();
-                    self.actions.lock().unwrap().push(Action::Command(command));
+                    self.push_action(Action::Command(command));
                 }
             }
             return None;
@@ -613,10 +696,7 @@ impl Engine for Bridge {
                     calls,
                 ) {
                     apply_setting(&mut data.settings, &name, &value);
-                    self.actions
-                        .lock()
-                        .unwrap()
-                        .push(Action::Convar(name, value));
+                    self.push_action(Action::Convar(name, value));
                 }
                 None
             }
@@ -669,7 +749,7 @@ impl Engine for Bridge {
                 ))
             }
             ("GameInterface", "PlaySound") => {
-                self.actions.lock().unwrap().push(Action::Sound(arg(0)));
+                self.push_action(Action::Sound(arg(0)));
                 None
             }
             ("GameInterface", "SetConvar")
@@ -683,7 +763,7 @@ impl Engine for Bridge {
                 if apply_setting(&mut data.settings, &name, &value) {
                     self.options.convar_committed(&name);
                 }
-                self.actions.lock().unwrap().push(Action::Convar(name, value));
+                self.push_action(Action::Convar(name, value));
                 None
             }
             ("GameInterface", "GetConvarNumber") => Some(Value::Number(match arg(0).as_str() {
@@ -727,11 +807,43 @@ impl Engine for Bridge {
     }
 }
 
-#[derive(Resource)]
-pub struct Frontend {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum WorkerKind { Home, Match }
+
+struct CachedWorker {
     movie: Option<Mutex<scaleform::Menu>>,
     data: Arc<Mutex<Data>>,
-    actions: Arc<Mutex<Vec<Action>>>,
+    actions: Arc<Mutex<ActionQueue>>,
+    worker_generation: u64,
+    active: bool,
+    ready: bool,
+    failed: Option<String>,
+    requested: HashSet<String>,
+    loaded: HashSet<String>,
+    loading_text: String,
+    loading_map: Option<LoadingContext>,
+    loading_selection: Option<crate::session::LoadingMap>,
+    lobby: Arc<Mutex<crate::frontend_lobby::Scene>>,
+}
+impl CachedWorker {
+    fn new(data: Data, catalog: crate::frontend_lobby::Catalog) -> Self {
+        Self { movie: None, data: Arc::new(Mutex::new(data)), actions: Default::default(),
+            worker_generation: 0, active: false, ready: false, failed: None,
+            requested: Default::default(), loaded: Default::default(), loading_text: String::new(),
+            loading_map: None, loading_selection: None,
+            lobby: Arc::new(Mutex::new(crate::frontend_lobby::Scene::new(catalog))) }
+    }
+}
+
+#[derive(Resource)]
+pub struct Frontend {
+    worker_kind: WorkerKind,
+    parked: Option<CachedWorker>,
+    next_worker_generation: u64,
+    home_show_pending: bool,
+    movie: Option<Mutex<scaleform::Menu>>,
+    data: Arc<Mutex<Data>>,
+    actions: Arc<Mutex<ActionQueue>>,
     image: Handle<Image>,
     presented_serial: u64,
     pause_presentation: crate::frontend_pause_surface::Presentation,
@@ -757,6 +869,59 @@ pub struct Frontend {
 }
 
 impl Frontend {
+    fn select_worker(&mut self, kind: WorkerKind, catalog: crate::frontend_lobby::Catalog) -> bool {
+        if self.worker_kind == kind { return false; }
+        // Reject actions immediately, including an in-flight old native call.
+        self.actions.lock().unwrap().park();
+        {
+            let mut data = self.data.lock().unwrap();
+            data.state = AppState::Loading;
+            data.menu_open = false;
+            data.pause_surface.activate(self.worker_generation, false);
+            data.pause_surface.options_cancelled();
+            data.deferred_pause.cancel_pending();
+        }
+        if let Some(movie) = &self.movie { movie.lock().unwrap().park(); }
+        self.active = false;
+        let fork = self.data.lock().unwrap().fork_worker();
+        let mut other = self.parked.take().unwrap_or_else(|| CachedWorker::new(fork, catalog));
+        std::mem::swap(&mut self.movie, &mut other.movie);
+        std::mem::swap(&mut self.data, &mut other.data);
+        std::mem::swap(&mut self.actions, &mut other.actions);
+        std::mem::swap(&mut self.worker_generation, &mut other.worker_generation);
+        std::mem::swap(&mut self.active, &mut other.active);
+        std::mem::swap(&mut self.ready, &mut other.ready);
+        std::mem::swap(&mut self.failed, &mut other.failed);
+        std::mem::swap(&mut self.requested, &mut other.requested);
+        std::mem::swap(&mut self.loaded, &mut other.loaded);
+        std::mem::swap(&mut self.loading_text, &mut other.loading_text);
+        std::mem::swap(&mut self.loading_map, &mut other.loading_map);
+        std::mem::swap(&mut self.loading_selection, &mut other.loading_selection);
+        std::mem::swap(&mut self.lobby, &mut other.lobby);
+        self.parked = Some(other);
+        self.worker_kind = kind;
+        self.home_show_pending = kind == WorkerKind::Home;
+        self.performance_ack = None;
+        self.pause_presentation.open();
+        info!(worker = ?kind, generation = self.worker_generation, "Classic UI selected cached domain");
+        true
+    }
+
+    fn resume_worker(&mut self, focused: bool, width: u32, height: u32) {
+        if let Some(movie) = &self.movie {
+            let movie = movie.lock().unwrap();
+            movie.resume(focused);
+            movie.send(Input::Resize { width, height });
+        } else if !self.actions.lock().unwrap().resume() {
+            self.failed = Some("The menu session limit was reached. Restart the game.".into());
+        }
+    }
+
+    pub(crate) fn home_bootstrapped(&self) -> bool { self.data.lock().unwrap().home_bootstrapped }
+    pub(crate) fn home_presented(&self) -> bool {
+        self.worker_kind == WorkerKind::Home && !self.home_show_pending
+            && self.movie_ready("MainMenu") && self.pause_presentation.ready()
+    }
     pub(crate) fn take_performance_ack(&mut self) -> Option<(u64, std::time::Instant)> { self.performance_ack.take() }
     pub(crate) fn camera(&self) -> Entity { self.camera }
     pub(crate) fn pause_surface_visible(&self) -> bool { self.data.lock().unwrap().pause_surface.visible() }
@@ -815,21 +980,21 @@ pub(crate) fn setup(
         fs: data.vfs.clone(),
         settings: settings.clone(),
         inventory: InventoryView::new(&data.vfs),
-        localization: crate::localize::Localization::load(&data.vfs),
+        localization: Arc::new(crate::localize::Localization::load(&data.vfs)),
         game_modes: crate::frontend_game::load(&data.vfs, &installed),
         state: AppState::Menu,
         menu_open: menu.open(),
         loading: String::new(),
         loading_map: None,
         player_name: "You".into(),
-        movie_ready: HashSet::new(),
+        movie_ready: HashSet::new(), home_bootstrapped: false, home_retired: false,
         pause_surface: Default::default(),
         deferred_pause: Default::default(),
     }));
     let lobby = Arc::new(Mutex::new(crate::frontend_lobby::Scene::new(
         crate::frontend_lobby::Catalog::installed(&options.0, &menu.maps),
     )));
-    let actions = Arc::new(Mutex::new(vec![]));
+    let actions = Arc::new(Mutex::new(ActionQueue::default()));
     let image = images.add(Image::new(
         Extent3d {
             width: 1,
@@ -925,13 +1090,19 @@ pub(crate) fn setup(
         .id();
     commands.entity(cancel).add_child(cancel_text);
     commands.entity(notice).add_children(&[notice_text, cancel]);
+    let mut presentation = crate::frontend_pause_surface::Presentation::default();
+    presentation.open();
     commands.insert_resource(Frontend {
+        worker_kind: WorkerKind::Home,
+        parked: None,
+        next_worker_generation: 0,
+        home_show_pending: true,
         movie: None,
         data: shared,
         actions,
         image,
         presented_serial: 0,
-        pause_presentation: Default::default(),
+        pause_presentation: presentation,
         performance_ack: None,
         worker_generation: 0,
         root,
@@ -990,6 +1161,11 @@ pub(crate) fn update(
 ) {
     let remote_loading = crate::remote_join::loading(remote.as_deref());
     let scene = if remote_loading { AppState::Loading } else { *state.get() };
+    let kind = if matches!(scene, AppState::Loading | AppState::Match) { WorkerKind::Match } else { WorkerKind::Home };
+    let switched = if front.worker_kind != kind {
+        let catalog = crate::frontend_lobby::Catalog::installed(&options.0, &menu.maps);
+        front.select_worker(kind, catalog)
+    } else { false };
     let loading_selection = if scene == AppState::Loading { loader.loading_map() } else { None };
     let loading_selection_changed = front.loading_selection != loading_selection;
     front.loading_selection = loading_selection.clone();
@@ -1006,10 +1182,10 @@ pub(crate) fn update(
         snapshot.pause_surface.activate(front.worker_generation,
             scene == AppState::Match && matches!(menu.page, Some(crate::menu::Page::Main | crate::menu::Page::Pause)));
     }
-    if settings.is_changed() {
+    if settings.is_changed() || switched {
         front.data.lock().unwrap().settings = settings.clone();
     }
-    if inventory.is_changed() || catalog.is_changed() || practice.is_changed() {
+    if inventory.is_changed() || catalog.is_changed() || practice.is_changed() || switched {
         let mut items = Vec::new();
         for weapon in &data.catalog.weapons {
             if !crate::inventory::visible(weapon, 0) {
@@ -1075,6 +1251,16 @@ pub(crate) fn update(
         }
         front.data.lock().unwrap().inventory.replace(items);
     }
+    if switched {
+        front.resume_worker(window.focused, window.physical_width(), window.physical_height());
+        // An unbooted Loading domain must not show the parked Home raster.
+        if scene == AppState::Loading {
+            if let Some(image) = images.get_mut(&front.image) {
+                image.texture_descriptor.size = Extent3d { width: 1, height: 1, depth_or_array_layers: 1 };
+                image.data = Some(vec![0, 0, 0, 0]);
+            }
+        }
+    }
     let visible = matches!(scene, AppState::Menu | AppState::Browser)
         || (scene == AppState::Match && menu.open())
         || (scene == AppState::Loading
@@ -1083,6 +1269,12 @@ pub(crate) fn update(
     // During play the existing viewmodel camera continues drawing the HUD.
     if let Ok((mut camera, mut msaa)) = cameras.get_mut(front.camera) {
         camera.is_active = scene != AppState::Match || menu.open();
+        if front.scene != Some(scene) {
+            // A new/cold Home must clear the former match target while its
+            // genuine Ready/presentation fence is pending. Pause composites.
+            camera.clear_color = if scene == AppState::Match { ClearColorConfig::None }
+                else { ClearColorConfig::Custom(Color::BLACK) };
+        }
         *msaa = if scene == AppState::Match && settings.msaa {
             Msaa::Sample4
         } else {
@@ -1092,19 +1284,22 @@ pub(crate) fn update(
     let background_start = options.0.screenshot.is_none()
         && matches!(scene, AppState::Loading | AppState::Match);
     if (visible || background_start) && front.movie.is_none() && front.failed.is_none() {
-        let Some(generation) = front.worker_generation.checked_add(1) else {
+        let Some(generation) = front.next_worker_generation.checked_add(1) else {
             front.failed = Some("The menu session limit was reached. Restart the game.".into());
             return;
         };
+        front.next_worker_generation = generation;
         front.worker_generation = generation;
+        info!(worker = ?front.worker_kind, generation, "Classic UI starting isolated worker");
         front.data.lock().unwrap().pause_surface.activate(generation,
             scene == AppState::Match && matches!(menu.page, Some(crate::menu::Page::Main | crate::menu::Page::Pause)));
         let mut elements = vec!["MainMenu".into()];
         if matches!(scene, AppState::Loading | AppState::Match) {
             elements.push("PauseMenu".into());
         }
+        if scene == AppState::Loading { elements.push("LoadingScreen".into()); }
         front.requested.extend(elements.iter().cloned());
-        front.movie = Some(Mutex::new(scaleform::Menu::spawn(
+        front.movie = Some(Mutex::new(scaleform::Menu::spawn_named(
             scaleform::Config {
                 game_dir: data.game_dir.clone(),
                 width: window.physical_width(),
@@ -1113,6 +1308,7 @@ pub(crate) fn update(
                 elements,
             },
             Box::new(Bridge {
+                dispatch_epoch: None,
                 data: front.data.clone(),
                 actions: front.actions.clone(),
                 seen: HashMap::new(),
@@ -1123,7 +1319,32 @@ pub(crate) fn update(
                 offline_open: false,
                 lobby: front.lobby.clone(),
             }),
+            format!("{:?}-{generation}", front.worker_kind),
         )));
+    }
+    // Only the match player's duplicate Home is disposable. The original
+    // parsed Home is safely parked in its own inactive callback domain.
+    let retire_match_home = {
+        let mut snapshot = front.data.lock().unwrap();
+        let retire = front.worker_kind == WorkerKind::Match && scene == AppState::Match
+            && !snapshot.home_retired && snapshot.movie_ready.contains("MainMenu")
+            && snapshot.movie_ready.contains("PauseMenu");
+        if retire { snapshot.home_retired = true; snapshot.movie_ready.remove("MainMenu"); }
+        retire
+    };
+    if retire_match_home {
+        front.ready = true;
+        front.loaded.remove("MainMenu");
+        front.send(Input::Call { path: "_global.MainMenuMovie".into(), function: "unloadMovie".into(), args: vec![] });
+        info!(generation = front.worker_generation, "Classic UI retired duplicate match Home after bootstrap");
+    }
+    if front.worker_kind == WorkerKind::Home && front.home_show_pending && front.movie_ready("MainMenu") {
+        front.home_show_pending = false;
+        front.send(Input::Present { commands: vec![
+            scaleform::Command::Set { path: "_global.MainMenuMovie".into(), property: "_visible".into(), value: true.into() },
+            scaleform::Command::Call { path: "_global.MainMenuMovie".into(), function: "showPanel".into(), args: vec![] },
+        ], revision: front.pause_presentation.revision() });
+        info!(generation = front.worker_generation, "Classic UI Home Ready; awaiting fresh presentation");
     }
     // Load the first Pause while the map loads, rather than making Escape pay
     // for its movies/fonts. A closed late load stays hidden in the bridge.
@@ -1131,7 +1352,7 @@ pub(crate) fn update(
         front.request("PauseMenu");
     }
     let active = visible || (front.movie.is_some() && matches!(scene, AppState::Loading | AppState::Match)
-        && front.failed.is_none() && (!front.movie_ready("MainMenu") || !front.movie_ready("PauseMenu")));
+        && front.failed.is_none() && (!front.home_bootstrapped() || !front.movie_ready("PauseMenu")));
     if front.active != active {
         front.send(Input::SetActive(active));
         front.active = active;
@@ -1142,7 +1363,7 @@ pub(crate) fn update(
             // Never flash a cached closed/previous menu raster while the worker
             // is still preparing this Escape transition.
             front.pause_presentation.open();
-        } else {
+        } else if !switched && !front.home_show_pending {
             front.pause_presentation.close();
         }
         if visible && scene == AppState::Menu && front.ready {
@@ -1170,7 +1391,7 @@ pub(crate) fn update(
     }
     let (pause_show, options_to_hide) = {
         let mut data = front.data.lock().unwrap();
-        let main_ready = data.movie_ready.contains("MainMenu");
+        let main_ready = data.home_bootstrapped;
         let pause_ready = data.movie_ready.contains("PauseMenu");
         let path = data.pause_surface.pause_root().map(str::to_owned);
         let options_path = data.pause_surface.options_root().map(str::to_owned);
@@ -1264,7 +1485,8 @@ pub(crate) fn update(
             }
         }
         front.send(Input::Present {
-            commands: scene_commands, revision: front.pause_presentation.revision(),
+            commands: scene_commands,
+            revision: if front.home_show_pending { 0 } else { front.pause_presentation.revision() },
         });
         if scene == AppState::Loading { front.request("LoadingScreen"); }
         front.scene = Some(scene);
@@ -1353,6 +1575,7 @@ pub(crate) fn update(
         let event = front.poll();
         match event {
             Some(scaleform::Event::Loaded(name)) => {
+                if name == "MainMenu" && front.data.lock().unwrap().home_retired { continue; }
                 front.ready |= name == "MainMenu";
                 front.loaded.insert(name.clone());
                 info!("Classic UI loaded {name}");
@@ -1384,7 +1607,7 @@ pub(crate) fn update(
             front.presented_serial = front.presented_serial.saturating_add(1);
         }
     }
-    let actions = std::mem::take(&mut *front.actions.lock().unwrap());
+    let actions = front.actions.lock().unwrap().take();
     // Home/quit in this batch wins over a preceding queued Start.
     if actions.iter().any(|action| matches!(action, Action::LobbyHome) ||
         matches!(action, Action::Command(command) if matches!(command.to_ascii_lowercase().as_str(), "quit" | "quitgame" | "disconnect" | "openserverbrowser"))) {
@@ -1504,7 +1727,7 @@ pub(crate) fn input(
     remote: Option<Res<crate::remote::RemoteClient>>,
 ) {
     let (window_entity, window) = *window;
-    let blocked = *state.get() == AppState::Browser || crate::remote_join::loading(remote.as_deref()) || packs.is_some_and(|packs| packs.blocks_movie()) || sharing.is_some_and(|sharing| sharing.blocks_movie()) || crate::frontend_flow::enabled() || !enabled.0 || !front.visible || front.failed.is_some() || !window.focused;
+    let blocked = *state.get() == AppState::Browser || crate::remote_join::loading(remote.as_deref()) || packs.is_some_and(|packs| packs.blocks_movie()) || sharing.is_some_and(|sharing| sharing.blocks_movie()) || crate::frontend_flow::enabled() || !enabled.0 || !front.visible || front.home_show_pending || front.failed.is_some() || !window.focused;
     for input in ownership.transition(blocked, window.focused) { front.send(input); }
     if blocked {
         keys.clear();
@@ -1741,6 +1964,25 @@ mod tests {
     use super::*;
 
     #[test]
+    fn cached_domain_actions_discard_parked_and_inflight_prior_epoch_calls() {
+        let mut queue = ActionQueue::default();
+        let old_dispatch = queue.current();
+        queue.push_at(old_dispatch, Action::Command("old-click".into()));
+        queue.park();
+        assert!(queue.is_empty());
+        queue.push_at(old_dispatch, Action::Command("inflight-after-park".into()));
+        assert!(queue.is_empty());
+        assert!(queue.resume());
+        queue.push_at(old_dispatch, Action::Command("inflight-after-resume".into()));
+        assert!(queue.is_empty());
+        queue.push_at(queue.current(), Action::Command("new-click".into()));
+        assert!(matches!(queue.take().as_slice(), [Action::Command(command)] if command == "new-click"));
+        queue.epoch = u64::MAX;
+        assert!(!queue.resume());
+        assert!(queue.current().is_none());
+    }
+
+    #[test]
     fn owned_proxy_epoch_rejects_stale_query_completion_and_duplicate_zeroarg_start() {
         use crate::frontend_lobby::{Api, Catalog, Scene};
         let modes = kv::parse("gameTypes { classic { value 0 gameModes { competitive { value 1 mapgroupsSP { mg_de_dust2 0 } } } } } mapgroups { mg_de_dust2 { maps { de_dust2 0 } } } maps { de_dust2 {} }").unwrap();
@@ -1748,14 +1990,14 @@ mod tests {
         let data = Arc::new(Mutex::new(Data {
             inventory: InventoryView::new(&fs), fs, settings: Settings::default(),
             localization: Default::default(), game_modes: modes.clone(),
-            state: AppState::Menu, menu_open: true, loading: String::new(), loading_map: None, player_name: "You".into(), movie_ready: HashSet::new(), pause_surface: Default::default(),
+            state: AppState::Menu, menu_open: true, loading: String::new(), loading_map: None, player_name: "You".into(), movie_ready: HashSet::new(), home_bootstrapped: false, home_retired: false, pause_surface: Default::default(),
         deferred_pause: Default::default(),
         }));
         let mut scene = Scene::new(Catalog::installed(&crate::ClientOptions::default(), &["de_dust2".into()]));
         assert!(scene.begin(&modes)); assert!(scene.open_lobby());
         let old_lobby = scene.proxy(Api::Lobby);
-        let actions = Arc::new(Mutex::new(Vec::new()));
-        let mut bridge = Bridge { data, actions: actions.clone(), seen: Default::default(), roots: Default::default(), requested: Default::default(),
+        let actions = Arc::new(Mutex::new(ActionQueue::default()));
+        let mut bridge = Bridge { dispatch_epoch: None, data, actions: actions.clone(), seen: Default::default(), roots: Default::default(), requested: Default::default(),
             options: Default::default(), offline: Default::default(), offline_open: false, lobby: Arc::new(Mutex::new(scene)) };
         let mut calls = Calls::default();
         bridge.call(&old_lobby, "ChooseGameSettings", &[], &mut calls);
@@ -1838,10 +2080,10 @@ mod tests {
             inventory: InventoryView::new(&fs), fs, settings: Settings::default(),
             localization: Default::default(), game_modes: Default::default(),
             state: AppState::Menu, menu_open: true, loading: String::new(),
-            loading_map: None, player_name: "You".into(), movie_ready: Default::default(),
+            loading_map: None, player_name: "You".into(), movie_ready: Default::default(), home_bootstrapped: false, home_retired: false,
             pause_surface: Default::default(), deferred_pause: Default::default(),
         }));
-        let mut bridge = Bridge {
+        let mut bridge = Bridge { dispatch_epoch: None,
             data: data.clone(), actions: Default::default(), seen: Default::default(),
             roots: HashMap::from([("OptionsMenu".into(), "_level12".into()),
                 ("StartSinglePlayer".into(), "_level15".into())]),
@@ -1881,12 +2123,12 @@ mod tests {
             loading: String::new(),
             loading_map: None,
             player_name: "You".into(),
-        movie_ready: HashSet::new(),
+        movie_ready: HashSet::new(), home_bootstrapped: false, home_retired: false,
         pause_surface: Default::default(),
         deferred_pause: Default::default(),
         }));
-        let actions = Arc::new(Mutex::new(Vec::new()));
-        let mut bridge = Bridge {
+        let actions = Arc::new(Mutex::new(ActionQueue::default()));
+        let mut bridge = Bridge { dispatch_epoch: None,
             data,
             actions: actions.clone(),
             seen: HashMap::new(),

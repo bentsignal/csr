@@ -337,7 +337,7 @@ fn step(world: &mut World, p: &mut Proof, frame: f64) -> Result<(), String> {
             p.enter(Stage::Warming);
         }
         Stage::Warming if p.elapsed() >= 1.0
-            && front.movie_ready("MainMenu") && front.movie_ready("PauseMenu") => {
+            && front.home_bootstrapped() && front.movie_ready("PauseMenu") => {
             p.position = position;
             p.shots = shots;
             p.clip = clip;
