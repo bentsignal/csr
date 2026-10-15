@@ -121,3 +121,18 @@ This verifies command entry and persisted wheel binding, not physical mouse
 wheel timing or native VGUI appearance. Wheel-jump delivery also has a focused
 TickInput test; full movement/bhop fidelity and the unsupported commands listed
 above remain separate work.
+
+The mouse-button extension was checked at source `fec4511` in two actual
+1920x1080 client launches. Typed commands assigned mouse4 to jump, mouse5 to
+secondary attack and cleared mouse2; all three values read back after relaunch.
+The coordinating agent inspected both console and resumed-match captures;
+the original HUD remained intact and the owner's prior configuration was
+unchanged. The first capture host exited unexpectedly and did not qualify;
+its owned client was closed and the failed run retained separately.
+
+Input regressions cover remapped pointer-capture clicks, keyboard independence,
+short mouse taps between fixed ticks and sustained secondary attack. A follow-up
+also keeps a fresh side-button attack independent of a capture-held button
+bound to the same command. Source `13b18ff` passed 309 client tests (three
+installed-data tests ignored), the PLAY build and zero-failure probe/sim.
+These checks do not establish physical mouse latency or complete native binds.

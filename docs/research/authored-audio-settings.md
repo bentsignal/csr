@@ -45,8 +45,8 @@ settings tests, the PLAY launcher build, and soundcheck (1425 decodable sounds,
 zero skipped or crashing). The follow-up actual `menu::apply` regression uses a
 real rodio-backed `AudioSink` without an output device: changing only window
 focus mutes and restores the existing sink, retains saved master volume, and
-the native Yes=0 choice permits unfocused playback. Actual original-widget
-rendering remains pending; this is not an overall Audio Settings pass.
+the native Yes=0 choice permits unfocused playback. This is not an overall
+Audio Settings pass.
 
 Original-only music metadata is available under
 `sound/music/valve_csgo_01/game_sounds_music.txt` in the Legacy VPK. The retained
@@ -65,4 +65,17 @@ the Audio header, original widget and navigation. `ResizeTop` remains untouched.
 The adapter now hides that controller visualization after `ShowPanel` in Audio
 mode8 only. No timeline action bodies were inspected. This standalone probe
 uses a stub option count and slider getter; its token label/value are not a
-production settings-page result. The two-row client render remains required.
+production settings-page result.
+
+Frozen production `b7403d9` passed the actual eight-image Home/match/Pause/
+Audio/Back/Resume/Home/Inferno lifecycle. The two original supported rows read
+Master Volume 0.03 and background audio No, without the stray black panel;
+the coordinating agent independently inspected Audio, resumed gameplay,
+returned Home and the new Inferno scene. HUD surfaces cleared/reappeared and
+the owner's prior configuration was unchanged. This does not claim a physical
+Alt-Tab/native-choice-click test or complete music/device/voice controls.
+
+Focused widget/settings and actual-sink regressions, the PLAY launcher,
+1425-sound decode audit, required RELEASE build/probe/sim and exact-source full
+CI passed before [PR #155](https://github.com/bentsignal/global-offensive/pull/155)
+merged. Probe and sim each reported zero failures.
