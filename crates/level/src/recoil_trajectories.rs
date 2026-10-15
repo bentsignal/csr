@@ -290,6 +290,11 @@ fn hash_profile(digest: &mut Sha1, mode: &[u8], profile: &RecoilTrajectory) {
     if let Some(response) = &profile.response {
         digest.update(response.reference.as_bytes());
         digest.update(response.reference_hz.to_le_bytes());
+        digest.update([u8::from(response.phase_recovery.is_some())]);
+        if let Some(phase) = &response.phase_recovery {
+            digest.update(phase.reference.as_bytes());
+            digest.update(phase.decay_decades_per_second.to_le_bytes());
+        }
         for value in [response.angle_decay, response.angle_linear, response.velocity_decay,
             response.first_impulse[0], response.first_impulse[1],
             response.final_impulse[0], response.final_impulse[1], response.held_tolerance_degrees] {
@@ -325,7 +330,7 @@ pub(super) fn import(catalog: &mut Catalog, schema: Option<[u8; 20]>) -> Option<
     digest.update(schema);
     // A peer with the same assets but the previous recoil policy must fail
     // content admission before prediction/snapshots can silently disagree.
-    digest.update(b"observed-recoil-trajectory-v6-ak-angle-velocity-legacy-1.38.8.1");
+    digest.update(b"observed-recoil-trajectory-v7-ak-observed-phase-legacy-1.38.8.1");
     let mut applied = false;
     {
         for def in &mut catalog.weapons {
@@ -369,6 +374,10 @@ pub(super) fn import(catalog: &mut Catalog, schema: Option<[u8; 20]>) -> Option<
                     // Only the overlapping second held marker needs this
                     // original ~2px observational bound in recoilcheck.
                     held_tolerance_degrees: 0.19,
+                    phase_recovery: Some(weapons::RecoilPhaseRecovery {
+                        reference: "legacy-1.38.8.1-ak-public-weapon-phase-standing-128hz".into(),
+                        decay_decades_per_second: 2.,
+                    }),
                 }),
             });
             digest.update(def.id.to_string().as_bytes());

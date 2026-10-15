@@ -587,3 +587,66 @@ that sign. Continued resumed spraying therefore still fails fidelity and
 needs separately observed phase/index behavior. This patch does not claim
 to fix that counter. Camera tracking, nonstanding cases, historical2015
 parity and native64 Hz behavior also remain unestablished.
+
+
+## Direct AK weapon-phase observation
+
+A separate owned session identified the actual predicted AK entity through
+`cl_predictionlist`; its observed number was 348 in that session, not a
+hard-coded entity assumption. `cl_pdump` on that entity positively exposed
+AK model metadata, `m_iClip1`, `m_flRecoilIndex`, the separate integer
+`m_iRecoilIndex`, last-shot time and primary-attack deadline. Fresh player
+pose/punch/ammo admission and a second weapon class/clip/zero-index gate
+preceded one six-shot release-only curve. All six actual near-shot waves
+and clip 30 to 24 were confirmed; all 12 preference entries restored exactly.
+The first HUD image still displayed 25 while the same-frame weapon field
+already displayed 24, so HUD presentation was not used as a phase clock.
+
+The floating index remains 6 through the 0.108 to 0.116-second receive-bound
+sample. Later values 4.835052, 3.625777, 2.440765, 0.923955, 0.302883 and
+0.092395 match repeated f32 multiplication by 0.1^(2/128) after 6, 14, 25,
+52, 83 and 116 updates, respectively, to their six-decimal display precision.
+The public runtime decay coefficient is 2. The integer field remains 0
+throughout and provides no evidence of the changing phase or impulse
+selection. Achieved capture bounds and the directly displayed attack timers
+constrain a cooldown plateau; they do not identify an exact native onset tick.
+
+The optional content policy uses that observed multiplicative decay after
+the ordinary primary-attack deadline. Discrete impulse selection is a
+separate inference from previously observed restart angle/velocity cases;
+those cases remain independent checks of the angle/velocity recovery
+operator, but are no longer blind holdouts for the phase-family choice.
+A new eight-shot release followed by three resumed shots is preregistered
+for independent validation, with floor and interpolation alternatives fixed
+before capture. Its results were not used to fit decay coefficients,
+endpoint impulses or the recovery operator.
+
+The independent eight-plus-three packet emitted exactly eleven identified
+near waves and showed clips 30, 22, 21, 20 and 19. Its actual last-partial to
+first-resumed sound-engine interval was 0.359 seconds. A clean frame proves
+the old colored impact markers absent before restarting; each resumed shot
+has one separate new marker. Both independently calibrated image regions
+again reproduce a 600-pixel focal length, and two stationary background
+regions and all readable player eye/zero-velocity rows remain unchanged.
+The weapon float field reads 4.038450 before restarting and 5.440420 after
+the three resumed shots. The integer field remains zero and is not used
+as evidence for discrete impulse selection.
+
+Using the actual counted sound intervals as inputs to the frozen
+predictions, the three floor-selection marker errors are 0.660, 1.519 and
+1.787 pixels, within the original approximately two-pixel marker bound.
+The interpolation alternative misses the third marker by 5.434 to 6.197
+pixels across both preregistered cooldown-onset hypotheses. This supports
+the discrete candidate without adjusting the angle/velocity recovery
+operator or held-profile impulses to the new observation. Sound-clock
+rounding is not an exact native server-tick measurement. Public post-shot
+angle/velocity pairs are retained with their display/capture uncertainty;
+the rounded held-ray impulses do not establish exact numerical state parity.
+
+The firing predicate already distinguishes a loaded automatic hold from
+an empty gun or a reload; it is not the raw attack button. Holstered phase
+evolution and repeated completely-empty dry cues remain unobserved boundary
+cases, even though angle/velocity already advance while holstered. This
+patch does not establish those cases, native 64 Hz behavior or historical
+2015 parity. Final actual-source ray checks and rendered validation remain
+pending.

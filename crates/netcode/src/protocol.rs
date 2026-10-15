@@ -613,7 +613,7 @@ mod tests {
         def.recoil_trajectory = Some(weapons::RecoilTrajectory { reference: "test".into(), bullet_angles: vec![[0.; 2]; 30],
             response: Some(weapons::RecoilResponse { reference: "test".into(), reference_hz: 128,
                 angle_decay: 8., angle_linear: 18., velocity_decay: 4.5,
-                first_impulse: [-20., 0.], final_impulse: [-20., 0.], held_tolerance_degrees: 0.2 }) });
+                first_impulse: [-20., 0.], final_impulse: [-20., 0.], held_tolerance_degrees: 0.2, phase_recovery: None }) });
         let mut gun = sim::weapon::WeaponState::new(std::sync::Arc::new(def));
         gun.recoil_motion = Some(sim::recoil_motion::RecoilMotion {
             angle: [-2., 1.], velocity: [-30., 4.], updated_tick: 8, anchor_tick: 1, tick_rate: 128,
