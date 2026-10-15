@@ -169,7 +169,7 @@ _global.csrDeathNotices.load = function(url) {
     this.loader.addListener(listener);
     return this.loader.loadClip(url, this.root);
 };
-_global.csrDeathNotices.add = function(key, killer, victim, killerColor, victimColor, weaponLinkage, headshot, localAttacker, localVictim) {
+_global.csrDeathNotices.addImpl = function(key, killer, victim, killerColor, victimColor, weaponLinkage, headshot, localAttacker, localVictim) {
     var id = this.key(key);
     if (!this.ready || id == undefined || this.rows[id] != undefined ||
         typeof killer != "string" || killer.length > 256 || typeof victim != "string" || victim.length > 256 ||
@@ -194,6 +194,18 @@ _global.csrDeathNotices.add = function(key, killer, victim, killerColor, victimC
     this.rows[id] = row;
     if (!this.layout(row)) { this.remove(key); return false; }
     return true;
+};
+_global.csrDeathNotices.add = function(key, killer, victim, killerColor, victimColor, weaponLinkage, headshot, localAttacker, localVictim) {
+    var success = false;
+    try {
+        success = this.addImpl.apply(this, arguments) === true;
+    } catch (error) {
+        // Unknown installed/pack content must restore the client's plain feed,
+        // including unexpected public movie/layout failures rather than hang.
+        success = false;
+    }
+    csrEI.call("csr.DeathNoticeResult", String(key), success);
+    return success;
 };
 _global.csrDeathNotices.remove = function(key) {
     var id = this.key(key);
