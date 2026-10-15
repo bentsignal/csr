@@ -83,3 +83,116 @@ incorrect and is not used by the implementation.
 Still open: final slider proof; sustained Pause performance fix; power button
 availability while the offline picker owns navigation; all original menu
 features/loading artwork fidelity. The current work does not claim these done.
+
+
+## Cached Home/match player replacement
+
+Cold Home retirement is retained as an unready experiment in PR130 because it
+improves Pause but adds about 5.8 seconds of repeat Home initialization. The
+replacement keeps the original parsed Home worker parked with SetActive(false),
+then uses an isolated cached match worker for Loading/Pause. That worker alone
+retires its duplicate Main after actual Main/Pause bootstrap readiness. Returning
+Home reuses its existing timeline; no Ruffle visibility semantics/fork change.
+
+Each worker owns separate mutable Data/actions/lobby/readiness and root maps.
+Only immutable installation/localization lookup data is shared. Current settings
+and actual inventory items refresh before resume. Ordered park/resume replaces
+queued input, releases held keys/buttons/focus, revokes old navigation, and gates
+in-flight native actions with a worker-owned epoch. Only the selected domain
+receives new input and submits new renders; an already submitted old readback
+is discarded while inactive and cannot pass the frontend's fresh revision fence.
+Viewport is explicitly refreshed even if the global window size did not change.
+
+The first match worker boots its original LoadingScreen/Pause alongside the
+required Main globals; subsequent matches reuse it. The existing production
+flow optionally exercises native Pause -> Audio -> Back and records actual Exit
+to freshly presented Ready Home latency. A separate three-second pending capture
+remains if restoration is slow, rather than hiding the delay behind fixture waits.
+First-ever Home after a direct developer startup still needs initial Home boot;
+it clears black rather than retaining the former world target. First match
+bootstrap cost, memory and the complete roundtrip are recorded below for e2d3305.
+
+
+## Exact 62e24a2 bounded observations
+
+Five frontend tests and 33 Scaleform tests pass (one ignored) after forced
+workspace play builds. The direct-start Pause pressure case exits 0 with four
+personally inspected 1920x1080 captures. Pause composites over the world and
+Resume clears it. First Pause response is 107 ms; the four-second readback
+window measures 22.90 / 36.65 ms mean / p95 versus c1's 52.62 / 60.41 ms.
+Reported slow pointer work averages 6.74 ms. This direct fixture has no parked
+Home, so it does not establish the cost of both cached workers or physical
+input/present latency.
+
+The original Home-start flow is an incomplete failure, not a pass despite its
+normal close returning 0. Its --screenshot option suppressed the usual
+background startup; the fixed three-second fixture then clicked Help before
+Pause boot completed. The preserved flow-pause image contains the world only.
+The corrected opt-in flow accepts CSR_TEST_FLOW_OUTPUT without --screenshot,
+waits actual fresh Pause presentation, and can apply five seconds of pointer
+pressure before Options. Production startup policy is unchanged. That corrected
+normal-start full roundtrip remains pending.
+
+Whole-process memory sampling peaks at 10.37 GiB private bytes in the incomplete
+two-worker flow and 8.19 GiB in direct pressure, ending at 2.80 / 2.32 GiB.
+These include map/load allocations and differing scenarios, not an isolated UI
+memory comparison. Both retain the owned-process timeout and free-RAM guard.
+
+## Remaining full menu fidelity
+
+The slider/navigation passes do not establish a complete Audio page. Current
+captures show only Master Volume and a large empty microphone panel. The
+remaining original controls, microphone services, layout, defaults and
+persistence remain open; supported-convar filtering currently excludes them.
+
+The original Scaleform Pause reference in the [Radar centralizado Steam guide](https://steamcommunity.com/sharedfiles/filedetails/?id=516337371)
+([embedded screenshot](https://images.steamusercontent.com/ugc/422566214060763931/1E90D7113BE3543FC527060582B1AF9E6350579E/))
+shows the world behind the translucent menu/logo and includes Choose Team,
+Call Vote and Community Servers, absent from our five-entry Pause. The guide
+was posted September 2015 and updated in 2023; exact image capture date is
+unknown. This supports composition/missing-entry evidence, not pixel or timing
+parity. Images remain private outside git. Offline power-button availability
+and its authored confirmation path also remain open.
+
+
+## Normal-start cached lifecycle: e2d3305
+
+The corrected normal-start flow passes with failures: 0 and all eight native
+1920x1080 captures inspected: Dust II, Pause, Audio, Back to Pause, Resume,
+Pause before Exit, returned Home, and Inferno. It starts without --screenshot;
+CSR_TEST_FLOW_OUTPUT supplies captures without changing production startup.
+The helper uses the committed native mutex and an immutable executable/hash,
+private data directory, owned-child shutdown, 180-second bound and free-RAM
+guard. No guard fires; minimum free RAM is 27.04 GiB. The earlier incomplete
+62/8 observations remain failures and are not relabeled as passes.
+
+Only Home generation 1 and Match generation 2 start. Home is parked on first
+Loading and reused after native Exit; the second match reuses Match 2. Native
+Exit to actual Ready plus a fresh Home image acknowledgment is 158.4 ms,
+compared with the cold-unload experiment's roughly 5.8 seconds. The returned
+Home capture has no prior world or Audio overlay. The original full Audio
+page and Home news/services remain unfinished; this validates lifecycle only.
+
+The same five-second pointer sweep runs with Home parked. In the four seconds
+after the Pause capture, 182 readbacks give 21.84 ms mean / 36.88 ms p95;
+reported slow pointer handlers average 6.31 ms. No Home active/slow-work trace
+rows occur in that window. Compare c1's 52.62 / 60.41 ms readback window;
+shared-PC workload and the fixture entry differ. Slow-work logs report only
+samples of at least 5 ms. These are worker timings, not physical input or GPU
+presentation latency, and do not establish exact native frame rate/fidelity.
+
+Cost: the first Match worker needs 6.38 seconds of bootstrap, overlapping
+map Loading; it is not repeated on the second match. Original LoadingScreen
+ownership is preserved, but full loading artwork/layout fidelity remains open.
+Whole-process peak sampled private bytes reach 12.15 GiB and peak working set
+7.96 GiB. Around Home return the sample is 9.15 GiB private / 5.99 GiB working
+set. These include map/renderer allocations and are not isolated UI overhead.
+The final 1.49 GiB private sample occurs during shutdown, not steady Home.
+A matched baseline is still needed before assigning the retained memory cost.
+
+Exact e2d3305 was built with all workspace play packages cleaned, and copied
+before target reuse. Five frontend and 33 Scaleform tests pass (one ignored).
+Required workspace/probe/sim CI is pending; this branch must not merge red.
+Private spec, receipt, raw trace, images, memory samples and the computed
+summary are under menu-cached-flow-normal-e2d3305 in the fidelity evidence
+folder. No third-party images or audio are committed.
