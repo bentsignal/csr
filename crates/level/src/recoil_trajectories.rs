@@ -104,6 +104,87 @@ fn is_observed_m4a4(def: &WeaponDefinition) -> bool {
             }
 }
 
+// Fresh owner-requested retakes independently observed both suppressor modes.
+// Two ordered magazines and a normal-speed aggregate per mode, with 2px
+// marker uncertainty. The physically disturbed earlier run is excluded.
+const M4S_ATTACHED_BULLET_ANGLES: [[f32; 2]; 20] = [
+    [0.00, 0.00],
+    [-0.14, 0.00],
+    [-0.33, 0.05],
+    [-1.00, -0.15],
+    [-2.00, 0.05],
+    [-2.96, -0.24],
+    [-4.10, -0.39],
+    [-4.76, 0.29],
+    [-5.24, 0.68],
+    [-5.34, 1.59],
+    [-5.76, 1.25],
+    [-6.09, 0.48],
+    [-5.90, -0.77],
+    [-5.81, -1.73],
+    [-5.44, -2.60],
+    [-5.81, -2.55],
+    [-6.14, -2.11],
+    [-6.00, -2.59],
+    [-5.82, -3.08],
+    [-5.91, -2.98],
+];
+
+const M4S_DETACHED_BULLET_ANGLES: [[f32; 2]; 20] = [
+    [0.00, 0.00],
+    [-0.24, 0.05],
+    [-0.86, 0.05],
+    [-2.20, -0.24],
+    [-3.24, 0.10],
+    [-4.57, -0.29],
+    [-5.81, -0.58],
+    [-6.75, 0.38],
+    [-7.50, 0.91],
+    [-7.69, 2.24],
+    [-8.02, 1.81],
+    [-8.44, 0.76],
+    [-8.20, -0.81],
+    [-7.88, -2.10],
+    [-7.23, -3.20],
+    [-7.23, -2.96],
+    [-7.56, -2.62],
+    [-7.51, -3.10],
+    [-7.14, -3.73],
+    [-7.42, -3.63],
+];
+
+fn is_observed_m4s(def: &WeaponDefinition) -> bool {
+    def.id == ContentId::csgo(ContentKind::Weapon, "m4a1_silencer")
+        && def.class_name == "weapon_m4a1_silencer"
+        && def.def_index == 60
+        && def.clip_size == 20
+        && def.bullets == 1
+        && def.full_auto
+        && def.cycle_time == 0.1
+        && def.attr_f32("has silencer") == Some(1.)
+        && def.recoil
+            == Recoil {
+                seed: 38965,
+                angle: 0.,
+                angle_variance: 65.,
+                magnitude: 25.,
+                magnitude_variance: 3.,
+            }
+        && def.attr_f32("recoil angle alt") == Some(0.)
+        && def.attr_f32("recoil angle variance alt") == Some(65.)
+        && def.attr_f32("recoil magnitude alt") == Some(21.)
+        && def.attr_f32("recoil magnitude variance alt") == Some(0.)
+}
+
+fn hash_profile(digest: &mut Sha1, mode: &[u8], profile: &RecoilTrajectory) {
+    digest.update(mode);
+    digest.update(profile.reference.as_bytes());
+    for angle in &profile.bullet_angles {
+        digest.update(angle[0].to_le_bytes());
+        digest.update(angle[1].to_le_bytes());
+    }
+}
+
 fn is_observed_ak(def: &WeaponDefinition) -> bool {
     def.id == ContentId::csgo(ContentKind::Weapon, "ak47")
         && def.class_name == "weapon_ak47"
@@ -131,7 +212,7 @@ pub(super) fn import(catalog: &mut Catalog, schema: Option<[u8; 20]>) -> Option<
     digest.update(schema);
     // A peer with the same assets but the previous recoil policy must fail
     // content admission before prediction/snapshots can silently disagree.
-    digest.update(b"observed-recoil-trajectory-v2-ak-m4-legacy-1.38.8.1");
+    digest.update(b"observed-recoil-trajectory-v3-ak-m4-m4s-legacy-1.38.8.1");
     let mut applied = false;
     {
         for def in &mut catalog.weapons {
@@ -142,6 +223,15 @@ pub(super) fn import(catalog: &mut Catalog, schema: Option<[u8; 20]>) -> Option<
                     "legacy-1.38.8.1-m4a4-held-standing-128hz",
                     &M4A4_BULLET_ANGLES,
                 )
+            } else if is_observed_m4s(def) {
+                def.recoil_trajectory_unsuppressed = Some(RecoilTrajectory {
+                    reference: "legacy-1.38.8.1-m4s-detached-held-standing-128hz".into(),
+                    bullet_angles: M4S_DETACHED_BULLET_ANGLES.to_vec(),
+                });
+                (
+                    "legacy-1.38.8.1-m4s-attached-held-standing-128hz",
+                    &M4S_ATTACHED_BULLET_ANGLES,
+                )
             } else {
                 continue;
             };
@@ -151,10 +241,13 @@ pub(super) fn import(catalog: &mut Catalog, schema: Option<[u8; 20]>) -> Option<
                 bullet_angles: angles.to_vec(),
             });
             digest.update(def.id.to_string().as_bytes());
-            digest.update(reference.as_bytes());
-            for angle in angles {
-                digest.update(angle[0].to_le_bytes());
-                digest.update(angle[1].to_le_bytes());
+            hash_profile(
+                &mut digest,
+                b"default-equipped",
+                def.recoil_trajectory.as_ref().unwrap(),
+            );
+            if let Some(detached) = &def.recoil_trajectory_unsuppressed {
+                hash_profile(&mut digest, b"suppressor-detached", detached);
             }
         }
     }
@@ -196,11 +289,26 @@ mod tests {
         let m4_profile = m4.recoil_trajectory.as_ref().unwrap();
         assert_eq!(m4_profile.bullet_angles.len(), 30);
         assert_ne!(m4_profile.bullet_angles, profile.bullet_angles);
+        let m4s = catalog.get("weapon_m4a1_silencer").unwrap();
+        let attached = m4s.recoil_trajectory.as_ref().unwrap();
+        let detached = m4s.recoil_trajectory_unsuppressed.as_ref().unwrap();
+        assert_eq!(attached.bullet_angles.len(), 20);
+        assert_eq!(detached.bullet_angles.len(), 20);
+        assert_ne!(attached.bullet_angles, detached.bullet_angles);
+        let mut modified = m4s.clone();
+        modified.recoil_trajectory = None;
+        modified.recoil_trajectory_unsuppressed = None;
+        modified
+            .attributes
+            .insert("recoil magnitude alt".into(), "22".into());
+        let mut unmeasured = Catalog {
+            weapons: vec![modified],
+        };
+        assert_eq!(import(&mut unmeasured, Some(schema)), Some(schema));
+        assert!(unmeasured.weapons[0].recoil_trajectory.is_none());
         assert!(
-            catalog
-                .get("weapon_m4a1_silencer")
-                .unwrap()
-                .recoil_trajectory
+            unmeasured.weapons[0]
+                .recoil_trajectory_unsuppressed
                 .is_none()
         );
 
