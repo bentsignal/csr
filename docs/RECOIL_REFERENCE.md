@@ -415,11 +415,11 @@ displayed zero by about 0.77 seconds while angular velocity remains
 (-2.125, +0.25). After one shot the angle reaches displayed zero by about
 0.51 seconds while velocity remains (-2.03125, -1.03125). Both started at
 zero, retained the same eye/zero movement velocity and ended at clips 29/24.
-The display quantizes these fields to 1/32 units. Capture begin/end bounds
+The displayed values fall on 1/32-unit increments. Capture begin/end bounds
 are retained; requested sample phases are not treated as exact native times.
 
 Ordinary runtime metadata independently reports recoil velocity decay 4.5,
-angle-decay entries 3.5 and 8, a linear-decay entry 18 and a decay coefficient
+decay-exponent entries 3.5 and 8, a linear-decay entry 18 and a decay coefficient
 2. The older 0.55 cooldown description explicitly says it is deprecated.
 The observed velocity envelopes are consistent with the reported 4.5 value.
 Metadata names alone do not establish the equation or update order. The
