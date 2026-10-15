@@ -192,7 +192,18 @@ pub(crate) fn install_frame_log(app: &mut App) {
     }
 }
 
-fn disable_test_light_clusters(mut commands: Commands, cameras: Query<Entity, Added<Camera3d>>) {
+fn disable_test_light_clusters(
+    mut commands: Commands,
+    cameras: Query<Entity, Added<Camera3d>>,
+    mut settings: ResMut<bevy::light::cluster::GlobalClusterSettings>,
+) {
+    // In Bevy 0.19 the GPU path still allocates a dummy texture for a None
+    // camera's zero-size grid. Select the documented CPU fallback as well;
+    // it skips disabled cameras rather than creating an invalid GPU texture.
+    if settings.gpu_clustering.is_some() {
+        settings.gpu_clustering = None;
+        info!("renderer experiment: disabled global GPU light clustering");
+    }
     for camera in &cameras {
         commands.entity(camera).insert(bevy::light::cluster::ClusterConfig::None);
         info!("renderer experiment: disabled light clusters for camera {camera}");
