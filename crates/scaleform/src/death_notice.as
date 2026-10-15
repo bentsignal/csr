@@ -118,8 +118,10 @@ _global.csrDeathNotices.layout = function(row) {
     // Resize ONLY its existing art by the measured text delta, keeping its
     // original right anchor and padding. Original highlight sprites share the
     // same content rectangle; no replacement rectangle/outline is drawn.
-    var right = box.xMax;
-    var left = box.xMin - delta;
+    // Preserve the original anchor across repeated layout/resize calls even if
+    // SetPanelText resets width without resetting a prior compatibility x.
+    var right = row.backgroundRight;
+    var left = right - (box.xMax - box.xMin) - delta;
     if (!this.fitHorizontal(background, panel, left, right) ||
         !this.fitHorizontal(panel.PanelAttacker, panel, left, right) ||
         !this.fitHorizontal(panel.PanelVictim, panel, left, right)) { return false; }
@@ -201,6 +203,7 @@ _global.csrDeathNotices.addImpl = function(key, killer, victim, killerColor, vic
         row.localVictim, row.localAttacker);
     // Capture before helper children can contribute to MovieClip bounds.
     row.fieldBounds = panel.TextPanel.getBounds(panel.TextPanel);
+    row.backgroundRight = panel.IDTextBG.getBounds(panel).xMax;
     row.weapon = this.bitmap(panel.TextPanel, "csrWeapon", weaponLinkage);
     if (headshot === true) { row.head = this.bitmap(panel.TextPanel, "csrHead", "icon-headshot.png"); }
     if (row.weapon == undefined || (headshot === true && row.head == undefined)) {
