@@ -199,10 +199,18 @@ _global.csrDeathNotices.addImpl = function(key, killer, victim, killerColor, vic
         typeof killer != "string" || killer.length > 256 || typeof victim != "string" || victim.length > 256 ||
         !this.color(killerColor) || !this.color(victimColor) || !this.linkage(weaponLinkage)) { return false; }
     var panel = this.root.AddPanel(false);
-    if (typeof panel != "movieclip" || panel.TextPanel.Text == undefined) { return false; }
-    var row = {panel: panel, killer: this.escape(killer), victim: this.escape(victim),
-        killerColor: killerColor, victimColor: victimColor,
-        localAttacker: localAttacker === true, localVictim: localVictim === true};
+    if (typeof panel != "movieclip") { return false; }
+    // Register ownership before any later public movie call can fail. The add
+    // wrapper can then hide/remove this partial row without touching siblings.
+    var row = {panel: panel};
+    this.rows[id] = row;
+    if (panel.TextPanel.Text == undefined) { return false; }
+    row.killer = this.escape(killer);
+    row.victim = this.escape(victim);
+    row.killerColor = killerColor;
+    row.victimColor = victimColor;
+    row.localAttacker = localAttacker === true;
+    row.localVictim = localVictim === true;
     // Initialize the actual text-dependent authored row height before fitting
     // icons: the unloaded template height differs from SetPanelText's height.
     this.root.SetPanelText(panel,
@@ -215,14 +223,13 @@ _global.csrDeathNotices.addImpl = function(key, killer, victim, killerColor, vic
     row.weapon = this.bitmap(panel.TextPanel, "csrWeapon", weaponLinkage);
     if (headshot === true) { row.head = this.bitmap(panel.TextPanel, "csrHead", "icon-headshot.png"); }
     if (row.weapon == undefined || (headshot === true && row.head == undefined)) {
-        this.root.RemovePanel(panel);
         return false;
     }
-    this.rows[id] = row;
-    if (!this.layout(row)) { this.remove(key); return false; }
-    return true;
+    return this.layout(row);
 };
 _global.csrDeathNotices.add = function(key, killer, victim, killerColor, victimColor, weaponLinkage, headshot, localAttacker, localVictim) {
+    var id = this.key(key);
+    var previous = this.rows[id];
     var success = false;
     try {
         success = this.addImpl.apply(this, arguments) === true;
@@ -231,16 +238,29 @@ _global.csrDeathNotices.add = function(key, killer, victim, killerColor, victimC
         // including unexpected public movie/layout failures rather than hang.
         success = false;
     }
+    // Rejected duplicate keys belong to the existing receipt. Clean only a
+    // row newly allocated by this call, including exceptions during layout.
+    if (!success && id != undefined && previous == undefined && this.rows[id] != undefined) {
+        this.discard(id, this.rows[id]);
+    }
     csrEI.call("csr.DeathNoticeResult", String(key), success);
     return success;
+};
+_global.csrDeathNotices.discard = function(id, row) {
+    if (row == undefined || this.rows[id] != row) { return false; }
+    row.panel._visible = false;
+    // A content-specific RemovePanel failure must leave this owned row hidden
+    // and must not prevent its keyed result or another receipt's cleanup.
+    try { this.root.RemovePanel(row.panel); }
+    catch (error) { }
+    delete this.rows[id];
+    return true;
 };
 _global.csrDeathNotices.remove = function(key) {
     var id = this.key(key);
     var row = this.rows[id];
     if (id == undefined || row == undefined) { return false; }
-    this.root.RemovePanel(row.panel);
-    delete this.rows[id];
-    return true;
+    return this.discard(id, row);
 };
 _global.csrDeathNotices.alpha = function(key, percent) {
     var id = this.key(key);
@@ -261,11 +281,13 @@ _global.csrDeathNotices.resize = function() {
     this.root.onResize();
     var success = true;
     for (var id in this.rows) {
+        var row = this.rows[id];
         var laidOut = false;
-        try { laidOut = this.layout(this.rows[id]) === true; }
+        try { laidOut = this.layout(row) === true; }
         catch (error) { laidOut = false; }
         if (!laidOut) {
             success = false;
+            row.panel._visible = false;
             csrEI.call("csr.DeathNoticeResult", id.substr(8), false);
         }
     }
