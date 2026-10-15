@@ -116,11 +116,11 @@ pub fn process(
                     sounds.play_decoy(&mut commands,fs,&mut sources,def,pos);
                 }
             }
-            GameEvent::UtilityThrown { player,kind,pos } => {
+            GameEvent::UtilityThrown { player,kind,.. } => {
                 // The installed grenade view models expose ACT_VM_THROW.
                 effects.attack(player, kind.name().to_string(), "ACT_VM_THROW", now);
-                let sound=match kind {sim::utility::Kind::Molotov=>"Molotov.Throw",sim::utility::Kind::Incendiary=>"IncGrenade.Throw",_=>"HEGrenade.Throw"};
-                sounds.play(&mut commands,fs,&mut sources,sound,if player==local.view_target(){None}else{Some(pos)});
+                // The release-phase cue is played by tick-owned foley. This
+                // physical spawn event must not repeat it a clip event later.
             }
             GameEvent::DecoyExpired { pos, .. } => {
                 // Audio only: no inferred HE damage or detonation particles.
@@ -132,7 +132,8 @@ pub fn process(
             GameEvent::UtilityDetonated { kind,pos,.. } => {
                 if effects.utility_detonations.len()<128 {effects.utility_detonations.push((kind,pos));}
                 let sound=match kind {sim::utility::Kind::Flash=>Some("Flashbang.Explode"),sim::utility::Kind::He=>Some("BaseGrenade.Explode"),
-                    sim::utility::Kind::Molotov|sim::utility::Kind::Incendiary=>Some("Inferno.Start_IncGrenade"),_=>None};
+                    sim::utility::Kind::Molotov|sim::utility::Kind::Incendiary=>Some("Inferno.Start_IncGrenade"),
+                    sim::utility::Kind::Smoke=>Some("BaseSmokeEffect.Sound"),_=>None};
                 // A smoke/decoy activation is not a shell collision. Contact
                 // cues come only from the authoritative bounce event above.
                 if let Some(sound)=sound {sounds.play(&mut commands,fs,&mut sources,sound,Some(pos));}

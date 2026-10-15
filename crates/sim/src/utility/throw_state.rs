@@ -34,11 +34,11 @@ mod tests {
         let mut catalog=weapons::Catalog::from_items_game(r#""items_game" { "items" { "44" { "name" "weapon_hegrenade" "baseitem" "0" "attributes" { "primary default clip size" "1" } } } }"#).unwrap();
         catalog.weapons[0].grenade_animations = Some(weapons::GrenadeAnimations {
             pull_pin_duration: 0.25,
-            overhand: weapons::GrenadeReleaseAnimation {
+            overhand: weapons::GrenadeReleaseAnimation { command_release_time: None,
                 duration: 0.5,
                 release_time: 0.125,
             },
-            underhand: weapons::GrenadeReleaseAnimation {
+            underhand: weapons::GrenadeReleaseAnimation { command_release_time: None,
                 duration: 0.5,
                 release_time: 0.125,
             },
@@ -111,7 +111,51 @@ mod tests {
         }
     }
     #[test]
-    fn tap_waits_for_pull_pin_and_switch_cancels_uncommitted_throw() {
+    fn observed_release_profile_drives_command_relative_projectile_at_both_rates() {
+        for rate in [64, 128] {
+            let (mut world, id) = fixture(rate);
+            let definition = std::sync::Arc::make_mut(&mut world.players[0].weapons[0].def);
+            let profile = definition.grenade_animations.as_mut().unwrap();
+            profile.overhand = weapons::GrenadeReleaseAnimation {
+                duration: 0.4, release_time: 1. / 3., command_release_time: Some(0.1),
+            };
+            world.step(&[(id, TickInput { buttons: buttons::ATTACK, ..Default::default() })]);
+            let release_tick = world.tick;
+            let expected_tick = release_tick + (0.1 / world.dt()).ceil() as u64;
+            let mut actual = None;
+            for _ in 0..rate / 2 {
+                world.step(&[(id, TickInput::default())]);
+                if world.events.iter().any(|e| matches!(e, GameEvent::UtilityThrown { .. })) {
+                    actual = Some(world.tick - 1);
+                }
+            }
+            assert_eq!(actual, Some(expected_tick));
+        }
+    }
+    #[test]
+    fn releasing_one_button_keeps_preparing_until_the_last_button_edge() {
+        for rate in [64, 128] {
+            for (held, mode) in [(buttons::ATTACK, ThrowMode::Overhand),
+                (buttons::ATTACK2, ThrowMode::Underhand)] {
+                let (mut world, id) = fixture(rate);
+                world.step(&[(id, TickInput { buttons: buttons::ATTACK | buttons::ATTACK2,
+                    ..Default::default() })]);
+                world.step(&[(id, TickInput { buttons: held, ..Default::default() })]);
+                let state = world.players[0].active_weapon().unwrap().grenade_throw.unwrap();
+                assert_eq!((state.phase, state.mode), (ThrowPhase::PullingPin, mode));
+                assert!(!state.release_requested);
+                world.step(&[(id, TickInput::default())]);
+                let state = world.players[0].active_weapon().unwrap().grenade_throw.unwrap();
+                assert_eq!((state.phase, state.mode, state.throw_started_tick),
+                    (ThrowPhase::Throwing, mode, Some(2)));
+                assert!(!state.spawned, "projectile still follows its installed release event");
+                let restored: crate::WorldState = world.decode(&world.encode_state()).unwrap();
+                assert_eq!(restored, world.state());
+            }
+        }
+    }
+    #[test]
+    fn tap_interrupts_pull_pin_and_switch_cancels_uncommitted_throw() {
         for rate in [64, 128] {
             let (mut world, id) = fixture(rate);
             world.step(&[(
@@ -133,7 +177,7 @@ mod tests {
                     break;
                 }
             }
-            assert_eq!(emitted, Some((rate * 3 / 8) as u64));
+            assert_eq!(emitted, Some(1 + (rate / 8) as u64));
             let (mut world, id) = fixture(rate);
             let spare = world.players[0].weapons[0].clone();
             world.players[0].weapons.push(spare);
@@ -225,16 +269,14 @@ impl World {
             } else {
                 state.release_requested = true;
             }
-            if tick
-                >= state
-                    .pull_started_tick
-                    .saturating_add(ticks(profile.pull_pin_duration, dt))
-            {
+            // Native quick taps interrupt preparation: the complete authored
+            // pull-pin clip is not an admission timer for the release clip.
+            // Keep the physical release event inside that clip tick-owned.
+            if state.release_requested {
+                state.phase = ThrowPhase::Throwing;
+                state.throw_started_tick = Some(tick);
+            } else if tick >= state.pull_started_tick.saturating_add(ticks(profile.pull_pin_duration, dt)) {
                 state.phase = ThrowPhase::Holding;
-                if state.release_requested {
-                    state.phase = ThrowPhase::Throwing;
-                    state.throw_started_tick = Some(tick);
-                }
             }
         }
         if state.phase != ThrowPhase::Throwing {
@@ -243,7 +285,7 @@ impl World {
         let animation = state.mode.animation(profile);
         let started = state.throw_started_tick.unwrap();
         let spawn =
-            !state.spawned && tick >= started.saturating_add(ticks(animation.release_time, dt));
+            !state.spawned && tick >= started.saturating_add(ticks(animation.projectile_delay(), dt));
         let finish = state.spawned && tick >= started.saturating_add(ticks(animation.duration, dt));
         if spawn {
             if self.spawn_grenade(i) {

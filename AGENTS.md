@@ -75,6 +75,20 @@ installs may still use the 730 `csgo_legacy` beta in
 - Editing files with non-ASCII (`×`, `µ`, `—`) from Python: always pass
   `encoding='utf-8'`, or use the Edit tool.
 
+Shared-target handoffs: Cargo was observed reusing an executable from another
+worktree when that worktree's artifacts were newer than the current sources.
+Under the exclusive Cargo slot, run `tools/clean-workspace-profile.ps1` with
+the explicit profile and absolute target directory before building in a
+different worktree.
+It cleans every workspace package for that profile while retaining external
+Bevy/Ruffle dependencies. Record the real build cwd and verify new behavior
+in the immutable copied executable; a source HEAD receipt alone is insufficient.
+
+Native Legacy observations and CI's userdata-preservation tests share
+`tools/fidelity/with-native-slot.ps1`. Run owned native helpers through it with
+`-Script <absolute helper> -NativeSlotGranted`; retain their process/prefs guards.
+Never overlap native runs with an unwrapped CI fidelity-session check.
+
 ## Verify every change
 
 - `cargo test --workspace`

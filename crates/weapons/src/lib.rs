@@ -62,11 +62,24 @@ pub struct Accuracy {
 #[derive(Clone, Debug, PartialEq)]
 pub struct GrenadeReleaseAnimation {
     pub duration: f32,
+    /// Event3005's authored time within the installed clip.
     pub release_time: f32,
+    /// Observed command-edge delay when independently calibrated. Missing
+    /// profiles retain the authored event rather than borrowing another item.
+    pub command_release_time: Option<f32>,
+}
+
+impl GrenadeReleaseAnimation {
+    pub fn projectile_delay(&self) -> f32 {
+        self.command_release_time.unwrap_or(self.release_time)
+    }
+
+
 }
 
 /// Declarative timing imported from the selected installed grenade viewmodel.
-/// Native minimum windup/ballistic behavior is not inferred from this metadata.
+/// Optional command timing is a separate observed profile, not inferred from
+/// the declarative clip. Ballistic behavior remains independent.
 #[derive(Clone, Debug, PartialEq)]
 pub struct GrenadeAnimations {
     pub pull_pin_duration: f32,

@@ -35,6 +35,7 @@ pub mod settings;
 mod console;
 pub mod menu;
 pub mod feedback;
+mod impact_decals;
 pub mod utility_fx;
 mod particle_data;
 mod particle_material;
@@ -739,8 +740,10 @@ fn smoke_test(
             let start=l.render_eye;
             let tr=level.0.collision.trace_ray(start,start+forward*500.0,collision::contents::MASK_SOLID);
             if tr.hit() {events.0.push(sim::GameEvent::Impact{player:l.id,pos:tr.end,normal:tr.normal,surface:tr.surface});}
-            let pos=start+forward*70.0;
-            events.0.push(sim::GameEvent::Damage{attacker:l.id,victim:l.id,health:25,group:sim::weapon::HitGroup::Chest,pos});
+            if std::env::var("CSR_TEST_FEEDBACK").as_deref() != Ok("impact") {
+                let pos=start+forward*70.0;
+                events.0.push(sim::GameEvent::Damage{attacker:l.id,victim:l.id,health:25,group:sim::weapon::HitGroup::Chest,pos});
+            }
         }
     }
     if *frame == capture_frame.saturating_sub(12) && std::env::var_os("CSR_TEST_DROP").is_some() {
