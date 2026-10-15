@@ -85,7 +85,7 @@ availability while the offline picker owns navigation; all original menu
 features/loading artwork fidelity. The current work does not claim these done.
 
 
-## Cached Home/match player replacement (pending verification)
+## Cached Home/match player replacement
 
 Cold Home retirement is retained as an unready experiment in PR130 because it
 improves Pause but adds about 5.8 seconds of repeat Home initialization. The
@@ -110,7 +110,7 @@ to freshly presented Ready Home latency. A separate three-second pending capture
 remains if restoration is slow, rather than hiding the delay behind fixture waits.
 First-ever Home after a direct developer startup still needs initial Home boot;
 it clears black rather than retaining the former world target. First match
-bootstrap cost, retained memory and complete runtime roundtrip remain unverified.
+bootstrap cost, memory and the complete roundtrip are recorded below for e2d3305.
 
 
 ## Exact 62e24a2 bounded observations
@@ -153,3 +153,46 @@ was posted September 2015 and updated in 2023; exact image capture date is
 unknown. This supports composition/missing-entry evidence, not pixel or timing
 parity. Images remain private outside git. Offline power-button availability
 and its authored confirmation path also remain open.
+
+
+## Normal-start cached lifecycle: e2d3305
+
+The corrected normal-start flow passes with failures: 0 and all eight native
+1920x1080 captures inspected: Dust II, Pause, Audio, Back to Pause, Resume,
+Pause before Exit, returned Home, and Inferno. It starts without --screenshot;
+CSR_TEST_FLOW_OUTPUT supplies captures without changing production startup.
+The helper uses the committed native mutex and an immutable executable/hash,
+private data directory, owned-child shutdown, 180-second bound and free-RAM
+guard. No guard fires; minimum free RAM is 27.04 GiB. The earlier incomplete
+62/8 observations remain failures and are not relabeled as passes.
+
+Only Home generation 1 and Match generation 2 start. Home is parked on first
+Loading and reused after native Exit; the second match reuses Match 2. Native
+Exit to actual Ready plus a fresh Home image acknowledgment is 158.4 ms,
+compared with the cold-unload experiment's roughly 5.8 seconds. The returned
+Home capture has no prior world or Audio overlay. The original full Audio
+page and Home news/services remain unfinished; this validates lifecycle only.
+
+The same five-second pointer sweep runs with Home parked. In the four seconds
+after the Pause capture, 182 readbacks give 21.84 ms mean / 36.88 ms p95;
+reported slow pointer handlers average 6.31 ms. No Home active/slow-work trace
+rows occur in that window. Compare c1's 52.62 / 60.41 ms readback window;
+shared-PC workload and the fixture entry differ. Slow-work logs report only
+samples of at least 5 ms. These are worker timings, not physical input or GPU
+presentation latency, and do not establish exact native frame rate/fidelity.
+
+Cost: the first Match worker needs 6.38 seconds of bootstrap, overlapping
+map Loading; it is not repeated on the second match. Original LoadingScreen
+ownership is preserved, but full loading artwork/layout fidelity remains open.
+Whole-process peak sampled private bytes reach 12.15 GiB and peak working set
+7.96 GiB. Around Home return the sample is 9.15 GiB private / 5.99 GiB working
+set. These include map/renderer allocations and are not isolated UI overhead.
+The final 1.49 GiB private sample occurs during shutdown, not steady Home.
+A matched baseline is still needed before assigning the retained memory cost.
+
+Exact e2d3305 was built with all workspace play packages cleaned, and copied
+before target reuse. Five frontend and 33 Scaleform tests pass (one ignored).
+Required workspace/probe/sim CI is pending; this branch must not merge red.
+Private spec, receipt, raw trace, images, memory samples and the computed
+summary are under menu-cached-flow-normal-e2d3305 in the fidelity evidence
+folder. No third-party images or audio are committed.
