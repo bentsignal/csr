@@ -142,3 +142,19 @@ subcomponents and weapon-name/kill-counter state remain open fidelity work.
 Unsupported sample decorations are hidden, never presented as authoritative
 state. Original inventory/radar/money/round HUD work remains separate. Full Audio
 settings content remains open; no dummy option rows are added by this track.
+
+The first production92 render admitted the real M4-S magazine20shots?clip0/80,
+health100/armor100 and the original death notice in the same transparent player,
+with no sample decorations or duplicate fallback. It exited0 with clean logs and
+unchanged settings. Its numeric HealthRed visibility override was unadmitted and
+made health visibly dimmer than the earlier positively observed numeric template;
+that override is removed in the next candidate. Only the separately measured bar
+trail is excluded from steady presentation. The92 image is retained as partial
+production proof rather than an overall final-visual pass.
+
+Public FrameLabel metadata independently resolves parking: both original
+15-frame HudPanel timelines have StartShow at2, **Show at8**, StartHide at9 and
+Hide at15. Production callbacks repeatedly report current8/total15. The last
+frame is the hidden state, not a universal settling target. Idle and lifecycle
+runtime checks remain required, but parking the observed Show state does not
+require inventing an animation duration or waiting for the hidden frame.

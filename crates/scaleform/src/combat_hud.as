@@ -175,8 +175,6 @@ _global.csrCombatHud.health = function(stamp, health, armor, helmet, alive) {
         var panel = part.root.HudPanel.HealthArmorPanel;
         success = this.write(panel.Health.TextBox, health) &&
             this.write(panel.HealthRed.TextBox, health) && this.write(panel.Armor.TextBox, armor);
-        panel.Health._visible = true;
-        panel.HealthRed._visible = false;
         panel.ArmorIcon._visible = armor > 0 && !helmet;
         panel.ArmorHelmetIcon._visible = armor > 0 && helmet;
         panel.HeavyArmorIcon._visible = false;
