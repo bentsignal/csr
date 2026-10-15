@@ -114,6 +114,15 @@ pub struct SuppressorAnimations {
     pub draw_detached: String,
 }
 
+/// Explicit content policy for a fully depleted primary trigger. A repeat
+/// interval is observed/declared by the importer, never inferred from class.
+#[derive(Clone, Debug, PartialEq)]
+pub struct EmptyTrigger {
+    pub sound: String,
+    pub repeat_interval: f32,
+    pub reference: String,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct WeaponDefinition {
     pub id: ContentId,
@@ -153,6 +162,7 @@ pub struct WeaponDefinition {
     pub fire_sound: String,
     /// Ordinary shot binding, before the equipped-suppressor override.
     pub unsuppressed_fire_sound: String,
+    pub empty_trigger: Option<EmptyTrigger>,
     pub zoom_in_sound: String,
     pub zoom_out_sound: String,
     pub kill_award: i32,
@@ -355,6 +365,14 @@ fn build(index: &str, class_name: &str, r: &Resolved) -> WeaponDefinition {
         world_model: f("model_world"),
         fire_sound: default_fire_sound(r),
         unsuppressed_fire_sound: f("visuals/sound_single_shot"),
+        // Content packs may explicitly declare both fields. The custom
+        // attribute is an importer extension, not a claimed Valve default.
+        empty_trigger: a("empty trigger interval")
+            .filter(|interval| interval.is_finite() && *interval >= 0.01)
+            .zip(r.fields.get("visuals/sound_empty").filter(|sound| !sound.is_empty()))
+            .map(|(repeat_interval, sound)| EmptyTrigger {
+                sound: sound.clone(), repeat_interval, reference: "content-defined".into(),
+            }),
         zoom_in_sound: f("zoom_in_sound"),
         zoom_out_sound: f("zoom_out_sound"),
         kill_award: ai("kill award").unwrap_or(300),
@@ -521,4 +539,19 @@ mod tests {
             assert_eq!(cat.get(name).unwrap().fire_sound, "Test.Fallback");
         }
     }
+    #[test]
+    fn empty_trigger_pack_policy_requires_both_explicit_sound_and_interval() {
+        let text = r#""items_game" { "items" {
+            "991" { "name" "weapon_pack_empty" "baseitem" "1"
+                "visuals" { "sound_empty" "Pack.Empty" }
+                "attributes" { "empty trigger interval" "0.3" } }
+            "992" { "name" "weapon_sound_only" "baseitem" "1" "visuals" { "sound_empty" "Pack.Empty" } }
+            "993" { "name" "weapon_time_only" "baseitem" "1" "attributes" { "empty trigger interval" "0.3" } }
+        } }"#;
+        let catalog = Catalog::from_items_game(text).unwrap();
+        assert_eq!(catalog.get("weapon_pack_empty").unwrap().empty_trigger.as_ref().unwrap().repeat_interval, 0.3);
+        assert!(catalog.get("weapon_sound_only").unwrap().empty_trigger.is_none());
+        assert!(catalog.get("weapon_time_only").unwrap().empty_trigger.is_none());
+    }
+
 }

@@ -282,3 +282,17 @@ fn post_move_eye_and_prediction_use_identical_current_collision() {
     );
     assert!(prediction.events.is_empty());
 }
+
+#[test]
+fn tracked_start_solid_muzzle_cannot_emit_empty_trigger_feedback() {
+    let (mut world, shooter, _) = match_pair();
+    let w = &mut world.players[0].weapons[0];
+    w.clip = 0; w.reserve = 0;
+    Arc::make_mut(&mut w.def).empty_trigger = Some(weapons::EmptyTrigger {
+        sound: "Pack.Empty".into(), repeat_interval: 0.2, reference: "explicit-test-content".into(),
+    });
+    let eye = world.players[0].eye();
+    brush(&mut world, eye - Vec3::splat(4.), eye + Vec3::splat(4.));
+    world.step(&[(shooter, tracked(Vec3::new(20., 0., 64.), Vec3::X))]);
+    assert!(!world.events.iter().any(|event| matches!(event, GameEvent::EmptyTrigger { .. })));
+}

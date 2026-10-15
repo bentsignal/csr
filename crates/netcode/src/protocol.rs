@@ -2,10 +2,10 @@
 use serde::{Deserialize, Serialize};
 use sim::{GameEvent, PlayerId, Snapshot, Team, TickInput};
 
-// v22 preserves held automatic-fire phase and released-empty idle reloads.
-// Wire fields are unchanged, but older peers predict different weapon state.
-pub const VERSION: u32 = 22;
-pub const PROTOCOL_ID: u64 = 0x4353_5257_0000_0016;
+// v23 appends authoritative, content-bound fully depleted trigger feedback.
+// Older peers cannot decode the event or predict its attack cooldown.
+pub const VERSION: u32 = 23;
+pub const PROTOCOL_ID: u64 = 0x4353_5257_0000_0017;
 pub const CONTROL: u8 = 0;
 pub const INPUT: u8 = 1;
 pub const SNAPSHOT: u8 = 2;
@@ -51,6 +51,7 @@ pub(crate) fn validate_events(batch: &EventBatch) -> Result<(), String> {
                 origin,
                 ..
             }
+            | EmptyTrigger { player, weapon, origin }
             | BurstModeChanged {
                 player,
                 weapon,
@@ -652,6 +653,21 @@ mod tests {
             assert!(validate_state(&invalid, Some(&welcome), 0, 0).is_err(), "inactive case {case}");
         }
     }
+    #[test]
+    fn empty_trigger_cue_roundtrip_rejects_untrusted_payloads() {
+        let event = GameEvent::EmptyTrigger { player: 7, weapon: "weapon_ak47".into(), origin: glam::Vec3::new(12., 4., 64.) };
+        let batch = EventBatch { tick: 200, events: vec![event.clone()] };
+        validate_events(&batch).unwrap();
+        assert_eq!(decode::<EventBatch>(&encode(&batch).unwrap()).unwrap(), batch);
+        for case in 0..3 {
+            let mut invalid = event.clone();
+            if let GameEvent::EmptyTrigger { player, weapon, origin } = &mut invalid {
+                match case { 0 => *player = 0, 1 => *weapon = "../host/file".into(), _ => *origin = glam::Vec3::NAN }
+            }
+            assert!(validate_events(&EventBatch { tick: 200, events: vec![invalid] }).is_err());
+        }
+    }
+
     #[test]
     fn burst_mode_cue_roundtrip_and_admission_preserve_authority() {
         let event = GameEvent::BurstModeChanged {
