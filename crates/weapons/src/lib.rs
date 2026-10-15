@@ -45,6 +45,16 @@ pub struct Recoil {
     pub seed: i64,
 }
 
+/// Observed no-spread bullet directions for a recovered, held magazine.
+/// Angles are offsets from the player's aim in degrees (pitch, yaw), with
+/// the first bullet at zero. This is a content-bound observation, not an
+/// engine recoil algorithm or a claim about release/recovery behavior.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RecoilTrajectory {
+    pub reference: String,
+    pub bullet_angles: Vec<[f32; 2]>,
+}
+
 /// Accuracy model inputs, in CS:GO's units (1/1000 radians-ish "inaccuracy").
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Accuracy {
@@ -130,6 +140,7 @@ pub struct WeaponDefinition {
     pub max_player_speed: f32,
     pub accuracy: Accuracy,
     pub recoil: Recoil,
+    pub recoil_trajectory: Option<RecoilTrajectory>,
     pub view_model: String,
     pub grenade_animations: Option<GrenadeAnimations>,
     pub suppressor_animations: Option<SuppressorAnimations>,
@@ -298,6 +309,7 @@ fn build(index: &str, class_name: &str, r: &Resolved) -> WeaponDefinition {
     };
     WeaponDefinition {
         grenade_animations: None,
+        recoil_trajectory: None,
         suppressor_animations: None,
         id: ContentId::csgo(ContentKind::Weapon, short),
         class_name: class_name.to_string(),

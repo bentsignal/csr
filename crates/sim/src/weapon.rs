@@ -251,6 +251,8 @@ impl WeaponState {
         self.pattern.0.get_or_init(|| {
             let mut def = (*self.def).clone();
             if self.burst_mode {
+                // A normal-mode observation does not establish burst recoil.
+                def.recoil_trajectory = None;
                 let alt = |key, base| def.attr_f32(key).filter(|v| v.is_finite()).unwrap_or(base);
                 def.recoil = weapons::Recoil { angle: alt("recoil angle alt", def.recoil.angle),
                     angle_variance: alt("recoil angle variance alt", def.recoil.angle_variance),
@@ -379,6 +381,22 @@ impl WeaponState {
 /// A fixed pattern per weapon, generated from its recoil stats and seed:
 /// each shot kicks by `magnitude` along `angle ± variance` (0° = up).
 pub fn recoil_pattern(def: &WeaponDefinition) -> Vec<[f32; 2]> {
+    if let Some(profile) = &def.recoil_trajectory {
+        let angles = &profile.bullet_angles;
+        if angles.len() == def.clip_size.max(0) as usize
+            && (2..=256).contains(&angles.len())
+            && angles[0] == [0., 0.]
+            && angles.iter().all(|angle| angle[0].is_finite() && angle[1].is_finite()
+                && angle[0].abs() < 89. && angle[1].abs() <= 180.)
+        {
+            // fire() samples this before increasing recoil_index and applies
+            // RECOIL_SCALE once. Preserve the measured bullet-space angles.
+            // After the observed magazine, aim_punch clamps to its last point;
+            // do not invent additional shots from a different generator.
+            return angles.iter().map(|angle|
+                [angle[0] / RECOIL_SCALE, angle[1] / RECOIL_SCALE]).collect();
+        }
+    }
     let shots = (def.clip_size.max(1) as usize + 1).min(256);
     let mut rng = Rng::from_parts(&[def.recoil.seed as u64, def.def_index as u64]);
     let mut out = Vec::with_capacity(shots + 1);
@@ -624,6 +642,7 @@ mod tests {
 
     fn ak() -> WeaponDefinition {
         WeaponDefinition {
+            recoil_trajectory: None,
             grenade_animations: None,
             suppressor_animations: None,
             id: ContentId::csgo(ContentKind::Weapon, "ak47"),
