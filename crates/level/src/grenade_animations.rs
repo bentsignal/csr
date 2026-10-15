@@ -44,7 +44,8 @@ const OBSERVED_HEADERS: &[(&str, &str)] = &[
 
 fn apply_observed_release(weapon: &weapons::WeaponDefinition, bytes: &[u8], profile: Option<&mut GrenadeAnimations>) {
     let Some((_, expected)) = OBSERVED_HEADERS.iter().find(|(name, _)| *name == weapon.class_name) else { return; };
-    if format!("{:x}", Sha1::digest(bytes)) != *expected { return; }
+    let actual: String = Sha1::digest(bytes).iter().map(|byte| format!("{byte:02x}")).collect();
+    if actual != *expected { return; }
     if let Some(profile) = profile {
         // All six primary/secondary throws and HE combined visibly launch by
         // ~0.12..0.17s, rather than the authored marker's ~0.333s. Tight HE
