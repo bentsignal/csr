@@ -1,7 +1,7 @@
 //! Derived observations only: no native implementation or game data table.
 use content::{ContentId, ContentKind};
 use sha1::{Digest, Sha1};
-use weapons::{Catalog, Recoil, RecoilTrajectory, WeaponDefinition};
+use weapons::{Catalog, Recoil, RecoilResponse, RecoilTrajectory, WeaponDefinition};
 
 // Exact installed item-schema identity observed with Legacy 1.38.8.1.
 // Historical schemas and other content packs do not inherit this profile
@@ -286,6 +286,16 @@ fn hash_profile(digest: &mut Sha1, mode: &[u8], profile: &RecoilTrajectory) {
         digest.update(angle[0].to_le_bytes());
         digest.update(angle[1].to_le_bytes());
     }
+    digest.update([u8::from(profile.response.is_some())]);
+    if let Some(response) = &profile.response {
+        digest.update(response.reference.as_bytes());
+        digest.update(response.reference_hz.to_le_bytes());
+        for value in [response.angle_decay, response.angle_linear, response.velocity_decay,
+            response.first_impulse[0], response.first_impulse[1],
+            response.final_impulse[0], response.final_impulse[1], response.held_tolerance_degrees] {
+            digest.update(value.to_le_bytes());
+        }
+    }
 }
 
 fn is_observed_ak(def: &WeaponDefinition) -> bool {
@@ -315,7 +325,7 @@ pub(super) fn import(catalog: &mut Catalog, schema: Option<[u8; 20]>) -> Option<
     digest.update(schema);
     // A peer with the same assets but the previous recoil policy must fail
     // content admission before prediction/snapshots can silently disagree.
-    digest.update(b"observed-recoil-trajectory-v5-ak-m4-m4s-galil-famas-normal-legacy-1.38.8.1");
+    digest.update(b"observed-recoil-trajectory-v6-ak-angle-velocity-legacy-1.38.8.1");
     let mut applied = false;
     {
         for def in &mut catalog.weapons {
@@ -347,7 +357,19 @@ pub(super) fn import(catalog: &mut Catalog, schema: Option<[u8; 20]>) -> Option<
             def.recoil_trajectory = Some(RecoilTrajectory {
                 reference: reference.into(),
                 bullet_angles: angles.to_vec(),
-                response: None,
+                response: is_observed_ak(def).then(|| RecoilResponse {
+                    reference: "legacy-1.38.8.1-ak-public-state-1-6-30-standing-128hz".into(),
+                    reference_hz: 128,
+                    angle_decay: 8., angle_linear: 18., velocity_decay: 4.5,
+                    // Rounded estimates constrained by independent readable
+                    // first/final-shot public velocity curves. Their phase
+                    // and display bounds do not identify exact engine values.
+                    first_impulse: [-20., -10.33],
+                    final_impulse: [-29.69, 3.78],
+                    // Only the overlapping second held marker needs this
+                    // original ~2px observational bound in recoilcheck.
+                    held_tolerance_degrees: 0.19,
+                }),
             });
             digest.update(def.id.to_string().as_bytes());
             hash_profile(
@@ -394,8 +416,10 @@ mod tests {
         let ak = catalog.get("weapon_ak47").unwrap();
         let profile = ak.recoil_trajectory.as_ref().unwrap();
         assert_eq!(profile.bullet_angles.len(), 30);
+        assert!(profile.response.is_some());
         let m4 = catalog.get("weapon_m4a1").unwrap();
         let m4_profile = m4.recoil_trajectory.as_ref().unwrap();
+        assert!(m4_profile.response.is_none());
         assert_eq!(m4_profile.bullet_angles.len(), 30);
         assert_ne!(m4_profile.bullet_angles, profile.bullet_angles);
         let galil = catalog.get("weapon_galilar").unwrap();

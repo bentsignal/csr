@@ -25,7 +25,11 @@ fn main() {
                 restart_gap = Some(gap);
             }
             "--restart-shots" => {
-                restart_shots = args.next().expect("partial shot count").parse::<usize>().expect("integer shot count");
+                restart_shots = args
+                    .next()
+                    .expect("partial shot count")
+                    .parse::<usize>()
+                    .expect("integer shot count");
             }
             _ => panic!("expected --unsuppressed, --restart-gap seconds or --restart-shots count"),
         }
@@ -45,7 +49,9 @@ fn main() {
         profile.bullet_angles.len(),
         level.catalog_sha1()
     );
-    println!("tickrate,shot,tick,time,pitch,yaw,error_degrees");
+    println!(
+        "tickrate,shot,tick,time,pitch,yaw,error_degrees,punch_pitch,punch_yaw,punch_velocity_pitch,punch_velocity_yaw"
+    );
     for rate in [64, 128] {
         let mut gun = installed.clone();
         // Equivalent direction isolation to native weapon_accuracy_nospread1;
@@ -122,19 +128,36 @@ fn main() {
                         // expected seventh angle from the held-magazine table.
                         f32::NAN
                     };
+                    let motion = world
+                        .player(id)
+                        .unwrap()
+                        .active_weapon()
+                        .unwrap()
+                        .recoil_motion;
+                    let (a, v) =
+                        motion.map_or(([f32::NAN; 2], [f32::NAN; 2]), |m| (m.angle, m.velocity));
                     println!(
-                        "{rate},{},{},{:.6},{pitch:.6},{yaw:.6},{error:.6}",
+                        "{rate},{},{},{:.6},{pitch:.6},{yaw:.6},{error:.6},{:.6},{:.6},{:.6},{:.6}",
                         emitted + 1,
                         world.tick,
-                        world.time()
+                        world.time(),
+                        a[0],
+                        a[1],
+                        v[0],
+                        v[1]
                     );
                     // The first two native boxes overlap. Independent first
                     // velocity evidence resolves their ambiguity only within
                     // the original marker uncertainty; later held rays retain
                     // their existing exact reconstruction check.
                     let tolerance = if emitted == 1 {
-                        profile.response.as_ref().map_or(0.001, |r| r.held_tolerance_degrees)
-                    } else { 0.001 };
+                        profile
+                            .response
+                            .as_ref()
+                            .map_or(0.001, |r| r.held_tolerance_degrees)
+                    } else {
+                        0.001
+                    };
                     assert!(
                         !held_reference || error < tolerance,
                         "actual authoritative bullet differs from attached observed profile"

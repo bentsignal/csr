@@ -2,8 +2,8 @@
 
 The owner requested a **2015 gameplay baseline**. This audit identifies dated
 weapon configuration and separates it from the still unverified recoil
-procedure. It does not change weapon behavior or establish a pixel-perfect
-spray pattern. The installed reference executable is CS:GO Legacy 1.38.8.1
+procedure. Later sections describe the separately observed profiles and
+their remaining limits. The installed reference executable is CS:GO Legacy 1.38.8.1
 (2023), not a runnable 2015 build. Existing classic menu work remains separate.
 
 ## Historical source identity
@@ -515,3 +515,49 @@ baseline. It does not establish requested 2015 parity, burst recoil,
 recovery, moving/crouched firing, camera punch or native 64-tick behavior.
 Raw game data, logs and screenshots remain private. Actual rewrite
 ray/render verification is pending.
+
+
+## AK independent angle/velocity response
+
+The exact installed AK profile now declares a separate response inferred
+from public, readable angle and angular-velocity observations. Release-only
+curves after one, six and thirty actual near-shot waves provide this evidence;
+restart rays are retained as independent validations, rather than fitting
+recovery coefficients to them. The initial single-kernel hypothesis failed
+an independent three-shot restart and is rejected. Raw images, logs and
+rejected hypotheses remain private.
+
+The observed update order is radial angle shrink, velocity contribution to
+angle, then velocity decay. The declared reference step is 1/128 second;
+angle shrink uses the public values 8 and 18, and velocity decay uses 4.5.
+This procedure was inferred from public state evolution, not copied from
+native implementation code. The one/six-shot trajectories reproduce all
+readable angle components within one 1/32-degree display increment when
+aligned by the independently displayed velocity envelope. The separate
+thirty-shot curve differs by at most 0.03434 degrees in angle and 0.02825
+degrees/second in velocity, within combined quantized-endpoint uncertainty.
+Capture receive bounds do not identify an exact server tick or sample phase.
+
+Held ray centers and the actual automatic-shot deadline policy constrain
+intermediate velocity impulses. Reconstruction uses the real tick rate and
+first-fire anchor, preserving the alternating rounded shot intervals at
+64/128 Hz and rebuilding the same derived cache after snapshots. First-shot
+velocity is constrained separately by the one-shot public curve: the first
+two native hit boxes overlap, so their nominal centers cannot establish a
+zero yaw impulse. The resolved second ray remains inside the original
+approximately two-pixel marker uncertainty; all later held rays retain exact
+reconstruction of the rounded observed centers. A separate full-magazine
+curve constrains the final impulse, which thirty bullet rays alone cannot
+identify. Both endpoint impulses are rounded estimates with phase/display
+uncertainty, not exact recovered native constants.
+
+Authoritative angle and velocity continue evolving during release, while
+holstered and on the ground. TickInput remains the only firing authority.
+Snapshots include motion and the cadence anchor; protocol24 and the
+response-aware catalog digest reject incompatible peers. Respawn resets
+motion. Other guns retain their current recovery until independently
+observed; the existing twelve-step-per-second spray-phase recovery remains
+a separate unmeasured caveat. Camera tracking, further sustained fire after
+partial recovery, nonstanding cases, historical2015 parity and native64 Hz
+behavior are not established by these observations. Actual rewrite ray and
+runtime verification of this source change is pending.

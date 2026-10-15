@@ -147,14 +147,15 @@ mod tests {
             final_impulse: [0.; 2],
             held_tolerance_degrees: 0.2,
         };
-        // Readable public values from two release-only observations, not
+        // Readable public values from three release-only observations, not
         // restart rays used to tune a family. Relative update counts align
         // the separately displayed velocity envelope; captured receive-time
         // bounds do not identify an exact server tick or absolute phase.
-        let curves: &[([f32; 2], [f32; 2], &[(u32, [f32; 2])])] = &[
+        let curves: &[([f32; 2], [f32; 2], f32, &[(u32, [f32; 2])])] = &[
             (
                 [-0.125, -0.0625],
                 [-19.28125, -9.96875],
+                1. / 32.,
                 &[
                     (4, [-0.15625, -0.0625]),
                     (5, [-0.15625, -0.0625]),
@@ -171,6 +172,7 @@ mod tests {
             (
                 [-3.4375, 0.3125],
                 [-62.28125, 7.9375],
+                1. / 32.,
                 &[
                     (1, [-3.5625, 0.3125]),
                     (5, [-3.84375, 0.40625]),
@@ -184,8 +186,28 @@ mod tests {
                     (127, [0., 0.]),
                 ],
             ),
+            (
+                [-5.3125, -1.6875],
+                [-70.40625, -13.03125],
+                // Both the initial and final displayed state are quantized.
+                // The independent full-magazine tail has a measured maximum
+                // discrepancy of 0.03434°, not exact one-increment agreement.
+                2. / 32.,
+                &[
+                    (1, [-5.40625, -1.625]),
+                    (6, [-5.5, -1.4375]),
+                    (9, [-5.375, -1.3125]),
+                    (12, [-5.125, -1.1875]),
+                    (17, [-4.59375, -1.]),
+                    (24, [-3.71875, -0.75]),
+                    (38, [-1.9375, -0.375]),
+                    (62, [-0.0625, 0.]),
+                    (94, [0., 0.]),
+                    (128, [0., 0.]),
+                ],
+            ),
         ];
-        for (initial_angle, initial_velocity, points) in curves {
+        for (initial_angle, initial_velocity, tolerance, points) in curves {
             for (updates, expected) in *points {
                 let (mut angle, mut velocity) = (*initial_angle, *initial_velocity);
                 advance(&mut angle, &mut velocity, &response, *updates as f64 / 128.);
@@ -193,7 +215,7 @@ mod tests {
                     angle
                         .iter()
                         .zip(expected)
-                        .all(|(a, b)| (*a - *b).abs() <= 1. / 32.),
+                        .all(|(a, b)| (*a - *b).abs() <= *tolerance),
                     "observed response misses display precision after {updates} updates: {angle:?} vs {expected:?}"
                 );
             }
