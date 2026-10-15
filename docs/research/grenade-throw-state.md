@@ -253,3 +253,15 @@ receiver rather than a launch measurement. A client lookup restricted to
 the substring `hegrenade` finds the held weapon only; no projectile entity
 index is invented from that result. The packet completed 17 captures,
 restored all 12 preferences exactly and left no native process.
+
+
+A further one-release packet attempted to identify the actual client projectile
+through public lookup before inspecting any numeric fields. Fresh selected HE,
+player state and prediction-list admission passed. Its additional clock change
+to 0.001 was acknowledged, but the following ordinary help/readback and its
+acknowledgement arrived about 6.2 seconds later, beyond the inherited four-second
+command deadline. The packet therefore aborted before entity lookup or numeric
+field capture. The late console output confirms the requested clock value;
+it does not retroactively admit the interrupted packet or establish a missing
+projectile receiver. All 12 preferences were restored and no process remained.
+No launch constants follow from this transport/scheduling negative.
