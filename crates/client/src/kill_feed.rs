@@ -330,12 +330,10 @@ fn update(
     }
     // Finish an in-flight bare-root load even if the match ends before it
     // announces readiness; otherwise a parked loader could time out on Home.
-    let has_drawable_row = {
-        let rejected = feed.rejected.lock().unwrap();
-        entries
-            .iter()
-            .any(|entry| !rejected.contains(&entry.death.key))
-    };
+    let rejected_before = feed.rejected.lock().unwrap().clone();
+    let has_drawable_row = entries
+        .iter()
+        .any(|entry| !rejected_before.contains(&entry.death.key));
     let active = !ready || (matched && (!feed.presented || has_drawable_row));
     if active != feed.active {
         feed.movie
@@ -347,7 +345,10 @@ fn update(
         feed.active = active;
     }
     if ready && matched && now - feed.last_alpha >= 1.0 / 30.0 {
-        for entry in &entries {
+        for entry in entries
+            .iter()
+            .filter(|entry| !rejected_before.contains(&entry.death.key))
+        {
             let remaining = entry.lifetime() - (now - entry.time);
             feed.movie
                 .as_ref()
