@@ -1,5 +1,57 @@
 use super::*;
 
+#[test]
+fn suppressor_completion_selects_separate_observed_rays_after_cache_and_snapshot() {
+    for rate in [64, 128] {
+        let (mut world, id) = fixture(rate);
+        let mut definitions = world.catalog.weapons.clone();
+        let gun = definitions.iter_mut().find(|def| def.class_name == "weapon_m4a1_silencer").unwrap();
+        gun.full_auto = true;
+        gun.accuracy = weapons::Accuracy::default();
+        let profile = |reference: &str, angle: [f32; 2]| {
+            let mut bullet_angles = vec![angle; 20];
+            bullet_angles[0] = [0., 0.];
+            weapons::RecoilTrajectory { reference: reference.into(), bullet_angles }
+        };
+        gun.recoil_trajectory = Some(profile("synthetic-attached", [-2., 0.5]));
+        gun.recoil_trajectory_unsuppressed = Some(profile("synthetic-detached", [-4., -0.5]));
+        world.player_mut(id).unwrap().active_weapon_mut().unwrap().set_def(Arc::new(gun.clone()));
+        world.catalog = Arc::new(weapons::Catalog { weapons: definitions });
+        let fire = TickInput { buttons: buttons::ATTACK, ..Default::default() };
+        for (mode, expected_angle) in [(true, [-2., 0.5]), (false, [-4., -0.5]), (true, [-2., 0.5])] {
+            let before = world.player(id).unwrap().shots;
+            let mut second_ray = None;
+            for _ in 0..world.ticks(2.) {
+                world.step(&[(id, fire)]);
+                if world.player(id).unwrap().shots == before + 2 {
+                    second_ray = world.events.iter().find_map(|event| match event {
+                        GameEvent::Tracer { start, end, .. } => Some((*end - *start).normalize()),
+                        _ => None,
+                    });
+                    break;
+                }
+            }
+            assert_eq!(world.player(id).unwrap().active_weapon().unwrap().suppressor_attached, mode);
+            let expected = movement::angle_vectors(Vec3::new(expected_angle[0], expected_angle[1], 0.)).0;
+            assert!((second_ray.expect("two real bullets") - expected).length() < 0.0001);
+            if before == 4 { break; }
+            for _ in 0..world.ticks(1.) { world.step(&[(id, TickInput::default())]); }
+            world.step(&[(id, TickInput { buttons: buttons::ATTACK2, ..Default::default() })]);
+            assert!(world.player(id).unwrap().active_weapon().unwrap().suppressor_transition.is_some());
+            let snapshot = world.decode::<Snapshot>(&state::encode(&world.snapshot())).unwrap();
+            let mut restored = world.clone();
+            restored.restore(snapshot.state);
+            for _ in 0..world.ticks(0.6) {
+                world.step(&[(id, TickInput::default())]);
+                restored.step_prediction(&[(id, TickInput::default())]);
+                assert_eq!(world.state_hash(), restored.state_hash());
+            }
+            assert_eq!(world.player(id).unwrap().active_weapon().unwrap().aim_punch(),
+                restored.player(id).unwrap().active_weapon().unwrap().aim_punch());
+        }
+    }
+}
+
 fn fixture(rate: u32) -> (World, PlayerId) {
     let mut catalog = catalog();
     let mut gun = def(

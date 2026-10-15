@@ -207,7 +207,63 @@ clamps rather than inventing extra magazine shots. The observed AK profile is
 a concrete spray improvement within these limits, not completion of recoil
 fidelity.
 
+## Admitted installed M4A4 held-magazine profile
+
+M4A4 has its own observed Legacy 1.38.8.1 standing profile, independently
+admitted after the AK observation. Native pictures show the actual M4A4,
+a 30 -> 29 single-shot decrement, a fresh impact and unchanged stationary
+player/camera. Both slow magazines contain 30 independently counted near
+shot starts and every observed HUD count 29 through 0. A separate normal
+speed magazine consumed 30 rounds and reproduced the aggregate shape.
+
+The new camera-rotation calibration fitted 599.825 .. 600.050 pixels over
+8,658 static samples, with 599.900 .. 600.150 over 3,696 held-out samples.
+The independently repeated magazine's marker-center differences are at
+most 1.12 pixels (RMS 0.492); centers are within 2 pixels of the separate
+normal-speed marker cloud. The measurement uncertainty remains 2 pixels.
+
+Each pair below is bullet pitch/yaw offset in degrees, relative to fixed
+aim. These are derived observations, not copied native implementation.
+The exact observed schema, content identity, definition 16, clip 30,
+cycle 0.09 and recoil-stat identity gate attachment. Other content and
+unobserved modes retain their previous fallback. Catalog policy hashing
+includes the reference and angles so peers using the old policy cannot
+silently disagree.
+
+| Shots | Pitch/yaw |
+| --- | --- |
+| 1-5 | -0/0; -0.24/0; -0.72/0.05; -1.67/-0.2; -2.86/0.1 |
+| 6-10 | -4.19/-0.29; -5.43/-0.58; -6.32/0.29; -7.13/0.86; -7.22/2.01 |
+| 11-15 | -7.69/1.76; -8.16/0.86; -8.02/-0.71; -7.93/-2.1; -7.51/-3.39 |
+| 16-20 | -7.84/-3.48; -8.12/-3.04; -8.08/-3.52; -7.85/-4.28; -8.08/-4.23 |
+| 21-25 | -8.16/-2.38; -8.39/-1.81; -8.44/-0.38; -8.62/0.05; -8.81/0.66 |
+| 26-30 | -8.9/0.14; -9/0.47; -9.04/0.66; -9.18/0.76; -9.18/1.04 |
+
+This still measures 2023 installed behavior, not 2015 parity. Recovery,
+camera decay, moving/crouched trajectories and native 64-tick behavior
+remain separate uncompleted measurements. M4A1-S attached/detached modes
+require their own admitted trajectories.
+
 ## Private provenance
+
+### M4 observation boundary
+
+The next profiles are measured separately for M4A4, attached M4A1-S and
+detached M4A1-S. The installed schema distinguishes the M4A1-S alternate
+recoil attributes; sharing the AK trajectory or assuming both suppressor
+states have the same spray is not justified. A completed suppressor change
+must select the matching observed trajectory and invalidate derived recoil
+data at the authoritative simulation boundary.
+
+Each native mode first requires a visible weapon/mode check, an exact
+full-clip to full-clip-minus-one decrement, a new impact, stationary eye and
+velocity, and an unchanged camera background. Two separately recovered,
+shot-ordered no-spread magazines and an independent normal-speed aggregate
+follow only after admission. Projection is checked again with known camera
+rotations; the earlier AK calibration is not assumed to apply automatically.
+Unadmitted captures and startup failures remain negative evidence. Native
+data and account-bearing receipts remain private. No M4 trajectory is
+claimed from the schema's seed or magnitude alone.
 
 Research output: `csr-fidelity/recoil-reference-2015`, outside the repo.
 No assets, raw scripts, native logs or account identifiers are published.
@@ -228,3 +284,7 @@ userdata restores passed with no remaining native process. Executable SHA256:
 `DE96C3B37E3AAEDCF4D6A24C5F6C30ACD60F3593E8D452DD9857D682EA3FB114`.
 Observed item-schema SHA1:
 `c1361d351802b7be5f55245c331f5f1d6b36ad35`.
+
+Native M4A4 observations: private `csr-fidelity/measured-m4-20261015`,
+run `M4A4-20261015-084848`; exact 12-file userdata restore passed.
+The preceding pre-Steam startup failure is retained as negative evidence.

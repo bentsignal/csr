@@ -4,12 +4,15 @@ use glam::Vec3;
 use std::sync::Arc;
 
 fn main() {
+    let weapon = std::env::args()
+        .nth(1)
+        .unwrap_or_else(|| "weapon_ak47".to_owned());
     let level = level::Level::load("de_dust2", None).expect("installed Legacy map/catalog");
-    let installed = level.catalog.get("weapon_ak47").expect("AK definition");
+    let installed = level.catalog.get(&weapon).expect("weapon definition");
     let profile = installed
         .recoil_trajectory
         .as_ref()
-        .expect("observed installed AK profile");
+        .expect("observed installed weapon profile");
     eprintln!(
         "profile={} rays={} catalog={:?}",
         profile.reference,
@@ -79,6 +82,10 @@ fn main() {
                 break;
             }
         }
-        assert_eq!(emitted, 30, "held magazine must reach all observed rays");
+        assert_eq!(
+            emitted,
+            profile.bullet_angles.len(),
+            "held magazine must reach all observed rays"
+        );
     }
 }
