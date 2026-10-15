@@ -2,9 +2,10 @@
 use serde::{Deserialize, Serialize};
 use sim::{GameEvent, PlayerId, Snapshot, Team, TickInput};
 
-// v21 adds the authoritative burst-mode switch cue event.
-pub const VERSION: u32 = 21;
-pub const PROTOCOL_ID: u64 = 0x4353_5257_0000_0015;
+// v22 preserves held automatic-fire phase and released-empty idle reloads.
+// Wire fields are unchanged, but older peers predict different weapon state.
+pub const VERSION: u32 = 22;
+pub const PROTOCOL_ID: u64 = 0x4353_5257_0000_0016;
 pub const CONTROL: u8 = 0;
 pub const INPUT: u8 = 1;
 pub const SNAPSHOT: u8 = 2;

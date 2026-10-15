@@ -178,7 +178,7 @@ impl WeaponState {
 
     /// Called after every ordinary authoritative bullet. Recovery is measured
     /// from the first bullet; native final-shot recovery remains unverified.
-    pub(crate) fn shot_cooldown(&mut self, time: f32) {
+    pub(crate) fn shot_cooldown(&mut self, time: f32, dt: f32, continued_trigger: bool) {
         if self.burst_mode {
             if let Some(profile) = self.burst_profile() {
                 self.burst = if let Some(burst) = self.burst {
@@ -193,7 +193,16 @@ impl WeaponState {
             }
         }
         self.cancel_burst();
-        self.next_attack = time + self.alt_stat("cycletime", self.def.cycle_time).max(0.01);
+        let cycle = self.alt_stat("cycletime", self.def.cycle_time).max(0.01);
+        let overdue = time - self.next_attack;
+        // A fixed tick may observe a deadline slightly late. Re-anchoring
+        // every held automatic shot at that tick accumulates the rounding
+        // error across the magazine. Carry only this one-tick overrun; an
+        // admitted new press or stale deadline starts a fresh interval.
+        // Keep one bullet per tick, including faster custom-pack weapons.
+        let carry = self.def.full_auto && continued_trigger && cycle >= dt
+            && (0.0..=dt + 0.00001).contains(&overdue);
+        self.next_attack = if carry { self.next_attack + cycle } else { time + cycle };
     }
 
     pub fn draw_activity(&self) -> &str {

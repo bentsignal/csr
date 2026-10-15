@@ -1581,7 +1581,7 @@ impl World {
                     } else if can_fire && (attack || stab) && w.reload_end.is_none() && time >= w.next_attack
                         && ((w.def.full_auto && !w.burst_mode) || pressed || w.is_melee()) {
                         if w.uses_ammo() && w.clip <= 0 {
-                            if w.can_reload() {
+                            if pressed && w.can_reload() {
                                 w.reset_zoom(time);
                                 w.begin_reload(time);
                                 self.events.push(GameEvent::Reload { player: id });
@@ -1590,11 +1590,11 @@ impl World {
                             fire = true;
                         }
                     }
-                    // Native Glock/FAMAS burst mode waits while an empty
-                    // trigger is held, then reloads without another click on
-                    // release. Readiness also preserves deploy/shot lockouts.
+                    // Native AK and Glock/FAMAS burst cases wait while an
+                    // empty trigger is held. AK/M4 and both burst guns start
+                    // idle reload on release, without another click. Keep
+                    // the existing weapon readiness/reload admission guards.
                     if !frozen && !busy && !muzzle_blocked && !attack && !secondary && can_fire
-                        && w.burst_mode && w.burst_profile().is_some()
                         && w.clip == 0 && w.can_reload() && time >= w.next_attack {
                         w.reset_zoom(time);
                         w.begin_reload(time);
@@ -1695,7 +1695,9 @@ impl World {
     }
 
     fn fire(&mut self, shooter: usize, time: f32, rewind_tick: Option<u64>) {
+        let dt = self.dt();
         let p = &self.players[shooter];
+        let continued_trigger = p.last_input.buttons & buttons::ATTACK != 0;
         let id = p.id;
         let team = p.team;
         let (eye, aim_angles) = p.aim_origin_angles();
@@ -1812,7 +1814,7 @@ impl World {
             if w.uses_ammo() {
                 w.clip -= 1;
             }
-            w.shot_cooldown(time);
+            w.shot_cooldown(time, dt, continued_trigger);
             w.accuracy_penalty += w.alt_stat("inaccuracy fire", def.accuracy.inaccuracy_fire);
             w.recoil_index += 1.0;
             if w.zoom_level > 0 && def.attr_f32("unzoom after shot").is_some_and(|v| v != 0.0) {

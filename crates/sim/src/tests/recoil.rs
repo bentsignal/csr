@@ -114,7 +114,7 @@ fn held_trigger_during_magazine_reload_and_dry_fire_does_not_freeze_recovery() {
 }
 
 #[test]
-fn held_empty_magazine_can_autoreload_and_semiautomatic_hold_recovers() {
+fn new_empty_trigger_can_autoreload_and_semiautomatic_hold_recovers() {
     for rate in [64, 128] {
         let (mut w, id) = rifle(rate, true);
         let gun = w.player_mut(id).unwrap().active_weapon_mut().unwrap();

@@ -69,9 +69,14 @@ mod tests {
                 assert_eq!(counted.observed.iter().map(|(_, clip)| *clip).collect::<Vec<_>>(),
                     (1..=requested).map(|n| 30 - n as i32).collect::<Vec<_>>());
                 assert_eq!(world.player(id).unwrap().active_weapon().unwrap().clip, 30 - requested as i32);
-                for pair in actual.windows(2) {
-                    let seconds = (pair[1] - pair[0]) as f32 / rate as f32;
-                    assert!(seconds >= 0.1 && seconds < 0.1 + world.dt());
+                // Held automatic fire preserves authored phase. Individual
+                // tick gaps can fall below one cycle while repaying the last
+                // tick's rounding; the cumulative schedule stays within one
+                // tick of the authored deadlines rather than drifting.
+                for (ordinal, tick) in actual.iter().enumerate().skip(1) {
+                    let seconds = (*tick - actual[0]) as f32 / rate as f32;
+                    let intended = ordinal as f32 * 0.1;
+                    assert!(seconds >= intended - 0.00001 && seconds < intended + world.dt() + 0.00001);
                 }
             }
         }

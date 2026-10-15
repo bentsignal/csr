@@ -627,7 +627,7 @@ fn shotgun_reload_loads_shells_and_firing_interrupts_it() {
     player.weapons.insert(0, WeaponState::new(Arc::new(nova)));
     player.active = 0;
     player.weapons[0].clip = 0;
-    run(&mut world, 1.2, &[]);
+    // Start the explicit reload immediately; idling empty now auto-reloads.
     let reload = TickInput { buttons: buttons::RELOAD, ..Default::default() };
     world.step(&[(id, reload)]);
     let s = world.player(id).unwrap().active_weapon().unwrap().shell_reload().unwrap();
@@ -858,6 +858,7 @@ fn dynamic_mob_hits_preserve_bullet_and_knife_contact_positions() {
 
 mod authority;
 mod recoil;
+mod fire_cadence;
 mod aim;
 mod rewind;
 mod death;
