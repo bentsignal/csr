@@ -1,90 +1,97 @@
-﻿# Classic death-notification integration
+# Classic death notifications
 
-Work in progress for WP10 in the October 14 playtest ledger. The current
-text feed is not the requested classic HUD.
+The draft client displays real kills using the player's installed classic
+`resource/flash/huddeathnotification.swf`: original boxes, colored names,
+local highlights, and runtime weapon/headshot bitmaps. Multiple-row positioning
+and repeated-resize sizing are currently broken and block integration. This
+implements WP10 in [the playtest ledger](../PLAYTEST-2026-10-14.md); full HUD
+fidelity remains open.
 
-The player's Legacy install contains `resource/flash/huddeathnotification.swf`.
-Its public export table includes the original weapon/headshot icons and
-`death-text`; none of this artwork is copied into the repository. Public
-runtime property inspection exposes `AddPanel`, `SetPanelText`, `RemovePanel`,
-`UpdateWidth`, `onLoaded`, and `onResize`. No authored function bodies,
-instructions, or leaked engine source have been inspected.
+## Runtime contract and ownership
 
-Public values observed at 1920 x 1080 include CT color `#6f9ce6`, T color
-`#eabe54`, seven notices, five-second lifetime, a 1.5 local-player lifetime
-modifier, and one-second fade. These are observations of the installed
-historical movie, not a claim of exact 2015 runtime parity.
+Clean-room public-runtime inspection established `AddPanel`, `SetPanelText`,
+`RemovePanel`, `UpdateWidth`, `onLoaded`, and `onResize`. Returned movie clips
+are passed back through explicit host clip references, never by interpreting
+player text as an object. No authored function bodies, instructions, leaked
+source, or game artwork are included in the repository.
 
-The first four bounded private probes established that the movie loads and
-initializes, but did **not** display a notice. Calling a public function is
-not evidence that its argument contract is correct. The next probe checks
-standard Flash root scoping before changing production presentation. Setting
-`_lockroot` did not by itself produce a visible notice. Public function arity
-and returned-clip observations are now exposed by the explicitly invoked
-diagnostic bridge; normal menus never call that path.
+The installed movie exposes CT color `#6f9ce6`, T color `#eabe54`, seven notices,
+five-second lifetime, a 1.5 local-player lifetime modifier, and one-second fade.
+These are installed historical-movie observations, not proof of 2015 runtime
+values. SetPanelText's local-victim flag selects the filled highlight; its
+local-attacker flag selects the outline.
 
-That call-result probe positively returned the clip
-`Panel.Notice.DeathText1.NoticePanel1` from `AddPanel`. Its public children
-are `TextPanel`, `IDTextBG`, `PanelVictim`, and `PanelAttacker`. Function
-`length` is undefined in this runtime, so no parameter-count claim is made.
-An explicit `__csrMovieClip` host value now allows a public setter to receive
-the returned clip without treating arbitrary player strings as handles.
+Ruffle does not display the original inline HTML bitmap images. Compatibility
+code reserves space in the original text field using observed tab stops,
+attaches the installed bitmap exports to owned containers, and fits the
+original background/highlight art to measured text. It draws no replacement
+boxes. Fonts and team colors remain those of the original field.
 
-Private evidence is under `C:\Users\shawn\csr-fidelity\` in
-`killfeed-*-runtime-20261015`. Those captures contain installed game artwork
-and must never be committed or attached to a public release.
+Simulation supplies immutable death identity, weapon and headshot facts.
+Suppressor state is retained only from a causally preceding matching Fire
+in the same event batch; the renderer does not infer a past shot's mode from
+an actor's later weapon state. No gameplay or network protocol changes are
+introduced by this presentation layer.
 
-Implementation starts by retaining authoritative weapon/headshot values in
-the bounded client feed, alongside its existing immutable death receipt.
-This does not change simulation, network messages, or the visible HUD yet.
-Authored rendering, real kill-event admission, local emphasis, resizing,
-expiration, and frame-cost checks remain required before completion.
+## Worker and fallback
 
+A dedicated transparent bare-root worker receives bounded receipts and
+revision-fenced raster requests. It receives no keyboard or pointer input.
+It finishes in-flight loading, then parks when no drawable notices remain;
+rejected rows receive no fade calls. CPU copies/uploads use the viewport's
+upper half; GPU readback still covers the complete target. Odd physical
+heights preserve the crop's pixel dimensions at the window's actual scale.
 
-## Integration checkpoint, October 15
+The ordinary text feed remains until the current authored raster is admitted.
+Load/worker failure preserves that complete fallback. A content-specific row
+failure instead retains only that receipt as text, below the cropped HUD when
+healthy authored rows are present. The helper hides/removes only its owned
+failed panel. Keyed successful relayout can recover a rejected row. Rejection
+state is bounded and pruned against live receipts; an unknown icon cannot
+disable the whole feed until restart.
 
-The original row now has a positive public-runtime argument contract: the
-returned AddPanel movie clip is passed to SetPanelText, made visible, and
-removed through RemovePanel. Public boolean observations distinguish local
-victim fill from local attacker outline. Bitmap exports attach through owned
-movie-clip containers; Ruffle does not render the original inline HTML images.
-Text gutter/spacing is still being established, so this remains unfinished.
+## Observed renders and remaining defects
 
-The client integration is a draft: a dedicated transparent bare-root worker
-receives immutable kill receipts, bounded lifetime, causal shot mode, and
-revision-fenced rasters. It receives no keyboard/pointer input and pauses when
-no notices are present. CPU copies/uploads use the viewport's upper half;
-GPU readback still covers the whole target. The existing text feed remains the
-fallback until a current authored raster is admitted; failed loads or rows
-retain that fallback and disconnect only the dedicated worker. Rust compilation and the initial real-kill renders passed on `6a2932d`.
-Repeated resize/lifetime, complete icon coverage and frame-cost validation
-remain open.
+Actual authoritative M4A1-S and AK kills rendered at 1920x1080 and1600x900 on
+`988033c`. Both saved images were personally inspected with intact original
+boxes, local-attacker outlines, names, weapon icons and headshot icons.
+Launcher/menu-probe builds and client/Scaleform checks passed. An earlier
+T-spawn AK fixture aimed above its target on a slope and correctly failed
+admission without a kill; that negative evidence remains preserved.
 
-## Real receipts and dated scale reference
+`7db8dbb` adds per-row fallback/cleanup/recovery and includes current M4A4
+recoil. Its clean-workspace launcher/menu-probe builds and client/Scaleform
+checks passed. A six-stage public API probe then established that unknown
+icons reject explicitly without removing healthy rows, individual removal
+leaves its sibling, and clear removes visible notices. It also exposed real
+failures: two valid rows overlap and repeated resize stretches their
+backgrounds. Inherited enumerable `isNavigable` was incorrectly treated as
+a receipt during iteration; owned-key/panel filtering now excludes it.
+The original probe remains failed: its strict raw-error guard also caught the
+intentionally unavailable test icon. Explicit callbacks, actual pixels and
+owned-map inspection are authoritative; some public return diagnostics are
+stale, so they are not used alone as acceptance evidence.
 
-The dedicated worker drew real authoritative kills on `6a2932d`: attached
-M4A1-S at1920x1080 and AK-47 at1600x900, with original panel art, local-attacker
-outline, colored names and installed weapon/headshot bitmaps. Both process and
-capture checks passed without fallback; the coordinating agent viewed both.
-An earlier T-spawn AK fixture aimed above its target on a slope, produced no
-kill, and correctly failed admission. Its failed receipt was retained; the
-successful retry used the already verified CT-spawn fixture without changing
-simulation or injecting a kill event.
+An additional bounded public-contract observation will distinguish separate
+row allocation/positioning and original width refresh before choosing a fix.
+No complete multi-row, actual viewport-resize, expiration, coverage or frame
+cost parity claim is made.
 
-The original row-height safety fit made icons too large. A dated primary
-reference is 3kliksphilip's own [CS GO Grenade Tutorial, March11 2015, frame331s](https://www.youtube.com/watch?v=xoatYCUn4tw&t=331s).
-Its USP-S/headshot ink was compared with the native-font glyph height, rather
-than assuming the video's unknown HUD scaling equals ours. Public bitmap
-metadata gives a32-pixel canvas height for these exports; the original field
-uses font size16. Canvas-to-font-height scaling is a bounded candidate supported
-by the matching USP-S and shared headshot observations. The new implementation
-uses the measured field font size, bounded by the existing row height and
-original bitmap resolution. Compressed footage, exact historic HUD scaling,
-safe-zone position and bitmap differences limit the comparison; this is not a
-claim of complete pixel parity. New scaled renders are pending.
+## Dated icon-scale reference
 
-Raw video/captures, bitmap bytes and account data remain private outside the
-repository. Only public metadata, derived measurements and bridge code ship.
-`CSR_KILL_FEED_TRACE=1` logs revision/receipt/raster admission for owned checks;
-`CSR_NO_CLASSIC_KILL_FEED=1` isolates its cost against the existing text feed.
-Neither switch changes simulation or weapon behavior.
+The original row-height fit made icons too large. The dated primary reference
+is 3kliksphilip's [CS GO Grenade Tutorial, March11 2015, frame331s](https://www.youtube.com/watch?v=xoatYCUn4tw&t=331s).
+USP-S/headshot ink is compared with native font glyph height rather than
+assuming the video's unknown HUD scale matches ours. Public bitmap metadata
+shows a32-pixel canvas and the installed field uses font size16. Font-height
+canvas sizing agrees with both reference observations within their bounds,
+so fitting uses the actual field font size, original resolution and row-height
+limit. Both new scaled real-kill images on988033c were personally inspected.
+Compressed footage, historical HUD scale, safe-zone placement and bitmap
+changes still prevent a complete pixel-parity claim.
+
+Raw video, captures, bitmap bytes and account data stay private under
+`C:\Users\shawn\csr-fidelity\`. Only observations, derived measurements
+and our bridge code ship. `CSR_KILL_FEED_TRACE=1` logs revision/receipt/raster
+admission; `CSR_NO_CLASSIC_KILL_FEED=1` isolates its presentation cost against
+the ordinary text feed. Neither switch changes simulation or weapon behavior.
