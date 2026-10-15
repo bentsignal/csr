@@ -271,7 +271,13 @@ _global.csrDeathNotices.alpha = function(key, percent) {
 };
 _global.csrDeathNotices.clear = function() {
     var keys = [];
-    for (var id in this.rows) { keys.push(id.substr(8)); }
+    for (var id in this.rows) {
+        // Installed UI helpers add enumerable Object-prototype functions.
+        // Only our prefixed rows with an owned panel belong to this list.
+        var row = this.rows[id];
+        if (id.substr(0, 8) == "receipt:" && typeof row == "object" &&
+            typeof row.panel == "movieclip") { keys.push(id.substr(8)); }
+    }
     var i = 0;
     while (i < keys.length) { this.remove(keys[i]); i += 1; }
     return true;
@@ -282,6 +288,8 @@ _global.csrDeathNotices.resize = function() {
     var success = true;
     for (var id in this.rows) {
         var row = this.rows[id];
+        if (id.substr(0, 8) != "receipt:" || typeof row != "object" ||
+            typeof row.panel != "movieclip") { continue; }
         var laidOut = false;
         try { laidOut = this.layout(row) === true; }
         catch (error) { laidOut = false; }
