@@ -195,6 +195,9 @@ impl Presentation {
                 "ammo"
             };
             self.state.expected[part].store(revision, Ordering::Release);
+            // A newer receipt owns its own pending/rejection state. Otherwise
+            // a prior rejection can park this retry before Show settles.
+            self.state.rejected[part].store(false, Ordering::Release);
             self.sent[part] = Some(snapshot.clone());
             batch.push(command(function, args));
         }
@@ -460,6 +463,50 @@ pub(crate) fn crop(frame: &scaleform::Frame, rect: Rect) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_new_component_retry_stays_active_until_its_own_settled_raster() {
+        let mut p = Presentation::default();
+        p.enabled = true;
+        for name in ["health", "ammo"] {
+            assert!(p.state.receive("CombatHudReady", &[name.into()]));
+        }
+        let mut snapshot = Snapshot {
+            player: 1,
+            life: 3,
+            alive: true,
+            health: 100,
+            armor: 100,
+            helmet: true,
+            weapon: None,
+        };
+        p.commands(Some(&snapshot), 1, false);
+        assert!(p.state.receive(
+            "CombatHudResult",
+            &["health".into(), "1".into(), false.into()]
+        ));
+        assert!(
+            p.state
+                .receive("CombatHudResult", &["ammo".into(), "1".into(), true.into()])
+        );
+        p.raster_revision[1] = 1;
+        assert!(!p.waiting(), "A rejected component may park with fallback");
+        snapshot.health = 73;
+        assert_eq!(p.commands(Some(&snapshot), 2, false).len(), 1);
+        assert!(p.waiting(), "The retry must run its deferred Show observer");
+        assert!(!p.state.receive(
+            "CombatHudResult",
+            &["health".into(), "1".into(), false.into()]
+        ));
+        assert!(p.waiting(), "An old failure cannot cancel the retry");
+        assert!(p.state.receive(
+            "CombatHudResult",
+            &["health".into(), "2".into(), true.into()]
+        ));
+        assert!(p.waiting(), "Success still needs the matching raster");
+        p.raster_revision[0] = 2;
+        assert!(!p.waiting());
+    }
 
     #[test]
     fn stale_component_results_cannot_hide_or_admit_a_newer_snapshot() {

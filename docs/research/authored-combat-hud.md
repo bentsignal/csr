@@ -178,3 +178,20 @@ own observer when complete. Unsupported or stuck timelines fail after a bounded
 This guard is not a claimed animation duration. Rust's existing pending-receipt
 state keeps the shared worker active until both completion and raster admission.
 The corrected actual damage, lifecycle and idle-cost checks remain pending.
+
+Immutable4ba's exact ordinary HE repeat passed the previously failing gate:
+health/armor changed to56/57 through simulation, the native raster shows those
+values and matching steady bars, and the automatically selected M4-S shows
+20/80. Every visible component completion callback is now Show8/15 before
+parking; the hidden grenade-ammo component legitimately reports1/15. Actual
+1920x1080 PNG inspection confirms readable steady ammo without the earlier
+partial fade, no duplicate fallback or sample art. The process exited0 with
+clean logs and unchanged settings. Historical colors and low-health behavior
+remain uncalibrated; ordinary fire/reload/Pause/new-match lifecycle and cost
+checks are still pending.
+
+A newer stamped command also clears only that component's previous result
+rejection. Otherwise an earlier failure could park a retry while its owned
+Show observer is pending. One behavioral regression exercises failure, newer
+pending retry, ignored old-stamp failure, success without raster, and final
+matching raster before parking. Other components and load failures are unchanged.
