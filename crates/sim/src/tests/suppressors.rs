@@ -11,7 +11,7 @@ fn suppressor_completion_selects_separate_observed_rays_after_cache_and_snapshot
         let profile = |reference: &str, angle: [f32; 2]| {
             let mut bullet_angles = vec![angle; 20];
             bullet_angles[0] = [0., 0.];
-            weapons::RecoilTrajectory { reference: reference.into(), bullet_angles }
+            weapons::RecoilTrajectory { reference: reference.into(), bullet_angles, response: None }
         };
         gun.recoil_trajectory = Some(profile("synthetic-attached", [-2., 0.5]));
         gun.recoil_trajectory_unsuppressed = Some(profile("synthetic-detached", [-4., -0.5]));

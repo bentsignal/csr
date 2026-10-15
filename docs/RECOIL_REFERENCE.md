@@ -2,8 +2,8 @@
 
 The owner requested a **2015 gameplay baseline**. This audit identifies dated
 weapon configuration and separates it from the still unverified recoil
-procedure. It does not change weapon behavior or establish a pixel-perfect
-spray pattern. The installed reference executable is CS:GO Legacy 1.38.8.1
+procedure. Later sections describe the separately observed profiles and
+their remaining limits. The installed reference executable is CS:GO Legacy 1.38.8.1
 (2023), not a runnable 2015 build. Existing classic menu work remains separate.
 
 ## Historical source identity
@@ -361,6 +361,80 @@ runs `M4SAttached-20261015-100848` and `M4SDetached-20261015-101424`.
 Both completed exact userdata restoration. The earlier `092314` run remains
 excluded from all profile fitting and comparison.
 
+## Partial-burst AK restart observations
+
+A separate standing, no-spread Legacy 1.38.8.1 observation released after six
+actual AK shots and resumed for exactly one shot. Each case began recovered:
+zero displayed aim punch and velocity, clip 30, and a first impact at the
+crosshair with clip 29. Later frames show clip 24 after the partial burst and
+23 after the restart; seven near firing-wave starts independently agree.
+Observed eye position, zero movement velocity and two static scene regions
+remain unchanged. Fresh camera rotations again calibrate a 600-pixel focal
+length at 1600×900. Minimum sensitivity reduces physical mouse influence;
+it does not disable input.
+
+| Actual sixth-to-seventh sound-engine interval | Restart pitch offset | Restart yaw offset |
+|---|---:|---:|
+| 0.125 s | −7.50° | +0.86° |
+| 0.305 s | −2.96° | +0.34° |
+| 0.312 s (independent repeat) | −2.77° | +0.34° |
+| 0.765 s | approximately 0° | approximately 0° |
+
+The interval comes from the two actual near-wave engine clock values,
+with command/receive timestamps retained as bounds. It is neither the
+requested pause nor an exact server tick. Marker uncertainty remains about
+2 pixels; printed degrees do not imply greater measurement precision.
+The initial long-gap marker overlapped existing boxes and was rejected. Its
+replacement positively verified a 0.3-second impact lifetime, showed all old
+boxes absent before restarting, and then showed one fresh central box. The
+other three distinct observations were retained. Raw captures stay private.
+
+The short restart continues upward beyond the sixth-shot impact. Simply
+walking backward through the held-magazine table cannot describe that phase.
+The actual 128 Hz sim ray at 0.125 seconds is (−5.53°, +0.22°), versus the
+observed (−7.50°, +0.86°). At 0.3125 seconds it is (−1.76°, −0.07°), versus
+the independent 0.312-second observation (−2.77°, +0.34°). The long pause
+returns to center in both. Thus matching the held magazine does not establish
+recoil recovery; these diagnostic checks deliberately expose the mismatch.
+These observations constrain the current arbitrary recovery model but do
+not establish a general replacement law, other partial-burst lengths,
+continued spraying after a restart, camera decay, native 64-tick behavior,
+or historical 2015 parity.
+
+Additional recovered three-shot and ten-shot cases at actual near-wave gaps
+0.375/0.376 seconds produce distinct new restart markers after all old boxes
+expire. The small burst returns almost to the crosshair; the larger one
+retains roughly two degrees of upward offset. Their actual clip sequences
+are 30/29/27/26 and 30/29/20/19. These observations were reserved for checking
+a replacement procedure rather than fitting the initial six-shot result.
+
+Two release-only observations then record eleven same-frame public
+`m_aimPunchAngle` and `m_aimPunchAngleVel` samples after exactly one and six
+shots, with no resumed fire. The six-shot angle continues upward after
+release, peaks around 0.09 seconds on the bounded receive clock, and reaches
+displayed zero by about 0.77 seconds while angular velocity remains
+(-2.125, +0.25). After one shot the angle reaches displayed zero by about
+0.51 seconds while velocity remains (-2.03125, -1.03125). Both started at
+zero, retained the same eye/zero movement velocity and ended at clips 29/24.
+The displayed values fall on 1/32-unit increments. Capture begin/end bounds
+are retained; requested sample phases are not treated as exact native times.
+
+Ordinary runtime metadata independently reports recoil velocity decay 4.5,
+decay-exponent entries 3.5 and 8, a linear-decay entry 18 and a decay coefficient
+2. The older 0.55 cooldown description explicitly says it is deprecated.
+The observed velocity envelopes are consistent with the reported 4.5 value.
+Metadata names alone do not establish the equation or update order. The
+independently evolving angle and velocity need their own measured state;
+they cannot be represented by walking backward through one spray index.
+
+`recoilcheck -- weapon_ak47 --restart-gap 0.125` emits six held authoritative
+rays, one release interval, and one actual restart ray at 64/128 Hz. Its CSV
+timestamps give the achieved sim interval, including tick/cooldown rounding.
+Only the initial six rays are compared with the admitted held profile;
+the restart error column is `NaN` because no expected recovery procedure is
+assumed. This diagnostic does not change production weapon behavior.
+
+
 
 ## Galil AR standing held baseline
 
@@ -441,3 +515,75 @@ baseline. It does not establish requested 2015 parity, burst recoil,
 recovery, moving/crouched firing, camera punch or native 64-tick behavior.
 Raw game data, logs and screenshots remain private. Actual rewrite
 ray/render verification is pending.
+
+
+## AK independent angle/velocity response
+
+The exact installed AK profile now declares a separate response inferred
+from public, readable angle and angular-velocity observations. Release-only
+curves after one, six and thirty actual near-shot waves provide this evidence;
+restart rays are retained as independent validations, rather than fitting
+recovery coefficients to them. The initial single-kernel hypothesis failed
+an independent three-shot restart and is rejected. Raw images, logs and
+rejected hypotheses remain private.
+
+The observed update order is radial angle shrink, velocity contribution to
+angle, then velocity decay. The declared reference step is 1/128 second;
+angle shrink uses the public values 8 and 18, and velocity decay uses 4.5.
+This procedure was inferred from public state evolution, not copied from
+native implementation code. The one/six-shot trajectories reproduce all
+readable angle components within one 1/32-degree display increment when
+aligned by the independently displayed velocity envelope. The separate
+thirty-shot curve differs by at most 0.03434 degrees in angle and 0.02825
+degrees/second in velocity, within combined quantized-endpoint uncertainty.
+Capture receive bounds do not identify an exact server tick or sample phase.
+
+Held ray centers and the actual automatic-shot deadline policy constrain
+intermediate velocity impulses. Reconstruction uses the real tick rate and
+first-fire anchor, preserving the alternating rounded shot intervals at
+64/128 Hz and rebuilding the same derived cache after snapshots. First-shot
+velocity is constrained separately by the one-shot public curve: the first
+two native hit boxes overlap, so their nominal centers cannot establish a
+zero yaw impulse. The resolved second ray remains inside the original
+approximately two-pixel marker uncertainty; all later held rays retain exact
+reconstruction of the rounded observed centers. A separate full-magazine
+curve constrains the final impulse, which thirty bullet rays alone cannot
+identify. Both endpoint impulses are rounded estimates with phase/display
+uncertainty, not exact recovered native constants.
+
+Authoritative angle and velocity continue evolving during release, while
+holstered and on the ground. TickInput remains the only firing authority.
+Snapshots include motion and the cadence anchor; protocol24 and the
+response-aware catalog digest reject incompatible peers. Respawn resets
+motion. Other guns retain their current recovery until independently
+observed. Actual authoritative rays at source8b13a75 passed all six untouched
+restart comparisons at128 Hz:
+
+| Partial shots | Native interval (s) | Achieved sim interval (s) | Marker error (px) |
+| ---: | ---: | ---: | ---: |
+| 6 | 0.125 | 0.125 | 0.600 |
+| 6 | 0.305 | 0.304688 | 0.425 |
+| 6 (independent repeat) | 0.312 | 0.3125 | 0.217 |
+| 6 | 0.765 | 0.765625 | 0.371 |
+| 3 (untouched holdout) | 0.375 | 0.375 | 0.164 |
+| 10 (untouched holdout) | 0.376 | 0.375 | 0.787 |
+
+The64 Hz resampling counterparts differ by0.158 to1.028 pixels; this is not
+an independently observed native64 Hz reference. Actual held-ray checks
+also passed at both rates for AK, M4A4, both M4A1-S modes, Galil and normal
+FAMAS. Focused motion/lifecycle/snapshot/prediction and malformed network
+state checks passed after cleaning all23 workspace packages for the profile.
+The copied client and diagnostic contain the unique response reference;
+source fingerprints and immutable artifact hashes were recorded privately.
+Full workspace/probe/sim CI and rendered checks remain pending.
+
+A separately checked negative remains: the old twelve-step-per-second
+spray-phase counter selects the wrong impulse after partial recovery. The
+first resumed bullet is emitted before that new impulse and matches the
+rays above, but the later public velocity does not. After the ten-shot
+restart, actual source yaw velocity is positive while the native public
+post-restart value is negative; capture-phase uncertainty cannot reverse
+that sign. Continued resumed spraying therefore still fails fidelity and
+needs separately observed phase/index behavior. This patch does not claim
+to fix that counter. Camera tracking, nonstanding cases, historical2015
+parity and native64 Hz behavior also remain unestablished.
