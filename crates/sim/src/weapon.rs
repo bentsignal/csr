@@ -235,7 +235,10 @@ impl WeaponState {
         let Some(animation) = self.suppressor_animation() else { return; };
         let elapsed = tick.saturating_sub(state.started_tick) as f32 * dt;
         let (complete, finished) = (elapsed >= animation.complete_time, elapsed >= animation.duration);
-        if complete { self.suppressor_attached = state.attached; }
+        if complete && self.suppressor_attached != state.attached {
+            self.suppressor_attached = state.attached;
+            self.pattern = RecoilPatternCache::default();
+        }
         if finished { self.suppressor_transition = None; }
     }
 
@@ -259,6 +262,10 @@ impl WeaponState {
     fn pattern(&self) -> &[[f32; 2]] {
         self.pattern.0.get_or_init(|| {
             let mut def = (*self.def).clone();
+            if def.suppressor_animations.is_some() && !self.suppressor_attached {
+                // A default-equipped observation cannot establish detached spray.
+                def.recoil_trajectory = def.recoil_trajectory_unsuppressed.clone();
+            }
             if self.burst_mode {
                 // A normal-mode observation does not establish burst recoil.
                 def.recoil_trajectory = None;
@@ -652,6 +659,7 @@ mod tests {
     fn ak() -> WeaponDefinition {
         WeaponDefinition {
             recoil_trajectory: None,
+            recoil_trajectory_unsuppressed: None,
             grenade_animations: None,
             suppressor_animations: None,
             id: ContentId::csgo(ContentKind::Weapon, "ak47"),

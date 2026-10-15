@@ -50,6 +50,60 @@ const AK_BULLET_ANGLES: [[f32; 2]; 30] = [
     [-10.12, -3.58],
 ];
 
+// Independently admitted M4A4 observations at the same measured projection.
+// Two ordered slow magazines plus a held-out normal-speed aggregate; 2px
+// marker uncertainty. This is neither an AK rescale nor historical proof.
+const M4A4_BULLET_ANGLES: [[f32; 2]; 30] = [
+    [0.00, 0.00],
+    [-0.24, 0.00],
+    [-0.72, 0.05],
+    [-1.67, -0.20],
+    [-2.86, 0.10],
+    [-4.19, -0.29],
+    [-5.43, -0.58],
+    [-6.32, 0.29],
+    [-7.13, 0.86],
+    [-7.22, 2.01],
+    [-7.69, 1.76],
+    [-8.16, 0.86],
+    [-8.02, -0.71],
+    [-7.93, -2.10],
+    [-7.51, -3.39],
+    [-7.84, -3.48],
+    [-8.12, -3.04],
+    [-8.08, -3.52],
+    [-7.85, -4.28],
+    [-8.08, -4.23],
+    [-8.16, -2.38],
+    [-8.39, -1.81],
+    [-8.44, -0.38],
+    [-8.62, 0.05],
+    [-8.81, 0.66],
+    [-8.90, 0.14],
+    [-9.00, 0.47],
+    [-9.04, 0.66],
+    [-9.18, 0.76],
+    [-9.18, 1.04],
+];
+
+fn is_observed_m4a4(def: &WeaponDefinition) -> bool {
+    def.id == ContentId::csgo(ContentKind::Weapon, "m4a1")
+        && def.class_name == "weapon_m4a1"
+        && def.def_index == 16
+        && def.clip_size == 30
+        && def.bullets == 1
+        && def.full_auto
+        && def.cycle_time == 0.09
+        && def.recoil
+            == Recoil {
+                seed: 38965,
+                angle: 0.,
+                angle_variance: 70.,
+                magnitude: 23.,
+                magnitude_variance: 0.,
+            }
+}
+
 fn is_observed_ak(def: &WeaponDefinition) -> bool {
     def.id == ContentId::csgo(ContentKind::Weapon, "ak47")
         && def.class_name == "weapon_ak47"
@@ -77,17 +131,28 @@ pub(super) fn import(catalog: &mut Catalog, schema: Option<[u8; 20]>) -> Option<
     digest.update(schema);
     // A peer with the same assets but the previous recoil policy must fail
     // content admission before prediction/snapshots can silently disagree.
-    digest.update(b"observed-recoil-trajectory-v1-ak-legacy-1.38.8.1");
+    digest.update(b"observed-recoil-trajectory-v2-ak-m4-legacy-1.38.8.1");
     let mut applied = false;
     {
-        for def in catalog.weapons.iter_mut().filter(|def| is_observed_ak(def)) {
+        for def in &mut catalog.weapons {
+            let (reference, angles): (&str, &[[f32; 2]]) = if is_observed_ak(def) {
+                ("legacy-1.38.8.1-ak-held-standing-128hz", &AK_BULLET_ANGLES)
+            } else if is_observed_m4a4(def) {
+                (
+                    "legacy-1.38.8.1-m4a4-held-standing-128hz",
+                    &M4A4_BULLET_ANGLES,
+                )
+            } else {
+                continue;
+            };
             applied = true;
             def.recoil_trajectory = Some(RecoilTrajectory {
-                reference: "legacy-1.38.8.1-ak-held-standing-128hz".into(),
-                bullet_angles: AK_BULLET_ANGLES.to_vec(),
+                reference: reference.into(),
+                bullet_angles: angles.to_vec(),
             });
             digest.update(def.id.to_string().as_bytes());
-            for angle in AK_BULLET_ANGLES {
+            digest.update(reference.as_bytes());
+            for angle in angles {
                 digest.update(angle[0].to_le_bytes());
                 digest.update(angle[1].to_le_bytes());
             }
@@ -127,9 +192,13 @@ mod tests {
         let ak = catalog.get("weapon_ak47").unwrap();
         let profile = ak.recoil_trajectory.as_ref().unwrap();
         assert_eq!(profile.bullet_angles.len(), 30);
+        let m4 = catalog.get("weapon_m4a1").unwrap();
+        let m4_profile = m4.recoil_trajectory.as_ref().unwrap();
+        assert_eq!(m4_profile.bullet_angles.len(), 30);
+        assert_ne!(m4_profile.bullet_angles, profile.bullet_angles);
         assert!(
             catalog
-                .get("weapon_m4a1")
+                .get("weapon_m4a1_silencer")
                 .unwrap()
                 .recoil_trajectory
                 .is_none()
