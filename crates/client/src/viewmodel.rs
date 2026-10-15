@@ -759,9 +759,13 @@ pub fn update(
         let rear = view.scope_rear.map_or(center, |(position, _)| position);
         offset = offset.lerp(glam::Vec3::new(8.0 - center.x, -rear.y, -rear.z), blend);
     }
-    let look_translation = if show && w.is_some_and(|w|
-        w.zoom_level == 0 && look_motion::observed_profile(level.0.item_schema_sha1(), &w.def)) {
-        state.look_motion.translation(now, f)
+    let look_translation = if show && p.id == local.id && local.spectating.is_none()
+        && w.is_some_and(|w| w.zoom_level == 0
+            && look_motion::observed_profile(level.0.item_schema_sha1(), &w.def)) {
+        // The admitted input is flat local look, not simulated recoil punch or
+        // a future tracked hand/head pose. Existing rendered punch stays current.
+        let look = movement::angle_vectors(glam::Vec3::new(local.pitch, local.yaw, 0.)).0;
+        state.look_motion.translation(now, look)
     } else { state.look_motion.clear(); glam::Vec3::ZERO };
     let origin = eye + f * offset.x - r * offset.y + u * offset.z + look_translation;
     if std::env::var_os("CSR_VIEWMODEL_MOTION_TRACE").is_some() {

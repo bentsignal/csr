@@ -15,7 +15,8 @@ presentation change introduces no wire/gameplay state or protocol change.
 
 History retains the samples bracketing the delayed time, with bounded storage.
 Respawn/view-target/weapon changes, noclip and clock discontinuities reset it.
-Scoped/hidden views stay neutral. The effect does not change authoritative
+Scoped/hidden/spectated views stay neutral. Only local unpunched flat look
+feeds this admitted history; existing rendered recoil punch stays current. The effect does not change authoritative
 movement, aim, input sampling or tracked-pose interfaces.
 
 ## Native reference boundary
