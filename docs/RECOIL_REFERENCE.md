@@ -360,3 +360,44 @@ Fresh native M4A1-S observations: private `csr-fidelity/measured-m4-20261015`,
 runs `M4SAttached-20261015-100848` and `M4SDetached-20261015-101424`.
 Both completed exact userdata restoration. The earlier `092314` run remains
 excluded from all profile fitting and comparison.
+## Partial-burst AK restart observations
+
+A separate standing, no-spread Legacy 1.38.8.1 observation released after six
+actual AK shots and resumed for exactly one shot. Each case began recovered:
+zero displayed aim punch and velocity, clip 30, and a first impact at the
+crosshair with clip 29. Later frames show clip 24 after the partial burst and
+23 after the restart; seven near firing-wave starts independently agree.
+Observed eye position, zero movement velocity and two static scene regions
+remain unchanged. Fresh camera rotations again calibrate a 600-pixel focal
+length at 1600×900. Minimum sensitivity reduces physical mouse influence;
+it does not disable input.
+
+| Actual sixth-to-seventh sound-engine interval | Restart pitch offset | Restart yaw offset |
+|---|---:|---:|
+| 0.125 s | −7.50° | +0.86° |
+| 0.305 s | −2.96° | +0.34° |
+| 0.312 s (independent repeat) | −2.77° | +0.34° |
+| 0.765 s | approximately 0° | approximately 0° |
+
+The interval comes from the two actual near-wave engine clock values,
+with command/receive timestamps retained as bounds. It is neither the
+requested pause nor an exact server tick. Marker uncertainty remains about
+2 pixels; printed degrees do not imply greater measurement precision.
+The initial long-gap marker overlapped existing boxes and was rejected. Its
+replacement positively verified a 0.3-second impact lifetime, showed all old
+boxes absent before restarting, and then showed one fresh central box. The
+other three distinct observations were retained. Raw captures stay private.
+
+The short restart continues upward beyond the sixth-shot impact. Simply
+walking backward through the held-magazine table cannot describe that phase.
+These observations constrain the current arbitrary recovery model but do
+not establish a general replacement law, other partial-burst lengths,
+continued spraying after a restart, camera decay, native 64-tick behavior,
+or historical 2015 parity.
+
+`recoilcheck -- weapon_ak47 --restart-gap 0.125` emits six held authoritative
+rays, one release interval, and one actual restart ray at 64/128 Hz. Its CSV
+timestamps give the achieved sim interval, including tick/cooldown rounding.
+Only the initial six rays are compared with the admitted held profile;
+the restart error column is `NaN` because no expected recovery procedure is
+assumed. This diagnostic does not change production weapon behavior.
