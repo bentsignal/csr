@@ -278,7 +278,13 @@ pub fn look(
         // Installed defaults bind MWHEELUP invprev and MWHEELDOWN invnext.
         // Authority chooses the weapon; reducing this to a slot loses reverse
         // direction among grenades and at slot boundaries.
-        local.pending_slot = if scroll.delta.y > 0.0 { sim::SLOT_PREVIOUS } else { sim::SLOT_NEXT };
+        let action = if scroll.delta.y > 0.0 { settings.wheel_up } else { settings.wheel_down };
+        match action {
+            crate::settings::WheelAction::Jump => local.latched |= buttons::JUMP,
+            crate::settings::WheelAction::Previous => local.pending_slot = sim::SLOT_PREVIOUS,
+            crate::settings::WheelAction::Next => local.pending_slot = sim::SLOT_NEXT,
+            crate::settings::WheelAction::None => {}
+        }
     }
 }
 

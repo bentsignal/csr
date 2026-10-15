@@ -429,7 +429,9 @@ pub fn update(
 
     for (mut t, mut color, kind) in &mut texts {
         let value: String = match kind {
-            HudText::Speed | HudText::Debug if !*debug => String::new(),
+            HudText::Speed if !*debug => String::new(),
+            HudText::Debug if !*debug && settings.show_fps => format!("{fps:.0} fps | {:.1} ms", if fps > 0.0 { 1000.0 / fps } else { 0.0 }),
+            HudText::Debug if !*debug => String::new(),
             HudText::Speed => format!("{:.0}", p.movement.velocity.truncate().length()),
             HudText::Debug => format!(
                 "{} | {:.0} fps\npos {:.0} {:.0} {:.0}\nK {} D {}{} | F3 hide",

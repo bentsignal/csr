@@ -1452,6 +1452,7 @@ pub(crate) fn cancel_loading(
 
 pub(crate) fn input(
     front: Res<Frontend>,
+    console: Option<Res<crate::console::DeveloperConsole>>,
     mut ownership: Local<crate::frontend_input::Ownership>,
     packs: Option<Res<crate::pack_ui::PackUi>>,
     sharing: Option<Res<crate::host_sharing_ui::Ui>>,
@@ -1468,7 +1469,7 @@ pub(crate) fn input(
     remote: Option<Res<crate::remote::RemoteClient>>,
 ) {
     let (window_entity, window) = *window;
-    let blocked = *state.get() == AppState::Browser || crate::remote_join::loading(remote.as_deref()) || packs.is_some_and(|packs| packs.blocks_movie()) || sharing.is_some_and(|sharing| sharing.blocks_movie()) || crate::frontend_flow::enabled() || !enabled.0 || !front.visible || front.failed.is_some() || !window.focused;
+    let blocked = console.is_some_and(|console| console.blocks_input()) || *state.get() == AppState::Browser || crate::remote_join::loading(remote.as_deref()) || packs.is_some_and(|packs| packs.blocks_movie()) || sharing.is_some_and(|sharing| sharing.blocks_movie()) || crate::frontend_flow::enabled() || !enabled.0 || !front.visible || front.failed.is_some() || !window.focused;
     for input in ownership.transition(blocked, window.focused) { front.send(input); }
     if blocked {
         keys.clear();
