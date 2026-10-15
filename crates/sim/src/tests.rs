@@ -857,6 +857,7 @@ fn dynamic_mob_hits_preserve_bullet_and_knife_contact_positions() {
 
 mod authority;
 mod recoil;
+mod fire_cadence;
 mod aim;
 mod rewind;
 mod death;

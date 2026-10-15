@@ -1695,7 +1695,9 @@ impl World {
     }
 
     fn fire(&mut self, shooter: usize, time: f32, rewind_tick: Option<u64>) {
+        let dt = self.dt();
         let p = &self.players[shooter];
+        let continued_trigger = p.last_input.buttons & buttons::ATTACK != 0;
         let id = p.id;
         let team = p.team;
         let (eye, aim_angles) = p.aim_origin_angles();
@@ -1812,7 +1814,7 @@ impl World {
             if w.uses_ammo() {
                 w.clip -= 1;
             }
-            w.shot_cooldown(time);
+            w.shot_cooldown(time, dt, continued_trigger);
             w.accuracy_penalty += w.alt_stat("inaccuracy fire", def.accuracy.inaccuracy_fire);
             w.recoil_index += 1.0;
             if w.zoom_level > 0 && def.attr_f32("unzoom after shot").is_some_and(|v| v != 0.0) {
