@@ -187,6 +187,10 @@ fn first_impulse_has_no_first_ray_offset_and_state_retimes_without_a_reset() {
     assert_eq!(before.angle, after.angle);
     assert_eq!(before.velocity, after.velocity);
     assert_eq!(after.tick_rate, 64);
+    // World::set_tick_rate rounds the shared tick clock. At the half-tick
+    // boundary, one converted update can have the same timestamp; the next
+    // complete new-rate interval must still decay rather than reset/freeze.
+    world.step(&[(id, input(false))]);
     world.step(&[(id, input(false))]);
     assert!(
         world
