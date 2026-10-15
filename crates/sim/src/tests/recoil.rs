@@ -193,7 +193,7 @@ fn observed_ray_profile_survives_hold_snapshot_prediction_and_recovered_restart(
         let mut definitions = server.catalog.weapons.clone();
         let gun = definitions.iter_mut().find(|def| def.class_name == "weapon_ak47").unwrap();
         gun.recoil_trajectory = Some(weapons::RecoilTrajectory {
-            reference: "synthetic-ray-seam".into(), bullet_angles: angles.clone(),
+            reference: "synthetic-ray-seam".into(), bullet_angles: angles.clone(), response: None,
         });
         server.player_mut(id).unwrap().active_weapon_mut().unwrap().set_def(Arc::new(gun.clone()));
         server.catalog = Arc::new(weapons::Catalog { weapons: definitions });
