@@ -601,6 +601,23 @@ mod remote_input_tests {
     }
 
     #[test]
+    fn wheel_jump_is_consumed_once_and_does_not_select_a_weapon() {
+        let mut app = capture_app();
+        app.world_mut().resource_mut::<crate::settings::Settings>().wheel_down = crate::settings::WheelAction::Jump;
+        app.world_mut().query::<&mut CursorOptions>().single_mut(app.world_mut()).unwrap().grab_mode = CursorGrabMode::Locked;
+        app.world_mut().resource_mut::<AccumulatedMouseScroll>().delta = Vec2::new(0., -1.);
+        app.world_mut().run_schedule(Update);
+        assert_ne!(app.world().resource::<Sampled>().0.buttons & buttons::JUMP, 0);
+        assert_eq!(app.world().resource::<Sampled>().0.weapon_slot, 0);
+        app.world_mut().resource_mut::<AccumulatedMouseScroll>().delta = Vec2::ZERO;
+        app.world_mut().run_schedule(Update);
+        assert_eq!(app.world().resource::<Sampled>().0.buttons & buttons::JUMP, 0);
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::Space);
+        app.world_mut().run_schedule(Update);
+        assert_ne!(app.world().resource::<Sampled>().0.buttons & buttons::JUMP, 0);
+    }
+
+    #[test]
     fn mouse_aim_reaches_both_cameras_without_a_sim_tick_or_pose_interpolation() {
         let mut app = capture_app();
         app.init_resource::<crate::interpolation::RenderPoses>()

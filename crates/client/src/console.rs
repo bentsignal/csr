@@ -85,7 +85,7 @@ pub(crate) fn install(app: &mut App) {
 pub(crate) fn allows_input(console: Res<DeveloperConsole>) -> bool {
     !console.blocks_input()
 }
-fn setup(mut commands: Commands) {
+fn setup(mut commands: Commands, assets: Res<crate::ui_assets::UiAssets>) {
     commands
         .spawn((
             crate::session::Persistent,
@@ -124,6 +124,7 @@ fn setup(mut commands: Commands) {
                     },
                     Text::new(""),
                     TextFont {
+                        font: bevy::text::FontSource::Handle(assets.regular.clone()),
                         font_size: 18.0.into(),
                         ..default()
                     },
