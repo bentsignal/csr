@@ -325,6 +325,7 @@ pub fn run(opts: ClientOptions) -> i32 {
     .insert_state(if browser_flow::enabled() || remote_flow::enabled() || pack_ui::proof_enabled() || frontend_flow::enabled() || std::env::var("CSR_TEST_MENU").as_deref() == Ok("main") { AppState::Menu }
         else if opts.direct || opts.screenshot.is_some() { AppState::Loading } else { AppState::Menu });
     bot_performance::install(&mut app);
+    material::install_lighting(&mut app);
     input_latency::install_frame_log(&mut app);
     if frontend_flow::enabled() {
         app.add_systems(Update, frontend_flow::update.after(frontend::update));
@@ -624,6 +625,7 @@ fn spawn_level(
     let start = Transform::from_translation(coords::to_bevy(local.curr_eye));
     commands.spawn((
         Camera3d::default(),
+        material::camera_clusters(),
         Camera {
             order: 0,
             clear_color: ClearColorConfig::Custom(sky_clear),
@@ -642,6 +644,7 @@ fn spawn_level(
     ));
     commands.spawn((
         Camera3d::default(),
+        material::camera_clusters(),
         Camera {
             order: 1,
             clear_color: ClearColorConfig::None,
@@ -661,6 +664,7 @@ fn spawn_level(
     // Viewmodel camera: drawn last with its own depth buffer and FOV.
     commands.spawn((
         Camera3d::default(),
+        material::camera_clusters(),
         Camera {
             order: 2,
             clear_color: ClearColorConfig::None,

@@ -22,7 +22,7 @@ pub const RECOIL_DEGREES_PER_UNIT: f32 = 0.02;
 pub const RECOIL_SCALE: f32 = 2.0;
 /// Fraction of the (scaled) aim punch shown by the camera.
 pub const VIEW_PUNCH_FRACTION: f32 = 0.5;
-/// Recoil recovery when not firing, in pattern steps per second.
+/// Fallback phase recovery without an independently observed content policy.
 pub const RECOIL_RECOVERY_RATE: f32 = 12.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -42,6 +42,12 @@ impl Cosmetic {
 struct RecoilPatternCache(OnceLock<Arc<Vec<[f32; 2]>>>);
 
 impl PartialEq for RecoilPatternCache {
+    fn eq(&self, _other: &Self) -> bool { true }
+}
+
+#[derive(Clone, Debug, Default)]
+struct RecoilImpulseCache(OnceLock<Option<Arc<Vec<[f32; 2]>>>>);
+impl PartialEq for RecoilImpulseCache {
     fn eq(&self, _other: &Self) -> bool { true }
 }
 
@@ -113,10 +119,15 @@ pub struct WeaponState {
     pub accuracy_penalty: f32,
     /// Position in the recoil pattern (shots, fractional while recovering).
     pub recoil_index: f32,
+    /// Angle and angular velocity evolve independently of the spray phase.
+    /// Present only for a content profile with separate recovery evidence.
+    pub recoil_motion: Option<crate::recoil_motion::RecoilMotion>,
     /// Cumulative recoil offsets (pitch, yaw) in degrees, computed from
     /// `def` on first use (not replicated: both sides derive it).
     #[serde(skip)]
     pattern: RecoilPatternCache,
+    #[serde(skip)]
+    impulses: RecoilImpulseCache,
 }
 
 impl WeaponState {
@@ -147,7 +158,9 @@ impl WeaponState {
             last_melee_attack: None,
             accuracy_penalty: 0.0,
             recoil_index: 0.0,
+            recoil_motion: None,
             pattern: RecoilPatternCache::default(),
+            impulses: RecoilImpulseCache::default(),
         }
     }
 
@@ -155,6 +168,7 @@ impl WeaponState {
     pub fn set_def(&mut self, def: Arc<WeaponDefinition>) {
         self.def = def;
         self.pattern = RecoilPatternCache::default();
+        self.reset_recoil_motion();
     }
 
     pub fn burst_profile(&self) -> Option<BurstProfile> { BurstProfile::from_def(&self.def) }
@@ -166,6 +180,7 @@ impl WeaponState {
             || self.suppressor_transition.is_some() || time < self.next_attack || time < self.next_secondary_attack { return false; }
         self.burst_mode = !self.burst_mode;
         self.pattern = RecoilPatternCache::default();
+        self.reset_recoil_motion();
         true
     }
 
@@ -238,6 +253,7 @@ impl WeaponState {
         if complete && self.suppressor_attached != state.attached {
             self.suppressor_attached = state.attached;
             self.pattern = RecoilPatternCache::default();
+            self.reset_recoil_motion();
         }
         if finished { self.suppressor_transition = None; }
     }
@@ -278,6 +294,109 @@ impl WeaponState {
             }
             Arc::new(recoil_pattern(&def))
         })
+    }
+
+    fn motion_profile(&self) -> Option<&weapons::RecoilTrajectory> {
+        if self.burst_mode { return None; }
+        let profile = if self.def.suppressor_animations.is_some() && !self.suppressor_attached {
+            self.def.recoil_trajectory_unsuppressed.as_ref()
+        } else { self.def.recoil_trajectory.as_ref() }?;
+        (profile.bullet_angles.len() == self.def.clip_size.max(0) as usize
+            && profile.bullet_angles.first() == Some(&[0., 0.])
+            && crate::recoil_motion::valid(profile)).then_some(profile)
+    }
+
+    pub fn has_recoil_response(&self) -> bool { self.motion_profile().is_some() }
+
+    fn phase_recovery(&self) -> Option<&weapons::RecoilPhaseRecovery> {
+        self.motion_profile()?.response.as_ref()?.phase_recovery.as_ref()
+    }
+
+    pub fn reset_recoil_motion(&mut self) {
+        self.recoil_motion = None;
+        self.impulses = RecoilImpulseCache::default();
+    }
+
+    /// Called for all carried and ground weapons, including a holstered gun.
+    pub(crate) fn advance_recoil_motion(&mut self, tick: u64) {
+        if let (Some(profile), Some(mut state)) = (self.motion_profile(), self.recoil_motion) {
+            state.advance(profile.response.as_ref().unwrap(), tick);
+            self.recoil_motion = Some(state);
+        }
+    }
+
+    pub(crate) fn retime_recoil_motion(&mut self, rate: u32) {
+        if let Some(state) = &mut self.recoil_motion {
+            let old_rate = state.tick_rate;
+            let convert = |tick: u64| ((tick as f64 / old_rate as f64) * rate as f64).round() as u64;
+            state.updated_tick = convert(state.updated_tick);
+            state.anchor_tick = convert(state.anchor_tick);
+            state.tick_rate = rate;
+            self.impulses = RecoilImpulseCache::default();
+        }
+    }
+
+    /// An impulse is added after sampling the actual authoritative ray.
+    pub(crate) fn recoil_shot(&mut self, tick: u64, rate: u32) {
+        if self.motion_profile().is_none() { return; }
+        let discrete_phase = self.phase_recovery().is_some();
+        if self.recoil_motion.is_none() {
+            self.recoil_motion = Some(crate::recoil_motion::RecoilMotion::new(tick, rate));
+        }
+        if self.recoil_index <= 0. || (discrete_phase && self.recoil_index < 1.) {
+            self.recoil_motion.as_mut().unwrap().anchor_tick = tick;
+            self.impulses = RecoilImpulseCache::default();
+        }
+        let Some(impulses) = self.impulses.0.get_or_init(|| self.derive_recoil_impulses()).as_ref() else { return; };
+        let index = if discrete_phase { self.recoil_index.floor() } else { self.recoil_index }
+            .clamp(0., (impulses.len() - 1) as f32);
+        let lo = index.floor() as usize;
+        let hi = (lo + 1).min(impulses.len() - 1);
+        let impulse = [
+            impulses[lo][0] + (impulses[hi][0] - impulses[lo][0]) * index.fract(),
+            impulses[lo][1] + (impulses[hi][1] - impulses[lo][1]) * index.fract(),
+        ];
+        let motion = self.recoil_motion.as_mut().unwrap();
+        for axis in 0..2 { motion.velocity[axis] += impulse[axis]; }
+    }
+
+    fn derive_recoil_impulses(&self) -> Option<Arc<Vec<[f32; 2]>>> {
+        let profile = self.motion_profile()?;
+        let response = profile.response.as_ref()?;
+        let state = self.recoil_motion?;
+        let rate = state.tick_rate;
+        let dt = 1. / rate as f32;
+        let mut tick = state.anchor_tick;
+        // Use the authoritative deadline carry policy itself, including its
+        // f32 rounding and first-fire anchor. A nominal cycle rounded once
+        // does not reproduce a full held magazine at either 64 or 128 Hz.
+        let mut clock = Self::new(self.def.clone());
+        clock.suppressor_attached = self.suppressor_attached;
+        clock.next_attack = tick as f32 * dt;
+        let mut angle = [0.; 2];
+        let mut velocity = [0.; 2];
+        let mut impulses = Vec::with_capacity(profile.bullet_angles.len());
+        for index in 0..profile.bullet_angles.len() - 1 {
+            clock.shot_cooldown(tick as f32 * dt, dt, true);
+            let previous = tick;
+            // A definition's admitted cycle is bounded by its ordinary
+            // fire policy. This loop is at most one magazine of deadlines.
+            let limit = (rate as f32 * 30.).ceil() as u64;
+            while (tick as f32 * dt) < clock.next_attack {
+                tick += 1;
+                if tick.saturating_sub(previous) > limit { return None; }
+            }
+            let seconds = (tick - previous) as f64 / rate as f64;
+            let target = profile.bullet_angles[index + 1].map(|x| x / RECOIL_SCALE);
+            let total = if index == 0 { response.first_impulse } else {
+                crate::recoil_motion::velocity_for_target(angle, velocity, target, response, seconds)?
+            };
+            impulses.push([total[0] - velocity[0], total[1] - velocity[1]]);
+            velocity = total;
+            crate::recoil_motion::advance(&mut angle, &mut velocity, response, seconds);
+        }
+        impulses.push(response.final_impulse);
+        Some(Arc::new(impulses))
     }
 
     pub fn zoom_levels(&self) -> u8 {
@@ -376,6 +495,9 @@ impl WeaponState {
     /// Current aim punch (pitch, yaw) in degrees from the recoil pattern,
     /// interpolated at the fractional recoil index. Negative pitch is up.
     pub fn aim_punch(&self) -> [f32; 2] {
+        if self.motion_profile().is_some() {
+            return self.recoil_motion.map_or([0.; 2], |state| state.angle);
+        }
         if self.recoil_index <= 0.0 {
             return [0.0, 0.0];
         }
@@ -549,7 +671,17 @@ pub fn think(w: &mut WeaponState, time: f32, dt: f32, ducked: bool, firing: bool
     // Decays to 10 % over the recovery time.
     w.accuracy_penalty *= 0.1f32.powf(dt / recovery);
     if !firing {
-        w.recoil_index = (w.recoil_index - RECOIL_RECOVERY_RATE * dt).max(0.0);
+        if let Some(coefficient) = w.phase_recovery().map(|phase| phase.decay_decades_per_second) {
+            // Direct weapon-state observations establish a plateau followed
+            // by this multiplicative decay. The ordinary attack deadline
+            // supplies the cooldown gate; receive-time captures do not prove
+            // its exact native boundary tick.
+            if time > w.next_attack {
+                w.recoil_index *= 0.1f32.powf(coefficient * dt);
+            }
+        } else {
+            w.recoil_index = (w.recoil_index - RECOIL_RECOVERY_RATE * dt).max(0.0);
+        }
     }
     if let Some(end) = w.reload_end {
         if let Some(s) = shell_reload(&w.def) {

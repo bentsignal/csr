@@ -2,10 +2,10 @@
 use serde::{Deserialize, Serialize};
 use sim::{GameEvent, PlayerId, Snapshot, Team, TickInput};
 
-// v23 appends authoritative, content-bound fully depleted trigger feedback.
-// Older peers cannot decode the event or predict its attack cooldown.
-pub const VERSION: u32 = 23;
-pub const PROTOCOL_ID: u64 = 0x4353_5257_0000_0017;
+// v24 replicates independent recoil angle/velocity and its cadence anchor.
+// Older peers must reject the session before attempting snapshot decoding.
+pub const VERSION: u32 = 24;
+pub const PROTOCOL_ID: u64 = 0x4353_5257_0000_0018;
 pub const CONTROL: u8 = 0;
 pub const INPUT: u8 = 1;
 pub const SNAPSHOT: u8 = 2;
@@ -460,7 +460,7 @@ pub(crate) fn validate_state(
             return Err("invalid snapshot player state".into());
         }
         for (slot, weapon) in actor.weapons.iter().enumerate() {
-            validate_weapon(weapon,world.tick)?;
+            validate_weapon(weapon,world.tick,world.tick_rate)?;
             if weapon.burst.is_some() && (!actor.alive || slot != actor.active) {
                 return Err("inactive weapon retains pending burst".into());
             }
@@ -476,7 +476,7 @@ pub(crate) fn validate_state(
             return Err("invalid dropped item state".into());
         }
         if let sim::GroundKind::Weapon(weapon) = &item.kind {
-            validate_weapon(weapon,world.tick)?;
+            validate_weapon(weapon,world.tick,world.tick_rate)?;
             if weapon.grenade_throw.is_some() || weapon.suppressor_transition.is_some() || weapon.burst.is_some(){return Err("dropped weapon retains active state".into());}
         }
     }
@@ -512,7 +512,14 @@ fn valid_decoy_weapon(kind: sim::utility::Kind, weapon: Option<&str>) -> bool {
         && weapon.parse::<content::ContentId>().is_ok_and(|id| id.kind == content::ContentKind::Weapon))
 }
 
-fn validate_weapon(weapon: &sim::weapon::WeaponState, tick:u64) -> Result<(), String> {
+fn validate_weapon(weapon: &sim::weapon::WeaponState, tick:u64, tick_rate:u32) -> Result<(), String> {
+    if let Some(state) = weapon.recoil_motion {
+        if !weapon.has_recoil_response() || state.tick_rate != tick_rate || state.anchor_tick > state.updated_tick || state.updated_tick > tick
+            || state.angle.iter().any(|x| !x.is_finite() || x.abs() > 180.)
+            || state.velocity.iter().any(|x| !x.is_finite() || x.abs() > 10_000.) {
+            return Err("invalid snapshot recoil motion".into());
+        }
+    }
     if weapon.burst_mode && weapon.burst_profile().is_none() {
         return Err("weapon has no valid burst profile".into());
     }
@@ -594,6 +601,41 @@ mod death_tests;
 mod tests {
     use super::*;
     #[test]
+    fn recoil_motion_rejects_nonfinite_future_and_wrong_content_state() {
+        let catalog = weapons::Catalog::from_items_game(r##"
+            items_game {
+                prefabs { rifle { item_class weapon_response item_type_name "#CSGO_Type_Rifle"
+                    attributes { "primary clip size" 30 } } }
+                items { 900 { name weapon_response prefab rifle baseitem 1 } }
+            }
+        "##).unwrap();
+        let mut def = catalog.get("weapon_response").unwrap().clone();
+        def.recoil_trajectory = Some(weapons::RecoilTrajectory { reference: "test".into(), bullet_angles: vec![[0.; 2]; 30],
+            response: Some(weapons::RecoilResponse { reference: "test".into(), reference_hz: 128,
+                angle_decay: 8., angle_linear: 18., velocity_decay: 4.5,
+                first_impulse: [-20., 0.], final_impulse: [-20., 0.], held_tolerance_degrees: 0.2, phase_recovery: None }) });
+        let mut gun = sim::weapon::WeaponState::new(std::sync::Arc::new(def));
+        gun.recoil_motion = Some(sim::recoil_motion::RecoilMotion {
+            angle: [-2., 1.], velocity: [-30., 4.], updated_tick: 8, anchor_tick: 1, tick_rate: 128,
+        });
+        assert!(validate_weapon(&gun, 10, 128).is_ok());
+        for case in 0..7 {
+            let mut invalid = gun.clone();
+            let state = invalid.recoil_motion.as_mut().unwrap();
+            match case {
+                0 => state.angle[0] = f32::NAN,
+                1 => state.velocity[1] = f32::INFINITY,
+                2 => state.updated_tick = 11,
+                3 => state.anchor_tick = 9,
+                4 => state.tick_rate = 64,
+                5 => state.velocity[0] = 10001.,
+                _ => std::sync::Arc::make_mut(&mut invalid.def).recoil_trajectory = None,
+            }
+            assert!(validate_weapon(&invalid, 10, 128).is_err(), "case {case}");
+        }
+    }
+
+    #[test]
     fn burst_snapshot_roundtrips_and_rejects_impossible_pending_bullets() {
         let catalog = weapons::Catalog::from_items_game(r##"
             items_game {
@@ -610,7 +652,7 @@ mod tests {
         gun.clip = 19;
         gun.next_attack = 0.5;
         gun.burst = Some(sim::weapon::BurstState { remaining: 2, next_shot: 0.05 });
-        assert!(validate_weapon(&gun, 0).is_ok());
+        assert!(validate_weapon(&gun, 0, 64).is_ok());
         world.players[0].weapons = vec![gun.clone()];
         let snapshot = world.snapshot();
         assert_eq!(world.decode::<sim::Snapshot>(&sim::state::encode(&snapshot)).unwrap(), snapshot);
@@ -626,7 +668,7 @@ mod tests {
                 6 => invalid.next_attack = 0.01,
                 _ => { std::sync::Arc::make_mut(&mut invalid.def).attributes.insert("time between burst shots".into(), "NaN".into()); },
             }
-            assert!(validate_weapon(&invalid, 0).is_err(), "case {case}");
+            assert!(validate_weapon(&invalid, 0, 64).is_err(), "case {case}");
         }
         let welcome = ServerControl::Welcome { version: VERSION, player: world.players[0].id,
             tick_rate: world.tick_rate, server_tick: 0,
