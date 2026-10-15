@@ -17,6 +17,31 @@ use bevy::shader::ShaderRef;
 
 pub const SHADER_PATH: &str = "embedded://client/shaders/world.wgsl";
 
+/// These cameras use WorldMaterial's lightmaps, ambient cubes and sun instead
+/// of Bevy's clustered point/spot lights. Keep the default path available for
+/// bounded renderer comparisons and future renderers that need those lights.
+pub(crate) fn camera_clusters() -> bevy::light::cluster::ClusterConfig {
+    if std::env::var_os("CSR_TEST_LIGHT_CLUSTERS").is_some() {
+        default()
+    } else {
+        bevy::light::cluster::ClusterConfig::None
+    }
+}
+
+pub(crate) fn install_lighting(app: &mut App) {
+    if std::env::var_os("CSR_TEST_LIGHT_CLUSTERS").is_none() {
+        app.add_systems(Startup, disable_unused_gpu_clusters);
+    }
+}
+
+fn disable_unused_gpu_clusters(mut settings: ResMut<bevy::light::cluster::GlobalClusterSettings>) {
+    // Bevy 0.19's GPU path allocates an invalid zero-width dummy texture for
+    // a disabled camera. Its documented CPU fallback skips that empty grid.
+    // Explicitly lit cameras in other renderers can still use CPU clusters.
+    settings.gpu_clustering = None;
+    info!("renderer: custom material cameras omit unused light clusters; CPU fallback selected");
+}
+
 pub mod flags {
     pub const ALPHA_TEST: u32 = 1 << 0;
     /// Blend `$basetexture2` by vertex alpha.
