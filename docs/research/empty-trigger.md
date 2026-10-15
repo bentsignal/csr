@@ -52,7 +52,21 @@ keeps its existing behavior rather than inheriting a guessed rifle default.
 The new authoritative event requires a protocol compatibility bump, including
 payload validation and rejection of older peers.
 
-Implementation and rewrite runtime verification are pending. The native
-session finished successfully, restored all 12 preference entries exactly,
-and left no game process. Physical mouse input was not disabled. Native
-evidence is private; only the derived observations above are committed.
+The implementation uses a 0.2-second interval as a candidate inferred from
+that aggregate. It shares the weapon's existing attack deadline, including
+deployment/reload/frozen/muzzle admission. It does not change ammunition,
+shot counts or recoil impulses. Only the exact observed installed AK opts in;
+its policy contributes to the catalog digest independently of recoil and
+animation imports. Protocol23 rejects older peers.
+
+Other content may explicitly provide `WeaponDefinition.empty_trigger`.
+The item-schema importer also accepts both `visuals/sound_empty` and the
+engine extension attribute `empty trigger interval`; neither field alone
+invents a default. Invalid or absent policies retain existing behavior.
+
+Rewrite runtime verification is pending. The native session finished
+successfully, restored all 12 preference entries exactly, and left no game
+process. The root reviewer independently viewed the loaded/depleted AK and
+held-case before/after images, including the dynamic empty-wave overlay.
+Physical mouse input was not disabled. Native evidence is private; only the
+derived observations above are committed.

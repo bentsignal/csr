@@ -702,6 +702,7 @@ mod tests {
             world_model: String::new(),
             unsuppressed_fire_sound: String::new(),
             fire_sound: String::new(),
+            empty_trigger: None,
             zoom_in_sound: String::new(),
             zoom_out_sound: String::new(),
             kill_award: 300,

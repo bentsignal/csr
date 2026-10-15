@@ -416,6 +416,9 @@ pub enum GameEvent {
     /// An admitted mode change, separate from a shot or an authored animation.
     /// Appended to preserve earlier event discriminants.
     BurstModeChanged { player: PlayerId, weapon: String, origin: Vec3, burst: bool },
+    /// Fully depleted primary-trigger feedback; no live shot or ammo change.
+    /// Appended so earlier event discriminants retain their meaning.
+    EmptyTrigger { player: PlayerId, weapon: String, origin: Vec3 },
 }
 
 /// The whole game: map data shared by every copy (`Arc`s), the replicated
@@ -1585,6 +1588,17 @@ impl World {
                                 w.reset_zoom(time);
                                 w.begin_reload(time);
                                 self.events.push(GameEvent::Reload { player: id });
+                            } else if w.reserve <= 0 && w.burst.is_none() && w.suppressor_transition.is_none() {
+                                if let Some(profile) = w.def.empty_trigger.as_ref().filter(|profile|
+                                    !profile.sound.is_empty() && profile.repeat_interval.is_finite()
+                                        && profile.repeat_interval >= 0.01) {
+                                    // Shares ordinary deployment/attack readiness. A
+                                    // dry cue is not a live shot or recoil impulse.
+                                    w.next_attack = time + profile.repeat_interval;
+                                    self.events.push(GameEvent::EmptyTrigger {
+                                        player: id, weapon: w.def.class_name.clone(), origin: eye,
+                                    });
+                                }
                             }
                         } else {
                             fire = true;

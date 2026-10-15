@@ -144,6 +144,7 @@ fn def(name: &str, index: u32, class: WeaponClass, side: Side, price: i32, clip:
         world_model: String::new(),
         unsuppressed_fire_sound: String::new(),
         fire_sound: String::new(),
+        empty_trigger: None,,
         zoom_in_sound: String::new(),
         zoom_out_sound: String::new(),
         kill_award: 300,
@@ -859,6 +860,7 @@ fn dynamic_mob_hits_preserve_bullet_and_knife_contact_positions() {
 mod authority;
 mod recoil;
 mod fire_cadence;
+mod empty_trigger;
 mod aim;
 mod rewind;
 mod death;
