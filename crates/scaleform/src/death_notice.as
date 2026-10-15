@@ -1,7 +1,9 @@
 // Our compatibility code, not authored game instructions. The movie, fonts,
 // panels and bitmap exports are read from the player's installed Legacy HUD.
 // Rust owns receipt keys, ordering, lifetime, fade and the bounded notice list.
-// Icon row-fit is a measured safety bound, NOT calibrated native image scale.
+// Weapon row-fit is a safety bound, NOT calibrated native image scale.
+// Headshot half-scale is a bounded candidate from dated 2015 footage; its
+// shared glyph-to-font ratio is measured, but not yet a pixel-perfect match.
 _global.csrDeathNotices = new Object();
 _global.csrDeathNotices.rows = new Object();
 _global.csrDeathNotices.generation = 0;
@@ -101,7 +103,12 @@ _global.csrDeathNotices.layout = function(row) {
     var i = 0;
     while (i < icons.length) {
         var icon = icons[i];
-        var scale = Math.min(1, height / icon.height);
+        // The 2015 reference's headshot ink is about 1.2x the text height;
+        // row-fit currently renders about 1.94x. That implies natural scale
+        // near 0.52. Test half-scale only for this shared icon; weapon artwork
+        // requires its own matching-weapon reference, not this inference.
+        var naturalScale = icon == row.head ? 0.5 : 1;
+        var scale = Math.min(naturalScale, height / icon.height);
         icon.clip._xscale = scale * 100;
         icon.clip._yscale = scale * 100;
         offsets.push(offset);
