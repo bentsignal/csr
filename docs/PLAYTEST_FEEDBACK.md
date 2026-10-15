@@ -108,3 +108,18 @@ in Rust/Bevy, including CS:GO surfing, rather than a plausible approximation.
 The leaked/decompiled CS:GO implementation remains outside the project's
 clean-room boundary. Public format documentation, dated declarative game data
 and observed native execution remain available for exact reconstruction.
+
+
+Additional full-menu follow-up, 2026-10-15 (still open):
+
+- [ ] Populate and verify the complete original Audio page, including remaining
+      controls, microphone panel/services, defaults and persistence. The slider
+      fix only proves its thumb axis/value and navigation ownership; current
+      captures still have one row and an empty microphone panel.
+- [ ] Restore original Pause entries and their services: Choose Team, Call Vote
+      and Community Servers. Match the translucent world composition; preserve
+      active authored hidden helpers. [Public reference and limits](research/menu-feedback-navigation.md#remaining-full-menu-fidelity).
+- [ ] Resolve Home return without repeat initialization/stale world. Cold
+      retirement improves Pause but introduces a measured 5.8-second return;
+      that policy remains draft. Cached isolated Home/match workers are the
+      follow-up, with fresh presentation/input/action ownership on every swap.

@@ -812,6 +812,9 @@ impl Frontend {
     /// Initial authored readiness survives intentional in-match Home retirement.
     pub(crate) fn home_bootstrapped(&self) -> bool { self.data.lock().unwrap().home.bootstrapped }
     fn home_restoring(&self) -> bool { self.data.lock().unwrap().home.restoring }
+    pub(crate) fn home_presented(&self) -> bool {
+        self.movie_ready("MainMenu") && !self.home_restoring() && self.pause_presentation.ready()
+    }
     /// Authored OnReady received for the current live movie; Loaded alone is earlier.
     pub(crate) fn movie_ready(&self, name: &str) -> bool {
         self.data.lock().unwrap().movie_ready.contains(name)

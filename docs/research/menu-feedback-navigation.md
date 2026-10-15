@@ -129,3 +129,48 @@ movie readiness does not. Restored Home stays behind a fresh presentation
 fence until Ready; input is withheld during restoration. Transparent Flash
 window mode preserves the world behind Pause using the existing straight-alpha
 readback. Required runtime roundtrips and transparent composition are pending.
+
+
+## Cold-retirement production result: do not ship
+
+Exact cf83d08 was built after cleaning all 23 workspace play packages; five
+frontend regressions and 32 Scaleform tests passed (one ignored). The existing
+production flow with optional native Pause -> Audio -> Back then Resume and a
+second Inferno launch exits 0. Transparent Pause is visibly over the world.
+The matching four-second pressure window measures 20.85 / 34.44 ms worker
+readback mean / p95, compared with c1e7b04's 52.62 / 60.41 ms. Reported slow
+pointer handlers average 6.17 ms; first Escape is 76.9 ms. Slow subphase samples
+have a 5 ms threshold and none of this measures physical input/present latency.
+
+However, Home reload after Exit takes about 5.8 seconds: roughly 1.8 seconds
+of reported load-executor work plus one 3827 ms initialization tick. The old
+fixed-three-second returned-Home capture still shows the prior world target;
+that capture is preserved as a failed/late Home image, not a fidelity pass.
+A correct subsequent native second launch does not excuse this delay. The
+flow correction waits actual Ready plus a fresh Home presentation, retaining
+a separate pending-state capture/log if Home has not returned after three
+seconds. That correction is not yet built. The cold-unload policy remains a
+draft and is being replaced by separately cached Home/match workers.
+
+One bounded public onUIHide/onUIShow probe confirms authored hide alone does
+not remove the dominant cost: the same four pointer moves average 27.37 ms
+before and 22.51 ms after hide, far above explicit-unload cost. Its final Home
+capture is backdrop-only because the setup explicitly set Home _visible=false
+and the final commands did not restore that property; no complete visual Home
+roundtrip is claimed from that observation. No generic hidden-clip behavior or
+Ruffle fork has been changed.
+
+## Remaining full menu fidelity
+
+The P0 slider and navigation checks do not establish a native-complete Audio
+page. Current production captures show only the Master Volume row and a large
+empty microphone panel. All remaining original audio controls, microphone
+services, layout, defaults and persistence remain open.
+
+The original Scaleform Pause reference in the [Radar centralizado Steam guide](https://steamcommunity.com/sharedfiles/filedetails/?id=516337371)
+([embedded screenshot](https://images.steamusercontent.com/ugc/422566214060763931/1E90D7113BE3543FC527060582B1AF9E6350579E/))
+shows the world behind the translucent menu/logo. It also includes Choose Team,
+Call Vote and Community Servers, which our current five-entry Pause lacks.
+The guide was first posted September 2015 and updated in 2023; exact screenshot
+capture date is unknown. This supports composition and missing-entry evidence,
+not pixel/timing parity. The screenshot is retained privately, outside git.

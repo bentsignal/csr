@@ -240,6 +240,17 @@ pub(crate) fn update(
             if *state.get() != AppState::Menu || flow.seconds() < 3. {
                 return;
             }
+            if !front.home_presented() {
+                if flow.step == 0 {
+                    // Preserve the actual slow-return state rather than
+                    // treating a fixed-delay capture as restored Home.
+                    capture(&mut commands, &options, "flow-home-pending.png");
+                    info!("frontend flow: Home still pending after {:.3}s", flow.seconds());
+                    flow.step = 1;
+                }
+                return;
+            }
+            info!("frontend flow: Home Ready and freshly presented after {:.3}s", flow.seconds());
             if !entities.is_empty() || world.is_some() || level.is_some() {
                 error!("frontend flow retained match entities/resources after Exit");
                 exit.write(AppExit::error());
