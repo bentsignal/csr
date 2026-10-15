@@ -9,6 +9,17 @@ contain Valve art. The harness writes them to `%USERPROFILE%\csr-fidelity`
 (outside the repository; it refuses a folder inside it). Only numbers and
 observations go into this file.
 
+`CSR_FRAME_LOG=<milliseconds>` enables the client's existing schedule scopes
+and Bevy 0.19.1's `RenderDiagnosticsPlugin`. Once per second, `render diagnostic`
+lines report the retained-history mean and sample count for recently updated
+render passes. The `/elapsed_cpu` and `/elapsed_gpu` paths distinguish CPU pass
+encoding from GPU execution; pipeline-statistics paths retain their original
+units. Missing GPU paths mean no supported result was supplied, not zero GPU
+cost. Nested pass times are not additive. Diagnostic query collection adds
+overhead, so use these runs to locate bottlenecks rather than claim normal-play
+FPS gains. Normal play without this switch installs neither the scopes nor
+the render-diagnostics plugin.
+
 ## The harness
 
 `tools/fidelity/fidelity.ps1` (PowerShell 5.1, no extra installs; the C#
