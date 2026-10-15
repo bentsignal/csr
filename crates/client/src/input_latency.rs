@@ -136,25 +136,6 @@ pub(crate) fn install_frame_log(app: &mut App) {
         // Extraction precedes Render and is deliberately outside this timer.
         if let Some(render) = app.get_sub_app_mut(bevy::render::RenderApp) {
             use bevy::render::{Render, RenderSystems};
-            // Bounded attribution experiment: retain the same systems/order,
-            // but compare scheduler dispatch with the ordinary executor.
-            // This override is available only in explicit diagnostic runs.
-            if std::env::var("CSR_RENDER_EXECUTOR").as_deref() == Ok("single") {
-                use bevy::ecs::schedule::{ScheduleLabel, SingleThreadedExecutor};
-                let mut configured = 0;
-                for label in [
-                    Render.intern(),
-                    bevy::render::renderer::RenderGraph.intern(),
-                    bevy::core_pipeline::schedule::Core3d.intern(),
-                    bevy::core_pipeline::schedule::Core2d.intern(),
-                ] {
-                    if let Some(schedule) = render.get_schedule_mut(label) {
-                        schedule.set_executor(SingleThreadedExecutor::new());
-                        configured += 1;
-                    }
-                }
-                info!(schedules = configured, "render executor diagnostic: single");
-            }
             render
                 .init_resource::<ScheduleTime>()
                 .init_resource::<SurfaceTime>()
