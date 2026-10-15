@@ -16,6 +16,27 @@ struct Flying {
     rotation: Quat,
     last_time: f32,
 }
+
+/// A decoy keeps its shell after activation. Its field shares the projectile
+/// id, so the existing posed body can survive that authoritative transition.
+struct GrenadeBody {
+    id: u32,
+    kind: Kind,
+    pos: glam::Vec3,
+    velocity: glam::Vec3,
+    settled: bool,
+    born: f32,
+}
+
+fn grenade_bodies(world: &sim::World) -> impl Iterator<Item = GrenadeBody> + '_ {
+    world.projectiles.iter().map(|p| GrenadeBody {
+        id: p.id, kind: p.kind, pos: p.pos, velocity: p.velocity,
+        settled: p.settled, born: p.born,
+    }).chain(world.utility_fields.iter().filter(|f| f.kind == Kind::Decoy).map(|f| GrenadeBody {
+        id: f.id, kind: f.kind, pos: f.pos, velocity: glam::Vec3::ZERO,
+        settled: true, born: f.born,
+    }))
+}
 #[derive(Resource)]
 pub struct AssetsFx {
     smoke: Vec<crate::utility_particles::Layer>,
@@ -275,7 +296,7 @@ pub fn update(
     let gone: Vec<_> = fx
         .projectiles
         .keys()
-        .filter(|id| !w.projectiles.iter().any(|p| p.id == **id))
+        .filter(|id| reset || !grenade_bodies(w).any(|body| body.id == **id))
         .copied()
         .collect();
     for id in gone {
@@ -285,7 +306,7 @@ pub fn update(
             }
         }
     }
-    for p in &w.projectiles {
+    for p in grenade_bodies(w) {
         let Some(asset) = characters.weapons.get(p.kind.name()) else {
             continue;
         };
@@ -307,6 +328,11 @@ pub fn update(
                     .normalize();
             }
             flying.rotation
+        } else if p.settled {
+            // A snapshot may contain an already activated decoy with no local
+            // flight history. Its rotation is not part of simulation state;
+            // show the installed body at rest instead of spinning it forever.
+            Quat::IDENTITY
         } else {
             Quat::from_rotation_z((time - p.born) * 6.0)
         };

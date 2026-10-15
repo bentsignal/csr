@@ -17,6 +17,7 @@ mod capture;
 pub mod diff;
 mod host;
 mod loading_image;
+mod messagebox_font;
 mod rewrite;
 
 /// Reads public export/import names without interpreting movie instructions.

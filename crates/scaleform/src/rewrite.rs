@@ -249,14 +249,14 @@ pub(crate) fn symbol_names(data: &[u8]) -> Result<std::collections::HashSet<Stri
     Ok(names)
 }
 
-struct RawTag<'a> {
-    code: u16,
-    body: &'a [u8],
+pub(crate) struct RawTag<'a> {
+    pub(crate) code: u16,
+    pub(crate) body: &'a [u8],
     /// Header plus body, as it appeared in the file.
-    whole: &'a [u8],
+    pub(crate) whole: &'a [u8],
 }
 
-fn split_tags(mut data: &[u8]) -> Result<Vec<RawTag<'_>>> {
+pub(crate) fn split_tags(mut data: &[u8]) -> Result<Vec<RawTag<'_>>> {
     let mut tags = Vec::new();
     while data.len() >= 2 {
         let start = data;
@@ -283,7 +283,7 @@ fn split_tags(mut data: &[u8]) -> Result<Vec<RawTag<'_>>> {
     Ok(tags)
 }
 
-fn push_tag(out: &mut Vec<u8>, code: u16, body: &[u8]) {
+pub(crate) fn push_tag(out: &mut Vec<u8>, code: u16, body: &[u8]) {
     out.extend_from_slice(&((code << 6) | 0x3f).to_le_bytes());
     out.extend_from_slice(&(body.len() as u32).to_le_bytes());
     out.extend_from_slice(body);

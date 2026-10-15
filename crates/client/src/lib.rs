@@ -775,10 +775,15 @@ fn smoke_test(
         if let (Some(w),Some(l),Ok(kind))=(world.as_mut(),local.as_ref(),std::env::var("CSR_TEST_UTILITY")) {
             let (forward,_,_)=movement::angle_vectors(glam::Vec3::new(0.0,l.yaw,0.0));
             let now=w.0.time();
-            let pos=w.0.collision.trace_ray(l.curr_eye+forward*330.0,l.curr_eye+forward*330.0-glam::Vec3::Z*200.0,collision::contents::MASK_SOLID).end;
+            // A decoy shell is much smaller than the smoke/fire field fixtures.
+            // Keep its snapshot-only fixture on clear nearby floor, at the
+            // projectile hull's two-unit rest height, for readable inspection.
+            let distance=if kind=="decoy" {80.0} else {330.0};
+            let pos=w.0.collision.trace_ray(l.curr_eye+forward*distance,l.curr_eye+forward*distance-glam::Vec3::Z*200.0,collision::contents::MASK_SOLID).end
+                + if kind=="decoy" {glam::Vec3::Z*2.0} else {glam::Vec3::ZERO};
             if kind=="he" {w.0.projectiles.push(sim::utility::Projectile{id:999998,owner:l.id,kind:sim::utility::Kind::He,pos:pos+glam::Vec3::Z*3.0,velocity:glam::Vec3::ZERO,settled:false,born:now-2.0,decoy_weapon:None});}
             else if kind=="flash" {if let Some(p)=w.0.player_mut(l.view_target()){p.flash_until=now+5.0;}}
-            else {w.0.utility_fields.push(sim::utility::Field{id:999999,owner:l.id,kind:if kind=="fire"{sim::utility::Kind::Molotov}else{sim::utility::Kind::Smoke},pos,born:now-1.0,until:now+20.0,decoy_weapon:None});}
+            else {w.0.utility_fields.push(sim::utility::Field{id:999999,owner:l.id,kind:match kind.as_str(){"fire"=>sim::utility::Kind::Molotov,"decoy"=>sim::utility::Kind::Decoy,_=>sim::utility::Kind::Smoke},pos,born:now-1.0,until:now+20.0,decoy_weapon:None});}
         }
     }
     if *frame == capture_frame {
@@ -794,6 +799,10 @@ fn smoke_test(
                 for projectile in &w.0.projectiles {
                     info!("capture projectile: id={} kind={:?} pos={:?} velocity={:?} settled={}",
                         projectile.id, projectile.kind, projectile.pos, projectile.velocity, projectile.settled);
+                }
+                for field in &w.0.utility_fields {
+                    info!("capture utility field: id={} kind={:?} pos={:?} born={} until={}",
+                        field.id, field.kind, field.pos, field.born, field.until);
                 }
             }
             if std::env::var("CSR_TEST_SWITCH").as_deref() == Ok("buy-close") {
