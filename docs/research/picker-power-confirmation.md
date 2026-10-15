@@ -126,3 +126,37 @@ menu scene. Raw native callbacks, loading-only confirmations, malformed values,
 cancelled openings and parked workers cannot request application exit. Actual
 production Cancel/reopen/OK and complete question rendering remain pending the
 combined candidate's immutable build and graphical check.
+
+
+## Frozen 15337c8 diagnostic result and remaining limits
+
+The new in-memory subset completion renders the full original question
+coherently at 1920x1080. Existing glyphs/indices, outlines, bounds, advances,
+global metrics, kerning and alignment records are preserved; the installed-data
+and independent SWF-reader regression passed. This fixes missing letters as a
+bounded usability improvement, not exact typography admission.
+
+The donor and subset have the same family name but different flags (133 versus
+140), global metrics and semantic contour geometry. Common donor advances are
+uniformly 20 Font3 units smaller; contour extrema differ by up to 350 units
+(about 0.46 pixels at the displayed 27-pixel font size). No inferred advance,
+outline or weight correction was applied. Existing metrics remain original.
+The same-family library fallback mechanism is an inference; exact original
+Scaleform substitution/typography remains open.
+
+The public-runtime check positively records actual Cancel through `OwnedQuit1`,
+the retained old callback still reporting `OwnedQuit1` after rebinding, and
+actual OK through `OwnedQuit2`. The Rust ownership regression separately rejects
+that stale receiver. The probe exited 0, preserved settings and produced five
+images with no ERROR/panic. Its strict helper nevertheless failed a substring
+gate: the expected diagnostic property-path string contained
+`MessageBox.OnButtonPress`; an anchored receiver check found zero raw calls.
+The original failed receipt remains unchanged, with a separate classification.
+
+The reopened probe raster is negative: its same-batch hide/show omitted the
+production bridge's explicit visibility restoration and settled cancellation.
+The later pictures show Home without the dialog, despite callback label proof.
+Do not call that a reopened visibility pass. Production Home question,
+Cancel/reopen/OK exit and Offline picker retention still require their bounded
+actual-client checks. Full Audio settings content/layout also remains open;
+the Master-only/empty-panel release capture is retained as independent evidence.

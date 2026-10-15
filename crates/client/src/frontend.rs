@@ -338,7 +338,7 @@ impl Engine for Bridge {
         if first
             || matches!(
                 method,
-                "BasePanelRunCommand" | "OnUpdateValue" | "SendUIEvent"
+                "BasePanelRunCommand" | "OnUpdateValue" | "SendUIEvent" | "OnButtonPress"
             )
             || method.starts_with("SetConvar")
         {

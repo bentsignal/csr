@@ -98,8 +98,10 @@ impl Files {
             return None;
         };
         // This movie embeds only the eleven glyphs in its placeholder token.
-        // Scaleform supplied the remaining localized glyphs from fontlib;
-        // Ruffle needs that completion explicitly. Other movies/fonts stay intact.
+        // The missing localized characters match that subset's omissions.
+        // A Scaleform library fallback is inferred, not yet independently
+        // established. Complete from the installed family while preserving
+        // original glyphs; exact donor typography remains a measured gap.
         let raw = if rel == "message-box.swf" {
             match self.vfs.read("resource/flash/fontlib.swf")
                 .ok_or_else(|| anyhow::anyhow!("fontlib.swf missing"))
