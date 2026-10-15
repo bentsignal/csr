@@ -3,7 +3,7 @@
 The draft client displays real kills using the player's installed classic
 `resource/flash/huddeathnotification.swf`: original boxes, colored names,
 local highlights, and runtime weapon/headshot bitmaps. Multiple-row positioning
-and repeated-resize sizing are currently broken and block integration. This
+and repeated-resize sizing now pass a bounded public API/rendered check. This
 implements WP10 in [the playtest ledger](../PLAYTEST-2026-10-14.md); full HUD
 fidelity remains open.
 
@@ -72,10 +72,24 @@ intentionally unavailable test icon. Explicit callbacks, actual pixels and
 owned-map inspection are authoritative; some public return diagnostics are
 stale, so they are not used alone as acceptance evidence.
 
-An additional bounded public-contract observation will distinguish separate
-row allocation/positioning and original width refresh before choosing a fix.
-No complete multi-row, actual viewport-resize, expiration, coverage or frame
-cost parity claim is made.
+`dfc9beb` corrects those defects using the original public UpdateWidth reset,
+owned insertion ordering, the existing public HUD scale0.85, and the movie's
+nScaledHeight metric converted into each row's parent coordinates. A six-stage
+probe draws two separate rows with opposite local highlights, preserves both
+after unknown/duplicate rejection, keeps them unchanged through two relayouts,
+reflows the survivor after removal, and clears the feed. Both agents viewed
+the actual images. Before/after values are identical: original parent yscale
+150.42735042735, nScaledHeight37.3575, row y0/24.9 and yscale85, background
+widths203/224. The expanded parent height75.05 does not corrupt its scale.
+Exactly one deliberately missing-export error is classified separately; all
+other errors/panics remain failures. Earlier failed evidence stays unchanged.
+
+The same frozen source passes clean-workspace launcher/menu-probe builds and
+client/Scaleform checks. A final real authoritative M4A1-S kill at1920x1080
+exits0, admits its1920x540 raster and displays the corrected original panel,
+name, local outline and icons; the coordinating agent viewed the actual image.
+No actual viewport-resize, complete expiration/icon coverage or frame-cost
+parity claim follows from the public relayout check.
 
 ## Dated icon-scale reference
 
@@ -87,8 +101,16 @@ shows a32-pixel canvas and the installed field uses font size16. Font-height
 canvas sizing agrees with both reference observations within their bounds,
 so fitting uses the actual field font size, original resolution and row-height
 limit. Both new scaled real-kill images on988033c were personally inspected.
-Compressed footage, historical HUD scale, safe-zone placement and bitmap
-changes still prevent a complete pixel-parity claim.
+A separate primary multi-kill reference is [ESL Archives' Cologne2015 final,
+uploaded August23 2015, around1190s](https://www.youtube.com/watch?v=02I5vVxlJhU&t=1190s).
+The original720p frame shows four notice lines at approximately25px pitch
+(with a conservative2px inspection/compression bound). The public movie's
+37.3575px stage pitch at1080 normalizes to24.905px at720. This independently
+supports the chosen public metric. The original single-row box/font heights
+also agree with applying the existing HUD scale, rather than introducing a
+new tuned scale. The video's spectator HUD, unknown original CVars, safe-zone
+placement and bitmap/compression differences still prevent a complete
+pixel-parity claim.
 
 Raw video, captures, bitmap bytes and account data stay private under
 `C:\Users\shawn\csr-fidelity\`. Only observations, derived measurements
