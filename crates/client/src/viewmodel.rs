@@ -22,6 +22,7 @@ use std::sync::Arc;
 
 mod grenade_hold;
 mod look_motion;
+mod settling;
 
 pub const VIEWMODEL_LAYER: usize = 2;
 /// CS:GO `viewmodel_fov` default (horizontal degrees at 4:3).
@@ -746,8 +747,8 @@ pub fn update(
     if let Some(hold) = &view.grenade_hold { hold.apply(grenade, &mut state.pose); }
     let pose = mdl::skeleton::model_space(&model.bones, &state.pose);
 
-    // Preserve this frame's orientation/aim. The observed Legacy look response
-    // is a small delayed-direction translation, separate from authored clips.
+    // Preserve this frame's camera/aim. Local model presentation is separate
+    // from authored clips and never changes the simulated shot direction.
     let view_angles = local.render_angles;
     let rot = mdl::angles_to_mat3(view_angles);
     let eye = local.render_eye;
@@ -767,11 +768,21 @@ pub fn update(
         let look = movement::angle_vectors(glam::Vec3::new(local.pitch, local.yaw, 0.)).0;
         state.look_motion.translation(now, look)
     } else { state.look_motion.clear(); glam::Vec3::ZERO };
-    let origin = eye + f * offset.x - r * offset.y + u * offset.z + look_translation;
+    let settling = if show && p.id == local.id && local.spectating.is_none()
+        && p.tracked.is_none() && p.aim.is_none()
+        && w.is_some_and(|w| w.zoom_level == 0
+            && look_motion::observed_profile(level.0.item_schema_sha1(), &w.def)) {
+        settling::Settling::sample(p.movement.velocity,
+            movement::angle_vectors(glam::Vec3::new(0., local.yaw, 0.)).0,
+            p.movement.on_ground, p.movement.duck_amount)
+    } else { settling::Settling::default() };
+    let settled_offset = settling.offset(offset);
+    let origin = eye + f * settled_offset.x - r * settled_offset.y + u * settled_offset.z + look_translation;
     if std::env::var_os("CSR_VIEWMODEL_MOTION_TRACE").is_some() {
-        info!("viewmodel motion: time={now:.6} angles={view_angles:?} eye={eye:?} look_translation={look_translation:?}");
+        info!("viewmodel motion: time={now:.6} angles={view_angles:?} eye={eye:?} look_translation={look_translation:?} settling_weight={} velocity={:?} on_ground={} settling_translation={:?}",
+            settling.weight, p.movement.velocity, p.movement.on_ground, settling.translation);
     }
-    let world_from_model = Mat4::from_rotation_translation(rotation_to_bevy(rot), to_bevy(origin));
+    let world_from_model = Mat4::from_rotation_translation(rotation_to_bevy(rot * settling.rotation), to_bevy(origin));
     skinning::apply_pose(&gun, world_from_model, &pose, &mut transforms);
     wick.sample = held_wick(p, show, model, &pose, world_from_model);
     if show {if let Some(point)=crate::tracers::muzzle_position(model,&pose,seq.left_muzzle) {
