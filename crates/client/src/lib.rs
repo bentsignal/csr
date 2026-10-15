@@ -51,6 +51,7 @@ pub mod viewmodel;
 pub mod coords;
 pub mod effects;
 mod kill_feed;
+mod combat_hud;
 pub mod hud;
 pub mod ui_assets;
 pub mod hud_art;

@@ -861,11 +861,12 @@ fn compile_shim() -> Result<Vec<u8>, Error> {
             match path {
                 "shim.as" => Ok(include_str!("shim.as").to_string()),
                 "death_notice.as" => Ok(include_str!("death_notice.as").to_string()),
+                "combat_hud.as" => Ok(include_str!("combat_hud.as").to_string()),
                 _ => Err(std::io::Error::new(std::io::ErrorKind::NotFound, path.to_string())),
             }
         }
         fn is_file(&self, path: &str) -> bool {
-            matches!(path, "shim.as" | "death_notice.as")
+            matches!(path, "shim.as" | "death_notice.as" | "combat_hud.as")
         }
     }
     // SWF 10: Ruffle turns empty strings crossing ExternalInterface into
@@ -874,6 +875,7 @@ fn compile_shim() -> Result<Vec<u8>, Error> {
     let mut builder = rascal::ProgramBuilder::new(Source).with_compile_options(options);
     builder.add_script("shim.as");
     builder.add_script("death_notice.as");
+    builder.add_script("combat_hud.as");
     let program = builder.build().map_err(|e| format!("compiling the bridge shim: {e:?}"))?;
     let swf_options = rascal::SwfOptions::default().with_frame_rate(30.0).with_stage_size(0.0, 0.0, 1280.0, 720.0);
     program.compile().to_swf(&swf_options).map_err(|e| format!("writing the bridge shim: {e}"))

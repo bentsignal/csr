@@ -72,3 +72,23 @@ half. A shared full-viewport worker therefore requires no new public renderer
 mode and can preserve the existing top-half API for other consumers. Component
 rasters must retain independent readiness/revision/fallback; ordinary ammo
 updates must not blank valid notice or health presentation.
+
+A separate three-stage observation called only those observed lifecycle methods,
+then inspected the initialized roots. It also exited 0 with clean logs and
+unchanged settings. `HudPanel.HealthArmorPanel` and `HudPanel.WeaponPanel` are
+the actual presentation containers. Initialization queries
+`GameInterface.GetConvarNumber("cl_hud_healthammo_style")`; our current shared
+default returns 0. Optional public `Function.length` reads produced no scalar
+result, so parameter arity is **not** admitted. The actual initialized raster
+still contains sample values and unsupported sample bomb/kill-counter art;
+these must be replaced/cleared before any production admission.
+
+An existing native Legacy 2023 1600x900 viewmodel capture provides a useful
+same-install font-height cross-check without another game launch. A strict
+near-white mask of the health `100` has y=867..888 (22 pixels); the initialized
+1920x1080 movie has y=1033..1064 (32 pixels). Normalizing the latter to 900 pixels
+and applying the observed shared `hud_scaling=0.85` yields about 22.7 pixels.
+This supports investigating the missing per-module HUD scale, as with notices;
+it does not establish an exact transform, safe-zone setting, native cvar value
+for that capture, or 2015 reference fidelity. Original layout must be measured
+and preserved rather than inventing offsets from these two images.
