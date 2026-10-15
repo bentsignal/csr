@@ -28,7 +28,7 @@ instant-throw fallback. Dedicated include-model grenade timing is not supported.
 
 WeaponState retains the phase, button mode, pin/throw producer ticks, pending
 release and whether the projectile was spawned. TickInput alone changes it.
-Release during pin pull is latched until the declared windup finishes. Holding
+Release during pin pull interrupts it on the final button-release tick. Holding
 never starts the projectile fuse. Secondary uses ACT_VM_RELEASE; combined input
 is retained separately and uses the overhand clip. Bots release from Holding
 through their regular TickInput producer. Switching cancels an uncommitted pin;
@@ -129,3 +129,34 @@ projectile release before adjusting either timing or launch coefficients.
 
 The owner also reported missing smoke emission audio. Activation currently
 has no smoke sound route; bounce audio does not substitute for emission.
+
+### First native release correction
+
+An owned Legacy1.38.8.1 session on Inferno used ordinary console button input,
+60FPS and acknowledged host_timescale0.25. HE held-overhand, held-underhand,
+a short HE tap, held smoke and held Molotov all emitted their throw cue on the
+release command edge. The short tap was approximately67ms of wall time (about
+17ms of scaled game time); it did not wait for the roughly0.967s pull-pin clip.
+First captured HE/underhand/smoke frames already showed the hand out of view.
+This disproves the prior full-clip preparation gate. The state now transitions
+to Throwing when the last held attack button is released; holding either button
+continues preparation. Physical projectile creation still follows the authored
+release event pending a tighter native spawn observation, so this is not yet a
+claim of exact jumpthrow or running-throw fidelity. No velocity coefficient,
+pitch law, origin offset, fuse or bounce constant was adjusted.
+
+Throw foley follows the authoritative release-phase tick, using the selected
+VFS's per-kind installed throw entry; the later projectile event no longer
+repeats that cue. An interrupted pin-pull cannot play its queued pin sounds
+over the release or the next practice grenade. The catalog policy salt changes
+so old full-pin-gate clients do not silently join this timing policy.
+
+Native smoke activation logged smoke_emit.wav and sg_explode_distant.wav.
+The installed BaseSmokeEffect.Sound entry declares those near/distant cues;
+activation now routes that entry through the existing positional sound mixer.
+Soundcheck includes both emission entries and all six throw entries. Captures,
+logs, executable hashes and exact preference restoration remain private under
+csr-fidelity/grenade-release-native-20261015/release-20261014-222257. All12
+preference targets matched the pre-launch snapshot after the owned process
+exited; no native process remained. First-frame sampling was coarse, so these
+captures do not establish an exact projectile spawn time.

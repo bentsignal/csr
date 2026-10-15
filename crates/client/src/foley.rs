@@ -37,6 +37,7 @@ struct PlayerFoley {
     reloading: bool,
     shell_stage: Option<Option<i32>>,
     grenade_pull: Option<u64>,
+    grenade_release: Option<u64>,
     suppressor_transition: Option<sim::weapon::SuppressorTransition>,
     moving: bool,
     step_timer: f32,
@@ -86,6 +87,7 @@ struct Queued {
     entry: String,
     reload: bool,
     suppressor: Option<sim::weapon::SuppressorTransition>,
+    grenade_pull: Option<u64>,
 }
 
 #[derive(Resource, Default)]
@@ -123,7 +125,7 @@ impl Foley {
 
     fn schedule(&mut self, player: sim::PlayerId, weapon: &str, now: f32, duration: f32, events: &[(f32, String)], reload: bool) {
         for (cycle, entry) in events {
-            self.queue.push(Queued { at: now + cycle * duration, player, weapon: weapon.to_string(), entry: entry.clone(), reload, suppressor: None });
+            self.queue.push(Queued { at: now + cycle * duration, player, weapon: weapon.to_string(), entry: entry.clone(), reload, suppressor: None, grenade_pull: None });
         }
     }
 }
@@ -218,18 +220,43 @@ pub fn update(
                     // seconds of screw sounds as one burst.
                     if at >= now - elapsed.tick_seconds {
                         foley.queue.push(Queued { at, player: p.id, weapon: weapon.clone(),
-                            entry: entry.clone(), reload: false, suppressor: Some(transition) });
+                            entry: entry.clone(), reload: false, suppressor: Some(transition), grenade_pull: None });
                     }
                 }
             }
         }
         let st = foley.players.get_mut(&p.id).unwrap();
-        let pull=w.and_then(|w|w.grenade_throw).map(|s|s.pull_started_tick);
-        let new_pull=pull.is_some() && pull!=st.grenade_pull;
-        st.grenade_pull=pull;
+        let grenade = w.and_then(|w| w.grenade_throw);
+        let pull = grenade.filter(|s| s.phase != sim::utility::ThrowPhase::Throwing)
+            .map(|s| s.pull_started_tick);
+        let new_pull = pull.is_some() && pull != st.grenade_pull;
+        st.grenade_pull = pull;
+        let release = grenade.and_then(|s| s.throw_started_tick);
+        let new_release = release.is_some() && release != st.grenade_release;
+        st.grenade_release = release;
         if new_pull {
-            if let Some((duration,events))=views.activity_sounds(&weapon,"ACT_VM_PULLPIN") {
-                foley.schedule(p.id,&weapon,pull.unwrap() as f32*world.0.dt(),duration,&events,false);
+            if let Some((duration, events)) = views.activity_sounds(&weapon, "ACT_VM_PULLPIN") {
+                for (cycle, entry) in events.iter() {
+                    foley.queue.push(Queued { at: pull.unwrap() as f32 * world.0.dt() + cycle * duration,
+                        player: p.id, weapon: weapon.clone(), entry: entry.clone(), reload: false,
+                        suppressor: None, grenade_pull: pull });
+                }
+            }
+        }
+        if new_release {
+            // Native logs place the throw cue on the release command edge,
+            // independently of the later physical projectile release event.
+            let entry = match sim::utility::Kind::from_name(&weapon) {
+                Some(sim::utility::Kind::He) => Some("HEGrenade.Throw"),
+                Some(sim::utility::Kind::Flash) => Some("Flashbang.Throw"),
+                Some(sim::utility::Kind::Smoke) => Some("SmokeGrenade.Throw"),
+                Some(sim::utility::Kind::Decoy) => Some("Decoy.Throw"),
+                Some(sim::utility::Kind::Molotov) => Some("Molotov.Throw"),
+                Some(sim::utility::Kind::Incendiary) => Some("IncGrenade.Throw"),
+                None => None,
+            };
+            if let Some(entry) = entry {
+                sounds.play_with(&mut commands, fs, &mut sources, entry, emit_for(p, &local, p.eye()));
             }
         }
         let st = foley.players.get_mut(&p.id).unwrap();
@@ -286,6 +313,14 @@ pub fn update(
         let Some(p) = world.0.player(q.player) else { continue };
         if p.active_weapon().map(|w| w.def.class_name.as_str()) != Some(q.weapon.as_str()) {
             continue;
+        }
+        if let Some(pull) = q.grenade_pull {
+            // A quick release interrupts the pin-pull clip and its remaining
+            // sounds. Never replay them over a throw or a fresh practice item.
+            if p.active_weapon().and_then(|w| w.grenade_throw).is_none_or(|s|
+                s.pull_started_tick != pull || s.phase == sim::utility::ThrowPhase::Throwing) {
+                continue;
+            }
         }
         let emit = emit_for(p, &local, p.movement.origin + glam::Vec3::Z * 48.0);
         sounds.play_with(&mut commands, fs, &mut sources, &q.entry, emit);

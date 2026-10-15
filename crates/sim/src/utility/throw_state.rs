@@ -111,7 +111,29 @@ mod tests {
         }
     }
     #[test]
-    fn tap_waits_for_pull_pin_and_switch_cancels_uncommitted_throw() {
+    fn releasing_one_button_keeps_preparing_until_the_last_button_edge() {
+        for rate in [64, 128] {
+            for (held, mode) in [(buttons::ATTACK, ThrowMode::Overhand),
+                (buttons::ATTACK2, ThrowMode::Underhand)] {
+                let (mut world, id) = fixture(rate);
+                world.step(&[(id, TickInput { buttons: buttons::ATTACK | buttons::ATTACK2,
+                    ..Default::default() })]);
+                world.step(&[(id, TickInput { buttons: held, ..Default::default() })]);
+                let state = world.players[0].active_weapon().unwrap().grenade_throw.unwrap();
+                assert_eq!((state.phase, state.mode), (ThrowPhase::PullingPin, mode));
+                assert!(!state.release_requested);
+                world.step(&[(id, TickInput::default())]);
+                let state = world.players[0].active_weapon().unwrap().grenade_throw.unwrap();
+                assert_eq!((state.phase, state.mode, state.throw_started_tick),
+                    (ThrowPhase::Throwing, mode, Some(2)));
+                assert!(!state.spawned, "projectile still follows its installed release event");
+                let restored = world.decode(&world.encode_state()).unwrap();
+                assert_eq!(restored, world.state());
+            }
+        }
+    }
+    #[test]
+    fn tap_interrupts_pull_pin_and_switch_cancels_uncommitted_throw() {
         for rate in [64, 128] {
             let (mut world, id) = fixture(rate);
             world.step(&[(
@@ -133,7 +155,7 @@ mod tests {
                     break;
                 }
             }
-            assert_eq!(emitted, Some((rate * 3 / 8) as u64));
+            assert_eq!(emitted, Some(1 + (rate / 8) as u64));
             let (mut world, id) = fixture(rate);
             let spare = world.players[0].weapons[0].clone();
             world.players[0].weapons.push(spare);
@@ -225,16 +247,14 @@ impl World {
             } else {
                 state.release_requested = true;
             }
-            if tick
-                >= state
-                    .pull_started_tick
-                    .saturating_add(ticks(profile.pull_pin_duration, dt))
-            {
+            // Native quick taps interrupt preparation: the complete authored
+            // pull-pin clip is not an admission timer for the release clip.
+            // Keep the physical release event inside that clip tick-owned.
+            if state.release_requested {
+                state.phase = ThrowPhase::Throwing;
+                state.throw_started_tick = Some(tick);
+            } else if tick >= state.pull_started_tick.saturating_add(ticks(profile.pull_pin_duration, dt)) {
                 state.phase = ThrowPhase::Holding;
-                if state.release_requested {
-                    state.phase = ThrowPhase::Throwing;
-                    state.throw_started_tick = Some(tick);
-                }
             }
         }
         if state.phase != ThrowPhase::Throwing {
