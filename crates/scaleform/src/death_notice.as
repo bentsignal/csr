@@ -288,8 +288,9 @@ _global.csrDeathNotices.resize = function() {
         if (!laidOut) {
             success = false;
             row.panel._visible = false;
-            csrEI.call("csr.DeathNoticeResult", id.substr(8), false);
         }
+        // A repaired layout must also clear this key's client-side fallback.
+        csrEI.call("csr.DeathNoticeResult", id.substr(8), laidOut);
     }
     return success;
 };
