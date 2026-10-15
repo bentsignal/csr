@@ -79,6 +79,10 @@ _global.csrDeathNotices.layout = function(row) {
     // Reset to ordinary populated text on each layout, retaining the original
     // setter's current padding/height instead of accumulating our width delta.
     this.root.SetPanelText(panel, killer + " " + victim, row.localVictim, row.localAttacker);
+    // Public observation confirms UpdateWidth refreshes the existing art's
+    // text-dependent width. Reset it to this plain text before adding the tab
+    // delta, otherwise repeated resize adds that delta to the prior fit again.
+    this.root.UpdateWidth(panel);
     var plainWidth = field.textWidth;
     var box = background.getBounds(panel);
     var killerWidth = this.measure(field, killer);
