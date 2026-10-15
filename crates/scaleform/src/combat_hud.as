@@ -92,6 +92,7 @@ _global.csrCombatHud.clear = function() {
         // Keep one parsed instance per component across matches. Visibility is
         // owned explicitly; parking the shared worker suspends all its timers.
         part.root._visible = false;
+        part.shown = false;
         i += 1;
     }
 };
@@ -135,4 +136,98 @@ _global.csrCombatHud.updateNumbers = function(health, armor, clip, reserve) {
     }
     csrEI.call("csr.CombatHudNumbers", healthSuccess, ammoSuccess);
     return healthSuccess && ammoSuccess;
+};
+_global.csrCombatHud.result = function(part, stamp, success, visible) {
+    if (part == undefined) { return false; }
+    try {
+        if (success && visible && !part.shown) {
+            part.root.showNow();
+            part.shown = true;
+        }
+        part.root._visible = success && visible;
+        if (success && visible) {
+            // Independently cropped rasters must contain the complete visible
+            // intersection of their original module. Expected offscreen art
+            // is clipped by the original viewport, never stretched into ours.
+            var bounds = part.root.getBounds(_global.csrResolve("_level9000"));
+            var left = Math.max(0, bounds.xMin);
+            var right = Math.min(Stage.width, bounds.xMax);
+            var top = Math.max(0, bounds.yMin);
+            var bottom = Math.min(Stage.height, bounds.yMax);
+            if (!(right > left) || !(bottom > top) || top < Math.ceil(Stage.height / 2) ||
+                (part.name == "health" && right > Math.ceil(Stage.width / 2)) ||
+                (part.name == "ammo" && left < Math.ceil(Stage.width / 2))) {
+                success = false;
+                part.root._visible = false;
+            }
+        }
+    } catch (error) { success = false; part.root._visible = false; }
+    csrEI.call("csr.CombatHudResult", part.name, stamp, success,
+        part.root.HudPanel._currentframe, part.root.HudPanel._totalframes);
+    return success;
+};
+_global.csrCombatHud.health = function(stamp, health, armor, helmet, alive) {
+    var part = this.part("health");
+    if (part == undefined || !part.ready) { return false; }
+    var success = false;
+    try {
+        if (alive && !part.shown) { part.root.showNow(); part.shown = true; }
+        var panel = part.root.HudPanel.HealthArmorPanel;
+        success = this.write(panel.Health.TextBox, health) &&
+            this.write(panel.HealthRed.TextBox, health) && this.write(panel.Armor.TextBox, armor);
+        panel.Health._visible = true;
+        panel.HealthRed._visible = false;
+        panel.ArmorIcon._visible = armor > 0 && !helmet;
+        panel.ArmorHelmetIcon._visible = armor > 0 && helmet;
+        panel.HeavyArmorIcon._visible = false;
+        success = this.bar(panel.HealthBar.HealthBar, panel.HealthBar.HealthBarRed, health) &&
+            this.bar(panel.ArmorBar.ArmorBar, panel.ArmorBar.ArmorBarRed, armor) && success;
+    } catch (error) { success = false; }
+    return this.result(part, stamp, success, alive === true);
+};
+_global.csrCombatHud.ammo = function(stamp, clip, reserve, visible) {
+    var part = this.part("ammo");
+    if (part == undefined || !part.ready) { return false; }
+    var success = false;
+    try {
+        if (visible && !part.shown) { part.root.showNow(); part.shown = true; }
+        var panel = part.root.HudPanel.WeaponPanel;
+        success = this.write(panel.AmmoCountClip.TextBox, clip) &&
+            this.write(panel.AmmoCountTotal.TextBox, "/" + reserve);
+        // These original template decorations are not authoritative gameplay
+        // values. Keep unsupported subcomponents hidden, rather than display
+        // sample bomb, defuser, kill-counter, burst or weapon-name art.
+        var hidden = ["KillEater", "WeaponName", "Kill1", "Kill2", "KillCount",
+            "Kill_Icon_1", "Kill_Icon_2", "Kill_Icon_3", "Kill_Icon_4", "Kill_Icon_5",
+            "UpgradeText", "BurstTypeSingle", "BurstTypeBurst", "Grenades",
+            "InBombZoneIcon", "DefuseKitIcon", "BombCarrierIcon", "AmmoAnim", "AmmoAnimFast"];
+        var i = 0;
+        while (i < hidden.length) { panel[hidden[i]]._visible = false; i += 1; }
+    } catch (error) { success = false; }
+    return this.result(part, stamp, success, visible === true);
+};
+_global.csrCombatHud.bar = function(foreground, trail, value) {
+    // Public runtime: 100/73/41/19 select widths62/45.2/25.3/11.6;
+    // frame1 has no drawn child and zero width. No authored actions inspected.
+    if (typeof foreground != "movieclip" || foreground._totalframes != 100 ||
+        typeof trail != "movieclip" || trail._totalframes != 100) { return false; }
+    var frame = Math.max(1, Math.min(100, Math.floor(value)));
+    foreground.gotoAndStop(frame);
+    foreground._visible = true;
+    trail.gotoAndStop(frame);
+    // Damage pulse/trail timing remains uncalibrated. Show steady native art;
+    // never leave the template's red layer permanently over the steady fill.
+    trail._visible = false;
+    return foreground._currentframe == frame;
+};
+_global.csrCombatHud.resize = function() {
+    var i = 0;
+    while (i < this.parts.length) {
+        var part = this.parts[i];
+        if (part.ready) {
+            try { part.root.onResize(); }
+            catch (error) { this.failed(part, "Resize failed"); }
+        }
+        i += 1;
+    }
 };

@@ -83,12 +83,62 @@ result, so parameter arity is **not** admitted. The actual initialized raster
 still contains sample values and unsupported sample bomb/kill-counter art;
 these must be replaced/cleared before any production admission.
 
-An existing native Legacy 2023 1600x900 viewmodel capture provides a useful
-same-install font-height cross-check without another game launch. A strict
-near-white mask of the health `100` has y=867..888 (22 pixels); the initialized
-1920x1080 movie has y=1033..1064 (32 pixels). Normalizing the latter to 900 pixels
-and applying the observed shared `hud_scaling=0.85` yields about 22.7 pixels.
-This supports investigating the missing per-module HUD scale, as with notices;
-it does not establish an exact transform, safe-zone setting, native cvar value
-for that capture, or 2015 reference fidelity. Original layout must be measured
-and preserved rather than inventing offsets from these two images.
+## Numeric and bar admission
+
+The first experimental variadic setter call is a retained negative: numeric
+sample fields did not update, and `updateAmmo(7,53)` tried four `icon-undefined`
+exports. Those incomplete inputs are not used in production. Public static
+DefineEditText metadata has empty variable names. Named instance placements
+identify `Health.TextBox`, `HealthRed.TextBox`, `Armor.TextBox`,
+`AmmoCountClip.TextBox`, and `AmmoCountTotal.TextBox` under the observed panels.
+Only text/font/placement metadata was inspected; all action payloads were skipped.
+
+Our adapter retains each original field's `getTextFormat`, changes its `text`,
+and restores its current and default text formats. A separate immutable8d3
+four-stage probe actually rendered73health/41armor/7clip/53reserve, then19/0/0/12,
+then cleared both complete roots. Public string reads and actual PNGs agree;
+two component-ready and two successful-update callbacks, clean logs, process0
+and unchanged owner settings were checked. This admits numeric fields/cleanup,
+not the unrelated template bomb, skull, weapon-name or kill-counter art.
+
+A separate original timeline observation establishes100-frame foreground bars:
+100 selects62units of fill,73 selects45.2,41 selects25.3,19 selects11.6. Frame1
+has zero width/height, no drawn child and an actually empty armor0 raster.
+The production adapter selects those original frames, with values clamped to
+the observed1..100 range, and keeps the original red trail layer hidden during
+steady presentation. Red damage-trail/pulse timing remains unmeasured. No bar
+rectangles, SVGs or replacement bitmap art are drawn.
+
+## Scaling limits
+
+An existing native Legacy2023 1600x900 viewmodel capture has a near-white health
+100 glyph y=867..888 (22pixels), while our initialized1920x1080 movie has
+y=1033..1064 (32pixels). A blanket0.85 multiplier would approximately reconcile
+those captures, but their native HUD scaling/safe-zone settings were not recorded.
+The already saved primary [March2015 tutorial frame331s](https://www.youtube.com/watch?v=xoatYCUn4tw&t=331s)
+has a720p yellow health glyph y=690..710 (21pixels); our **unscaled** initialized
+movie normalizes to21.3pixels at720. These observations conflict unless CVars
+are accounted for. The notice-row0.85 transform is therefore not blindly applied
+to these separate modules: the candidate retains original `onResize` layout.
+Compression, unknown original CVars, 2023-versus2015 differences and safe-zone
+placement prevent an exact pixel-parity claim.
+
+## Production ownership and remaining gates
+
+The pending production change shares one transparent full-viewport player with
+notices. Three nonoverlapping physical-pixel regions retain independent raster
+receipts/fallbacks. Snapshot commands are sent on actual value/life/viewport
+changes. A readiness callback alone never hides ordinary values; a successful
+matching raster is required. Ordinary value updates retain same-life pixels;
+death/respawn/view-target/leave/resize cannot reuse stale pixels. Per-component
+load/result failure preserves other components. Only worker failure is global.
+Idle admission parks the worker; no second continually rendering HUD player is
+created. Unchanged image regions and Node/Visibility values are retained.
+
+Production render/lifecycle/performance checks remain pending. Initial native
+numeric fields and steady bar art are admitted; low-health colors, damage
+pulse/trail, low/empty-ammo tint, shot/eject animation, grenade/bomb/defuser/burst
+subcomponents and weapon-name/kill-counter state remain open fidelity work.
+Unsupported sample decorations are hidden, never presented as authoritative
+state. Original inventory/radar/money/round HUD work remains separate. Full Audio
+settings content remains open; no dummy option rows are added by this track.

@@ -2,7 +2,7 @@
 use crate::{
     GameData,
     effects::{Effects, KillFeedEntry},
-    player::LocalPlayer,
+    player::{LocalPlayer, SimWorld},
     session::{AppState, Persistent},
 };
 use bevy::{
@@ -28,6 +28,7 @@ struct Surface;
 pub(crate) struct Presentation {
     movie: Option<Mutex<scaleform::Menu>>,
     ready: Arc<AtomicBool>,
+    notice_failed: Arc<AtomicBool>,
     failed: Arc<AtomicBool>,
     rejected: Arc<Mutex<Vec<sim::death::DeathKey>>>,
     started: Option<std::time::Instant>,
@@ -39,11 +40,15 @@ pub(crate) struct Presentation {
     presented: bool,
     active: bool,
     last_alpha: f32,
+    pub(crate) combat: crate::combat_hud::Presentation,
 }
 
 struct Bridge {
     ready: Arc<AtomicBool>,
-    failed: Arc<AtomicBool>,
+    notice_failed: Arc<AtomicBool>,
+    combat: Arc<crate::combat_hud::State>,
+    combat_enabled: bool,
+    notice_enabled: bool,
     rejected: Arc<Mutex<Vec<sim::death::DeathKey>>>,
 }
 impl Engine for Bridge {
@@ -57,8 +62,18 @@ impl Engine for Bridge {
         if object != "csr" {
             return None;
         }
+        if self.combat.receive(method, args) {
+            return Some(Value::Undefined);
+        }
         match method {
-            "RootReady" => calls.call(API, "load", vec!["huddeathnotification.swf".into()]),
+            "RootReady" => {
+                if self.notice_enabled {
+                    calls.call(API, "load", vec!["huddeathnotification.swf".into()]);
+                }
+                if self.combat_enabled {
+                    calls.call("_global.csrCombatHud", "load", vec![]);
+                }
+            }
             "DeathNoticesReady" => {
                 self.ready.store(true, Ordering::Release);
             }
@@ -67,7 +82,7 @@ impl Engine for Bridge {
                     ?args,
                     "Classic kill feed could not load; preserving text fallback"
                 );
-                self.failed.store(true, Ordering::Release);
+                self.notice_failed.store(true, Ordering::Release);
             }
             "DeathNoticeResult" => {
                 let (Some(Value::String(raw)), Some(Value::Bool(success))) =
@@ -160,12 +175,14 @@ fn add(entry: &KillFeedEntry, local: sim::PlayerId) -> Command {
 }
 
 pub(crate) fn install(app: &mut App) {
-    app.init_resource::<Presentation>().add_systems(
-        Update,
-        update
-            .after(crate::hud::update)
-            .after(crate::frontend::update),
-    );
+    app.init_resource::<Presentation>()
+        .add_systems(
+            Update,
+            update
+                .after(crate::hud::update)
+                .after(crate::frontend::update),
+        )
+        .add_systems(Update, crate::combat_hud::display.after(update));
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -177,6 +194,7 @@ fn update(
     windows: Query<&Window, With<PrimaryWindow>>,
     effects: Option<Res<Effects>>,
     local: Option<Res<LocalPlayer>>,
+    world: Option<Res<SimWorld>>,
     time: Res<Time>,
     mut images: ResMut<Assets<Image>>,
     mut surfaces: Query<(&mut Visibility, &mut Node), (With<Surface>, Without<Fallback>)>,
@@ -185,18 +203,35 @@ fn update(
     for (_, mut node) in &mut fallback {
         node.top = px(60.0);
     }
+    let notice_enabled = std::env::var_os("CSR_NO_CLASSIC_KILL_FEED").is_none();
     let matched = *state.get() == AppState::Match
         && local.is_some()
         && effects.is_some()
-        && std::env::var_os("CSR_NO_HUD").is_none()
-        && std::env::var_os("CSR_NO_CLASSIC_KILL_FEED").is_none();
+        && std::env::var_os("CSR_NO_HUD").is_none();
     let Ok(window) = windows.single() else { return };
     let size = (
         window.resolution.physical_width().max(1),
         window.resolution.physical_height().max(1),
     );
+    let snapshot = matched
+        .then(|| {
+            world
+                .as_ref()
+                .and_then(|world| {
+                    local
+                        .as_ref()
+                        .and_then(|local| world.0.player(local.view_target()))
+                })
+                .map(crate::combat_hud::Snapshot::from_player)
+        })
+        .flatten();
     let surface_height = px(size.1.div_ceil(2) as f32 / window.scale_factor());
-    if feed.movie.is_none() && matched && !feed.failed.load(Ordering::Acquire) {
+    if feed.movie.is_none()
+        && matched
+        && !feed.failed.load(Ordering::Acquire)
+        && (notice_enabled || std::env::var_os("CSR_NO_CLASSIC_COMBAT_HUD").is_none())
+    {
+        feed.combat.spawn(&mut commands, &mut images);
         let image = images.add(Image::new(
             Extent3d {
                 width: 1,
@@ -225,7 +260,7 @@ fn update(
                 Visibility::Hidden,
             ))
             .id();
-        let movie = scaleform::Menu::spawn_overlay(
+        let movie = scaleform::Menu::spawn_named(
             Config {
                 game_dir: data.game_dir.clone(),
                 width: size.0,
@@ -235,9 +270,13 @@ fn update(
             },
             Box::new(Bridge {
                 ready: feed.ready.clone(),
-                failed: feed.failed.clone(),
+                notice_failed: feed.notice_failed.clone(),
+                combat: feed.combat.state.clone(),
+                combat_enabled: feed.combat.enabled,
+                notice_enabled,
                 rejected: feed.rejected.clone(),
             }),
+            "classic-hud".into(),
         );
         feed.movie = Some(Mutex::new(movie));
         feed.image = image;
@@ -246,17 +285,24 @@ fn update(
         feed.active = true;
         feed.started = Some(std::time::Instant::now());
     }
-    if !feed.ready.load(Ordering::Acquire)
-        && feed
-            .started
-            .is_some_and(|started| started.elapsed().as_secs() >= 30)
-        && !feed.failed.swap(true, Ordering::AcqRel)
+    if feed
+        .started
+        .is_some_and(|started| started.elapsed().as_secs() >= 30)
     {
-        error!("Classic kill feed readiness timed out; preserving text fallback");
+        if notice_enabled
+            && !feed.ready.load(Ordering::Acquire)
+            && !feed.notice_failed.swap(true, Ordering::AcqRel)
+        {
+            warn!("Classic kill feed readiness timed out; preserving text fallback");
+        }
+        if feed.combat.enabled {
+            feed.combat.state.timeout();
+        }
     }
     if feed.failed.load(Ordering::Acquire) {
         // Disconnecting input terminates only our dedicated worker. A failed
         // movie must never erase the last usable text feed.
+        feed.combat.hide();
         feed.movie = None;
         for (mut surface, _) in &mut surfaces {
             *surface = Visibility::Hidden;
@@ -269,7 +315,7 @@ fn update(
     let now = time.elapsed_secs();
     let entries: Vec<_> = effects
         .as_ref()
-        .filter(|_| matched)
+        .filter(|_| matched && notice_enabled)
         .map(|effects| effects.kill_feed.iter().collect())
         .unwrap_or_default();
     let keys: Vec<_> = entries.iter().map(|entry| entry.death.key).collect();
@@ -277,7 +323,11 @@ fn update(
         .lock()
         .unwrap()
         .retain(|key| keys.contains(key));
-    let ready = feed.ready.load(Ordering::Acquire);
+    let ready = notice_enabled
+        && feed.ready.load(Ordering::Acquire)
+        && !feed.notice_failed.load(Ordering::Acquire);
+    let next_revision = feed.revision.checked_add(1).expect("HUD revision limit");
+    let resized = feed.viewport != size;
     let mut batch = vec![];
     if feed.viewport != size {
         feed.movie
@@ -308,12 +358,20 @@ fn update(
         }
         feed.entries = keys;
     }
-    if !batch.is_empty() {
+    let notice_changed = !batch.is_empty();
+    batch.extend(
+        feed.combat
+            .commands(snapshot.as_ref(), next_revision, resized),
+    );
+    let has_commands = !batch.is_empty();
+    if has_commands {
         feed.revision = feed
             .revision
             .checked_add(1)
             .expect("kill-feed revision limit");
-        feed.presented = false;
+        if notice_changed {
+            feed.presented = false;
+        }
         if std::env::var_os("CSR_KILL_FEED_TRACE").is_some() {
             info!(revision = feed.revision, notices = feed.entries.len(), keys = ?feed.entries,
                 "Classic kill feed receipts updated");
@@ -334,7 +392,13 @@ fn update(
     let has_drawable_row = entries
         .iter()
         .any(|entry| !rejected_before.contains(&entry.death.key));
-    let active = !ready || (matched && (!feed.presented || has_drawable_row));
+    let notice_pending = notice_enabled
+        && !feed.ready.load(Ordering::Acquire)
+        && !feed.notice_failed.load(Ordering::Acquire);
+    let active = has_commands
+        || notice_pending
+        || feed.combat.waiting()
+        || (matched && ((!feed.presented && !feed.entries.is_empty()) || has_drawable_row));
     if active != feed.active {
         feed.movie
             .as_ref()
@@ -386,20 +450,37 @@ fn update(
         .iter()
         .filter(|entry| !rejected.contains(&entry.death.key))
         .count();
-    if let Some(frame) = frame.filter(|frame| frame.presentation_revision == feed.revision) {
-        if let Some(mut image) = images.get_mut(&feed.image) {
-            if !feed.presented && ready && std::env::var_os("CSR_KILL_FEED_TRACE").is_some() {
+    if let Some(frame) = frame.filter(|frame| {
+        frame.presentation_revision == feed.revision && (frame.width, frame.height) == size
+    }) {
+        feed.combat.admit(&frame, snapshot.as_ref(), &mut images);
+        if ready && rendered_count == 0 {
+            // No visible notice pixels changed with a health/ammo update.
+            // Retain the top texture and avoid copying half the viewport.
+            feed.presented = true;
+        } else if ready
+            && let Some(rgba) = crate::combat_hud::crop(
+                &frame,
+                crate::combat_hud::regions(frame.width, frame.height)[0],
+            )
+            && let Some(mut image) = images.get_mut(&feed.image)
+        {
+            if !feed.presented && std::env::var_os("CSR_KILL_FEED_TRACE").is_some() {
                 info!(revision = feed.revision, notices = rendered_count, width = frame.width,
                     height = frame.height, keys = ?feed.entries, "Classic kill feed raster admitted");
             }
             image.texture_descriptor.size = Extent3d {
-                width: frame.width,
-                height: frame.height,
+                width: size.0,
+                height: size.1.div_ceil(2),
                 depth_or_array_layers: 1,
             };
-            image.data = Some(frame.rgba);
+            image.data = Some(rgba);
             feed.presented = true;
         }
+    }
+    feed.combat.visibility(snapshot.as_ref(), size);
+    if feed.failed.load(Ordering::Acquire) {
+        feed.combat.hide();
     }
     let visible = matched
         && ready
@@ -409,12 +490,17 @@ fn update(
     for (mut surface, mut node) in &mut surfaces {
         // An odd physical height must not stretch a ceil(height/2) raster into
         // a fractional-height box. Preserve one authored pixel per screen pixel.
-        node.height = surface_height;
-        *surface = if visible {
+        if node.height != surface_height {
+            node.height = surface_height;
+        }
+        let value = if visible {
             Visibility::Inherited
         } else {
             Visibility::Hidden
         };
+        if *surface != value {
+            *surface = value;
+        }
     }
     if matched && ready && feed.presented && !feed.failed.load(Ordering::Acquire) {
         let plain = entries
@@ -448,7 +534,10 @@ mod tests {
     fn rejected_content_is_keyed_bounded_and_does_not_disable_other_notices() {
         let mut bridge = Bridge {
             ready: Arc::new(AtomicBool::new(true)),
-            failed: Arc::new(AtomicBool::new(false)),
+            notice_failed: Arc::new(AtomicBool::new(false)),
+            combat: Arc::default(),
+            combat_enabled: true,
+            notice_enabled: true,
             rejected: Arc::default(),
         };
         let mut calls = Calls::default();
@@ -469,7 +558,7 @@ mod tests {
         );
         assert_eq!(*bridge.rejected.lock().unwrap(), [rejected]);
         assert!(!bridge.rejected.lock().unwrap().contains(&healthy));
-        assert!(!bridge.failed.load(Ordering::Acquire));
+        assert!(!bridge.notice_failed.load(Ordering::Acquire));
         assert!(bridge.ready.load(Ordering::Acquire));
         for invalid in ["", "2:4", "2:4:90:extra", "invalid:4:90", "2:-4:90"] {
             bridge.call(
@@ -497,13 +586,13 @@ mod tests {
             );
         }
         assert_eq!(bridge.rejected.lock().unwrap().len(), 16);
-        assert!(!bridge.failed.load(Ordering::Acquire));
+        assert!(!bridge.notice_failed.load(Ordering::Acquire));
         bridge.call(
             "csr",
             "DeathNoticesFailed",
             &["missing movie".into()],
             &mut calls,
         );
-        assert!(bridge.failed.load(Ordering::Acquire));
+        assert!(bridge.notice_failed.load(Ordering::Acquire));
     }
 }
