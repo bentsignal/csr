@@ -274,7 +274,7 @@ pub fn look(
     if keys.just_pressed(settings.binds[10]) {
         local.pending_drop = true;
     }
-    if grabbed && scroll.delta.y != 0.0 && me.is_some_and(|p| !p.weapons.is_empty()) {
+    if grabbed && scroll.delta.y != 0.0 {
         // Installed defaults bind MWHEELUP invprev and MWHEELDOWN invnext.
         // Authority chooses the weapon; reducing this to a slot loses reverse
         // direction among grenades and at slot boundaries.
