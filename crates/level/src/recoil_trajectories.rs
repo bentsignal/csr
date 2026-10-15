@@ -153,6 +153,63 @@ const M4S_DETACHED_BULLET_ANGLES: [[f32; 2]; 20] = [
     [-7.42, -3.63],
 ];
 
+// Two independently ordered 35-shot native magazines, with a normal-speed
+// held-out aggregate. Projection was re-calibrated in both static ROIs.
+// Overlapping boxes were reviewed chronologically; centers have 2px
+// uncertainty. This is installed 2023 standing-held evidence, not 2015 or
+// recovery/camera parity. No native impulse table or algorithm is copied.
+const GALIL_BULLET_ANGLES: [[f32; 2]; 35] = [
+    [0.00, 0.00],
+    [-0.10, 0.10],
+    [-0.33, 0.05],
+    [-0.91, 0.49],
+    [-1.86, 1.03],
+    [-2.91, 1.02],
+    [-4.20, 1.16],
+    [-5.15, 1.45],
+    [-5.72, 2.07],
+    [-6.38, 1.82],
+    [-6.75, 0.57],
+    [-6.66, -0.96],
+    [-6.10, -2.59],
+    [-6.38, -3.07],
+    [-6.44, -3.59],
+    [-6.53, -3.93],
+    [-6.68, -4.07],
+    [-7.00, -3.82],
+    [-7.27, -2.44],
+    [-7.50, -1.72],
+    [-7.41, -0.38],
+    [-6.94, 1.34],
+    [-6.94, 1.67],
+    [-7.22, 1.00],
+    [-7.36, 1.62],
+    [-7.32, 2.20],
+    [-7.00, 3.16],
+    [-7.04, 2.49],
+    [-6.89, 0.86],
+    [-6.75, -0.53],
+    [-6.99, -1.24],
+    [-7.31, -0.91],
+    [-7.22, -1.67],
+    [-6.57, -2.97],
+    [-6.44, -3.69],
+];
+
+fn is_observed_galil(def: &WeaponDefinition) -> bool {
+    def.id == ContentId::csgo(ContentKind::Weapon, "galilar")
+        && def.class_name == "weapon_galilar"
+        && def.def_index == 13
+        && def.clip_size == 35
+        && def.bullets == 1
+        && def.full_auto
+        && def.cycle_time == 0.09
+        && def.recoil == Recoil {
+            seed: 51191, angle: 0., angle_variance: 70.,
+            magnitude: 21., magnitude_variance: 1.,
+        }
+}
+
 fn is_observed_m4s(def: &WeaponDefinition) -> bool {
     def.id == ContentId::csgo(ContentKind::Weapon, "m4a1_silencer")
         && def.class_name == "weapon_m4a1_silencer"
@@ -212,7 +269,7 @@ pub(super) fn import(catalog: &mut Catalog, schema: Option<[u8; 20]>) -> Option<
     digest.update(schema);
     // A peer with the same assets but the previous recoil policy must fail
     // content admission before prediction/snapshots can silently disagree.
-    digest.update(b"observed-recoil-trajectory-v3-ak-m4-m4s-legacy-1.38.8.1");
+    digest.update(b"observed-recoil-trajectory-v4-ak-m4-m4s-galil-legacy-1.38.8.1");
     let mut applied = false;
     {
         for def in &mut catalog.weapons {
@@ -223,6 +280,8 @@ pub(super) fn import(catalog: &mut Catalog, schema: Option<[u8; 20]>) -> Option<
                     "legacy-1.38.8.1-m4a4-held-standing-128hz",
                     &M4A4_BULLET_ANGLES,
                 )
+            } else if is_observed_galil(def) {
+                ("legacy-1.38.8.1-galil-held-standing-128hz", &GALIL_BULLET_ANGLES)
             } else if is_observed_m4s(def) {
                 def.recoil_trajectory_unsuppressed = Some(RecoilTrajectory {
                     reference: "legacy-1.38.8.1-m4s-detached-held-standing-128hz".into(),
@@ -289,6 +348,20 @@ mod tests {
         let m4_profile = m4.recoil_trajectory.as_ref().unwrap();
         assert_eq!(m4_profile.bullet_angles.len(), 30);
         assert_ne!(m4_profile.bullet_angles, profile.bullet_angles);
+        let galil = catalog.get("weapon_galilar").unwrap();
+        assert_eq!(galil.recoil_trajectory.as_ref().unwrap().bullet_angles.len(), 35);
+        assert!(catalog.get("weapon_famas").unwrap().recoil_trajectory.is_none());
+        for case in 0..3 {
+            let mut changed = galil.clone(); changed.recoil_trajectory = None;
+            match case {
+                0 => changed.recoil.seed += 1,
+                1 => changed.cycle_time = 0.1,
+                _ => changed.id = ContentId::csgo(ContentKind::Weapon, "pack_galil"),
+            }
+            let mut unmeasured = Catalog { weapons: vec![changed] };
+            assert_eq!(import(&mut unmeasured, Some(schema)), Some(schema));
+            assert!(unmeasured.weapons[0].recoil_trajectory.is_none());
+        }
         let m4s = catalog.get("weapon_m4a1_silencer").unwrap();
         let attached = m4s.recoil_trajectory.as_ref().unwrap();
         let detached = m4s.recoil_trajectory_unsuppressed.as_ref().unwrap();
