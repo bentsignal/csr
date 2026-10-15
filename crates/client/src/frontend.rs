@@ -214,8 +214,9 @@ impl Engine for Bridge {
         // Requests after retirement carry their own immutable API label. A
         // late callback from an unloaded Home must never mark its replacement
         // ready or issue navigation against the new root at the same level.
-        let object = if object == "MainMenu" || object.starts_with("OwnedHome") {
-            if !self.data.lock().unwrap().home.accepts(object) { return Some(Value::Undefined); }
+        let home_receiver = (object == "MainMenu" || object.starts_with("OwnedHome")).then_some(object);
+        let object = if let Some(receiver) = home_receiver {
+            if !self.data.lock().unwrap().home.accepts(receiver) { return Some(Value::Undefined); }
             "MainMenu"
         } else { object };
         let seen_object = if object.starts_with("OwnedLobby") { "OwnedLobby" }
@@ -408,11 +409,18 @@ impl Engine for Bridge {
         }
         if method == "OnReady" {
             let mut data = self.data.lock().unwrap();
+            // The render thread can retire Home between dispatch and this
+            // readiness write; validate its label under the same data lock.
+            if home_receiver.is_some_and(|receiver| !data.home.accepts(receiver)) { return Some(Value::Undefined); }
             data.movie_ready.insert(object.into());
             if object == "MainMenu" { data.home.bootstrapped = true; }
         }
         if method == "OnLoadFinished" && !object.starts_with("CScaleformComponent_") {
-            self.data.lock().unwrap().movie_ready.remove(object);
+            {
+                let mut data = self.data.lock().unwrap();
+                if home_receiver.is_some_and(|receiver| !data.home.accepts(receiver)) { return Some(Value::Undefined); }
+                data.movie_ready.remove(object);
+            }
             if let Some(path) = arg(0).strip_prefix("mc:") {
                 self.roots.insert(object.into(), path.into());
                 match object {
