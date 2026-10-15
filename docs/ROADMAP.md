@@ -6,15 +6,16 @@ concurrently (one agent or worktree per track), and the dependencies between
 them are listed. Every item ends in a verified state (`cargo test`,
 `csr probe`, `csr sim`, and screenshots for anything visual; see AGENTS.md).
 
-## Where we are (assessed 2026-10-12)
+## Where we are (assessed 2026-10-15)
 
 Owner return-home playtest on 2026-10-14: all reported defects, required
 features, accepted improvements and priorities are retained in
 [PLAYTEST-2026-10-14.md](PLAYTEST-2026-10-14.md). Work continues without another
-test request until the owner asks. Immediate parallel tracks are coherent
-menu navigation/pause performance, grenade release synchronization, and a
-usable console with persistent wheel/key bindings; movement/surfing, spray,
-lighting and original HUD remain high-priority alongside them.
+test request until the owner asks. Immediate parallel tracks are grenade
+release/launch synchronization, measured walking viewmodel bob, and original
+combat HUD integration. Console and persistent wheel/key bindings have landed;
+menu coverage/performance, movement/surfing, additional weapon profiles and
+lighting remain open alongside those tracks.
 
 The inherited code is a **real, playable single-player base**. Phase 0 and
 the installer/updater release are complete. Gameplay now lives in the fixed
@@ -28,7 +29,7 @@ unfinished.
 |---|---|---|
 | Format readers (kv, vpk, vfs, bsp, vtf, vmt, mdl), collision, movement | Working base; exact movement and surfing parity unverified | **Keep, measure** |
 | `sim`: Bevy-free, fixed tick (128 default, runtime setting), per-player `TickInput`, seeded RNG | Right shape for netcode; owns bots and loadouts since Track A | **Keep, extend** |
-| Rendering, animation, viewmodels, sounds | Dust II validated; other maps unverified | **Keep** |
+| Rendering, animation, viewmodels, sounds | Bounded Dust II/Nuke and weapon checks; full lighting, motion and historical sound parity remain open | **Keep, measure and improve** |
 | Gameplay glue in `client` (bots, loadouts, skins, overworld rules run in Bevy systems, not `sim`) | Moved into `sim` (Track A) | **Done** |
 | Main menu | Installed Scaleform movies, persistent menu/loading/match flow, offline/pause/options bridge | **Extend and measure** |
 | Cases / inventory / cosmetics data | Works locally | **Keep data, rewrite UI** |
@@ -263,6 +264,27 @@ thing is uncanny. Fidelity is measured, never eyeballed:
       feel of movement, recoil, animation and hit registration.
       Dated recoil data and the unverified procedure:
       [RECOIL_REFERENCE.md](RECOIL_REFERENCE.md).
+- [x] Integrate independently observed standing AK, M4A4, both fresh M4A1-S
+      attachment modes, Galil and normal-fire FAMAS spray profiles, gated to
+      their exact installed Legacy schema. The disturbed M4A1-S set is wholly
+      excluded. These are version-specific observations, not complete moving,
+      crouching, scoped, other-weapon or 2015 recoil parity.
+- [x] Separate measured AK punch angle/velocity recovery from spray phase;
+      admit discrete resumed impulses against an independent paused-spray
+      observation. Actual World/TickInput rays and rendered recovery passed;
+      other weapons' recovery and historical parity remain open.
+      [PR #147](https://github.com/bentsignal/global-offensive/pull/147),
+      [PR #151](https://github.com/bentsignal/global-offensive/pull/151).
+- [x] Restore measured finite-history M4A4 look translation without changing
+      the aim ray or weapon orientation. Actual rendered yaw/pitch cases have
+      about one pixel of remaining rear-sight discrepancy; walking bob and
+      other weapon/view contexts remain open.
+      [PR #150](https://github.com/bentsignal/global-offensive/pull/150).
+- [x] Omit unused Bevy light clusters from the client's custom-lit cameras.
+      Same-binary Nuke comparisons reduced mean frame time about 7-8% in both
+      orders; production release/probe/sim and default-path rendering passed.
+      Complete pacing, other-map performance and 155 Hz parity remain open.
+      [Evidence](research/light-cluster-overhead.md).
 - [x] Replace the plain death feed with the installed classic notification movie: original boxes, team colors, local highlights and runtime icons, with independently inspected real kills and multiple rows. Missing-icon fallback and repeated relayout are verified; complete coverage and historical parity remain open. [HUD evidence](research/authored-killfeed.md).
 - [x] Authored static-prop lighting metadata foundation: retained model and
       hardware/source-vertex identities, bounded opaque VHV parsing and

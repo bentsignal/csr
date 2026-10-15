@@ -34,6 +34,7 @@ fn fixture(rate: u32) -> (World, PlayerId, Vec<[f32; 2]>) {
             first_impulse: [-20., -10.],
             final_impulse: [-20., 0.],
             held_tolerance_degrees: 0.2,
+            phase_recovery: None,
         }),
     });
     let p = world.player_mut(id).unwrap();
@@ -49,6 +50,58 @@ fn input(attack: bool) -> TickInput {
     TickInput {
         buttons: if attack { buttons::ATTACK } else { 0 },
         ..Default::default()
+    }
+}
+
+fn enable_phase(world: &mut World, id: PlayerId) {
+    let mut definitions = world.catalog.weapons.clone();
+    let gun = definitions.iter_mut().find(|x| x.class_name == "weapon_ak47").unwrap();
+    gun.recoil_trajectory.as_mut().unwrap().response.as_mut().unwrap().phase_recovery = Some(weapons::RecoilPhaseRecovery {
+        reference: "synthetic-phase-policy".into(), decay_decades_per_second: 2.,
+    });
+    world.player_mut(id).unwrap().active_weapon_mut().unwrap().set_def(Arc::new(gun.clone()));
+    world.catalog = Arc::new(weapons::Catalog { weapons: definitions });
+}
+
+#[test]
+fn public_float_phase_curve_constrains_decay_without_using_restart_rays() {
+    let (mut world, id, _) = fixture(128); enable_phase(&mut world, id);
+    let gun = world.player_mut(id).unwrap().active_weapon_mut().unwrap();
+    gun.recoil_index = 6.; gun.next_attack = 0.1;
+    // The observed values identify the decay multiplier very precisely.
+    // Receive timestamps do not establish the exact native onset tick; this
+    // fixture exercises the declared ordinary-primary-deadline convention.
+    let points = [(18, 4.835052), (26, 3.625777), (37, 2.440765),
+        (64, 0.923955), (95, 0.302883), (128, 0.092395)];
+    for tick in 1..=128 {
+        weapon::think(gun, tick as f32 / 128., 1. / 128., false, false);
+        if tick <= 12 { assert_eq!(gun.recoil_index, 6.); }
+        if let Some((_, expected)) = points.iter().find(|(at, _)| *at == tick) {
+            assert!((gun.recoil_index - expected).abs() <= 0.000002,
+                "phase after tick {tick}: {} vs {expected}", gun.recoil_index);
+        }
+    }
+}
+
+#[test]
+fn fractional_phase_and_derived_anchor_survive_resumed_burst_prediction() {
+    for rate in [64, 128] {
+        let (mut world, id, _) = fixture(rate); enable_phase(&mut world, id);
+        while world.player(id).unwrap().shots < 8 { world.step(&[(id, input(true))]); }
+        run(&mut world, 0.35, &[(id, input(false))]);
+        let phase = world.player(id).unwrap().active_weapon().unwrap().recoil_index;
+        assert!(phase > 2. && phase < 3.);
+        let snapshot: Snapshot = world.decode(&state::encode(&world.snapshot())).unwrap();
+        let mut predicted = world.clone(); predicted.restore(snapshot.state);
+        while world.player(id).unwrap().shots < 11 {
+            world.step(&[(id, input(true))]); predicted.step_prediction(&[(id, input(true))]);
+            assert_eq!(world.state_hash(), predicted.state_hash());
+        }
+        assert!((world.player(id).unwrap().active_weapon().unwrap().recoil_index - phase - 3.).abs() < 0.000002);
+        run(&mut world, 3., &[(id, input(false))]);
+        assert!(world.player(id).unwrap().active_weapon().unwrap().recoil_index < 1.);
+        world.step(&[(id, input(true))]);
+        assert!(ray(&world).unwrap().iter().all(|x| x.abs() < 0.001), "fractional recovered phase still starts at aim");
     }
 }
 fn ray(world: &World) -> Option<[f32; 2]> {

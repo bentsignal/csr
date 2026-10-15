@@ -36,6 +36,7 @@ pub fn setup(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
     let camera = commands
         .spawn((
             Camera3d::default(),
+            crate::material::camera_clusters(),
             Camera {
                 order: -1,
                 clear_color: Color::NONE.into(),

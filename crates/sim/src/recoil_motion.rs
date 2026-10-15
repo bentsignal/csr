@@ -46,6 +46,8 @@ pub(crate) fn valid(profile: &RecoilTrajectory) -> bool {
             .all(|x| x.is_finite() && x.abs() <= 10_000.)
         && r.held_tolerance_degrees.is_finite()
         && (0. ..=1.).contains(&r.held_tolerance_degrees)
+        && r.phase_recovery.as_ref().is_none_or(|phase| phase.decay_decades_per_second.is_finite()
+            && (0. ..=100.).contains(&phase.decay_decades_per_second))
         && profile
             .bullet_angles
             .iter()
@@ -146,6 +148,7 @@ mod tests {
             first_impulse: [0.; 2],
             final_impulse: [0.; 2],
             held_tolerance_degrees: 0.2,
+            phase_recovery: None,
         };
         // Readable public values from three release-only observations, not
         // restart rays used to tune a family. Relative update counts align

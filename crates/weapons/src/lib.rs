@@ -73,6 +73,16 @@ pub struct RecoilResponse {
     /// Observational uncertainty of a held bullet, rather than a claim that
     /// overlapping native hit boxes identify an exact angular center.
     pub held_tolerance_degrees: f32,
+    pub phase_recovery: Option<RecoilPhaseRecovery>,
+}
+
+/// Observed phase decay after the primary-attack deadline, with discrete
+/// impulse selection. Separate from continuously evolving angle/velocity.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RecoilPhaseRecovery {
+    pub reference: String,
+    /// A value of two retains 1/100 of the phase after one decay second.
+    pub decay_decades_per_second: f32,
 }
 
 /// Accuracy model inputs, in CS:GO's units (1/1000 radians-ish "inaccuracy").
