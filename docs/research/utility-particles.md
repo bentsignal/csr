@@ -200,3 +200,14 @@ explicit flag keep their previous orientation. The trace, emission, particle
 centers, material, brightness, fire coverage and authoritative damage are
 unchanged. This does not implement native inferno spread cells or the remaining
 SpriteCard composition laws. Focused and rendered verification are pending.
+
+Source `f64c964` passed all five focused utility-particle tests and a play
+launcher build after cleaning all 23 workspace packages for that profile.
+Two bounded 1920x1080 Dust II captures then showed the field on the mid ramp
+and a flat-floor control. Both were reviewed by the implementing and
+coordinating agents. Both clients exited zero, acknowledged the saved image
+with one live utility field, had clean raw logs and preserved the owner's
+separate configuration. Private receipts retain the immutable executable and
+image hashes. These establish rendered placement, without a matched native
+or before/after brightness claim. Fire is still visibly too bright; GR07 and
+authoritative spread GR08 remain open.
