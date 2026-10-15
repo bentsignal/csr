@@ -134,7 +134,7 @@ struct Bridge {
 /// A confirmation belongs to one opening, not to the cached MessageBox movie.
 /// Retained callbacks from a cancelled opening must never quit a later scene.
 #[derive(Default)]
-struct QuitConfirmation { epoch: u64, active: bool }
+struct QuitConfirmation { epoch: u64, active: bool, shown: bool }
 impl QuitConfirmation {
     fn begin(&mut self) -> bool {
         if self.active { return false; }
@@ -144,8 +144,8 @@ impl QuitConfirmation {
         true
     }
     fn receiver(&self) -> String { format!("OwnedQuit{}", self.epoch) }
-    fn owns(&self, receiver: &str) -> bool { self.active && receiver == self.receiver() }
-    fn cancel(&mut self) { self.active = false; }
+    fn owns(&self, receiver: &str) -> bool { self.active && self.shown && receiver == self.receiver() }
+    fn cancel(&mut self) { self.active = false; self.shown = false; }
 }
 
 fn show_single_player(path: &str, calls: &mut Calls) {
@@ -270,6 +270,7 @@ impl Bridge {
         calls.call(path, "SetFlagTertiary", vec![false.into()]);
         calls.set(path, "_visible", true.into());
         calls.call(path, "showPanel", vec![]);
+        self.quit.shown = true;
     }
 
     fn open_quit(&mut self, calls: &mut Calls) {
@@ -351,18 +352,18 @@ impl Engine for Bridge {
         if object.starts_with("OwnedQuit") {
             if !self.quit.owns(object) || self.dispatch_epoch.is_none()
                 || !matches!(self.data.lock().unwrap().state, AppState::Menu | AppState::Browser) { return None; }
-            match method {
-                "OnOk" if args.is_empty() => {
+            match (method, args) {
+                ("OnButtonPress", [Value::String(key)]) if key == "KEY_ENTER" => {
                     self.close_quit(calls);
                     self.push_action(Action::Command("quit".into()));
                 }
-                "OnCancel" | "OnUnload" if args.is_empty() => self.close_quit(calls),
+                ("OnButtonPress", [Value::String(key)]) if key == "KEY_ESCAPE" => self.close_quit(calls),
                 _ => (),
             }
             return None;
         }
         // The current opening's self-bound API is the only exit authority.
-        if object == "MessageBox" && matches!(method, "OnOk" | "OnCancel" | "OnUnload") { return None; }
+        if object == "MessageBox" && method == "OnButtonPress" { return None; }
         // Only our self-bound proxy labels carry epoch bookkeeping. Reject a
         // stale label before dispatch, including zero-argument Start/getters.
         if crate::frontend_lobby::Scene::owned_receiver(object) {
@@ -2231,25 +2232,29 @@ mod tests {
         assert!(bridge.actions.lock().unwrap().is_empty(), "power must not exit before confirmation");
         bridge.call("MainMenu", "BasePanelRunCommand", &["Quit".into()], &mut calls);
         assert_eq!(bridge.quit.receiver(), first, "repeat power during loading must keep one opening");
-        bridge.call("MessageBox", "OnOk", &[], &mut calls);
-        bridge.call(&first, "OnOk", &[true.into()], &mut calls);
+        bridge.call(&first, "OnButtonPress", &["KEY_ENTER".into()], &mut calls);
+        assert!(bridge.actions.lock().unwrap().is_empty(), "pending dialog cannot confirm before it is shown");
+        bridge.call("MessageBox", "OnReady", &[], &mut calls);
+        assert!(bridge.quit.shown);
+        bridge.call("MessageBox", "OnButtonPress", &["KEY_ENTER".into()], &mut calls);
+        bridge.call(&first, "OnButtonPress", &[48.0.into()], &mut calls);
         assert!(bridge.actions.lock().unwrap().is_empty(), "unowned/malformed confirmation must not exit");
-        bridge.call(&first, "OnCancel", &[], &mut calls);
+        bridge.call(&first, "OnButtonPress", &["KEY_ESCAPE".into()], &mut calls);
         assert!(!bridge.quit.active && bridge.offline_open, "Cancel must retain the picker");
         bridge.call("MainMenu", "BasePanelRunCommand", &["Quit".into()], &mut calls);
         assert_ne!(bridge.quit.receiver(), first);
-        bridge.call(&first, "OnOk", &[], &mut calls);
+        bridge.call(&first, "OnButtonPress", &["KEY_ENTER".into()], &mut calls);
         assert!(bridge.actions.lock().unwrap().is_empty());
         let second = bridge.quit.receiver();
         assert!(bridge.lifecycle(false, &mut calls));
         bridge.call("MessageBox", "OnReady", &[], &mut calls);
-        bridge.call(&second, "OnOk", &[], &mut calls);
+        bridge.call(&second, "OnButtonPress", &["KEY_ENTER".into()], &mut calls);
         assert!(!bridge.quit.active && bridge.actions.lock().unwrap().is_empty());
         assert!(bridge.lifecycle(true, &mut calls));
         bridge.call("MainMenu", "BasePanelRunCommand", &["Quit".into()], &mut calls);
         let current = bridge.quit.receiver();
-        bridge.call(&current, "OnOk", &[], &mut calls);
-        bridge.call(&current, "OnOk", &[], &mut calls);
+        bridge.call(&current, "OnButtonPress", &["KEY_ENTER".into()], &mut calls);
+        bridge.call(&current, "OnButtonPress", &["KEY_ENTER".into()], &mut calls);
         let actions = bridge.actions.lock().unwrap();
         assert_eq!(actions.len(), 1, "current confirmation must exit exactly once");
         assert!(matches!(&actions[0], Action::Command(command) if command == "quit"));

@@ -104,3 +104,25 @@ This checkpoint is not a rendered fix claim. The original Cancel click emitted
 API still need the bounded verbose public observation. The provisional callback
 binding is not accepted as complete until actual Cancel/reopen/OK behavior and
 the full question render have been checked.
+
+## Observed button contract and owned adapter
+
+The bounded verbose public observation identifies `OnButtonPress(48)` for the
+actual OK pixel and `OnButtonPress(52)` for Cancel. Those values are our bridge's
+existing `ValveKeyTable` entries for `KEY_ENTER` and `KEY_ESCAPE`. The dialog
+record exposes text/flags, `mLevel` and `mPanel`, with no native API field.
+Rebinding the movie's `gameAPI` did not replace its retained engine receiver.
+
+The corrected adapter changes only `OnButtonPress` on our cached MessageBox
+proxy. It preserves any prior own property, translates through our own key table
+and assigns an immutable opening receiver. Release restores that property only
+if it still owns it. The ineffective root/MessageBoxAPI replacement is removed.
+A retained old callback closure remains tied to its old epoch; a future authored
+lookup of the current property obtains the current wrapper. No claim is made
+that arbitrary delayed authored lookups can be assigned a historical epoch.
+
+The Rust bridge requires a current shown confirmation, active action epoch and
+menu scene. Raw native callbacks, loading-only confirmations, malformed values,
+cancelled openings and parked workers cannot request application exit. Actual
+production Cancel/reopen/OK and complete question rendering remain pending the
+combined candidate's immutable build and graphical check.

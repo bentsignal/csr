@@ -96,17 +96,7 @@ _global.csrBindings.samplePauseSurface = function(owner, epoch, serial, pausePat
 
 // Our epoch labels identify stale owned-menu callbacks. Keep only the live
 // alias, without placing each reopen generation in the ordinary API cache.
-_global.csrBindings.bindOwnedApi = function(alias, name) {
-    var prefix;
-    if (alias == "LobbyAPI") {
-        prefix = "OwnedLobby";
-    } else if (alias == "SinglePlayerAPI") {
-        prefix = "OwnedPicker";
-    } else if (alias == "MessageBoxAPI") {
-        prefix = "OwnedQuit";
-    } else {
-        return false;
-    }
+_global.csrBindings.validOwnedName = function(name, prefix) {
     if (typeof name != "string" || name.indexOf(prefix) != 0) {
         return false;
     }
@@ -136,35 +126,58 @@ _global.csrBindings.bindOwnedApi = function(alias, name) {
     if (comparison > 0) {
         return false;
     }
+    return true;
+};
+_global.csrBindings.bindOwnedApi = function(alias, name) {
+    var prefix;
+    if (alias == "LobbyAPI") { prefix = "OwnedLobby"; }
+    else if (alias == "SinglePlayerAPI") { prefix = "OwnedPicker"; }
+    else { return false; }
+    if (!_global.csrBindings.validOwnedName(name, prefix)) { return false; }
     _global[alias] = _global.csrMakeProxy(name);
     return true;
 };
 
-// Only our registered original quit dialog receives an opening-bound API.
-// Preserve the loader API/alias for other uses of the cached MessageBox.
+// The installed dialog retains the engine proxy passed to RequestElement;
+// rebinding root.gameAPI does not replace that reference. Change only the
+// observed button callback on OUR cached proxy, with an immutable opening
+// receiver. Other native getters/timer callbacks keep the loader API.
 _global.csrBindings.bindOwnedQuit = function(path, name) {
     var root = _global.csrResolve(path);
+    var api = _global.csrApi("MessageBox");
     if (path != "_level500" || root == undefined || root.elementName != "MessageBox" ||
-        typeof root.gameAPI != "object") { return false; }
-    if (root.csrQuitBaseAPI == undefined) {
-        root.csrQuitBaseAPI = root.gameAPI;
-        root.csrQuitBaseAlias = _global.MessageBoxAPI;
-        root.csrQuitHadAlias = _global.MessageBoxAPI != undefined;
+        root.gameAPI != api || !_global.csrBindings.validOwnedName(name, "OwnedQuit")) { return false; }
+    if (root.csrQuitBoundAPI == undefined) {
+        root.csrQuitBoundAPI = api;
+        root.csrQuitHadButton = api.hasOwnProperty("OnButtonPress");
+        root.csrQuitBaseButton = api.OnButtonPress;
     }
-    if (!_global.csrBindings.bindOwnedApi("MessageBoxAPI", name)) { return false; }
-    root.gameAPI = _global.MessageBoxAPI;
+    var owned = _global.csrMakeProxy(name);
+    var callback = function(code) {
+        if (arguments.length != 1 || typeof code != "number") { return; }
+        // Both pixels were observed: native OK -> our KEY_ENTER48;
+        // Cancel -> our KEY_ESCAPE52. Keep our table, not magic native values.
+        var key = _global.ValveKeyTable[code];
+        if (key != "KEY_ENTER" && key != "KEY_ESCAPE") { return; }
+        return owned.OnButtonPress(key);
+    };
+    root.csrQuitCallback = callback;
+    api.OnButtonPress = callback;
     return true;
 };
 _global.csrBindings.releaseOwnedQuit = function(path) {
     var root = _global.csrResolve(path);
     if (path != "_level500" || root == undefined || root.elementName != "MessageBox" ||
-        typeof root.csrQuitBaseAPI != "object") { return false; }
-    root.gameAPI = root.csrQuitBaseAPI;
-    if (root.csrQuitHadAlias) { _global.MessageBoxAPI = root.csrQuitBaseAlias; }
-    else { delete _global.MessageBoxAPI; }
-    delete root.csrQuitBaseAPI;
-    delete root.csrQuitBaseAlias;
-    delete root.csrQuitHadAlias;
+        typeof root.csrQuitBoundAPI != "object") { return false; }
+    var api = root.csrQuitBoundAPI;
+    if (api.OnButtonPress == root.csrQuitCallback) {
+        if (root.csrQuitHadButton) { api.OnButtonPress = root.csrQuitBaseButton; }
+        else { delete api.OnButtonPress; }
+    }
+    delete root.csrQuitBoundAPI;
+    delete root.csrQuitBaseButton;
+    delete root.csrQuitHadButton;
+    delete root.csrQuitCallback;
     return true;
 };
 
