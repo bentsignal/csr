@@ -97,6 +97,19 @@ impl Files {
             tracing::debug!("scaleform: no file {rel}");
             return None;
         };
+        // This movie embeds only the eleven glyphs in its placeholder token.
+        // The missing localized characters match that subset's omissions.
+        // A Scaleform library fallback is inferred, not yet independently
+        // established. Complete from the installed family while preserving
+        // original glyphs; exact donor typography remains a measured gap.
+        let raw = if rel == "message-box.swf" {
+            match self.vfs.read("resource/flash/fontlib.swf")
+                .ok_or_else(|| anyhow::anyhow!("fontlib.swf missing"))
+                .and_then(|library| crate::messagebox_font::complete(&raw, &library)) {
+                Ok(data) => data,
+                Err(error) => { tracing::warn!("scaleform: MessageBox font completion: {error}"); raw }
+            }
+        } else { raw };
         let data = if rel.ends_with(".swf") {
             match rewrite::translate_movie(&raw, &self.loc, &mut self.stats.borrow_mut()) {
                 Ok(data) => data,

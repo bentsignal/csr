@@ -127,7 +127,25 @@ struct Bridge {
     options: crate::frontend_options::Scene,
     offline: crate::frontend_game::OfflineLaunch,
     offline_open: bool,
+    quit: QuitConfirmation,
     lobby: Arc<Mutex<crate::frontend_lobby::Scene>>,
+}
+
+/// A confirmation belongs to one opening, not to the cached MessageBox movie.
+/// Retained callbacks from a cancelled opening must never quit a later scene.
+#[derive(Default)]
+struct QuitConfirmation { epoch: u64, active: bool, shown: bool }
+impl QuitConfirmation {
+    fn begin(&mut self) -> bool {
+        if self.active { return false; }
+        let Some(epoch) = self.epoch.checked_add(1) else { return false; };
+        self.epoch = epoch;
+        self.active = true;
+        true
+    }
+    fn receiver(&self) -> String { format!("OwnedQuit{}", self.epoch) }
+    fn owns(&self, receiver: &str) -> bool { self.active && self.shown && receiver == self.receiver() }
+    fn cancel(&mut self) { self.active = false; self.shown = false; }
 }
 
 fn show_single_player(path: &str, calls: &mut Calls) {
@@ -144,6 +162,10 @@ fn show_single_player(path: &str, calls: &mut Calls) {
         vec![false.into(), false.into(), false.into()],
     );
     calls.call(path, "showPanel", vec![]);
+    // MainMenu.hidePanelImmediate disables its native power button. Keep that
+    // original control usable above the owned picker, as requested; its public
+    // setter and actual Quit callback were observed together at runtime.
+    calls.call("_global.MainMenuMovie.Panel.SelectPanel.MainMenuTopBar.QuitButton", "setDisabled", vec![false.into()]);
     let modes = format!("{path}.Panel.Panel.ModeChooser.TabDefault");
     calls.call(&format!("{modes}.ModeCompetitive"), "Action", vec![]);
     for mode in ["ModeCasual", "ModeWingman", "ModeWargames"] {
@@ -191,6 +213,7 @@ impl Bridge {
     fn push_action(&self, action: Action) { self.actions.lock().unwrap().push_at(self.dispatch_epoch, action); }
 
     fn reset_navigation(&mut self, calls: &mut Calls) {
+        self.close_quit(calls);
         self.close_options(calls);
         self.offline_open = false;
         self.offline.query(None);
@@ -221,6 +244,47 @@ impl Bridge {
         data.deferred_pause.cancel_pending();
         if let Some(path) = self.roots.get("OptionsMenu") {
             calls.set(path, "_visible", false.into());
+        }
+    }
+
+    fn close_quit(&mut self, calls: &mut Calls) {
+        let was_active = self.quit.active;
+        self.quit.cancel();
+        if let Some(path) = self.roots.get("MessageBox") {
+            if was_active { calls.call(path, "hidePanelImmediate", vec![]); }
+            calls.set(path, "_visible", false.into());
+            calls.call("_global.csrBindings", "releaseOwnedQuit", vec![path.clone().into()]);
+        }
+    }
+
+    fn show_quit(&mut self, calls: &mut Calls) {
+        let Some(path) = self.roots.get("MessageBox") else { return; };
+        let data = self.data.lock().unwrap();
+        if !self.quit.active || !matches!(data.state, AppState::Menu | AppState::Browser)
+            || self.actions.lock().unwrap().current().is_none() { return; }
+        let text = |token: &str| data.localization.get(token).unwrap_or(token).to_owned();
+        calls.call("_global.csrBindings", "bindOwnedQuit", vec![path.clone().into(), self.quit.receiver().into()]);
+        // These are the installed MessageBox's observed public setters. Keep
+        // its native geometry, flags and navigation; do not guess Init's order.
+        calls.call(path, "SetTitle", vec![text("#SFUI_MainMenu_ExitGameConfirmation_Title").into()]);
+        calls.call(path, "SetMessage", vec![text("#SFUI_MainMenu_ExitGameConfirmation_Message").into()]);
+        calls.call(path, "SetButtonLegend", vec![text("#SFUI_MainMenu_ExitGameConfirmation_Navigation").into()]);
+        calls.call(path, "SetFlagOk", vec![true.into()]);
+        calls.call(path, "SetFlagCancel", vec![true.into()]);
+        calls.call(path, "SetFlagTertiary", vec![false.into()]);
+        calls.set(path, "_visible", true.into());
+        calls.call(path, "showPanel", vec![]);
+        self.quit.shown = true;
+    }
+
+    fn open_quit(&mut self, calls: &mut Calls) {
+        if !matches!(self.data.lock().unwrap().state, AppState::Menu | AppState::Browser)
+            || self.dispatch_epoch.is_none() || !self.quit.begin() { return; }
+        let ready = self.data.lock().unwrap().movie_ready.contains("MessageBox");
+        if ready {
+            self.show_quit(calls);
+        } else if self.requested.insert("MessageBox".into()) {
+            calls.request_element("MessageBox");
         }
     }
 
@@ -266,7 +330,8 @@ impl Engine for Bridge {
         self.dispatch_epoch = self.actions.lock().unwrap().current();
         if object == "MainMenu" && self.data.lock().unwrap().home_retired { return Some(Value::Undefined); }
         let seen_object = if object.starts_with("OwnedLobby") { "OwnedLobby" }
-            else if object.starts_with("OwnedPicker") { "OwnedPicker" } else { object };
+            else if object.starts_with("OwnedPicker") { "OwnedPicker" }
+            else if object.starts_with("OwnedQuit") { "OwnedQuit" } else { object };
         // Repeated native getters are the common path. Borrow their existing
         // names instead of allocating two Strings only to discard them when
         // the diagnostic pair was already seen. This does not cache results.
@@ -277,7 +342,7 @@ impl Engine for Bridge {
         if first
             || matches!(
                 method,
-                "BasePanelRunCommand" | "OnUpdateValue" | "SendUIEvent"
+                "BasePanelRunCommand" | "OnUpdateValue" | "SendUIEvent" | "OnButtonPress"
             )
             || method.starts_with("SetConvar")
         {
@@ -288,6 +353,21 @@ impl Engine for Bridge {
             }
         }
         let arg = |index: usize| args.get(index).map(Value::str).unwrap_or_default();
+        if object.starts_with("OwnedQuit") {
+            if !self.quit.owns(object) || self.dispatch_epoch.is_none()
+                || !matches!(self.data.lock().unwrap().state, AppState::Menu | AppState::Browser) { return None; }
+            match (method, args) {
+                ("OnButtonPress", [Value::String(key)]) if key == "KEY_ENTER" => {
+                    self.close_quit(calls);
+                    self.push_action(Action::Command("quit".into()));
+                }
+                ("OnButtonPress", [Value::String(key)]) if key == "KEY_ESCAPE" => self.close_quit(calls),
+                _ => (),
+            }
+            return None;
+        }
+        // The current opening's self-bound API is the only exit authority.
+        if object == "MessageBox" && method == "OnButtonPress" { return None; }
         // Only our self-bound proxy labels carry epoch bookkeeping. Reject a
         // stale label before dispatch, including zero-argument Start/getters.
         if crate::frontend_lobby::Scene::owned_receiver(object) {
@@ -479,7 +559,7 @@ impl Engine for Bridge {
                     if self.data.lock().unwrap().state != AppState::Menu || !self.lobby.lock().unwrap().active() {
                         calls.set(path, "_visible", false.into());
                     }
-                } else if matches!(object, "OptionsMenu" | "StartSinglePlayer") {
+                } else if matches!(object, "OptionsMenu" | "StartSinglePlayer" | "MessageBox") {
                     // Loader completion precedes authored Ready. Keep a cold
                     // root hidden until the still-current destination owns its
                     // initialization; superseded loads must never flash open.
@@ -502,6 +582,13 @@ impl Engine for Bridge {
             if data.state != AppState::Match || !data.menu_open || data.pause_surface.options_requested() {
                 if let Some(path) = self.roots.get(object) { calls.set(path, "_visible", false.into()); }
             }
+            return None;
+        }
+        if method == "OnReady" && object == "MessageBox" {
+            let current = self.quit.active && matches!(self.data.lock().unwrap().state, AppState::Menu | AppState::Browser)
+                && self.dispatch_epoch.is_some();
+            if current { self.show_quit(calls); }
+            else { self.close_quit(calls); }
             return None;
         }
         if method == "OnReady" && matches!(object, "LobbyBrowser" | "LobbyScreen") {
@@ -582,6 +669,13 @@ impl Engine for Bridge {
         }
         if method == "BasePanelRunCommand" {
             let command = arg(0);
+            // The installed Home power button emits Quit. Confirmation must
+            // precede generic navigation teardown so Cancel keeps the picker.
+            if object == "MainMenu" && command == "Quit" {
+                self.open_quit(calls);
+                return None;
+            }
+            self.close_quit(calls);
             self.close_options(calls);
             self.offline_open = false;
             self.offline.query(None);
@@ -1321,7 +1415,7 @@ pub(crate) fn update(
                 requested: HashSet::new(),
                 options: Default::default(),
                 offline: Default::default(),
-                offline_open: false,
+                offline_open: false, quit: Default::default(),
                 lobby: front.lobby.clone(),
             }),
             format!("{:?}-{generation}", front.worker_kind),
@@ -2004,7 +2098,7 @@ mod tests {
         let old_lobby = scene.proxy(Api::Lobby);
         let actions = Arc::new(Mutex::new(ActionQueue::default()));
         let mut bridge = Bridge { dispatch_epoch: None, data, actions: actions.clone(), seen: Default::default(), roots: Default::default(), requested: Default::default(),
-            options: Default::default(), offline: Default::default(), offline_open: false, lobby: Arc::new(Mutex::new(scene)) };
+            options: Default::default(), offline: Default::default(), offline_open: false, quit: Default::default(), lobby: Arc::new(Mutex::new(scene)) };
         let mut calls = Calls::default();
         bridge.call(&old_lobby, "ChooseGameSettings", &[], &mut calls);
         let old_picker = bridge.lobby.lock().unwrap().proxy(Api::Picker);
@@ -2094,7 +2188,7 @@ mod tests {
             roots: HashMap::from([("OptionsMenu".into(), "_level12".into()),
                 ("StartSinglePlayer".into(), "_level15".into())]),
             requested: Default::default(), options: Default::default(),
-            offline: Default::default(), offline_open: false,
+            offline: Default::default(), offline_open: false, quit: Default::default(),
             lobby: Arc::new(Mutex::new(crate::frontend_lobby::Scene::new(
                 crate::frontend_lobby::Catalog::installed(&crate::ClientOptions::default(), &[])))),
         };
@@ -2113,6 +2207,61 @@ mod tests {
         bridge.call("StartSinglePlayer", "OnReady", &[], &mut calls);
         assert!(data.lock().unwrap().pause_surface.options_requested());
         assert!(!bridge.offline_open, "late picker readiness must not replace Audio");
+    }
+
+    #[test]
+    fn quit_confirmation_preserves_picker_and_rejects_cancelled_or_parked_callbacks() {
+        let fs = Arc::new(vfs::Vfs::new());
+        let data = Arc::new(Mutex::new(Data {
+            inventory: InventoryView::new(&fs), fs, settings: Settings::default(),
+            localization: Default::default(), game_modes: Default::default(),
+            state: AppState::Menu, menu_open: true, loading: String::new(),
+            loading_map: None, player_name: "You".into(), movie_ready: Default::default(),
+            home_bootstrapped: false, home_retired: false,
+            pause_surface: Default::default(), deferred_pause: Default::default(),
+        }));
+        let mut bridge = Bridge {
+            dispatch_epoch: None, data: data.clone(), actions: Default::default(),
+            seen: Default::default(), roots: HashMap::from([("MessageBox".into(), "_level500".into())]),
+            requested: Default::default(), options: Default::default(),
+            offline: Default::default(), offline_open: false, quit: Default::default(),
+            lobby: Arc::new(Mutex::new(crate::frontend_lobby::Scene::new(
+                crate::frontend_lobby::Catalog::installed(&crate::ClientOptions::default(), &[])))),
+        };
+        let mut calls = Calls::default();
+        bridge.call("MainMenu", "BasePanelRunCommand", &["OpenCreateSinglePlayerGameDialog".into()], &mut calls);
+        bridge.call("MainMenu", "BasePanelRunCommand", &["Quit".into(), "false".into()], &mut calls);
+        let first = bridge.quit.receiver();
+        assert!(bridge.offline_open && bridge.quit.active);
+        assert!(bridge.actions.lock().unwrap().is_empty(), "power must not exit before confirmation");
+        bridge.call("MainMenu", "BasePanelRunCommand", &["Quit".into()], &mut calls);
+        assert_eq!(bridge.quit.receiver(), first, "repeat power during loading must keep one opening");
+        bridge.call(&first, "OnButtonPress", &["KEY_ENTER".into()], &mut calls);
+        assert!(bridge.actions.lock().unwrap().is_empty(), "pending dialog cannot confirm before it is shown");
+        bridge.call("MessageBox", "OnReady", &[], &mut calls);
+        assert!(bridge.quit.shown);
+        bridge.call("MessageBox", "OnButtonPress", &["KEY_ENTER".into()], &mut calls);
+        bridge.call(&first, "OnButtonPress", &[48.0.into()], &mut calls);
+        assert!(bridge.actions.lock().unwrap().is_empty(), "unowned/malformed confirmation must not exit");
+        bridge.call(&first, "OnButtonPress", &["KEY_ESCAPE".into()], &mut calls);
+        assert!(!bridge.quit.active && bridge.offline_open, "Cancel must retain the picker");
+        bridge.call("MainMenu", "BasePanelRunCommand", &["Quit".into()], &mut calls);
+        assert_ne!(bridge.quit.receiver(), first);
+        bridge.call(&first, "OnButtonPress", &["KEY_ENTER".into()], &mut calls);
+        assert!(bridge.actions.lock().unwrap().is_empty());
+        let second = bridge.quit.receiver();
+        assert!(bridge.lifecycle(false, &mut calls));
+        bridge.call("MessageBox", "OnReady", &[], &mut calls);
+        bridge.call(&second, "OnButtonPress", &["KEY_ENTER".into()], &mut calls);
+        assert!(!bridge.quit.active && bridge.actions.lock().unwrap().is_empty());
+        assert!(bridge.lifecycle(true, &mut calls));
+        bridge.call("MainMenu", "BasePanelRunCommand", &["Quit".into()], &mut calls);
+        let current = bridge.quit.receiver();
+        bridge.call(&current, "OnButtonPress", &["KEY_ENTER".into()], &mut calls);
+        bridge.call(&current, "OnButtonPress", &["KEY_ENTER".into()], &mut calls);
+        let actions = bridge.actions.lock().unwrap();
+        assert_eq!(actions.len(), 1, "current confirmation must exit exactly once");
+        assert!(matches!(&actions[0], Action::Command(command) if command == "quit"));
     }
 
     #[test]
@@ -2142,7 +2291,7 @@ mod tests {
             requested: HashSet::new(),
             options: crate::frontend_options::Scene::default(),
             offline: crate::frontend_game::OfflineLaunch::default(),
-            offline_open: false,
+            offline_open: false, quit: Default::default(),
             lobby: Arc::new(Mutex::new(crate::frontend_lobby::Scene::new(
                 crate::frontend_lobby::Catalog::installed(&crate::ClientOptions::default(), &[]),
             ))),
