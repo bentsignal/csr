@@ -173,6 +173,12 @@ pub fn process(
                     if !sound.is_empty() { sounds.play_with(&mut commands, fs, &mut sources, sound, emit(player, origin)); }
                 }
             }
+            GameEvent::BurstModeChanged { player, origin, .. } => {
+                // Both installed burst viewmodels have no separate switch
+                // sequence; native mode changes emit this soundscript cue.
+                sounds.play_with(&mut commands, fs, &mut sources,
+                    "Weapon.AutoSemiAutoSwitch", emit(player, origin));
+            }
             GameEvent::Tracer { player, start, end } => {
                 tracers.pending.push((player,start,end));
             }
