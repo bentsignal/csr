@@ -195,17 +195,36 @@ _global.csrBindings.focusWidget = function(path, index) {
     }
 };
 
-// Register the measured resting axis of this exact installed horizontal pip.
-// The host adjusts only its native zero-height drag constraint, retaining the
-// authored callbacks and Flash dragging (including the original x bounds).
+// Arm an axis correction from the exact registered pip's own native event.
+// Callbacks remain authored; the host retains Flash's original drag machinery.
+_global.csrBindings.wrapSliderDragEvent = function(pip, widget, axis, name) {
+    var base = pip[name];
+    if (typeof base != "function") {
+        return;
+    }
+    pip[name] = function() {
+        var result = base.apply(this, arguments);
+        if (this == pip && widget.m_bDraggingMouse === true) {
+            csrEI.call("csr.RegisterSliderDragAxis", "mc:" + String(pip), axis);
+        }
+        return result;
+    };
+};
 _global.csrBindings.preserveSliderDragAxis = function(path) {
     var widget = _global.csrResolve(path);
     var pip = widget.ScrollPip;
     if (typeof pip != "movieclip" || typeof widget.m_nSlideMin != "number" ||
-        typeof widget.m_nSlideMax != "number") {
+        typeof widget.m_nSlideMax != "number" || !isFinite(pip._y)) {
         return false;
     }
-    return csrEI.call("csr.RegisterSliderDragAxis", "mc:" + String(pip), pip._y);
+    if (pip.csrSliderAxisInstalled === true) {
+        return true;
+    }
+    pip.csrSliderAxisInstalled = true;
+    var axis = pip._y;
+    _global.csrBindings.wrapSliderDragEvent(pip, widget, axis, "onPress");
+    _global.csrBindings.wrapSliderDragEvent(pip, widget, axis, "onMouseMove");
+    return true;
 };
 
 // Resolves "_global.MainMenuMovie.Panel" or "_level31.Panel" to an object.

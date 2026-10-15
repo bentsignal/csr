@@ -34,10 +34,12 @@ bodies were read.
 
 An initial instance startDrag wrapper did not intercept the installed path;
 the 386966a production drag screenshot still shows the bug. The replacement
-registers the exact pip's public runtime path/resting y and uses Ruffle's public
-UpdateContext drag object to correct only its native zero-height y constraint.
-It retains the original x constraint, drag offset, callbacks, value conversion
-and sounds. A fresh Options load clears the registry. The replacement must be
+wraps only that pip's observed onPress/onMouseMove callbacks, delegates the
+original and arms a one-event correction when the widget reports native mouse
+dragging. The host uses Ruffle's public UpdateContext drag constraint and
+Player::update_drag to preserve the measured y, retaining x bounds, offset,
+value conversion and sounds. A fresh Options load clears any pending request.
+The replacement must be
 validated with a newly built client before calling this fixed.
 
 ## Pause response investigation

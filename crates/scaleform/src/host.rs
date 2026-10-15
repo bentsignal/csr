@@ -17,7 +17,6 @@ use ruffle_core::backend::navigator::{
     ErrorResponse, NavigationMethod, NavigatorBackend, NullExecutor, NullSpawner, OwnedFuture,
     Request, SuccessResponse, create_fetch_error,
 };
-use ruffle_core::display_object::TDisplayObject;
 use ruffle_core::swf::Twips;
 use ruffle_core::events::{KeyDescriptor, KeyLocation, LogicalKey, NamedKey, PhysicalKey, MouseButton as RuffleButton, MouseWheelDelta, PlayerEvent, TextControlCode};
 use ruffle_core::external::{ExternalInterfaceProvider, Value as ExtValue};
@@ -236,7 +235,7 @@ struct Dispatcher {
     calls: Calls,
     events: EventSender<Event>,
     root_ready: bool,
-    slider_axes: HashMap<String, f64>,
+    slider_axis_pending: Option<f64>,
 }
 
 impl Dispatcher {
@@ -254,11 +253,11 @@ impl Dispatcher {
                     || !axis.is_finite() || axis.abs() > 16_384. {
                     return Value::Bool(false);
                 }
-                self.slider_axes.insert(path.to_owned(), *axis);
+                self.slider_axis_pending = Some(*axis);
                 return Value::Bool(true);
             }
             (_, "OnLoadFinished") if !object.starts_with("CScaleformComponent_") => {
-                if object == "OptionsMenu" { self.slider_axes.clear(); }
+                if object == "OptionsMenu" { self.slider_axis_pending = None; }
                 let _ = self.events.send(Event::Loaded(object.to_string()));
             }
             _ => {}
@@ -376,7 +375,7 @@ impl Host {
             calls: Calls::default(),
             events,
             root_ready: false,
-            slider_axes: HashMap::new(),
+            slider_axis_pending: None,
         }));
         let executor = NullExecutor::new();
         let navigator = InstallNavigator {
@@ -534,22 +533,18 @@ impl Host {
         self.player.lock().unwrap().call_internal_interface(callback, args)
     }
 
-    /// Scaleform's horizontal pip rests at y=5, but its installed native drag
-    /// requests a y=0 constraint. Correct only registered current Options pips;
-    /// arbitrary Flash drags, x bounds, offsets and callbacks are untouched.
+    /// A registered pip's own callback arms this single-event correction only
+    /// while its widget reports native dragging. Keep Flash's x bounds/offsets.
     fn preserve_slider_drag_axis(&mut self) {
-        let dispatcher = self.dispatcher.borrow();
-        if dispatcher.slider_axes.is_empty() { return; }
+        let Some(axis) = self.dispatcher.borrow_mut().slider_axis_pending.take() else { return };
+        let axis = Twips::from_pixels(axis);
+        if axis == Twips::ZERO { return; }
         self.player.lock().unwrap().mutate_with_update_context(|context| {
             let Some(drag) = context.drag_object.as_mut() else { return };
-            if drag.display_object.avm1_removed() || drag.constraint.y_min != Twips::ZERO
-                || drag.constraint.y_max != Twips::ZERO { return; }
-            let path = drag.display_object.path();
-            let Some(axis) = dispatcher.slider_axes.get(path.to_utf8_lossy().as_ref()) else { return };
-            let axis = Twips::from_pixels(*axis);
+            if drag.constraint.y_min != Twips::ZERO || drag.constraint.y_max != Twips::ZERO { return; }
             drag.constraint.y_min = axis;
             drag.constraint.y_max = axis;
-            drag.display_object.set_y(axis);
+            Player::update_drag(context);
         });
     }
 
