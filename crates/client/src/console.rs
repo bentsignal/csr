@@ -9,7 +9,7 @@ use bevy::{
 use std::collections::VecDeque;
 
 #[derive(Resource)]
-pub(crate) struct DeveloperConsole {
+pub struct DeveloperConsole {
     open: bool,
     blocked_frame: bool,
     line: String,
@@ -120,7 +120,11 @@ fn setup(mut commands: Commands, assets: Res<crate::ui_assets::UiAssets>) {
                     Node {
                         flex_grow: if output { 1.0 } else { 0.0 },
                         flex_shrink: if output { 1.0 } else { 0.0 },
-                        min_height: px(0),
+                        // Text with an initially empty value otherwise measures
+                        // to zero before opening; reserve visible title/input rows.
+                        height: if output { auto() } else { px(26) },
+                        min_height: if output { px(0) } else { px(26) },
+                        flex_basis: if output { px(0) } else { px(26) },
                         overflow: Overflow::clip(),
                         ..default()
                     },
