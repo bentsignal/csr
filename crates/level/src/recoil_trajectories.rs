@@ -334,6 +334,7 @@ pub(super) fn import(catalog: &mut Catalog, schema: Option<[u8; 20]>) -> Option<
                 def.recoil_trajectory_unsuppressed = Some(RecoilTrajectory {
                     reference: "legacy-1.38.8.1-m4s-detached-held-standing-128hz".into(),
                     bullet_angles: M4S_DETACHED_BULLET_ANGLES.to_vec(),
+                    response: None,
                 });
                 (
                     "legacy-1.38.8.1-m4s-attached-held-standing-128hz",
@@ -346,6 +347,7 @@ pub(super) fn import(catalog: &mut Catalog, schema: Option<[u8; 20]>) -> Option<
             def.recoil_trajectory = Some(RecoilTrajectory {
                 reference: reference.into(),
                 bullet_angles: angles.to_vec(),
+                response: None,
             });
             digest.update(def.id.to_string().as_bytes());
             hash_profile(

@@ -8,6 +8,7 @@ fn main() {
     let weapon = args.next().unwrap_or_else(|| "weapon_ak47".to_owned());
     let mut unsuppressed = false;
     let mut restart_gap = None;
+    let mut restart_shots = 6;
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--unsuppressed" => unsuppressed = true,
@@ -23,7 +24,10 @@ fn main() {
                 );
                 restart_gap = Some(gap);
             }
-            _ => panic!("expected --unsuppressed or --restart-gap seconds"),
+            "--restart-shots" => {
+                restart_shots = args.next().expect("partial shot count").parse::<usize>().expect("integer shot count");
+            }
+            _ => panic!("expected --unsuppressed, --restart-gap seconds or --restart-shots count"),
         }
     }
     let level = level::Level::load("de_dust2", None).expect("installed Legacy map/catalog");
@@ -34,6 +38,7 @@ fn main() {
         installed.recoil_trajectory.as_ref()
     }
     .expect("observed installed weapon/mode profile");
+    assert!((1..profile.bullet_angles.len()).contains(&restart_shots));
     eprintln!(
         "profile={} rays={} catalog={:?}",
         profile.reference,
@@ -80,7 +85,7 @@ fn main() {
         p.weapons = vec![state];
         p.active = 0;
         let total = if restart_gap.is_some() {
-            7
+            restart_shots + 1
         } else {
             profile.bullet_angles.len()
         };
@@ -89,10 +94,10 @@ fn main() {
         let mut partial_time = None;
         let mut partial_tick = None;
         for _ in 0..world.ticks(5.) {
-            // Release after six actual tracers, then request one restart.
-            // The printed sixth-to-seventh interval is authoritative sim time;
+            // Release after actual tracers, then request one restart.
+            // The printed last-to-restart interval is authoritative sim time;
             // it can differ from the request because of cooldown/tick rounding.
-            let attack = emitted < 6
+            let attack = emitted < restart_shots
                 || restart_gap.is_none()
                 || (world.tick > partial_tick.unwrap_or(0)
                     && world.time() + world.dt()
@@ -107,7 +112,7 @@ fn main() {
                     let direction = (*end - *start).normalize();
                     let pitch = -direction.z.asin().to_degrees();
                     let yaw = direction.y.atan2(direction.x).to_degrees();
-                    let held_reference = restart_gap.is_none() || emitted < 6;
+                    let held_reference = restart_gap.is_none() || emitted < restart_shots;
                     let error = if held_reference {
                         let expected = profile.bullet_angles[emitted];
                         ((pitch - expected[0]).powi(2) + (yaw - expected[1]).powi(2)).sqrt()
@@ -123,15 +128,22 @@ fn main() {
                         world.tick,
                         world.time()
                     );
+                    // The first two native boxes overlap. Independent first
+                    // velocity evidence resolves their ambiguity only within
+                    // the original marker uncertainty; later held rays retain
+                    // their existing exact reconstruction check.
+                    let tolerance = if emitted == 1 {
+                        profile.response.as_ref().map_or(0.001, |r| r.held_tolerance_degrees)
+                    } else { 0.001 };
                     assert!(
-                        !held_reference || error < 0.001,
+                        !held_reference || error < tolerance,
                         "actual authoritative bullet differs from attached observed profile"
                     );
                     emitted += 1;
-                    if emitted == 6 {
+                    if emitted == restart_shots {
                         partial_time = Some(world.time());
                         partial_tick = Some(world.tick);
-                    } else if emitted == 7 && restart_gap.is_some() {
+                    } else if emitted == restart_shots + 1 && restart_gap.is_some() {
                         eprintln!(
                             "tickrate={rate} requested_restart_gap={} actual_restart_interval={:.6} clip={}",
                             restart_gap.unwrap(),
