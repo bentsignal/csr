@@ -179,6 +179,12 @@ _global.csrDeathNotices.add = function(key, killer, victim, killerColor, victimC
     var row = {panel: panel, killer: this.escape(killer), victim: this.escape(victim),
         killerColor: killerColor, victimColor: victimColor,
         localAttacker: localAttacker === true, localVictim: localVictim === true};
+    // Initialize the actual text-dependent authored row height before fitting
+    // icons: the unloaded template height differs from SetPanelText's height.
+    this.root.SetPanelText(panel,
+        '<font color="' + row.killerColor + '">' + row.killer + '</font>&#160;' +
+        '<font color="' + row.victimColor + '">' + row.victim + '</font>',
+        row.localVictim, row.localAttacker);
     row.weapon = this.bitmap(panel.TextPanel, "csrWeapon", weaponLinkage);
     if (headshot === true) { row.head = this.bitmap(panel.TextPanel, "csrHead", "icon-headshot.png"); }
     if (row.weapon == undefined || (headshot === true && row.head == undefined)) {
