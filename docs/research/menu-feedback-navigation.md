@@ -111,3 +111,45 @@ remains if restoration is slow, rather than hiding the delay behind fixture wait
 First-ever Home after a direct developer startup still needs initial Home boot;
 it clears black rather than retaining the former world target. First match
 bootstrap cost, retained memory and complete runtime roundtrip remain unverified.
+
+
+## Exact 62e24a2 bounded observations
+
+Five frontend tests and 33 Scaleform tests pass (one ignored) after forced
+workspace play builds. The direct-start Pause pressure case exits 0 with four
+personally inspected 1920x1080 captures. Pause composites over the world and
+Resume clears it. First Pause response is 107 ms; the four-second readback
+window measures 22.90 / 36.65 ms mean / p95 versus c1's 52.62 / 60.41 ms.
+Reported slow pointer work averages 6.74 ms. This direct fixture has no parked
+Home, so it does not establish the cost of both cached workers or physical
+input/present latency.
+
+The original Home-start flow is an incomplete failure, not a pass despite its
+normal close returning 0. Its --screenshot option suppressed the usual
+background startup; the fixed three-second fixture then clicked Help before
+Pause boot completed. The preserved flow-pause image contains the world only.
+The corrected opt-in flow accepts CSR_TEST_FLOW_OUTPUT without --screenshot,
+waits actual fresh Pause presentation, and can apply five seconds of pointer
+pressure before Options. Production startup policy is unchanged. That corrected
+normal-start full roundtrip remains pending.
+
+Whole-process memory sampling peaks at 10.37 GiB private bytes in the incomplete
+two-worker flow and 8.19 GiB in direct pressure, ending at 2.80 / 2.32 GiB.
+These include map/load allocations and differing scenarios, not an isolated UI
+memory comparison. Both retain the owned-process timeout and free-RAM guard.
+
+## Remaining full menu fidelity
+
+The slider/navigation passes do not establish a complete Audio page. Current
+captures show only Master Volume and a large empty microphone panel. The
+remaining original controls, microphone services, layout, defaults and
+persistence remain open; supported-convar filtering currently excludes them.
+
+The original Scaleform Pause reference in the [Radar centralizado Steam guide](https://steamcommunity.com/sharedfiles/filedetails/?id=516337371)
+([embedded screenshot](https://images.steamusercontent.com/ugc/422566214060763931/1E90D7113BE3543FC527060582B1AF9E6350579E/))
+shows the world behind the translucent menu/logo and includes Choose Team,
+Call Vote and Community Servers, absent from our five-entry Pause. The guide
+was posted September 2015 and updated in 2023; exact image capture date is
+unknown. This supports composition/missing-entry evidence, not pixel or timing
+parity. Images remain private outside git. Offline power-button availability
+and its authored confirmation path also remain open.
