@@ -1,9 +1,8 @@
 // Our compatibility code, not authored game instructions. The movie, fonts,
 // panels and bitmap exports are read from the player's installed Legacy HUD.
 // Rust owns receipt keys, ordering, lifetime, fade and the bounded notice list.
-// Weapon row-fit is a safety bound, NOT calibrated native image scale.
-// Headshot half-scale is a bounded candidate from dated 2015 footage; its
-// shared glyph-to-font ratio is measured, but not yet a pixel-perfect match.
+// Bitmap canvas-to-font sizing is measured against dated 2015 USP-S/headshot
+// footage, but its exact native pixels/HUD scaling remain uncalibrated.
 _global.csrDeathNotices = new Object();
 _global.csrDeathNotices.rows = new Object();
 _global.csrDeathNotices.generation = 0;
@@ -96,6 +95,8 @@ _global.csrDeathNotices.layout = function(row) {
     parent.globalToLocal(bottom);
     var height = Math.abs(bottom.y - top.y);
     if (!(height > 0)) { return false; }
+    var fontSize = Number(field.getTextFormat().size);
+    if (!(fontSize > 0) || fontSize > 512) { return false; }
     var icons = [row.weapon];
     if (row.head != undefined) { icons.push(row.head); }
     var offsets = [];
@@ -103,12 +104,12 @@ _global.csrDeathNotices.layout = function(row) {
     var i = 0;
     while (i < icons.length) {
         var icon = icons[i];
-        // The 2015 reference's headshot ink is about 1.2x the text height;
-        // row-fit currently renders about 1.94x. That implies natural scale
-        // near 0.52. Test half-scale only for this shared icon; weapon artwork
-        // requires its own matching-weapon reference, not this inference.
-        var naturalScale = icon == row.head ? 0.5 : 1;
-        var scale = Math.min(naturalScale, height / icon.height);
+        // The original field is 16px and these bitmap canvases are 32px high.
+        // In dated 2015 footage, USP-S ink is about 30x11px (canvas ink65x24)
+        // and headshot ink is about 12px high (canvas ink26px). Font-height
+        // canvas sizing independently agrees for both within footage/HUD-scale
+        // uncertainty. Retain the populated row-height bound for other packs.
+        var scale = Math.min(fontSize, height) / icon.height;
         icon.clip._xscale = scale * 100;
         icon.clip._yscale = scale * 100;
         offsets.push(offset);
