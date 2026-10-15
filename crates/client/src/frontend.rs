@@ -396,6 +396,11 @@ impl Engine for Bridge {
                     if self.data.lock().unwrap().state != AppState::Menu || !self.lobby.lock().unwrap().active() {
                         calls.set(path, "_visible", false.into());
                     }
+                } else if matches!(object, "OptionsMenu" | "StartSinglePlayer") {
+                    // Loader completion precedes authored Ready. Keep a cold
+                    // root hidden until the still-current destination owns its
+                    // initialization; superseded loads must never flash open.
+                    calls.set(path, "_visible", false.into());
                 } else if object == "PauseMenu" {
                     // Loaded precedes authored Ready. The deferred owner shows
                     // this exact cached root only after both movies are ready.
@@ -535,10 +540,10 @@ impl Engine for Bridge {
                     for element in ["LobbyBrowser", "LobbyScreen"] {
                         if let Some(path) = self.roots.get(element) { calls.set(path, "_visible", false.into()); }
                     }
-                    if let Some(path) = self.roots.get("StartSinglePlayer") {
-                        show_single_player(path, calls);
-                    } else {
-                        if self.requested.insert("StartSinglePlayer".into()) { calls.request_element("StartSinglePlayer"); }
+                    if self.data.lock().unwrap().movie_ready.contains("StartSinglePlayer") {
+                        if let Some(path) = self.roots.get("StartSinglePlayer") { show_single_player(path, calls); }
+                    } else if self.requested.insert("StartSinglePlayer".into()) {
+                        calls.request_element("StartSinglePlayer");
                     }
                 }
                 "OpenVideoSettingsDialog"
@@ -557,10 +562,10 @@ impl Engine for Bridge {
                         &command,
                         &data.localization,
                     );
-                    if let Some(path) = self.roots.get("OptionsMenu") {
-                        self.options.show(path, &data.settings, calls);
-                    } else {
-                        if self.requested.insert("OptionsMenu".into()) { calls.request_element("OptionsMenu"); }
+                    if data.movie_ready.contains("OptionsMenu") {
+                        if let Some(path) = self.roots.get("OptionsMenu") { self.options.show(path, &data.settings, calls); }
+                    } else if self.requested.insert("OptionsMenu".into()) {
+                        calls.request_element("OptionsMenu");
                     }
                 }
                 _ => {
