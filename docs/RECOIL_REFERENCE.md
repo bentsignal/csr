@@ -209,6 +209,25 @@ fidelity.
 
 ## Private provenance
 
+### M4 observation boundary
+
+The next profiles are measured separately for M4A4, attached M4A1-S and
+detached M4A1-S. The installed schema distinguishes the M4A1-S alternate
+recoil attributes; sharing the AK trajectory or assuming both suppressor
+states have the same spray is not justified. A completed suppressor change
+must select the matching observed trajectory and invalidate derived recoil
+data at the authoritative simulation boundary.
+
+Each native mode first requires a visible weapon/mode check, an exact
+full-clip to full-clip-minus-one decrement, a new impact, stationary eye and
+velocity, and an unchanged camera background. Two separately recovered,
+shot-ordered no-spread magazines and an independent normal-speed aggregate
+follow only after admission. Projection is checked again with known camera
+rotations; the earlier AK calibration is not assumed to apply automatically.
+Unadmitted captures and startup failures remain negative evidence. Native
+data and account-bearing receipts remain private. No M4 trajectory is
+claimed from the schema's seed or magnitude alone.
+
 Research output: `csr-fidelity/recoil-reference-2015`, outside the repo.
 No assets, raw scripts, native logs or account identifiers are published.
 
