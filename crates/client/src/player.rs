@@ -274,11 +274,17 @@ pub fn look(
     if keys.just_pressed(settings.binds[10]) {
         local.pending_drop = true;
     }
-    if grabbed && scroll.delta.y != 0.0 && me.is_some_and(|p| !p.weapons.is_empty()) {
+    if grabbed && scroll.delta.y != 0.0 {
         // Installed defaults bind MWHEELUP invprev and MWHEELDOWN invnext.
         // Authority chooses the weapon; reducing this to a slot loses reverse
         // direction among grenades and at slot boundaries.
-        local.pending_slot = if scroll.delta.y > 0.0 { sim::SLOT_PREVIOUS } else { sim::SLOT_NEXT };
+        let action = if scroll.delta.y > 0.0 { settings.wheel_up } else { settings.wheel_down };
+        match action {
+            crate::settings::WheelAction::Jump => local.latched |= buttons::JUMP,
+            crate::settings::WheelAction::Previous => local.pending_slot = sim::SLOT_PREVIOUS,
+            crate::settings::WheelAction::Next => local.pending_slot = sim::SLOT_NEXT,
+            crate::settings::WheelAction::None => {}
+        }
     }
 }
 
@@ -592,6 +598,23 @@ mod remote_input_tests {
         }));
         app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::KeyW);
         app
+    }
+
+    #[test]
+    fn wheel_jump_is_consumed_once_and_does_not_select_a_weapon() {
+        let mut app = capture_app();
+        app.world_mut().resource_mut::<crate::settings::Settings>().wheel_down = crate::settings::WheelAction::Jump;
+        app.world_mut().query::<&mut CursorOptions>().single_mut(app.world_mut()).unwrap().grab_mode = CursorGrabMode::Locked;
+        app.world_mut().resource_mut::<AccumulatedMouseScroll>().delta = Vec2::new(0., -1.);
+        app.world_mut().run_schedule(Update);
+        assert_ne!(app.world().resource::<Sampled>().0.buttons & buttons::JUMP, 0);
+        assert_eq!(app.world().resource::<Sampled>().0.weapon_slot, 0);
+        app.world_mut().resource_mut::<AccumulatedMouseScroll>().delta = Vec2::ZERO;
+        app.world_mut().run_schedule(Update);
+        assert_eq!(app.world().resource::<Sampled>().0.buttons & buttons::JUMP, 0);
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::Space);
+        app.world_mut().run_schedule(Update);
+        assert_ne!(app.world().resource::<Sampled>().0.buttons & buttons::JUMP, 0);
     }
 
     #[test]

@@ -251,6 +251,7 @@ fn mutate<T>(
 #[allow(clippy::too_many_arguments)]
 pub fn input(
     mut commands: Commands,
+    console: Option<Res<crate::console::DeveloperConsole>>,
     menu: Res<Menu>,
     catalog: Res<Catalog>,
     mut inventory: ResMut<Inventory>,
@@ -260,7 +261,7 @@ pub fn input(
     time: Res<Time<Real>>,
     settings: Res<crate::settings::Settings>,
 ) {
-    if menu.page != Some(Page::Cases) {
+    if console.is_some_and(|console| console.blocks_input()) || menu.page != Some(Page::Cases) {
         keys.clear();
         return;
     }

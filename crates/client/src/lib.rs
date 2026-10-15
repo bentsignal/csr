@@ -32,6 +32,7 @@ pub mod case_ui;
 pub mod menu_scene;
 mod menu_blur;
 pub mod settings;
+mod console;
 pub mod menu;
 pub mod feedback;
 mod impact_decals;
@@ -215,6 +216,7 @@ impl Plugin for CsgoPlugin {
             .add_systems(
                 RunFixedMainLoop,
                 (menu::input, buymenu::input, player::look, player::grab_cursor).chain()
+                    .run_if(console::allows_input)
                     .run_if(remote_join::ready)
                     .in_set(bevy::app::RunFixedMainLoopSystems::BeforeFixedMainLoop),
             )
@@ -271,6 +273,7 @@ impl Plugin for CsgoPlugin {
             .add_systems(Update, foley::update.run_if(remote_join::ready).run_if(resource_exists::<remote::RemoteClient>).after(remote_join::update));
         if let Err(error) = remote_render_gate::install(app) { error!("Remote render preparation unavailable: {error:?}"); }
         shadow_diagnostic::install(app);
+        console::install(app);
     }
 }
 
