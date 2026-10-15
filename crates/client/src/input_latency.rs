@@ -140,15 +140,15 @@ pub(crate) fn install_frame_log(app: &mut App) {
             // but compare scheduler dispatch with the ordinary executor.
             // This override is available only in explicit diagnostic runs.
             if std::env::var("CSR_RENDER_EXECUTOR").as_deref() == Ok("single") {
-                use bevy::ecs::schedule::{ExecutorKind, ScheduleLabel};
+                use bevy::ecs::schedule::{ScheduleLabel, SingleThreadedExecutor};
                 for label in [
                     Render.intern(),
                     bevy::render::renderer::RenderGraph.intern(),
-                    bevy::core_pipeline::core_3d::Core3d.intern(),
-                    bevy::core_pipeline::core_2d::Core2d.intern(),
+                    bevy::core_pipeline::schedule::Core3d.intern(),
+                    bevy::core_pipeline::schedule::Core2d.intern(),
                 ] {
                     if let Some(schedule) = render.get_schedule_mut(label) {
-                        schedule.set_executor_kind(ExecutorKind::SingleThreaded);
+                        schedule.set_executor(SingleThreadedExecutor::new());
                     }
                 }
                 info!("render executor diagnostic: single");
