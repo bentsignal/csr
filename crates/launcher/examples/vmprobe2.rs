@@ -55,7 +55,7 @@ fn report_sight_rois(model: &mdl::Model, pose: &[glam::Mat4]) {
         model.name, model.checksum);
     for (label, x0, y0, x1, y1) in [
         ("front-post", 977., 498., 1008., 548.),
-        ("rear-aperture", 1184., 550., 1240., 607.),
+        ("rear-aperture", 1193., 558., 1221., 585.),
     ] {
         let mut vertices = Vec::new();
         for (mi, mesh) in model.meshes.iter().enumerate() {
@@ -69,8 +69,11 @@ fn report_sight_rois(model: &mdl::Model, pose: &[glam::Mat4]) {
                 }
             }
         }
-        vertices.sort_by(|a, b| a.2.x.total_cmp(&b.2.x));
-        println!("ROI {label}: {} candidates; bounded first128 by depth (offset already included)", vertices.len());
+        let raw_count = vertices.len();
+        vertices.sort_by(|a, b| a.2.x.total_cmp(&b.2.x)
+            .then(a.2.y.total_cmp(&b.2.y)).then(a.2.z.total_cmp(&b.2.z)));
+        vertices.dedup_by(|a, b| a.2 == b.2);
+        println!("ROI {label}: {raw_count} raw, {} unique candidates; bounded first128 by depth (offset already included)", vertices.len());
         for (mesh, vertex, point, pixel) in vertices.iter().take(128) {
             println!("  mesh={mesh} vertex={vertex} eye_model={point:?} pixel={pixel:?}");
         }
