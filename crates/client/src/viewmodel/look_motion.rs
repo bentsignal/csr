@@ -49,7 +49,12 @@ impl LookMotion {
         let (b, bf) = self.samples[1];
         let fraction = if b > a { ((target - a) / (b - a)).clamp(0., 1.) } else { 1. };
         let past = af.lerp(bf, fraction);
-        (past - forward) * SCALE
+        let delta = past - forward;
+        // The native +/- yaw asymmetry and inward rear-sight movement for
+        // BOTH pitch directions admit a positive camera-forward component.
+        // Preserve the delayed transverse direction, reflecting only its
+        // longitudinal component into the current camera frame.
+        (delta - 2. * forward * delta.dot(forward)) * SCALE
     }
 }
 
@@ -65,10 +70,27 @@ mod tests {
         motion.translation(0.05, forward(0.));
         let current = forward(10.);
         let moved = motion.translation(0.06, current);
-        assert!((moved.y + 0.2778371).abs() < 0.00001);
+        let right = glam::Vec3::new(-current.y, current.x, 0.);
+        assert!((moved.dot(right) + 0.2778371).abs() < 0.00001);
+        assert!((moved.dot(current) - 0.0243076).abs() < 0.00001);
         let held = motion.translation(0.10, current);
         assert!((held - moved).length() < 0.00001);
         assert!(motion.translation(0.17, current).length() < 0.00001);
+    }
+
+    #[test]
+    fn opposite_look_steps_both_move_the_model_forward_not_toward_the_camera() {
+        // Native rear-sight x moves inward for both pitch signs; yaw steps
+        // have smaller right than left screen displacement. A world-space
+        // past-minus-current delta has the opposite depth and fails this.
+        for pitch in [-10_f32, 10.] {
+            let mut m = LookMotion::default(); m.translation(0., glam::Vec3::X);
+            let a = pitch.to_radians();
+            let current = glam::Vec3::new(a.cos(), 0., -a.sin());
+            let translation = m.translation(0.01, current);
+            assert!((translation.dot(current) - 0.0243076).abs() < 0.00001);
+            assert!((translation.length() - 0.2788984).abs() < 0.00001);
+        }
     }
 
     #[test]

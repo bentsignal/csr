@@ -1,9 +1,12 @@
 # Observed viewmodel motion
 
 CT09 currently has a bounded presentation candidate for the installed M4A4.
-Its model origin translates by the difference between the current forward
-vector and the time-interpolated forward history 0.1 seconds earlier, scaled
-by 1.6. Model/camera orientation and gameplay aim stay current. This differs
+Its model origin uses the time-interpolated forward history 0.1 seconds
+earlier, scaled by 1.6. In the current camera frame, the delayed transverse
+components remain unchanged and the forward component is
+`1 - dot(past_forward, current_forward)`. This preserves the native inward
+rear-sight movement in both pitch directions and yaw-step asymmetry.
+Model/camera orientation and gameplay aim stay current. This differs
 from the removed guessed angular low-pass filter. Authored clips, muzzle and
 held attachments continue using the same resulting model transform.
 
@@ -57,5 +60,20 @@ background edges were rejected; CT08 still needs admitted motion extraction.
 Both native packets restored all12 preference entries exactly and left no
 native process. A preceding transient existing-process preflight failure is
 preserved separately. Raw game files, logs, screenshots and account data
-remain private. Candidate rewrite projection/render verification is pending;
-this document does not claim complete CT09, other-weapon or2015 parity.
+remain private.
+
+## Rewrite verification boundary
+
+The first world-space-difference candidate (`af7e26b`) passed focused client
+and level tests and five actual1600 by900 M4 render checks. All retained
+intact models/hands/HUD30/90, unmodified owner preferences, and zero shots.
+Its front/rear shifts were yaw10: +9/+19 pixels; yaw5: +4/+9; pitch10:
+-8/-18 vertically, with rear x+1; settled yaw: zero. Native positive yaw
+was +9/+17 and both pitch directions moved rear x-1. This small but repeated
+longitudinal discrepancy remains recorded; the first candidate was not exact.
+
+The corrected camera-frame longitudinal sign is derived from those independent
+native step/return and normal-time observations. It retains the original
+0.1/1.6, transverse response, finite window, resets, and unchanged aim. Actual
+corrected rewrite projection/render verification is pending. This document
+does not claim complete CT09, other-weapon or2015 parity.
