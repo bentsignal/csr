@@ -125,6 +125,10 @@ pub(crate) fn install_frame_log(app: &mut App) {
         .filter(|v| v.is_finite() && *v >= 0.);
     if let Some(limit) = limit {
         TIMING_ENABLED.store(true, Ordering::Relaxed);
+        // Use Bevy's existing pass instrumentation to separate GPU execution
+        // from the wall-time/command-encoding scopes below. This allocates GPU
+        // query buffers only for explicitly requested diagnostic runs.
+        app.add_plugins(bevy::render::diagnostic::RenderDiagnosticsPlugin);
         app.init_resource::<ScheduleTime>()
             .add_systems(First, start_schedule)
             .add_systems(Last, finish_main);
@@ -181,7 +185,10 @@ pub(crate) fn install_frame_log(app: &mut App) {
     }
 }
 
-fn report_stages(mut last: Local<Option<Instant>>) {
+fn report_stages(
+    mut last: Local<Option<Instant>>,
+    diagnostics: Res<bevy::diagnostic::DiagnosticsStore>,
+) {
     let now = Instant::now();
     let Some(previous) = *last else {
         *last = Some(now);
@@ -200,6 +207,29 @@ fn report_stages(mut last: Local<Option<Instant>>) {
             stage.total_ms / stage.calls as f64,
             stage.max_ms
         );
+    }
+    // The store retains paths from cameras/passes which may no longer draw.
+    // Do not attribute those stale samples to the current scene. Means cover
+    // Bevy's retained history, not the full one-second logging interval.
+    let mut passes: Vec<_> = diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.path().as_str().starts_with("render/"))
+        .filter(|diagnostic| {
+            diagnostic.measurement().is_some_and(|measurement| {
+                measurement.value.is_finite() && measurement.time.elapsed().as_secs_f64() < 1.
+            })
+        })
+        .collect();
+    passes.sort_by(|a, b| a.path().as_str().cmp(b.path().as_str()));
+    for diagnostic in passes {
+        if let Some(mean) = diagnostic.average().filter(|mean| mean.is_finite()) {
+            info!(
+                "render diagnostic {}: history_mean={mean:.3}{} samples={}",
+                diagnostic.path(),
+                diagnostic.suffix,
+                diagnostic.measurements().count(),
+            );
+        }
     }
 }
 
