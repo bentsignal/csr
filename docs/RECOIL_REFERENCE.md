@@ -360,3 +360,42 @@ Fresh native M4A1-S observations: private `csr-fidelity/measured-m4-20261015`,
 runs `M4SAttached-20261015-100848` and `M4SDetached-20261015-101424`.
 Both completed exact userdata restoration. The earlier `092314` run remains
 excluded from all profile fitting and comparison.
+
+
+## Galil AR standing held baseline
+
+The installed Galil AR now has a separate 35-shot observed trajectory. Its
+exact item-schema identity, canonical ContentId, definition index 13, clip
+size 35, automatic mode, 0.09-second cycle and recoil inputs must match
+before attachment. Other schemas, changed stats and renamed content do not
+inherit it. The policy contributes to the accumulated catalog digest without
+changing the earlier AK/M4/M4-S profiles or any global firing/recovery law.
+
+An owned Legacy 1.38.8.1 session recorded two ordered no-spread magazines at
+0.1 timescale and a held-out magazine at normal timescale. Each emitted 35
+identified near-shot waves; sound-start spans were 3.062, 3.063 and 3.061
+engine seconds. Actual chronological HUD counts were reviewed from 35 to 0
+(reserves 89, 54 and 19 after the single-shot admission/reloads). All 12
+preference entries were restored exactly, and no native process remained.
+
+Four independent camera rotations, each checked in two image regions,
+reproduced a focal length of 599.85?600.325 pixels at 1600?900. The profile
+uses the independently reproduced 600-pixel basis. Two static regions were
+also checked across all 210 magazine frames. The ordered repeat differs by
+at most 1.118 pixels (RMS 0.535); the normal-speed aggregate lies within 2
+pixels of every selected center. These measurements do not establish
+universal camera behavior or exact server shot deadlines.
+
+Early overlapping markers were reviewed explicitly. Shot 35 exposed no
+fresh threshold-mask component because it overlapped older boxes. The
+actual chronological images and signed color additions were reviewed in
+both independent magazines; localized addition centers were approximately
+(838.29, 382.56) and (838.52, 382.80). The rounded candidate retains the
+same 2-pixel marker uncertainty. It was not inferred from the largest old
+component. An independent reviewer viewed both complete ordered HUD sheets,
+ammo endpoints, the normal aggregate and the overlap/delta images.
+
+This is a standing, held, no-spread **2023 installed-game baseline**. It does
+not establish 2015 behavior, recoil recovery, arbitrary camera parity or a
+native seeded recoil algorithm. Raw screenshots, sound logs and game data
+remain private. Actual rewrite ray/render verification is pending.
