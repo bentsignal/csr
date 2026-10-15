@@ -193,7 +193,7 @@ impl Catalog {
                     material,
                     weight,
                 };
-                cached.insert(path.clone(), decal.clone());
+                cached.insert(path.to_owned(), decal.clone());
                 variants.push(decal);
                 loaded += 1;
             }
