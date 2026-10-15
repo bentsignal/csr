@@ -8,6 +8,7 @@ fn main() {
         paths.extend(library.waves(name).unwrap().iter().cloned());
     }
     for name in [
+        "Default.ClipEmpty_Rifle",
         "Flesh.BulletImpact",
         "Player.DamageHeadShot",
         "Player.DamageHelmet",

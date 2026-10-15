@@ -425,6 +425,24 @@ pub fn tick(
                     }
                 }
             }
+        } else if std::env::var("CSR_TEST_SWITCH").as_deref() == Ok("empty-trigger") {
+            // Screenshot-only ordinary inputs: four full AK magazines with
+            // released-trigger reloads, then a short and held depleted press.
+            // No direct ammo/state writes manufacture the empty condition.
+            input.buttons &= !(buttons::ATTACK | buttons::ATTACK2);
+            let now = world.0.time();
+            if ((1.5..22.5).contains(&now) && (now - 1.5).rem_euclid(6.) < 3.)
+                || (23.5..23.65).contains(&now) || (24.2..25.7).contains(&now) {
+                input.buttons |= buttons::ATTACK;
+            }
+            if let Some(player) = world.0.player(local.id) {
+                if input.buttons != player.last_input.buttons {
+                    if let Some(gun) = player.active_weapon() {
+                        info!("empty trigger fixture: tick={} time={now:.5} buttons={} weapon={} clip={} reserve={} shots={} reload={:?}",
+                            world.0.tick, input.buttons, gun.def.class_name, gun.clip, gun.reserve, player.shots, gun.reload_end);
+                    }
+                }
+            }
         } else if std::env::var("CSR_TEST_SWITCH").as_deref() == Ok("automatic-release") {
             // Screenshot-only normal magazine: keep the trigger held after
             // its declared shots, then release. The sim alone owns ammo,

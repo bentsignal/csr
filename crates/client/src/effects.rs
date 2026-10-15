@@ -173,6 +173,14 @@ pub fn process(
                     if !sound.is_empty() { sounds.play_with(&mut commands, fs, &mut sources, sound, emit(player, origin)); }
                 }
             }
+            GameEvent::EmptyTrigger { player, weapon, origin } => {
+                if let Some(profile) = world.0.catalog.get(&weapon).and_then(|def| def.empty_trigger.as_ref()) {
+                    if std::env::var_os("CSR_WEAPON_TRACE").is_some() {
+                        info!("empty trigger event: player={player} weapon={weapon} sound={} origin={origin:?}", profile.sound);
+                    }
+                    sounds.play_with(&mut commands, fs, &mut sources, &profile.sound, emit(player, origin));
+                }
+            }
             GameEvent::BurstModeChanged { player, origin, .. } => {
                 // Both installed burst viewmodels have no separate switch
                 // sequence; native mode changes emit this soundscript cue.

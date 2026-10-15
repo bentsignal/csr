@@ -2,6 +2,7 @@
 
 pub mod maps;
 mod character_profiles;
+mod empty_trigger;
 mod grenade_animations;
 mod recoil_trajectories;
 mod suppressor_animations;
@@ -227,9 +228,11 @@ impl Level {
                     .map(|catalog| (catalog, Some(Sha1::digest(&bytes).into())))
             })
             .unwrap_or_default();
+        let item_schema_sha1 = catalog_sha1;
         let catalog_sha1=recoil_trajectories::import(&mut catalog,catalog_sha1);
         let catalog_sha1=grenade_animations::import(&mut catalog,&fs,catalog_sha1);
         let catalog_sha1=suppressor_animations::import(&mut catalog,&fs,catalog_sha1);
+        let catalog_sha1=empty_trigger::import(&mut catalog,item_schema_sha1,catalog_sha1);
         timings.push(("weapons", t.elapsed().as_secs_f32()));
         let t = Instant::now();
         let (character_profiles, catalog_sha1) = character_profiles::load(&fs, catalog_sha1)?;
