@@ -332,6 +332,7 @@ pub(crate) fn input(
         buy.open = false;
         buy.just_closed = false;
         local.latched = 0;
+        local.pointer_attacks = 0;
         local.pending_drop = false;
         local.pending_slot = 0;
         local.pending_buys.clear();

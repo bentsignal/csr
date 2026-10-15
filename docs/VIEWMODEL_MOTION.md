@@ -140,4 +140,16 @@ content packs remain outside this measured slice. No new timing filter or
 invented return rate is added: actual speed drives the pose and a stopped
 player has a neutral transform. The screenshot fixture uses ordinary
 TickInput movement; rendered checks must admit actual speed and ground state.
-Final runtime verification is pending on the frozen feature candidate.
+Frozen source `a0c7aff` passed focused DEV tests, all client PLAY tests, the
+launcher build and required RELEASE build/probe/sim with zero failures.
+Actual 1600x900 baseline/run/walk/coast images were independently inspected:
+the M4, hands, world and 30/90 HUD remained intact, running lowered the model
+more than walking, and stopping returned the neutral pose. All sessions
+preserved the owner's configuration and exited successfully.
+
+The first wrapper rejected walk's printed `116.99999` against a literal
+`117.0` pattern; the child's zero exit, image and raw logs were retained.
+A separate finite numeric audit admitted all twelve actual walk states within
+0.001 units/s and 0.00001 weight. Only the missing coast case was captured
+afterward. Exact-source full CI passed before
+[PR #157](https://github.com/bentsignal/global-offensive/pull/157) merged.

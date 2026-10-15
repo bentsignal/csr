@@ -2,7 +2,7 @@
 
 `vmprobe2` already reports installed model animation metadata. Its optional
 `--sight-rois` report projects bounded vertex candidates for the observed M4A4
-idle framing: 1600?900, viewmodel FOV60, offsets1,1,-1. It reuses the existing
+idle framing: 1600x900, viewmodel FOV60, offsets1,1,-1. It reuses the existing
 MDL reader and skeletal skinning, with no new parser or asset files.
 
 ```powershell
