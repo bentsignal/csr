@@ -42,8 +42,11 @@ gain while unfocused when selected, retaining the saved master value and
 restoring current sounds on focus return. Focus-only changes do not reapply
 display/material settings. Frozen `d2dbc42` passed focused audio-options and
 settings tests, the PLAY launcher build, and soundcheck (1425 decodable sounds,
-zero skipped or crashing). Actual original-widget rendering and playback/focus
-verification remain pending; this is not an overall Audio Settings pass.
+zero skipped or crashing). The follow-up actual `menu::apply` regression uses a
+real rodio-backed `AudioSink` without an output device: changing only window
+focus mutes and restores the existing sink, retains saved master volume, and
+the native Yes=0 choice permits unfocused playback. Actual original-widget
+rendering remains pending; this is not an overall Audio Settings pass.
 
 Original-only music metadata is available under
 `sound/music/valve_csgo_01/game_sounds_music.txt` in the Legacy VPK. The retained
@@ -51,9 +54,15 @@ item definitions currently label id1 as `valve_cs2_01` and original-CSGO as70;
 neither a first-entry/default-id assumption nor any CS2-named music is admitted.
 Only explicit original-CSGO declarations can supply future cue paths/gains.
 
-The black-center diagnosis also remains open. Public placement metadata names
+Public placement metadata names
 `ResizeTop.ResizePanel`, horizontal/vertical resize controls, `DeadZone` and
 safe-zone brackets, with no microphone-named placed clip. The actual Audio trace
-queries safe-zone bounds. The "microphone panel" description was an inference;
-public runtime geometry/visibility must identify the stray art before changing
-its ownership. No timeline action bodies were inspected.
+queries safe-zone bounds. The "microphone panel" description was an inference.
+The bounded original-runtime counterfact (`6B5EC633`, private immutable8d probe,
+1920x1080) reproduces the black rounded panel and white center point; setting
+only `OptionsMenu.DeadZone._visible=false` removes that art while retaining
+the Audio header, original widget and navigation. `ResizeTop` remains untouched.
+The adapter now hides that controller visualization after `ShowPanel` in Audio
+mode8 only. No timeline action bodies were inspected. This standalone probe
+uses a stub option count and slider getter; its token label/value are not a
+production settings-page result. The two-row client render remains required.
