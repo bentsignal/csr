@@ -160,3 +160,29 @@ Do not call that a reopened visibility pass. Production Home question,
 Cancel/reopen/OK exit and Offline picker retention still require their bounded
 actual-client checks. Full Audio settings content/layout also remains open;
 the Master-only/empty-panel release capture is retained as independent evidence.
+
+## Production Home pass and native picker control correction
+
+The a61f67e actual-client checks establish Home Cancel followed by reopening:
+the reopened original box and complete question are visible at 1920x1080.
+A fresh actual OK click emits the current owned Enter callback and exits 0
+before the screenshot fixture can fire. These are bounded Home passes.
+
+The same artifact's production picker check is a preserved real failure: its
+power glyph is dim, no Quit callback is emitted, and the later Cancel point
+instead hits a map tile. The production bridge honors `bHidePanel` by invoking
+`MainMenu.hidePanelImmediate`; the earlier standalone picker request did not.
+
+Installed PlaceObject2 metadata names the native `QuitButton`. A bounded public
+runtime check reproduces the production hide, observes that exact button,
+invokes its public `setDisabled(false)` and then clicks the actual power pixel.
+The glyph becomes bright without changing its authored geometry and emits the
+original Quit command. The correction calls that same setter after showing the
+owned picker, for both cold-ready and cached paths. It does not add a hit region,
+new control, overlay, generic visibility rule or authored instruction change.
+
+That standalone check also retains nine exact missing modern-thumbnail errors;
+those are an explicit separate asset-negative, not a general clean-log pass.
+The corrected production picker route still needs its new-build check. Passed
+Home cases will not be repeated merely to obtain another receipt. Exact font
+substitution and full Audio page content/layout remain open.

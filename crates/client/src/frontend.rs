@@ -162,6 +162,10 @@ fn show_single_player(path: &str, calls: &mut Calls) {
         vec![false.into(), false.into(), false.into()],
     );
     calls.call(path, "showPanel", vec![]);
+    // MainMenu.hidePanelImmediate disables its native power button. Keep that
+    // original control usable above the owned picker, as requested; its public
+    // setter and actual Quit callback were observed together at runtime.
+    calls.call("_global.MainMenuMovie.Panel.SelectPanel.MainMenuTopBar.QuitButton", "setDisabled", vec![false.into()]);
     let modes = format!("{path}.Panel.Panel.ModeChooser.TabDefault");
     calls.call(&format!("{modes}.ModeCompetitive"), "Action", vec![]);
     for mode in ["ModeCasual", "ModeWingman", "ModeWargames"] {
