@@ -23,6 +23,32 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+/// Engine-owned Home lifetime; hidden helpers inside active movies are untouched.
+#[derive(Default)]
+struct HomeLifecycle {
+    epoch: u64,
+    bootstrapped: bool,
+    retired: bool,
+    restoring: bool,
+}
+impl HomeLifecycle {
+    fn accepts(&self, receiver: &str) -> bool {
+        if self.retired { return false; }
+        if self.epoch == 0 { return receiver == "MainMenu"; }
+        receiver.strip_prefix("OwnedHome").and_then(|epoch| {
+            let value = epoch.parse::<u64>().ok()?;
+            (value.to_string() == epoch).then_some(value)
+        }) == Some(self.epoch)
+    }
+    fn retire(&mut self) { self.retired = true; self.restoring = false; }
+    fn restore(&mut self) -> Option<String> {
+        self.epoch = self.epoch.checked_add(1)?;
+        self.retired = false;
+        self.restoring = true;
+        Some(format!("OwnedHome{}", self.epoch))
+    }
+}
+
 struct Data {
     fs: Arc<vfs::Vfs>,
     settings: Settings,
@@ -35,6 +61,7 @@ struct Data {
     loading_map: Option<LoadingContext>,
     player_name: String,
     movie_ready: HashSet<String>,
+    home: HomeLifecycle,
     pause_surface: crate::frontend_pause_surface::Tracker,
     deferred_pause: crate::frontend_pause_surface::DeferredPause,
 }
@@ -184,6 +211,13 @@ impl Engine for Bridge {
         args: &[Value],
         calls: &mut Calls,
     ) -> Option<Value> {
+        // Requests after retirement carry their own immutable API label. A
+        // late callback from an unloaded Home must never mark its replacement
+        // ready or issue navigation against the new root at the same level.
+        let object = if object == "MainMenu" || object.starts_with("OwnedHome") {
+            if !self.data.lock().unwrap().home.accepts(object) { return Some(Value::Undefined); }
+            "MainMenu"
+        } else { object };
         let seen_object = if object.starts_with("OwnedLobby") { "OwnedLobby" }
             else if object.starts_with("OwnedPicker") { "OwnedPicker" } else { object };
         // Repeated native getters are the common path. Borrow their existing
@@ -372,7 +406,11 @@ impl Engine for Bridge {
             }
             return Some(Value::Undefined);
         }
-        if method == "OnReady" { self.data.lock().unwrap().movie_ready.insert(object.into()); }
+        if method == "OnReady" {
+            let mut data = self.data.lock().unwrap();
+            data.movie_ready.insert(object.into());
+            if object == "MainMenu" { data.home.bootstrapped = true; }
+        }
         if method == "OnLoadFinished" && !object.starts_with("CScaleformComponent_") {
             self.data.lock().unwrap().movie_ready.remove(object);
             if let Some(path) = arg(0).strip_prefix("mc:") {
@@ -763,7 +801,10 @@ impl Frontend {
     pub(crate) fn options_requested(&self) -> bool { self.data.lock().unwrap().pause_surface.options_requested() }
     pub(crate) fn pause_root(&self) -> Option<String> { self.data.lock().unwrap().pause_surface.pause_root().map(str::to_owned) }
     pub(crate) fn loaded(&self, name: &str) -> bool { self.loaded.contains(name) }
-    /// Authored OnReady received for the current cached movie; Loaded alone is earlier.
+    /// Initial authored readiness survives intentional in-match Home retirement.
+    pub(crate) fn home_bootstrapped(&self) -> bool { self.data.lock().unwrap().home.bootstrapped }
+    fn home_restoring(&self) -> bool { self.data.lock().unwrap().home.restoring }
+    /// Authored OnReady received for the current live movie; Loaded alone is earlier.
     pub(crate) fn movie_ready(&self, name: &str) -> bool {
         self.data.lock().unwrap().movie_ready.contains(name)
     }
@@ -822,7 +863,7 @@ pub(crate) fn setup(
         loading: String::new(),
         loading_map: None,
         player_name: "You".into(),
-        movie_ready: HashSet::new(),
+        movie_ready: HashSet::new(), home: Default::default(),
         pause_surface: Default::default(),
         deferred_pause: Default::default(),
     }));
@@ -1125,13 +1166,61 @@ pub(crate) fn update(
             }),
         )));
     }
+    // Retire only the engine-owned Home movie after both bootstrap contracts
+    // completed. Visibility alone cannot stop its global AVM1 mouse/frame work.
+    let retire_home = {
+        let mut snapshot = front.data.lock().unwrap();
+        let retire = scene == AppState::Match && !snapshot.home.retired
+            && snapshot.movie_ready.contains("MainMenu") && snapshot.movie_ready.contains("PauseMenu");
+        if retire {
+            snapshot.home.retire();
+            snapshot.movie_ready.remove("MainMenu");
+        }
+        retire
+    };
+    if retire_home {
+        // Loaded may still be in the worker event queue, but both actual Ready
+        // callbacks above already established the engine bootstrap contract.
+        front.ready = true;
+        front.loaded.remove("MainMenu");
+        front.requested.remove("MainMenu");
+        front.send(Input::Call { path: "_global.MainMenuMovie".into(), function: "unloadMovie".into(), args: vec![] });
+    }
+    let restore_home = {
+        let mut snapshot = front.data.lock().unwrap();
+        if matches!(scene, AppState::Menu | AppState::Browser) && snapshot.home.retired {
+            Some(snapshot.home.restore())
+        } else { None }
+    };
+    if let Some(receiver) = restore_home {
+        let Some(receiver) = receiver else {
+            front.failed = Some("The menu session limit was reached. Restart the game.".into());
+            return;
+        };
+        front.ready = false;
+        front.pause_presentation.open();
+        front.send(Input::Call { path: "_global.csrBindings".into(), function: "requestHome".into(), args: vec![receiver.into()] });
+    }
+    let restored_home = {
+        let mut snapshot = front.data.lock().unwrap();
+        let ready = snapshot.home.restoring && snapshot.movie_ready.contains("MainMenu");
+        if ready { snapshot.home.restoring = false; }
+        ready
+    };
+    if restored_home && matches!(scene, AppState::Menu | AppState::Browser) {
+        front.ready = true;
+        front.send(Input::Present { commands: vec![
+            scaleform::Command::Set { path: "_global.MainMenuMovie".into(), property: "_visible".into(), value: true.into() },
+            scaleform::Command::Call { path: "_global.MainMenuMovie".into(), function: "showPanel".into(), args: vec![] },
+        ], revision: front.pause_presentation.revision() });
+    }
     // Load the first Pause while the map loads, rather than making Escape pay
     // for its movies/fonts. A closed late load stays hidden in the bridge.
     if matches!(scene, AppState::Loading | AppState::Match) {
         front.request("PauseMenu");
     }
     let active = visible || (front.movie.is_some() && matches!(scene, AppState::Loading | AppState::Match)
-        && front.failed.is_none() && (!front.movie_ready("MainMenu") || !front.movie_ready("PauseMenu")));
+        && front.failed.is_none() && (!front.home_bootstrapped() || !front.movie_ready("PauseMenu")));
     if front.active != active {
         front.send(Input::SetActive(active));
         front.active = active;
@@ -1142,7 +1231,7 @@ pub(crate) fn update(
             // Never flash a cached closed/previous menu raster while the worker
             // is still preparing this Escape transition.
             front.pause_presentation.open();
-        } else {
+        } else if !front.home_restoring() {
             front.pause_presentation.close();
         }
         if visible && scene == AppState::Menu && front.ready {
@@ -1170,7 +1259,7 @@ pub(crate) fn update(
     }
     let (pause_show, options_to_hide) = {
         let mut data = front.data.lock().unwrap();
-        let main_ready = data.movie_ready.contains("MainMenu");
+        let main_ready = data.home.bootstrapped;
         let pause_ready = data.movie_ready.contains("PauseMenu");
         let path = data.pause_surface.pause_root().map(str::to_owned);
         let options_path = data.pause_surface.options_root().map(str::to_owned);
@@ -1199,7 +1288,7 @@ pub(crate) fn update(
     if front.scene != Some(scene) {
         // Return-to-Home must not expose the last in-match Pause raster while
         // this transaction is still in the worker queue/GPU readback pipeline.
-        if visible && scene == AppState::Menu && front.scene.is_some() {
+        if visible && matches!(scene, AppState::Menu | AppState::Browser) && front.scene.is_some() {
             front.pause_presentation.open();
         }
         let mut scene_commands = Vec::new();
@@ -1219,7 +1308,7 @@ pub(crate) fn update(
                 path: path.into(),
                 property: "_visible".into(),
                 value: (matches!(scene, AppState::Menu | AppState::Browser)
-                    && path == "_global.MainMenuMovie")
+                    && path == "_global.MainMenuMovie" && !front.home_restoring())
                     .into(),
             });
         }
@@ -1255,7 +1344,7 @@ pub(crate) fn update(
                 function: "hidePanel".into(),
                 args: vec![],
             });
-            if scene == AppState::Menu {
+            if scene == AppState::Menu && !front.home_restoring() {
                 scene_commands.push(scaleform::Command::Call {
                     path: "_global.MainMenuMovie".into(),
                     function: "showPanel".into(),
@@ -1264,7 +1353,9 @@ pub(crate) fn update(
             }
         }
         front.send(Input::Present {
-            commands: scene_commands, revision: front.pause_presentation.revision(),
+            commands: scene_commands,
+            // Initial/load frames must not satisfy the restored Home fence.
+            revision: if front.home_restoring() { 0 } else { front.pause_presentation.revision() },
         });
         if scene == AppState::Loading { front.request("LoadingScreen"); }
         front.scene = Some(scene);
@@ -1353,7 +1444,11 @@ pub(crate) fn update(
         let event = front.poll();
         match event {
             Some(scaleform::Event::Loaded(name)) => {
-                front.ready |= name == "MainMenu";
+                let name = if name == "MainMenu" || name.starts_with("OwnedHome") {
+                    if !front.data.lock().unwrap().home.accepts(&name) { continue; }
+                    "MainMenu".to_string()
+                } else { name };
+                front.ready |= name == "MainMenu" && !front.home_restoring();
                 front.loaded.insert(name.clone());
                 info!("Classic UI loaded {name}");
             }
@@ -1504,7 +1599,7 @@ pub(crate) fn input(
     remote: Option<Res<crate::remote::RemoteClient>>,
 ) {
     let (window_entity, window) = *window;
-    let blocked = *state.get() == AppState::Browser || crate::remote_join::loading(remote.as_deref()) || packs.is_some_and(|packs| packs.blocks_movie()) || sharing.is_some_and(|sharing| sharing.blocks_movie()) || crate::frontend_flow::enabled() || !enabled.0 || !front.visible || front.failed.is_some() || !window.focused;
+    let blocked = *state.get() == AppState::Browser || crate::remote_join::loading(remote.as_deref()) || packs.is_some_and(|packs| packs.blocks_movie()) || sharing.is_some_and(|sharing| sharing.blocks_movie()) || crate::frontend_flow::enabled() || !enabled.0 || !front.visible || front.home_restoring() || front.failed.is_some() || !window.focused;
     for input in ownership.transition(blocked, window.focused) { front.send(input); }
     if blocked {
         keys.clear();
@@ -1741,6 +1836,49 @@ mod tests {
     use super::*;
 
     #[test]
+    fn retired_home_rejects_old_ready_and_navigation_across_reloaded_roots() {
+        let fs = Arc::new(vfs::Vfs::new());
+        let data = Arc::new(Mutex::new(Data {
+            inventory: InventoryView::new(&fs), fs, settings: Settings::default(),
+            localization: Default::default(), game_modes: Default::default(),
+            state: AppState::Menu, menu_open: true, loading: String::new(), loading_map: None,
+            player_name: "You".into(), movie_ready: Default::default(), home: Default::default(),
+            pause_surface: Default::default(), deferred_pause: Default::default(),
+        }));
+        let actions = Arc::new(Mutex::new(Vec::new()));
+        let mut bridge = Bridge { data: data.clone(), actions: actions.clone(), seen: Default::default(),
+            roots: Default::default(), requested: Default::default(), options: Default::default(),
+            offline: Default::default(), offline_open: false,
+            lobby: Arc::new(Mutex::new(crate::frontend_lobby::Scene::new(
+                crate::frontend_lobby::Catalog::installed(&crate::ClientOptions::default(), &[])))),
+        };
+        let mut calls = Calls::default();
+        bridge.call("MainMenu", "OnReady", &[], &mut calls);
+        assert!(data.lock().unwrap().home.bootstrapped);
+        { let mut data = data.lock().unwrap(); data.home.retire(); data.movie_ready.clear(); }
+        bridge.call("MainMenu", "OnReady", &[], &mut calls);
+        bridge.call("MainMenu", "BasePanelRunCommand", &["QuitGame".into()], &mut calls);
+        assert!(data.lock().unwrap().movie_ready.is_empty());
+        assert!(actions.lock().unwrap().is_empty());
+        assert_eq!(data.lock().unwrap().home.restore().as_deref(), Some("OwnedHome1"));
+        for stale in ["MainMenu", "OwnedHome0", "OwnedHome01", "OwnedHome2", "OwnedHome18446744073709551616"] {
+            bridge.call(stale, "OnReady", &[], &mut calls);
+        }
+        assert!(data.lock().unwrap().movie_ready.is_empty());
+        bridge.call("OwnedHome1", "OnLoadFinished", &["mc:_level31".into()], &mut calls);
+        bridge.call("OwnedHome1", "OnReady", &[], &mut calls);
+        assert!(data.lock().unwrap().movie_ready.contains("MainMenu"));
+        assert_eq!(bridge.roots.get("MainMenu").map(String::as_str), Some("_level31"));
+        { let mut data = data.lock().unwrap(); data.home.retire(); data.movie_ready.clear(); assert_eq!(data.home.restore().as_deref(), Some("OwnedHome2")); }
+        bridge.call("OwnedHome1", "OnReady", &[], &mut calls);
+        assert!(data.lock().unwrap().movie_ready.is_empty());
+        bridge.call("OwnedHome2", "OnReady", &[], &mut calls);
+        assert!(data.lock().unwrap().movie_ready.contains("MainMenu"));
+        data.lock().unwrap().home.epoch = u64::MAX;
+        assert!(data.lock().unwrap().home.restore().is_none());
+    }
+
+    #[test]
     fn owned_proxy_epoch_rejects_stale_query_completion_and_duplicate_zeroarg_start() {
         use crate::frontend_lobby::{Api, Catalog, Scene};
         let modes = kv::parse("gameTypes { classic { value 0 gameModes { competitive { value 1 mapgroupsSP { mg_de_dust2 0 } } } } } mapgroups { mg_de_dust2 { maps { de_dust2 0 } } } maps { de_dust2 {} }").unwrap();
@@ -1748,7 +1886,7 @@ mod tests {
         let data = Arc::new(Mutex::new(Data {
             inventory: InventoryView::new(&fs), fs, settings: Settings::default(),
             localization: Default::default(), game_modes: modes.clone(),
-            state: AppState::Menu, menu_open: true, loading: String::new(), loading_map: None, player_name: "You".into(), movie_ready: HashSet::new(), pause_surface: Default::default(),
+            state: AppState::Menu, menu_open: true, loading: String::new(), loading_map: None, player_name: "You".into(), movie_ready: HashSet::new(), home: Default::default(), pause_surface: Default::default(),
         deferred_pause: Default::default(),
         }));
         let mut scene = Scene::new(Catalog::installed(&crate::ClientOptions::default(), &["de_dust2".into()]));
@@ -1838,7 +1976,7 @@ mod tests {
             inventory: InventoryView::new(&fs), fs, settings: Settings::default(),
             localization: Default::default(), game_modes: Default::default(),
             state: AppState::Menu, menu_open: true, loading: String::new(),
-            loading_map: None, player_name: "You".into(), movie_ready: Default::default(),
+            loading_map: None, player_name: "You".into(), movie_ready: Default::default(), home: Default::default(),
             pause_surface: Default::default(), deferred_pause: Default::default(),
         }));
         let mut bridge = Bridge {
@@ -1881,7 +2019,7 @@ mod tests {
             loading: String::new(),
             loading_map: None,
             player_name: "You".into(),
-        movie_ready: HashSet::new(),
+        movie_ready: HashSet::new(), home: Default::default(),
         pause_surface: Default::default(),
         deferred_pause: Default::default(),
         }));

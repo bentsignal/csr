@@ -39,8 +39,12 @@ original and arms a one-event correction when the widget reports native mouse
 dragging. The host uses Ruffle's public UpdateContext drag constraint and
 Player::update_drag to preserve the measured y, retaining x bounds, offset,
 value conversion and sounds. A fresh Options load clears any pending request.
-The replacement must be
-validated with a newly built client before calling this fixed.
+The replacement was built after cleaning all 23 workspace play packages at
+c1e7b04. Its production 1920x1080 off-axis pointer drag (from volume 0.5)
+exited 0; the inspected final screenshot shows the pip on the track, and the
+authored callback plus private saved config record volume 0.79. The same exact
+client's Audio -> Play -> Offline screenshot shows the picker without Audio
+overlaid. These captures establish those cases, not all menu fidelity.
 
 ## Pause response investigation
 
@@ -72,7 +76,13 @@ was still treated as a completion pair. The pending correction drains only a
 leading passive prefix in that case, allowing presentation before the next
 pointer handler. Actual boundaries retain their original FIFO completion rule.
 A focused regression exercises both passive/motion orders and preserves the
-existing click/key/remaining-cap coverage. Runtime improvement is still pending.
+existing click/key/remaining-cap coverage. A fixed four-second window after the existing Pause capture measured worker
+readback cadence improving from 71.78 / 89.90 ms mean / p95 on 386966a to
+52.62 / 60.41 ms on c1e7b04. The candidate processes one MouseMove per input
+turn in that window (76 turns), rather than the baseline's additional move in
+24 of 56 turns. Both runs exit 0. This shared-PC observation supports the
+queue fix, but sustained Pause remains slow and physical input/present latency
+is not measured.
 
 Pinned Ruffle source review also confirms hidden AVM1 clips still receive frame
 and global MouseMove work. This is normal Flash behavior, not a reason to skip
@@ -80,6 +90,42 @@ hidden helpers globally. Passive call_internal_interface does not call the
 generic Player::update; an early hypothesis that it repeated hit tests was
 incorrect and is not used by the implementation.
 
-Still open: final slider proof; sustained Pause performance fix; power button
+Still open: sustained Pause performance fix; power button
 availability while the offline picker owns navigation; all original menu
 features/loading artwork fidelity. The current work does not claim these done.
+
+
+## Explicit inactive Home retirement experiment
+
+One bounded existing menu_probe run on the all-workspace-clean 386966a build
+compared the same four Pause pointer moves before and after standard Flash
+`_level31.unloadMovie()`. This retired the engine-owned inactive Home root; it
+did not alter Ruffle's visibility behavior or hidden helper callbacks.
+
+| Worker operation | Before Home unload | After Home unload |
+| --- | --- | --- |
+| Four MouseMove handlers, mean / maximum | 24.69 / 29.00 ms | 6.14 / 7.23 ms |
+| Reported slow movie ticks, mean / maximum | 20.17 / 61.95 ms | 5.85 / 8.66 ms |
+
+Tick reporting has a 5 ms threshold, so these tick means describe only reported
+slow samples, not all ticks. The Pause controls and hover remained visible in
+the inspected captures, but Home's blue background disappeared and the player
+cleared opaque gray. A production fix therefore needs transparent readback and
+an explicit Home restore lifecycle with stale callback/presentation fences.
+The unload experiment alone is not a validated shipping lifecycle policy.
+
+A separate existing-probe observation on c1e7b04 confirms the original
+`RequestElement("MainMenu", gameAPI)` loads Home again after standard unload
+(a second Loaded event and a clean final Home capture). Its uninitialized
+Pause request exposes a green rectangle before Home is unloaded; after the
+normal Pause show/hide, final Home is clean. This is not attributed to reload.
+
+The pending production policy retires only Home after actual MainMenu and
+Pause readiness in Match. It reloads through that same authored loader on
+return to Menu/Browser using an engine-owned immutable receiver generation.
+Stale load/Ready/navigation callbacks and Loaded events cannot claim the new
+root at the reused level. Bootstrap readiness survives retirement, while live
+movie readiness does not. Restored Home stays behind a fresh presentation
+fence until Ready; input is withheld during restoration. Transparent Flash
+window mode preserves the world behind Pause using the existing straight-alpha
+readback. Required runtime roundtrips and transparent composition are pending.

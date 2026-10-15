@@ -385,6 +385,26 @@ csrEI.addCallback("csrRequestElement", null, function(elementId, apiName) {
     _global.RequestElement(elementId, _global.csrApi(apiName));
 });
 
+// A restored Home gets a fresh engine-owned receiver without retaining every
+// generation in the ordinary API cache. The engine validates its exact epoch.
+_global.csrBindings.requestHome = function(name) {
+    if (typeof name != "string" || name.substr(0, 9) != "OwnedHome") {
+        return false;
+    }
+    var digits = name.substr(9);
+    if (digits.length == 0 || digits.length > 20) {
+        return false;
+    }
+    var i = 0;
+    while (i < digits.length) {
+        var code = digits.charCodeAt(i);
+        if (code < 48 || code > 57) { return false; }
+        i = i + 1;
+    }
+    _global.RequestElement("MainMenu", _global.csrMakeProxy(name));
+    return true;
+};
+
 // Keys reached the movies through _global.KeyDownEvent(code, vkey, slot,
 // binding); Lib.SFKey turns codes into Source key names with the engine's
 // _global.ValveKeyTable (both directions). The movies only ever look names

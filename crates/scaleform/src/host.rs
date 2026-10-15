@@ -409,6 +409,10 @@ impl Host {
             .with_autoplay(true)
             .with_max_execution_duration(Duration::from_secs(15))
             .build();
+        // Flash wmode=transparent preserves the match behind authored Pause
+        // when its inactive Home root has been retired. Home still paints its
+        // own background; the readback already preserves straight alpha.
+        player.lock().unwrap().set_window_mode("transparent");
         player.lock().unwrap().fetch_root_movie(
             format!("{BASE_URL}{SHIM_NAME}"),
             vec![
