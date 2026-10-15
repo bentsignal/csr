@@ -263,6 +263,7 @@ thing is uncanny. Fidelity is measured, never eyeballed:
       feel of movement, recoil, animation and hit registration.
       Dated recoil data and the unverified procedure:
       [RECOIL_REFERENCE.md](RECOIL_REFERENCE.md).
+- [x] Replace the plain death feed with the installed classic notification movie: original boxes, team colors, local highlights and runtime icons, with independently inspected real kills and multiple rows. Missing-icon fallback and repeated relayout are verified; complete coverage and historical parity remain open. [HUD evidence](research/authored-killfeed.md).
 - [x] Authored static-prop lighting metadata foundation: retained model and
       hardware/source-vertex identities, bounded opaque VHV parsing and
       instance-scoped checksum/count validation against installed Dust II.

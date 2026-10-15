@@ -9,6 +9,19 @@ contain Valve art. The harness writes them to `%USERPROFILE%\csr-fidelity`
 (outside the repository; it refuses a folder inside it). Only numbers and
 observations go into this file.
 
+`CSR_FRAME_LOG=<milliseconds>` enables the client's existing schedule scopes
+and Bevy 0.19.1's `RenderDiagnosticsPlugin`. Once per second, `render diagnostic`
+lines report the retained-history mean and sample count for recently updated
+render passes. The `/elapsed_cpu` and `/elapsed_gpu` paths distinguish CPU pass
+encoding from GPU execution; pipeline-statistics paths retain their original
+units. Missing GPU paths mean no supported result was supplied, not zero GPU
+cost. Nested pass times are not additive. Diagnostic query collection adds
+overhead, so use these runs to locate bottlenecks rather than claim normal-play
+FPS gains. Normal play without this switch installs neither the scopes nor
+the render-diagnostics plugin.
+
+The 2026-10-15 Nuke pass-attribution capture on `f4daf06` completed with an inspected 1920x1080 render, clean logs, unchanged owner preferences and 2,066 measured frames: 98.3 FPS, 10.177 ms mean, 12.5 ms p95. It exposed CPU/GPU pass paths; repeated camera names and nested spans do not form a global GPU frame total. A subsequent same-binary comparison on `6f199ae` rejected serial render scheduling: 90.4 FPS default versus 89.4 FPS serial, with worse serial tails. Both raw runs and source identities are retained privately; shared-machine background builds limit small-delta conclusions. The experimental override was removed. This establishes attribution, not an FPS improvement.
+
 ## The harness
 
 `tools/fidelity/fidelity.ps1` (PowerShell 5.1, no extra installs; the C#
