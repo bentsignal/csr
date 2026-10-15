@@ -400,6 +400,32 @@ not establish a general replacement law, other partial-burst lengths,
 continued spraying after a restart, camera decay, native 64-tick behavior,
 or historical 2015 parity.
 
+Additional recovered three-shot and ten-shot cases at actual near-wave gaps
+0.375/0.376 seconds produce distinct new restart markers after all old boxes
+expire. The small burst returns almost to the crosshair; the larger one
+retains roughly two degrees of upward offset. Their actual clip sequences
+are 30/29/27/26 and 30/29/20/19. These observations were reserved for checking
+a replacement procedure rather than fitting the initial six-shot result.
+
+Two release-only observations then record eleven same-frame public
+`m_aimPunchAngle` and `m_aimPunchAngleVel` samples after exactly one and six
+shots, with no resumed fire. The six-shot angle continues upward after
+release, peaks around 0.09 seconds on the bounded receive clock, and reaches
+displayed zero by about 0.77 seconds while angular velocity remains
+(-2.125, +0.25). After one shot the angle reaches displayed zero by about
+0.51 seconds while velocity remains (-2.03125, -1.03125). Both started at
+zero, retained the same eye/zero movement velocity and ended at clips 29/24.
+The display quantizes these fields to 1/32 units. Capture begin/end bounds
+are retained; requested sample phases are not treated as exact native times.
+
+Ordinary runtime metadata independently reports recoil velocity decay 4.5,
+angle-decay entries 3.5 and 8, a linear-decay entry 18 and a decay coefficient
+2. The older 0.55 cooldown description explicitly says it is deprecated.
+The observed velocity envelopes are consistent with the reported 4.5 value.
+Metadata names alone do not establish the equation or update order. The
+independently evolving angle and velocity need their own measured state;
+they cannot be represented by walking backward through one spray index.
+
 `recoilcheck -- weapon_ak47 --restart-gap 0.125` emits six held authoritative
 rays, one release interval, and one actual restart ray at 64/128 Hz. Its CSV
 timestamps give the achieved sim interval, including tick/cooldown rounding.
