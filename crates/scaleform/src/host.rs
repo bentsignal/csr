@@ -331,6 +331,7 @@ pub(crate) struct Host {
     executor: NullExecutor,
     mouse: (f64, f64),
     render_trace_remaining: usize,
+    work_trace_remaining: usize,
     pending_readback: Option<PendingReadback>,
     viewport_generation: u64,
 }
@@ -404,6 +405,7 @@ impl Host {
         );
         Ok(Self { player, dispatcher, executor, mouse: (0.0, 0.0),
             pending_readback: None, viewport_generation: 0,
+            work_trace_remaining: if std::env::var("CSR_UI_WORKER_TRACE").as_deref() == Ok("1") { 2048 } else { 0 },
             render_trace_remaining: if std::env::var("CSR_UI_RENDER_TRACE").as_deref() == Ok("1") { 1024 } else { 0 },
         })
     }
@@ -435,11 +437,33 @@ impl Host {
         self.executor.run();
     }
 
+    fn work_started(&self) -> Option<Instant> {
+        (self.work_trace_remaining > 0).then(Instant::now)
+    }
+
+    fn work_finished(&mut self, phase: &'static str, started: Option<Instant>) {
+        let Some(started) = started else { return };
+        let elapsed = started.elapsed();
+        if elapsed >= Duration::from_millis(5) && self.work_trace_remaining > 0 {
+            self.work_trace_remaining -= 1;
+            tracing::info!(target: "scaleform::worker", phase,
+                elapsed_ms = elapsed.as_secs_f64() * 1000.0, "Slow UI work");
+        }
+    }
+
     pub fn step(&mut self, dt: Duration) {
+        let started = self.work_started();
         self.executor.run();
+        self.work_finished("load_executor", started);
+        let started = self.work_started();
         self.player.lock().unwrap().tick(FloatDuration::from_secs(dt.as_secs_f64()));
+        self.work_finished("movie_tick", started);
+        let started = self.work_started();
         self.executor.run();
+        self.work_finished("load_executor", started);
+        let started = self.work_started();
         self.drain_calls();
+        self.work_finished("movie_callbacks", started);
     }
 
     fn drain_calls(&mut self) {
@@ -456,8 +480,16 @@ impl Host {
     }
 
     pub fn run_command(&mut self, command: Command) {
+        let phase = match &command {
+            Command::Call { function, .. } if function == "samplePauseSurface" => "pause_visibility",
+            Command::Call { .. } => "movie_call",
+            Command::Set { .. } => "movie_set",
+            Command::RequestElement(_) => "movie_request",
+        };
+        let started = self.work_started();
         self.run_command_now(command);
         self.drain_calls();
+        self.work_finished(phase, started);
     }
 
     fn run_command_now(&mut self, command: Command) {
@@ -538,8 +570,18 @@ impl Host {
             Input::Focus(focused) => if focused { PlayerEvent::FocusGained } else { PlayerEvent::FocusLost },
             _ => return,
         };
+        let phase = match &event {
+            PlayerEvent::MouseMove { .. } => "mouse_move",
+            PlayerEvent::MouseDown { .. } => "mouse_down",
+            PlayerEvent::MouseUp { .. } => "mouse_up",
+            _ => "movie_event",
+        };
+        let started = self.work_started();
         self.player.lock().unwrap().handle_event(event);
+        self.work_finished(phase, started);
+        let started = self.work_started();
         self.drain_calls();
+        self.work_finished("input_callbacks", started);
     }
 
     /// Keys went to the movies through `_global.KeyDownEvent`/`KeyUpEvent`
