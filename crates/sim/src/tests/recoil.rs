@@ -181,3 +181,55 @@ fn sustained_burst_prediction_and_authority_share_punch_and_bullet_direction() {
         );
     }
 }
+
+#[test]
+fn observed_ray_profile_survives_hold_snapshot_prediction_and_recovered_restart() {
+    // Deliberately non-monotonic bullet-space angles expose double scaling,
+    // cumulative addition and off-by-one indexing in the actual fire path.
+    let mut angles = vec![[-2.5, -0.5]; 30];
+    angles[..5].copy_from_slice(&[[0., 0.], [-1., 0.5], [-3., -1.], [-2., 1.5], [-2.5, -0.5]]);
+    for rate in [64, 128] {
+        let (mut server, id) = rifle(rate, true);
+        let mut definitions = server.catalog.weapons.clone();
+        let gun = definitions.iter_mut().find(|def| def.class_name == "weapon_ak47").unwrap();
+        gun.recoil_trajectory = Some(weapons::RecoilTrajectory {
+            reference: "synthetic-ray-seam".into(), bullet_angles: angles.clone(),
+        });
+        server.player_mut(id).unwrap().active_weapon_mut().unwrap().set_def(Arc::new(gun.clone()));
+        server.catalog = Arc::new(weapons::Catalog { weapons: definitions });
+        let mut predicted = server.clone();
+        for _ in 0..server.ticks(1.0) {
+            let before = server.player(id).unwrap().shots as usize;
+            server.step(&[(id, held())]);
+            predicted.step_prediction(&[(id, held())]);
+            assert_eq!(server.state_hash(), predicted.state_hash());
+            for event in &server.events {
+                if let GameEvent::Tracer { start, end, .. } = event {
+                    let expected = movement::angle_vectors(Vec3::new(angles[before][0], angles[before][1], 0.)).0;
+                    assert!(((*end - *start).normalize() - expected).length() < 0.0001,
+                        "actual post-spread ray must sample observed shot {} once at {rate}Hz", before + 1);
+                }
+            }
+            if server.player(id).unwrap().shots == 5 { break; }
+        }
+        assert_eq!(server.player(id).unwrap().shots, 5);
+        let decoded: Snapshot = server.decode(&state::encode(&server.snapshot())).unwrap();
+        predicted.restore(decoded.state);
+        assert_eq!(server.player(id).unwrap().active_weapon().unwrap().aim_punch(),
+            predicted.player(id).unwrap().active_weapon().unwrap().aim_punch());
+        // This asserts only that the existing recovery policy eventually
+        // reaches the recovered start; its native timing remains unmeasured.
+        for _ in 0..server.ticks(2.0) {
+            server.step(&[(id, TickInput::default())]);
+            predicted.step_prediction(&[(id, TickInput::default())]);
+            assert_eq!(server.state_hash(), predicted.state_hash());
+        }
+        assert_eq!(server.player(id).unwrap().active_weapon().unwrap().aim_punch(), [0., 0.]);
+        server.step(&[(id, held())]);
+        assert_eq!(server.player(id).unwrap().shots, 6);
+        let ray = server.events.iter().find_map(|event| match event {
+            GameEvent::Tracer { start, end, .. } => Some((*end - *start).normalize()), _ => None,
+        }).unwrap();
+        assert!((ray - Vec3::X).length() < 0.0001, "recovered restart uses profile's first ray");
+    }
+}
