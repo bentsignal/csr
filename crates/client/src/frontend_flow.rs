@@ -24,6 +24,7 @@ pub(crate) struct Flow {
     home_ready_ms: Option<f64>,
     pause_hover: bool,
     pause_hover_started: Option<Instant>,
+    pause_ready_serial: Option<u64>,
 }
 impl Default for Flow {
     fn default() -> Self {
@@ -37,6 +38,7 @@ impl Default for Flow {
             home_ready_ms: None,
             pause_hover: std::env::var("CSR_TEST_PAUSE_HOVER").as_deref() == Ok("1"),
             pause_hover_started: None,
+            pause_ready_serial: None,
         }
     }
 }
@@ -184,6 +186,10 @@ pub(crate) fn update(
             // delay. Do not turn a click on the world into a claimed UI test.
             if flow.step == 0 {
                 if !front.pause_presented() { return; }
+                let serial = *flow.pause_ready_serial.get_or_insert(front.presented_serial());
+                // The image acknowledgment precedes the next root visibility
+                // update. Require a subsequent raster before capturing/clicking.
+                if front.presented_serial() <= serial { return; }
                 if flow.pause_hover {
                     let started = *flow.pause_hover_started.get_or_insert_with(|| {
                         capture(&mut commands, &options, "flow-pause.png");
