@@ -21,6 +21,9 @@ pub struct KillFeedEntry {
     /// diagnostic text so the authored HUD can choose its exported icons.
     pub weapon: String,
     pub headshot: bool,
+    /// Mode of the causally preceding Fire event, when it matches this weapon.
+    /// Never infer this from the attacker's potentially changed current gun.
+    pub suppressed: Option<bool>,
     pub local_involved: bool,
     pub time: f32,
     /// Immutable authority, retained inside the existing bounded feed rather
@@ -30,16 +33,19 @@ pub struct KillFeedEntry {
 
 impl KillFeedEntry {
     fn new(attacker: sim::PlayerId, weapon: &str, headshot: bool,
-        death: sim::death::DeathReceipt, local: sim::PlayerId, time: f32) -> Self {
+        death: sim::death::DeathReceipt, local: sim::PlayerId, time: f32,
+        suppressed: Option<bool>) -> Self {
         let gun = if weapon == "planted_c4" { "bomb" } else { weapon.trim_start_matches("weapon_") };
         let text = match &death.attacker {
             Some(actor) => format!("{}  [{}{}]  {}", actor.name, gun,
                 if headshot { " HS" } else { "" }, death.victim_name),
             None => format!("[{gun}]  {}", death.victim_name),
         };
-        Self { text, weapon: weapon.into(), headshot,
+        Self { text, weapon: weapon.into(), headshot, suppressed,
             local_involved: attacker == local || death.key.victim == local, time, death }
     }
+
+    pub(crate) fn lifetime(&self) -> f32 { if self.local_involved { 7.5 } else { 5.0 } }
 }
 
 #[derive(Resource, Default)]
@@ -106,10 +112,14 @@ pub fn process(
         Emit { at: (!own).then_some(at), owner: Some(player), local: own }
     };
     let fs = &level.0.vfs;
+    // Hitscan Fire and Kill are ordered in the same event batch. Missing
+    // remote Fire evidence stays unknown instead of reusing a prior mode.
+    let mut shot_modes = std::collections::HashMap::<sim::PlayerId, (String, bool)>::new();
     for event in pending.0.drain(..) {
         if matches!(event, GameEvent::Damage {..} | GameEvent::Impact {..} | GameEvent::RoundStart {..}) { effects.feedback.push(event.clone()); }
         match event {
             GameEvent::Fire { player, weapon, origin, suppressed } => {
+                shot_modes.insert(player, (weapon.clone(), suppressed));
                 effects.attack(player, weapon.clone(), "ACT_VM_PRIMARYATTACK", now);
                 let sound = world.0.catalog.get(&weapon).map(|d| sounds.weapon_shot_mode_entry(d, suppressed).to_string()).unwrap_or_default();
                 if !sound.is_empty() {
@@ -192,8 +202,10 @@ pub fn process(
             }
             GameEvent::Kill { attacker, weapon, headshot, death, .. } => {
                 if effects.deaths.len() < 128 { effects.deaths.push(death.clone()); }
-                effects.kill_feed.push(KillFeedEntry::new(attacker, &weapon, headshot, death, local.id, now));
-                if effects.kill_feed.len() > 6 {
+                let suppressed = shot_modes.get(&attacker)
+                    .filter(|(fired_weapon, _)| fired_weapon == &weapon).map(|(_, mode)| *mode);
+                effects.kill_feed.push(KillFeedEntry::new(attacker, &weapon, headshot, death, local.id, now, suppressed));
+                if effects.kill_feed.len() > 7 {
                     effects.kill_feed.remove(0);
                 }
             }
@@ -306,7 +318,7 @@ pub fn process(
         }
     }
     effects.explosions.retain(|e| now - e.1 < EXPLOSION_LIFE);
-    effects.kill_feed.retain(|k| now - k.time < 6.0);
+    effects.kill_feed.retain(|k| now - k.time < k.lifetime());
 }
 
 pub fn draw(effects: Res<Effects>, time: Res<Time>, mut gizmos: Gizmos) {
@@ -341,7 +353,7 @@ mod attack_tests {
         world.respawn(victim);
         assert!(world.player(victim).unwrap().life_epoch > death.key.life_epoch);
         world.remove_player(victim);
-        let entry = KillFeedEntry::new(attacker, &weapon, headshot, death.clone(), victim, 10.);
+        let entry = KillFeedEntry::new(attacker, &weapon, headshot, death.clone(), victim, 10., None);
         assert_eq!(entry.text, "[bomb]  victim <old> & name");
         assert!(entry.local_involved);
         assert_eq!(entry.death, death);
@@ -355,7 +367,7 @@ mod attack_tests {
             GameEvent::Kill { death, .. } => Some(death), _ => None,
         }).unwrap();
         death.attacker = Some(sim::death::DeathActor { id: 2, name: "original attacker".into(), team: sim::Team::Terrorist });
-        let entry = KillFeedEntry::new(2, "weapon_ak47", true, death, 3, 1.);
+        let entry = KillFeedEntry::new(2, "weapon_ak47", true, death, 3, 1., None);
         assert_eq!(entry.text, "original attacker  [ak47 HS]  victim");
         assert_eq!(entry.weapon, "weapon_ak47");
         assert!(entry.headshot);

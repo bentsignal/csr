@@ -40,3 +40,21 @@ This does not change simulation, network messages, or the visible HUD yet.
 Authored rendering, real kill-event admission, local emphasis, resizing,
 expiration, and frame-cost checks remain required before completion.
 
+
+## Integration checkpoint, October 15
+
+The original row now has a positive public-runtime argument contract: the
+returned AddPanel movie clip is passed to SetPanelText, made visible, and
+removed through RemovePanel. Public boolean observations distinguish local
+victim fill from local attacker outline. Bitmap exports attach through owned
+movie-clip containers; Ruffle does not render the original inline HTML images.
+Text gutter/spacing is still being established, so this remains unfinished.
+
+The client integration is a draft: a dedicated transparent bare-root worker
+receives immutable kill receipts, bounded lifetime, causal shot mode, and
+revision-fenced rasters. It receives no keyboard/pointer input and pauses when
+no notices are present. CPU copies/uploads use the viewport's upper half;
+GPU readback still covers the whole target. The existing text feed remains the
+fallback until a current authored raster is admitted; failed loads or rows
+retain that fallback and disconnect only the dedicated worker. Rust compilation,
+actual kill renders, resizing, lifetime and frame-cost validation are pending.

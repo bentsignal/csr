@@ -244,6 +244,9 @@ impl Dispatcher {
         match (object, method) {
             ("csr", "RootReady") => {
                 self.root_ready = true;
+                // A bare-root HUD has no requested menu element to announce
+                // readiness. Its engine queues the owned HUD loader here.
+                let _ = self.engine.borrow_mut().call(object, method, args, &mut self.calls);
                 return Value::Undefined;
             }
             ("csr", "RegisterSliderDragAxis") => {
@@ -349,10 +352,19 @@ pub(crate) struct Host {
     work_trace_remaining: usize,
     pending_readback: Option<PendingReadback>,
     viewport_generation: u64,
+    overlay: bool,
 }
 
 impl Host {
     pub fn new(config: &Config, engine: Box<dyn Engine>, events: EventSender<Event>) -> Result<Self, Error> {
+        Self::new_surface(config, engine, events, false)
+    }
+
+    pub fn overlay(config: &Config, engine: Box<dyn Engine>, events: EventSender<Event>) -> Result<Self, Error> {
+        Self::new_surface(config, engine, events, true)
+    }
+
+    fn new_surface(config: &Config, engine: Box<dyn Engine>, events: EventSender<Event>, overlay: bool) -> Result<Self, Error> {
         let mut fs = vfs::Vfs::new();
         fs.mount_game_dir(&config.game_dir).map_err(|e| format!("mounting {}: {e}", config.game_dir.display()))?;
         let loc_path = format!("resource/csgo_{}.txt", config.language);
@@ -411,8 +423,8 @@ impl Host {
             .with_autoplay(true)
             .with_max_execution_duration(Duration::from_secs(15))
             .build();
-        // The selected player's authored background paints Home; Pause keeps
-        // the world beneath its translucent controls through existing alpha.
+// The selected player's authored background paints Home; Pause and the
+        // dedicated HUD surface preserve the world beneath authored alpha.
         player.lock().unwrap().set_window_mode("transparent");
         player.lock().unwrap().fetch_root_movie(
             format!("{BASE_URL}{SHIM_NAME}"),
@@ -423,7 +435,7 @@ impl Host {
             Box::new(|_| {}),
         );
         Ok(Self { player, dispatcher, executor, mouse: (0.0, 0.0), held_keys: HashMap::new(), held_buttons: HashSet::new(),
-            pending_readback: None, viewport_generation: 0,
+            pending_readback: None, viewport_generation: 0, overlay,
             work_trace_remaining: if std::env::var("CSR_UI_WORKER_TRACE").as_deref() == Ok("1") { 2048 } else { 0 },
             render_trace_remaining: if std::env::var("CSR_UI_RENDER_TRACE").as_deref() == Ok("1") { 1024 } else { 0 },
         })
@@ -736,10 +748,11 @@ impl Host {
             return Ok(None); // Guard unmaps the obsolete target, without copying it.
         }
         let mapped_at = pending.started.map(|_| Instant::now());
+        let height = if self.overlay { pending.height.div_ceil(2) } else { pending.height };
         let mut rgba = {
             let mapped = pending.buffer.slice(..).get_mapped_range()
                 .map_err(|error| format!("menu readback range failed: {error}"))?;
-            crate::capture::copy_rows(&mapped, pending.width, pending.height,
+            crate::capture::copy_rows(&mapped, pending.width, height,
                 pending.dimensions.padded_bytes_per_row as usize)
                 .map_err(str::to_owned)?
         }; // Drop the mapped view before PendingReadback unmaps, including errors.
@@ -754,7 +767,7 @@ impl Host {
                 alpha_ms = copied_at.map_or(0., |begin| begin.elapsed().as_secs_f64() * 1000.),
                 "UI readback completed (age includes intervening input and movie work)");
         }
-        Ok(Some(CapturedFrame { width: pending.width, height: pending.height, rgba,
+        Ok(Some(CapturedFrame { width: pending.width, height, rgba,
             presentation_revision: pending.presentation_revision }))
     }
 }
@@ -834,11 +847,12 @@ fn compile_shim() -> Result<Vec<u8>, Error> {
         fn load(&self, path: &str) -> Result<String, std::io::Error> {
             match path {
                 "shim.as" => Ok(include_str!("shim.as").to_string()),
+                "death_notice.as" => Ok(include_str!("death_notice.as").to_string()),
                 _ => Err(std::io::Error::new(std::io::ErrorKind::NotFound, path.to_string())),
             }
         }
         fn is_file(&self, path: &str) -> bool {
-            path == "shim.as"
+            matches!(path, "shim.as" | "death_notice.as")
         }
     }
     // SWF 10: Ruffle turns empty strings crossing ExternalInterface into
@@ -846,6 +860,7 @@ fn compile_shim() -> Result<Vec<u8>, Error> {
     let options = rascal::CompileOptions::default().with_swf_version(10);
     let mut builder = rascal::ProgramBuilder::new(Source).with_compile_options(options);
     builder.add_script("shim.as");
+    builder.add_script("death_notice.as");
     let program = builder.build().map_err(|e| format!("compiling the bridge shim: {e:?}"))?;
     let swf_options = rascal::SwfOptions::default().with_frame_rate(30.0).with_stage_size(0.0, 0.0, 1280.0, 720.0);
     program.compile().to_swf(&swf_options).map_err(|e| format!("writing the bridge shim: {e}"))
