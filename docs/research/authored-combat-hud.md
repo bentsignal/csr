@@ -35,3 +35,40 @@ state. Current health/armor/ammo still use Bevy text and extracted icon fragment
 No new runtime contract, rendered improvement or complete HUD fidelity is
 claimed at this initial checkpoint. Full Audio settings content remains open
 in the menu research/owner playtest ledger; this track does not add dummy rows.
+
+## Installed public movie contract, first observation
+
+A bounded two-stage 1920x1080 runtime observation loaded the three candidate
+movies into separate owned, locked-root children of the existing transparent
+main UI. Only standard `createEmptyMovieClip`/`loadMovie` and passive public
+property inspection were used. It exited 0 with no ERROR/panic and unchanged
+owner settings. The saved actual raster shows the original health/armor at the
+bottom left and ammunition at the bottom right, still containing authored sample
+values because no gameplay setter or initializer had been called.
+
+- `hudhealtharmormodule.swf`: public `updateValues`, `SetStyle`,
+  `AmmoStyleUpdate`, `setColorText`, `showNow`, `hideNow`, `setVisible`,
+  `onLoaded`, `onResize`, `onUnload`; its actual child is `HudPanel`, not `Panel`.
+  Uninitialized bounds were x=0..615.1, y=1018..1083.05 at 1920x1080.
+- `hudweaponmodule.swf`: public `updateAmmo`, `switchWeaponName`,
+  `weaponFired`, `updateAmmoColor`, `ShowBomb`, `updateKillEater`, `SetStyle`,
+  `AmmoStyleUpdate`, `setNumberKills`, `showNow`, `hideNow`, `setVisible`,
+  `onLoaded`, `onResize`, `onUnload`, with `HudPanel`.
+  Uninitialized bounds were x=1336.35..1925.05, y=874.3..1102.8.
+- `hudweaponselected.swf`: separate inventory public `AddPanel`, `RemovePanel`,
+  `AddWeaponData`, `AddNextPanel`, `AddNextWeaponData`, `SetWeaponName`,
+  `resizeRelative`, and `Anchor`. It is not required to display health/ammo;
+  inventory remains a separate fidelity item.
+
+These are runtime property names and primitive geometry, not authored
+instructions. Bounds and sample art are not an initialized layout or fidelity
+pass. Argument meanings, original initialization/scaling and animation settling
+remain evidence gates. Public `Function.length` metadata, if exposed by the
+runtime, can establish arity but cannot establish argument meaning.
+
+The existing `Menu::spawn_named` already uses transparent window rendering and
+returns the complete viewport. `spawn_overlay` differs only by copying its top
+half. A shared full-viewport worker therefore requires no new public renderer
+mode and can preserve the existing top-half API for other consumers. Component
+rasters must retain independent readiness/revision/fallback; ordinary ammo
+updates must not blank valid notice or health presentation.
