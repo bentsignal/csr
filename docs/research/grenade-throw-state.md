@@ -200,3 +200,34 @@ trial was rejected after rendered comparison: event3005 does not establish the
 native visible hand-release phase. Physical release/audio timing are verified
 independently; exact hand-phase matching, native animation speed, movement/VR
 trajectories and historical parity remain open.
+
+### Public throw-state capability checkpoint
+
+A fresh standing HE observation identified the actual selected weapon and
+predicted viewmodel through the ordinary public prediction list. The player
+dump showed a settled origin/eye offset, zero movement velocity and zero
+punch; the viewmodel's weapon handle independently identified the selected
+HE. Entity indices were read from that session rather than reused.
+
+The weapon dump exposes `m_bPinPulled` and `m_flThrowStrength`; the settled
+values were false and 1. The viewmodel exposes `m_nSequence`,
+`m_flPlaybackRate` and `m_flAnimTime`, showing idle sequence 0 and playback
+rate 1. This receiver did not expose the required grenade throw-time or
+viewmodel cycle fields. The complete capability gate was therefore rejected
+before any throw, preserving five images as negative evidence. All 12
+preference targets were restored exactly and no native process remained.
+An animation-time field is not silently substituted for an absent cycle.
+
+The existing installed-model format reader separately enumerates HE
+sequences in order: idle, pullpin, throw, deploy, underhand and
+throwcharge_blend. Throw and underhand each declare 13 frames at 30 fps,
+with event 3005 at cycle approximately 0.833. These are authored metadata,
+not evidence of a native playback clock or physical release time. Runtime
+sequence transitions and the exposed clock fields still need an actual
+released throw before they can constrain the rendering discrepancy.
+
+Ordinary public help also describes entity lookup and dump commands. Their
+availability alone does not establish an actual projectile position/velocity
+receiver. Launch pitch, origin, speed, movement inheritance and throw-strength
+blending remain uncalibrated; no numeric launch policy changes follow from
+this capability checkpoint. Raw installed-game images and logs remain private.
