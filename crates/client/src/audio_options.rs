@@ -60,6 +60,69 @@ mod tests {
     use crate::settings::Settings;
 
     #[test]
+    fn window_focus_changes_existing_playback_without_changing_saved_volume() {
+        use bevy::{
+            audio::{AudioSink, AudioSinkPlayback},
+            prelude::*,
+            window::PrimaryWindow,
+        };
+        let mut app = App::new();
+        app.insert_resource(Settings::parse("volume=0.8\nsnd_mute_losefocus=1\n"))
+            .insert_resource(crate::Options(crate::ClientOptions {
+                screenshot: Some("unused-focus-test.png".into()),
+                ..default()
+            }))
+            .init_resource::<crate::audio::SoundLibrary>()
+            .init_resource::<Assets<crate::material::WorldMaterial>>()
+            .add_systems(Update, crate::menu::apply);
+        let window = app
+            .world_mut()
+            .spawn((
+                PrimaryWindow,
+                Window {
+                    focused: true,
+                    ..default()
+                },
+            ))
+            .id();
+        // A real rodio queue/sink, without opening an output device.
+        let (player, _queue) = rodio::Player::new();
+        let sound = app
+            .world_mut()
+            .spawn((crate::audio::SoundGain(0.25), AudioSink::new(player)))
+            .id();
+        let volume = |app: &App| {
+            app.world()
+                .get::<AudioSink>(sound)
+                .unwrap()
+                .volume()
+                .to_linear()
+        };
+        app.update();
+        assert!((volume(&app) - 0.2).abs() < 1e-6);
+        app.world_mut().get_mut::<Window>(window).unwrap().focused = false;
+        app.update();
+        assert_eq!(volume(&app), 0.0);
+        assert_eq!(
+            app.world()
+                .resource::<crate::audio::SoundLibrary>()
+                .master_volume,
+            0.0
+        );
+        assert_eq!(app.world().resource::<Settings>().volume, 0.8);
+        app.world_mut().get_mut::<Window>(window).unwrap().focused = true;
+        app.update();
+        assert!((volume(&app) - 0.2).abs() < 1e-6);
+        // The original Yes choice is zero: playback remains audible unfocused.
+        app.world_mut()
+            .resource_mut::<Settings>()
+            .set_convar_number("snd_mute_losefocus", 0.0);
+        app.world_mut().get_mut::<Window>(window).unwrap().focused = false;
+        app.update();
+        assert!((volume(&app) - 0.2).abs() < 1e-6);
+    }
+
+    #[test]
     fn focus_mute_keeps_saved_master_and_shared_ui_console_value() {
         let mut settings = Settings::parse("volume=0.73\nsnd_mute_losefocus=1\n");
         assert_eq!(

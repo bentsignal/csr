@@ -1,7 +1,7 @@
 # Authored Audio Settings and real playback
 
-The current original Audio Settings page displays only Master Volume and an
-empty microphone panel. Its installed declarative `scripts/audio_options.txt`
+The current original Audio Settings page displays only Master Volume and a
+large empty black panel. Its installed declarative `scripts/audio_options.txt`
 contains more rows, but our widget adapter admits only settings with working
 backends. This track connects additional real playback controls and preserves
 the original widgets, labels, ranges, callbacks and navigation. It does not add
@@ -21,7 +21,7 @@ dummy controls, replacement UI, assets or authored movie instructions.
   Device/output/HRTF controls likewise require actual backend support. Bevy
   0.19's current output resource is private and opens its default device; an
   original dropdown alone would not make device switching work.
-- The empty microphone panel is an unfinished original subcomponent. Discover
+- The empty black panel is an unfinished original subcomponent. Discover
   its public layout/visibility contract rather than inventing microphone input
   or an empty replacement graphic.
 
@@ -40,8 +40,10 @@ The first implementation checkpoint adds the original `snd_mute_losefocus`
 choice and persistent audio-options delegation. It applies zero actual playback
 gain while unfocused when selected, retaining the saved master value and
 restoring current sounds on focus return. Focus-only changes do not reapply
-display/material settings. This is pending compilation, actual original-widget
-render and playback/focus verification; it is not an overall Audio Settings pass.
+display/material settings. Frozen `d2dbc42` passed focused audio-options and
+settings tests, the PLAY launcher build, and soundcheck (1425 decodable sounds,
+zero skipped or crashing). Actual original-widget rendering and playback/focus
+verification remain pending; this is not an overall Audio Settings pass.
 
 Original-only music metadata is available under
 `sound/music/valve_csgo_01/game_sounds_music.txt` in the Legacy VPK. The retained
