@@ -32,6 +32,20 @@ bounded to 64 groups/256 material variants, 16M source pixels and 1M cropped
 pixels per material. Cosmetic variation does not use or alter simulation RNG,
 recoil, hit registration or network state.
 
-Verification is pending: synthetic subrect/inheritance checks, workspace and
-installed probe/simulation, actual rendered wall impacts, and a native matched
-material comparison. A successful data load alone does not close WP09.
+Verification at production source `92ef13d`: workspace checks, installed-map
+probe/simulation and 64/128-tick remote checks passed in CI run `38676896129`.
+The local predecessor also passed an all-workspace-package-clean dev/play
+build. The final CI client was copied before the next runner build, with its
+write time, SHA256 and actual client compilation log retained privately.
+
+Root-reviewed 1920x1080 captures show distinct plaster, concrete and rock
+material selections. A normal 900-frame M4 firing run shows persistent,
+irregular plaster marks on the wall, with 37 actual shots at the capture gate;
+the installed catalog loaded 25 groups / 72 material variants. Earlier
+instantaneous fixture views hit occluded prop/curb faces or retained the dust
+puff, so those pictures alone were not accepted as proof of wall artwork.
+Artifacts stay outside the repo under `csr-fidelity/impact-decals-20261015`.
+
+Native matched-material comparison and exact release-profile probe/simulation
+on the combined build remain pending. A visible data-driven mark does not
+close WP09 or establish the native blend, projection or scaling rules.
