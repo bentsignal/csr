@@ -58,12 +58,14 @@ _global.csrDeathNotices.bitmap = function(parent, name, linkage) {
     }
     return {clip: holder, bounds: bounds, width: width, height: height};
 };
-_global.csrDeathNotices.slot = function(field, width, space) {
-    // Flash HTML image layout is missing in Ruffle. Reserve its measured width
-    // through supported HTML typography so the ORIGINAL SetPanelText still owns
-    // background sizing, right alignment, team colors and local-player panels.
-    var html = '<font letterSpacing="' + String(width - space) + '">&#160;</font>';
-    return {html: html, width: this.measure(field, html)};
+_global.csrDeathNotices.fitHorizontal = function(clip, parent, left, right) {
+    if (typeof clip != "movieclip" || !(right > left)) { return false; }
+    var before = clip.getBounds(parent);
+    if (!(before.xMax > before.xMin)) { return false; }
+    clip._xscale *= (right - left) / (before.xMax - before.xMin);
+    var after = clip.getBounds(parent);
+    clip._x += left - after.xMin;
+    return true;
 };
 _global.csrDeathNotices.layout = function(row) {
     var panel = row.panel;
@@ -71,58 +73,70 @@ _global.csrDeathNotices.layout = function(row) {
     var field = parent.Text;
     var background = panel.IDTextBG;
     if (field == undefined || background == undefined) { return false; }
-    var space = this.measure(field, "&#160;");
+    var killer = '<font color="' + row.killerColor + '">' + row.killer + '</font>';
+    var victim = '<font color="' + row.victimColor + '">' + row.victim + '</font>';
+    // Reset to ordinary populated text on each layout, retaining the original
+    // setter's current padding/height instead of accumulating our width delta.
+    this.root.SetPanelText(panel, killer + " " + victim, row.localVictim, row.localAttacker);
+    var plainWidth = field.textWidth;
+    var box = background.getBounds(panel);
+    var killerWidth = this.measure(field, killer);
+    // A whitespace-only span has zero measured width in this runtime. Measure
+    // an actual INTERNAL space using the same original TextField/font instead.
+    var space = this.measure(field, "A A") - this.measure(field, "AA");
     if (!(space > 0)) { return false; }
 
-    // Convert the existing background's row into the TextPanel coordinate
-    // system; do not assume a viewport scale or duplicate its padding constants.
-    var top = {x: background._x, y: background._y};
-    var bottom = {x: background._x, y: background._y + background._height};
+    var top = {x: box.xMin, y: box.yMin};
+    var bottom = {x: box.xMin, y: box.yMax};
     panel.localToGlobal(top);
     panel.localToGlobal(bottom);
     parent.globalToLocal(top);
     parent.globalToLocal(bottom);
     var height = Math.abs(bottom.y - top.y);
     if (!(height > 0)) { return false; }
-    var prefix = '<font color="' + row.killerColor + '">' + row.killer + '</font>&#160;';
-    var prefixWidth = this.measure(field, prefix);
-    var html = prefix;
     var icons = [row.weapon];
     if (row.head != undefined) { icons.push(row.head); }
     var offsets = [];
-    var offset = prefixWidth;
+    var offset = killerWidth + space;
     var i = 0;
     while (i < icons.length) {
         var icon = icons[i];
         var scale = Math.min(1, height / icon.height);
         icon.clip._xscale = scale * 100;
         icon.clip._yscale = scale * 100;
-        var slot = this.slot(field, icon.width * scale, space);
-        if (!(slot.width > 0)) { return false; }
         offsets.push(offset);
-        html += slot.html + "&#160;";
-        offset += slot.width + space;
+        offset += icon.width * scale + space;
         i += 1;
     }
-    html += '<font color="' + row.victimColor + '">' + row.victim + '</font>';
-    // Public boolean A/B: third enables PanelVictim, fourth PanelAttacker.
+    // Publicly observed TABSTOPS reservation works in pinned Ruffle. The tab
+    // keeps one original field and its original fonts/colors/right alignment.
+    var html = '<TEXTFORMAT TABSTOPS="' + String(offset) + '">' + killer + "\t" + victim + '</TEXTFORMAT>';
     this.root.SetPanelText(panel, html, row.localVictim, row.localAttacker);
+    var delta = field.textWidth - plainWidth;
+    if (!(delta > 0)) { return false; }
+    // The installed setter does not include tab advance in its BG measurement.
+    // Resize ONLY its existing art by the measured text delta, keeping its
+    // original right anchor and padding. Original highlight sprites share the
+    // same content rectangle; no replacement rectangle/outline is drawn.
+    var right = box.xMax;
+    var left = box.xMin - delta;
+    if (!this.fitHorizontal(background, panel, left, right) ||
+        !this.fitHorizontal(panel.PanelAttacker, panel, left, right) ||
+        !this.fitHorizontal(panel.PanelVictim, panel, left, right)) { return false; }
 
-    // Bounds include the original field's own placement. Native TextFormat
-    // metrics supply its gutter rather than a guessed pixel offset.
     var format = field.getTextFormat();
     var extent = format.getTextExtent("");
     var gutter = (extent.textFieldWidth - extent.width) / 2;
     if (!(gutter >= 0)) { return false; }
-    var bounds = parent.getBounds(parent);
-    var left = bounds.xMin + gutter;
-    if (format.align == "right") { left = bounds.xMax - gutter - field.textWidth; }
-    else if (format.align == "center") { left = (bounds.xMin + bounds.xMax - field.textWidth) / 2; }
+    var bounds = row.fieldBounds;
+    var textLeft = bounds.xMin + gutter;
+    if (format.align == "right") { textLeft = bounds.xMax - gutter - field.textWidth; }
+    else if (format.align == "center") { textLeft = (bounds.xMin + bounds.xMax - field.textWidth) / 2; }
     i = 0;
     while (i < icons.length) {
         var icon = icons[i];
         var scale = icon.clip._xscale / 100;
-        icon.clip._x = left + offsets[i] - icon.bounds.xMin * scale;
+        icon.clip._x = textLeft + offsets[i] - icon.bounds.xMin * scale;
         icon.clip._y = (top.y + bottom.y) / 2 - (icon.bounds.yMin + icon.height / 2) * scale;
         i += 1;
     }
@@ -182,9 +196,11 @@ _global.csrDeathNotices.addImpl = function(key, killer, victim, killerColor, vic
     // Initialize the actual text-dependent authored row height before fitting
     // icons: the unloaded template height differs from SetPanelText's height.
     this.root.SetPanelText(panel,
-        '<font color="' + row.killerColor + '">' + row.killer + '</font>&#160;' +
+        '<font color="' + row.killerColor + '">' + row.killer + '</font> ' +
         '<font color="' + row.victimColor + '">' + row.victim + '</font>',
         row.localVictim, row.localAttacker);
+    // Capture before helper children can contribute to MovieClip bounds.
+    row.fieldBounds = panel.TextPanel.getBounds(panel.TextPanel);
     row.weapon = this.bitmap(panel.TextPanel, "csrWeapon", weaponLinkage);
     if (headshot === true) { row.head = this.bitmap(panel.TextPanel, "csrHead", "icon-headshot.png"); }
     if (row.weapon == undefined || (headshot === true && row.head == undefined)) {
