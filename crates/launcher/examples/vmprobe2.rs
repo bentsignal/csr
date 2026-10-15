@@ -56,6 +56,8 @@ fn report_sight_rois(model: &mdl::Model, pose: &[glam::Mat4]) {
     for (label, x0, y0, x1, y1) in [
         ("front-post", 977., 498., 1008., 548.),
         ("rear-aperture", 1193., 558., 1221., 585.),
+        ("receiver-carry-handle", 1285., 682., 1358., 735.),
+        ("receiver-side", 1340., 760., 1450., 840.),
     ] {
         let mut vertices = Vec::new();
         for (mi, mesh) in model.meshes.iter().enumerate() {
