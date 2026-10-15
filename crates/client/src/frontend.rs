@@ -985,7 +985,6 @@ pub(crate) fn update(
 ) {
     let remote_loading = crate::remote_join::loading(remote.as_deref());
     let scene = if remote_loading { AppState::Loading } else { *state.get() };
-    if scene != AppState::Match { front.pause_presentation.close(); }
     let loading_selection = if scene == AppState::Loading { loader.loading_map() } else { None };
     let loading_selection_changed = front.loading_selection != loading_selection;
     front.loading_selection = loading_selection.clone();
@@ -1193,19 +1192,25 @@ pub(crate) fn update(
     }
     if scene != AppState::Menu && front.lobby.lock().unwrap().active() { front.lobby.lock().unwrap().cancel(); }
     if front.scene != Some(scene) {
+        // Return-to-Home must not expose the last in-match Pause raster while
+        // this transaction is still in the worker queue/GPU readback pipeline.
+        if visible && scene == AppState::Menu && front.scene.is_some() {
+            front.pause_presentation.open();
+        }
+        let mut scene_commands = Vec::new();
         let options_root = {
             let mut data = front.data.lock().unwrap();
             data.pause_surface.options_cancelled();
             data.pause_surface.options_root().map(str::to_owned)
         };
-        if let Some(path) = options_root { front.send(Input::Set { path, property: "_visible".into(), value: false.into() }); }
+        if let Some(path) = options_root { scene_commands.push(scaleform::Command::Set { path, property: "_visible".into(), value: false.into() }); }
         for path in ["_global.LobbyMovie", "_level17"] {
-            front.send(Input::Set { path: path.into(), property: "_visible".into(), value: false.into() });
+            scene_commands.push(scaleform::Command::Set { path: path.into(), property: "_visible".into(), value: false.into() });
         }
         // Movie animations and late callbacks can leave cached launch panels
         // visible. Own the root visibility across scenes, including descendants.
         for path in ["_global.MainMenuMovie", "_global.SinglePlayerMovie"] {
-            front.send(Input::Set {
+            scene_commands.push(scaleform::Command::Set {
                 path: path.into(),
                 property: "_visible".into(),
                 value: (matches!(scene, AppState::Menu | AppState::Browser)
@@ -1214,43 +1219,49 @@ pub(crate) fn update(
             });
         }
         if scene != AppState::Match {
-            front.send(Input::Call {
+            scene_commands.push(scaleform::Command::Set {
+                path: "_level100".into(), property: "_visible".into(), value: false.into(),
+            });
+            scene_commands.push(scaleform::Command::Call {
                 path: "_level100".into(),
                 function: "hidePanel".into(),
                 args: vec![],
             });
         }
         if scene == AppState::Loading {
-            front.send(Input::Call {
+            scene_commands.push(scaleform::Command::Call {
                 path: "_global.MainMenuMovie".into(),
                 function: "hidePanelImmediate".into(),
                 args: vec![],
             });
-            front.send(Input::Call {
+            scene_commands.push(scaleform::Command::Call {
                 path: "_global.SinglePlayerMovie".into(),
                 function: "hidePanel".into(),
                 args: vec![true.into()],
             });
-            front.send(Input::Call {
+            scene_commands.push(scaleform::Command::Call {
                 path: "_global.SinglePlayerMovie.Panel.Panel.BotDiffPanel".into(),
                 function: "HidePanel".into(),
                 args: vec![],
             });
-            front.request("LoadingScreen");
         } else {
-            front.send(Input::Call {
+            scene_commands.push(scaleform::Command::Call {
                 path: "_level1000".into(),
                 function: "hidePanel".into(),
                 args: vec![],
             });
             if scene == AppState::Menu {
-                front.send(Input::Call {
+                scene_commands.push(scaleform::Command::Call {
                     path: "_global.MainMenuMovie".into(),
                     function: "showPanel".into(),
                     args: vec![],
                 });
             }
         }
+        front.send(Input::Present {
+            commands: scene_commands, revision: front.pause_presentation.revision(),
+        });
+        if scene == AppState::Loading { front.request("LoadingScreen"); }
         front.scene = Some(scene);
     }
     let loading_map = front.data.lock().unwrap().loading_map.clone();
