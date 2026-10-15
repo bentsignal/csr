@@ -538,7 +538,8 @@ fn validate_weapon(weapon: &sim::weapon::WeaponState, tick:u64) -> Result<(), St
             || [profile.pull_pin_duration,profile.overhand.duration,profile.underhand.duration]
                 .iter().any(|n|!n.is_finite()||*n<=0.||*n>30.)
             || [&profile.overhand,&profile.underhand].iter().any(|a|
-                !a.release_time.is_finite()||a.release_time<0.||a.release_time>a.duration)
+                !a.release_time.is_finite()||a.release_time<0.||a.release_time>a.duration
+                || a.command_release_time.is_some_and(|delay| !delay.is_finite() || delay < 0. || delay > a.duration))
         {return Err("invalid snapshot grenade throw phase".into());}
     }
     if [

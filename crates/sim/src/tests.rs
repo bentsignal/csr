@@ -115,8 +115,8 @@ fn def(name: &str, index: u32, class: WeaponClass, side: Side, price: i32, clip:
         suppressor_animations: None,
         grenade_animations: (class==WeaponClass::Grenade).then_some(weapons::GrenadeAnimations {
             pull_pin_duration:0.25,
-            overhand:weapons::GrenadeReleaseAnimation {duration:0.4,release_time:0.1},
-            underhand:weapons::GrenadeReleaseAnimation {duration:0.4,release_time:0.1},
+            overhand:weapons::GrenadeReleaseAnimation { command_release_time: None,duration:0.4,release_time:0.1},
+            underhand:weapons::GrenadeReleaseAnimation { command_release_time: None,duration:0.4,release_time:0.1},
         }),
         id: content::ContentId::csgo(content::ContentKind::Weapon, name.trim_start_matches("weapon_")),
         class_name: name.into(),
