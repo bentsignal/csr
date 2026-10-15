@@ -31,10 +31,11 @@ impl Settling {
         }
         let v = velocity.truncate();
         let f = forward.truncate().normalize_or_zero();
-        let speed = v.length();
-        // Numerical tolerance only: sideways/backward/airborne behavior is
-        // unmeasured. It is not a response-angle or amplitude tuning control.
-        if speed <= f32::EPSILON || v.dot(f) <= 0. || v.perp_dot(f).abs() > 0.01 {
+        // Only the observed forward component contributes. A hard direction
+        // cutoff would snap the pose while turning; perpendicular speed does
+        // not add an unmeasured response and backward motion stays neutral.
+        let speed = v.dot(f);
+        if !speed.is_finite() || speed <= f32::EPSILON {
             return Self::default();
         }
         let weight = (speed / REFERENCE_SPEED).min(1.);
@@ -100,5 +101,7 @@ mod tests {
         let fast = Settling::sample(Vec3::X * 450., Vec3::X, true, 0.);
         assert_eq!(fast.rotation, run.rotation);
         assert_eq!(fast.translation, run.translation);
+        let transverse = Settling::sample(Vec3::new(117., 200., 0.), Vec3::X, true, 0.);
+        assert!((transverse.translation - walk.translation).length() < 0.00001);
     }
 }
