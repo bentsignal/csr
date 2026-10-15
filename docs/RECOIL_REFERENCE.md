@@ -390,6 +390,11 @@ other three distinct observations were retained. Raw captures stay private.
 
 The short restart continues upward beyond the sixth-shot impact. Simply
 walking backward through the held-magazine table cannot describe that phase.
+The actual 128 Hz sim ray at 0.125 seconds is (−5.53°, +0.22°), versus the
+observed (−7.50°, +0.86°). At 0.3125 seconds it is (−1.76°, −0.07°), versus
+the independent 0.312-second observation (−2.77°, +0.34°). The long pause
+returns to center in both. Thus matching the held magazine does not establish
+recoil recovery; these diagnostic checks deliberately expose the mismatch.
 These observations constrain the current arbitrary recovery model but do
 not establish a general replacement law, other partial-burst lengths,
 continued spraying after a restart, camera decay, native 64-tick behavior,
