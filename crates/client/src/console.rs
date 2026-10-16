@@ -284,6 +284,8 @@ const COMMANDS: &[&str] = &[
     "unbind",
     "bindlist",
     "volume",
+    "mat_vsync",
+    "mat_antialias",
     "sensitivity",
     "m_pitch",
     "cl_showfps",

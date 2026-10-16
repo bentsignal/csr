@@ -93,6 +93,31 @@ mod tests {
     use bevy::window::WindowResolution;
 
     #[test]
+    fn original_video_controls_change_real_preferences_without_claiming_exclusive_or_triple_modes() {
+        let mut settings = Settings::default();
+        let mut window = Window::default();
+        let mut state = DisplayState::default();
+        assert!(settings.set_convar_number("fullscreen_restart", 2.0));
+        assert!(settings.set_convar_number("sys_vsync", 1.0));
+        state.apply(&mut window, &settings, None);
+        assert_eq!(window.mode, WindowMode::BorderlessFullscreen(MonitorSelection::Current));
+        assert_eq!(window.present_mode, crate::input_latency::present_mode(true));
+        assert!(!settings.set_convar_number("fullscreen_restart", 1.0));
+        assert!(!settings.set_convar_number("sys_vsync", 2.0));
+        assert!(settings.set_convar_number("fullscreen_restart", 0.0));
+        assert!(settings.set_convar_number("mat_vsync", 0.0));
+        assert!(settings.set_convar_number("mat_antialias", 0.0));
+        state.apply(&mut window, &settings, None);
+        assert_eq!(window.mode, WindowMode::Windowed);
+        assert_eq!(window.present_mode, crate::input_latency::present_mode(false));
+        assert!(!settings.msaa);
+        assert!(settings.set_convar_number("mat_antialias", 4.0));
+        assert!(settings.msaa);
+        assert!(!settings.set_convar_number("mat_antialias", 8.0));
+        assert_eq!(Settings::parse(&settings.encode()), settings);
+    }
+
+    #[test]
     fn startup_distinguishes_saved_cli_and_screenshot_dimensions() {
         let settings = Settings {
             resolution: 2,

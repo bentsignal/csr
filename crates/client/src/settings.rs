@@ -346,6 +346,9 @@ impl Settings {
     pub(crate) fn convar_number(&self, name: &str) -> Option<f64> {
         Some(match name {
             "volume" => self.volume as f64,
+            "fullscreen_restart" => if self.fullscreen { 2.0 } else { 0.0 },
+            "sys_vsync" | "mat_vsync" => u8::from(self.vsync) as f64,
+            "mat_antialias" => if self.msaa { 4.0 } else { 0.0 },
             "cl_showfps" => u8::from(self.show_fps) as f64,
             "cl_crosshairsize" => self.cross_size as f64,
             "cl_crosshairgap" => self.cross_gap as f64,
@@ -364,6 +367,9 @@ impl Settings {
     pub(crate) fn set_convar_number(&mut self, name: &str, number: f64) -> bool {
         if !number.is_finite() { return false; }
         match name {
+            "fullscreen_restart" if number == 0.0 || number == 2.0 => self.fullscreen = number == 2.0,
+            "sys_vsync" | "mat_vsync" if number == 0.0 || number == 1.0 => self.vsync = number == 1.0,
+            "mat_antialias" if number == 0.0 || number == 4.0 => self.msaa = number == 4.0,
             "cl_showfps" if number == 0.0 || number == 1.0 => self.show_fps = number == 1.0,
             "cl_crosshairsize" => self.cross_size = number.clamp(2.0, 20.0) as f32,
             "cl_crosshairgap" => self.cross_gap = number.clamp(0.0, 16.0) as f32,
