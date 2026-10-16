@@ -116,6 +116,7 @@ pub fn gather(world: &mut World) -> Result<SceneAssets, GatherError> {
             &material.phong_map,
             &material.skin_surface,
             &material.skin_position,
+            &material.detail,
         ] {
             owners.images.insert(image.id());
         }
@@ -155,6 +156,7 @@ mod tests {
             phong_map: handles[7].clone(),
             skin_surface: handles[8].clone(),
             skin_position: handles[9].clone(),
+            detail: handles[10].clone(),
             alpha_mode: AlphaMode::Opaque,
             cull: false,
         })
@@ -168,12 +170,12 @@ mod tests {
     }
 
     #[test]
-    fn reused_entity_and_retained_model_owners_include_all_ten_images_once() {
+    fn reused_entity_and_retained_model_owners_include_all_eleven_images_once() {
         let mut world = World::new();
         let mut meshes = Assets::<Mesh>::default();
         let mut images = Assets::<Image>::default();
         let mut materials = Assets::<WorldMaterial>::default();
-        let handles = (0..10)
+        let handles = (0..11)
             .map(|_| images.add(Image::default()))
             .collect::<Vec<_>>();
         let material = material(&mut materials, &handles);
@@ -239,8 +241,8 @@ mod tests {
         let scene_mesh = mesh(&mut meshes);
         let old_mesh = mesh(&mut meshes);
         let unused_mesh = mesh(&mut meshes);
-        let mat = material(&mut materials, &vec![scene_image.clone(); 10]);
-        let old_mat = material(&mut materials, &vec![old_image.clone(); 10]);
+        let mat = material(&mut materials, &vec![scene_image.clone(); 11]);
+        let old_mat = material(&mut materials, &vec![old_image.clone(); 11]);
         world.spawn((MatchEntity, Mesh3d(scene_mesh.clone()), MeshMaterial3d(mat)));
         world.spawn((
             crate::session::Persistent,
@@ -286,7 +288,7 @@ mod tests {
         let mut images = Assets::<Image>::default();
         let mut materials = Assets::<WorldMaterial>::default();
         let image = images.add(Image::default());
-        let mat = material(&mut materials, &vec![image; 10]);
+        let mat = material(&mut materials, &vec![image; 11]);
         let id = mat.id();
         materials.remove(id);
         world.spawn((MatchEntity, MeshMaterial3d(mat)));
@@ -301,7 +303,7 @@ mod tests {
         let mut images = Assets::<Image>::default();
         let mut materials = Assets::<WorldMaterial>::default();
         let image = images.add(Image::default());
-        let mat = material(&mut materials, &vec![image; 10]);
+        let mat = material(&mut materials, &vec![image; 11]);
         let parts = (0..MAX_SCENE_ASSETS)
             .map(|_| (mesh(&mut meshes), mat.clone()))
             .collect();
