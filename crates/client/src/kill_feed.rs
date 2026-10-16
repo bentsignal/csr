@@ -62,7 +62,7 @@ impl Engine for Bridge {
         if object != "csr" {
             return None;
         }
-        if self.combat.receive(method, args) {
+        if self.combat.receive(method, args, calls) {
             return Some(Value::Undefined);
         }
         match method {

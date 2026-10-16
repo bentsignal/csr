@@ -29,10 +29,11 @@ pub(crate) struct State {
     status: [AtomicU8; 2],
     expected: [AtomicU64; 2],
     accepted: [AtomicU64; 2],
+    receipt_fence: [AtomicU64; 2],
     rejected: [AtomicBool; 2],
 }
 impl State {
-    pub fn receive(&self, method: &str, args: &[Value]) -> bool {
+    pub fn receive(&self, method: &str, args: &[Value], calls: &mut scaleform::Calls) -> bool {
         let part = match args.first().map(Value::str).as_deref() {
             Some("health") => 0,
             Some("ammo") => 1,
@@ -62,6 +63,10 @@ impl State {
                 }
                 self.rejected[part].store(!success, Ordering::Release);
                 if *success {
+                    // An older GPU readback can finish after this callback with
+                    // the same presentation revision. Publish the capture floor
+                    // before accepting the receipt, and require one fresh render.
+                    self.receipt_fence[part].store(calls.require_raster(), Ordering::Relaxed);
                     self.accepted[part].store(stamp, Ordering::Release);
                 }
             }
@@ -239,6 +244,7 @@ impl Presentation {
                 || !self.state.ready(part)
                 || self.state.rejected[part].load(Ordering::Acquire)
                 || self.state.accepted[part].load(Ordering::Acquire) != expected
+                || frame.raster_fence < self.state.receipt_fence[part].load(Ordering::Relaxed)
             {
                 continue;
             }
@@ -271,6 +277,7 @@ impl Presentation {
                 info!(
                     part,
                     revision = frame.presentation_revision,
+                    raster_fence = frame.raster_fence,
                     ?size,
                     ?snapshot,
                     "Original combat HUD raster admitted"
@@ -471,6 +478,84 @@ mod tests {
     use super::*;
 
     #[test]
+    fn same_revision_pixels_submitted_before_show_cannot_freeze_the_hud() {
+        let mut p = Presentation::default();
+        p.enabled = true;
+        p.state.status[0].store(1, Ordering::Release);
+        p.state.status[1].store(2, Ordering::Release);
+        let mut images = Assets::<Image>::default();
+        p.images[0] = images.add(Image::new(
+            Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+            TextureDimension::D2,
+            vec![0; 4],
+            TextureFormat::Rgba8UnormSrgb,
+            RenderAssetUsages::default(),
+        ));
+        let snapshot = Snapshot {
+            player: 1,
+            life: 3,
+            alive: true,
+            health: 73,
+            armor: 41,
+            helmet: true,
+            weapon: None,
+        };
+        p.commands(Some(&snapshot), 8, false);
+        let mut calls = scaleform::Calls::default();
+        assert!(p.state.receive(
+            "CombatHudResult",
+            &["health".into(), "8".into(), true.into()],
+            &mut calls
+        ));
+        let mut frame = scaleform::Frame {
+            width: 4,
+            height: 4,
+            rgba: vec![7; 64],
+            serial: 1,
+            presentation_revision: 8,
+            raster_fence: 0,
+        };
+        p.admit(&frame, Some(&snapshot), &mut images);
+        p.visibility(Some(&snapshot), (4, 4));
+        assert!(
+            p.accepted[0].is_none(),
+            "pre-Show pixels must not enter the snapshot cache"
+        );
+        assert!(
+            !p.visible[0],
+            "ordinary fallback stays visible until the settled capture"
+        );
+        assert!(
+            p.waiting(),
+            "the worker must not park on a pre-Show readback"
+        );
+
+        frame.raster_fence = p.state.receipt_fence[0].load(Ordering::Acquire);
+        frame.serial = 2;
+        frame.rgba = vec![99; 64];
+        p.admit(&frame, Some(&snapshot), &mut images);
+        p.visibility(Some(&snapshot), (4, 4));
+        assert!(p.visible[0]);
+        assert!(!p.waiting());
+        assert_eq!(
+            images.get(&p.images[0]).unwrap().data.as_ref().unwrap(),
+            &vec![99; 16]
+        );
+
+        frame.raster_fence = 0;
+        frame.rgba = vec![7; 64];
+        p.admit(&frame, Some(&snapshot), &mut images);
+        assert_eq!(
+            images.get(&p.images[0]).unwrap().data.as_ref().unwrap(),
+            &vec![99; 16]
+        );
+    }
+
+    #[test]
     fn mode_only_changes_refresh_ammo_and_unsupported_weapons_clear_the_indicator() {
         fn mode(batch: Vec<Command>) -> (Value, Value) {
             batch
@@ -485,11 +570,11 @@ mod tests {
         }
         let mut presentation = Presentation::default();
         presentation.enabled = true;
-        assert!(
-            presentation
-                .state
-                .receive("CombatHudReady", &["ammo".into()])
-        );
+        assert!(presentation.state.receive(
+            "CombatHudReady",
+            &["ammo".into()],
+            &mut scaleform::Calls::default()
+        ));
         let mut snapshot = Snapshot {
             player: 1,
             life: 3,
@@ -520,7 +605,8 @@ mod tests {
         );
         assert!(!presentation.state.receive(
             "CombatHudResult",
-            &["ammo".into(), "11".into(), true.into()]
+            &["ammo".into(), "11".into(), true.into()],
+            &mut scaleform::Calls::default()
         ));
         snapshot.weapon.as_mut().unwrap().burst_mode = None;
         assert_eq!(
@@ -547,7 +633,11 @@ mod tests {
         let mut p = Presentation::default();
         p.enabled = true;
         for name in ["health", "ammo"] {
-            assert!(p.state.receive("CombatHudReady", &[name.into()]));
+            assert!(p.state.receive(
+                "CombatHudReady",
+                &[name.into()],
+                &mut scaleform::Calls::default()
+            ));
         }
         let mut snapshot = Snapshot {
             player: 1,
@@ -561,12 +651,14 @@ mod tests {
         p.commands(Some(&snapshot), 1, false);
         assert!(p.state.receive(
             "CombatHudResult",
-            &["health".into(), "1".into(), false.into()]
+            &["health".into(), "1".into(), false.into()],
+            &mut scaleform::Calls::default()
         ));
-        assert!(
-            p.state
-                .receive("CombatHudResult", &["ammo".into(), "1".into(), true.into()])
-        );
+        assert!(p.state.receive(
+            "CombatHudResult",
+            &["ammo".into(), "1".into(), true.into()],
+            &mut scaleform::Calls::default()
+        ));
         p.raster_revision[1] = 1;
         assert!(!p.waiting(), "A rejected component may park with fallback");
         snapshot.health = 73;
@@ -574,12 +666,14 @@ mod tests {
         assert!(p.waiting(), "The retry must run its deferred Show observer");
         assert!(!p.state.receive(
             "CombatHudResult",
-            &["health".into(), "1".into(), false.into()]
+            &["health".into(), "1".into(), false.into()],
+            &mut scaleform::Calls::default()
         ));
         assert!(p.waiting(), "An old failure cannot cancel the retry");
         assert!(p.state.receive(
             "CombatHudResult",
-            &["health".into(), "2".into(), true.into()]
+            &["health".into(), "2".into(), true.into()],
+            &mut scaleform::Calls::default()
         ));
         assert!(p.waiting(), "Success still needs the matching raster");
         p.raster_revision[0] = 2;
@@ -593,23 +687,27 @@ mod tests {
         state.expected[1].store(13, Ordering::Release);
         assert!(!state.receive(
             "CombatHudResult",
-            &["health".into(), "11".into(), true.into()]
+            &["health".into(), "11".into(), true.into()],
+            &mut scaleform::Calls::default()
         ));
         assert_eq!(state.accepted[0].load(Ordering::Acquire), 0);
         assert!(state.receive(
             "CombatHudResult",
-            &["ammo".into(), "13".into(), true.into()]
+            &["ammo".into(), "13".into(), true.into()],
+            &mut scaleform::Calls::default()
         ));
         assert!(state.receive(
             "CombatHudResult",
-            &["health".into(), "12".into(), false.into()]
+            &["health".into(), "12".into(), false.into()],
+            &mut scaleform::Calls::default()
         ));
         assert!(state.rejected[0].load(Ordering::Acquire));
         assert!(!state.rejected[1].load(Ordering::Acquire));
         assert_eq!(state.accepted[1].load(Ordering::Acquire), 13);
         assert!(!state.receive(
             "CombatHudResult",
-            &["ammo".into(), "12".into(), false.into()]
+            &["ammo".into(), "12".into(), false.into()],
+            &mut scaleform::Calls::default()
         ));
         assert!(!state.rejected[1].load(Ordering::Acquire));
     }
@@ -627,13 +725,16 @@ mod tests {
             helmet: true,
             weapon: None,
         };
-        presentation
-            .state
-            .receive("CombatHudReady", &["health".into()]);
+        presentation.state.receive(
+            "CombatHudReady",
+            &["health".into()],
+            &mut scaleform::Calls::default(),
+        );
         presentation.commands(Some(&snapshot), 8, false);
         presentation.state.receive(
             "CombatHudResult",
             &["health".into(), "8".into(), true.into()],
+            &mut scaleform::Calls::default(),
         );
         presentation.visibility(Some(&snapshot), (1920, 1080));
         assert_eq!(
@@ -644,7 +745,8 @@ mod tests {
         presentation.commands(None, 9, false);
         assert!(!presentation.state.receive(
             "CombatHudResult",
-            &["health".into(), "8".into(), true.into()]
+            &["health".into(), "8".into(), true.into()],
+            &mut scaleform::Calls::default()
         ));
         assert_eq!(presentation.visible, [false; 2]);
     }
@@ -680,6 +782,7 @@ mod tests {
             height: 3,
             serial: 1,
             presentation_revision: 7,
+            raster_fence: 0,
             rgba: (0..15).flat_map(|n| [n, n, n, 255]).collect(),
         };
         let parts = regions(5, 3);
@@ -732,6 +835,7 @@ mod tests {
             rgba: vec![0; 8],
             serial: 1,
             presentation_revision: 3,
+            raster_fence: 0,
         };
         assert!(crop(&frame, regions(1920, 1080)[0]).is_none());
     }
