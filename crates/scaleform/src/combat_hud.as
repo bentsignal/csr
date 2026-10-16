@@ -242,7 +242,7 @@ _global.csrCombatHud.health = function(stamp, health, armor, helmet, alive) {
     } catch (error) { success = false; }
     return this.result(part, stamp, success, alive === true);
 };
-_global.csrCombatHud.ammo = function(stamp, clip, reserve, visible) {
+_global.csrCombatHud.ammo = function(stamp, clip, reserve, visible, burst) {
     var part = this.part("ammo");
     if (part == undefined || !part.ready) { return false; }
     var success = false;
@@ -253,13 +253,31 @@ _global.csrCombatHud.ammo = function(stamp, clip, reserve, visible) {
             this.write(panel.AmmoCountTotal.TextBox, "/" + reserve);
         // These original template decorations are not authoritative gameplay
         // values. Keep unsupported subcomponents hidden, rather than display
-        // sample bomb, defuser, kill-counter, burst or weapon-name art.
+        // sample bomb, defuser, kill-counter or weapon-name art.
         var hidden = ["KillEater", "WeaponName", "Kill1", "Kill2", "KillCount",
             "Kill_Icon_1", "Kill_Icon_2", "Kill_Icon_3", "Kill_Icon_4", "Kill_Icon_5",
-            "UpgradeText", "BurstTypeSingle", "BurstTypeBurst", "Grenades",
+            "UpgradeText", "Grenades",
             "InBombZoneIcon", "DefuseKitIcon", "BombCarrierIcon", "AmmoAnim", "AmmoAnimFast"];
         var i = 0;
         while (i < hidden.length) { panel[hidden[i]]._visible = false; i += 1; }
+        var single = panel.BurstTypeSingle;
+        var triple = panel.BurstTypeBurst;
+        if (typeof single == "movieclip") { single._visible = false; }
+        if (typeof triple == "movieclip") { triple._visible = false; }
+        if (typeof burst == "boolean") {
+            // Installed declarative metadata: both are one-frame FullClip
+            // sprites. Retained native Glock/FAMAS images show one filled vs
+            // three filled bullets. No replacement art or animation timing.
+            if (typeof single != "movieclip" || typeof triple != "movieclip" ||
+                single._totalframes != 1 || triple._totalframes != 1) {
+                success = false;
+            } else {
+                single.gotoAndStop("FullClip");
+                triple.gotoAndStop("FullClip");
+                single._visible = visible === true && burst === false;
+                triple._visible = visible === true && burst === true;
+            }
+        }
     } catch (error) { success = false; }
     return this.result(part, stamp, success, visible === true);
 };
