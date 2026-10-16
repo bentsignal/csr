@@ -66,7 +66,7 @@ bind mwheeldown invnext
 or `bind space ""` removes that keyboard binding without removing mouse or wheel
 bindings for the same action. Unbound keys stay unbound after relaunch;
 `bind space +jump` restores keyboard jump. Keyboard binds
-support the existing 15 configurable actions shown by `bindlist`: movement,
+support the configurable actions shown by `bindlist`: movement,
 jump, crouch, walk, use, reload, buy, drop, scoreboard, inspect and primary/secondary attack. For example,
 `bind f +use` uses the existing key-swapping behavior: if F already belongs to
 inspect, inspect takes Use's former key. Letters and the existing modifier,
@@ -90,6 +90,52 @@ key without removing mouse attack bindings. Arbitrary command binds and
 slot/Q/console rebinding remain open. The classic keyboard settings page
 currently exposes only its connected sensitivity/inversion controls; the
 console makes these action bindings reachable from the classic frontend.
+
+## Direct grenade selection
+
+```text
+use weapon_smokegrenade
+bind x "use weapon_smokegrenade"
+bind mouse4 "use weapon_flashbang"
+```
+
+The same named commands support `weapon_hegrenade`, `weapon_flashbang`,
+`weapon_smokegrenade`, `weapon_molotov`, `weapon_incgrenade` and `weapon_decoy`.
+Direct bindings default to unbound and append to the existing saved action
+indices, preserving earlier movement and attack bindings. Key and mouse taps
+select once, obeying the normal gameplay, menu and pointer-capture guards.
+The fallback keyboard settings page and `bindlist` list the added actions;
+the original movie's settings controls remain unchanged.
+
+`use` resolves the named grenade against the current catalog and the living
+player's carried inventory, then queues one ordinary `TickInput.utility`.
+An explicit console request can select while the console has focus; it does
+not admit hardware input. Home, loading, pause, buy, disconnected, spectator
+and noclip states reject the command. The server resolves ownership again at
+the actual input tick, so a grenade dropped in the meantime is never granted.
+No stock item index, throw timing, physics or network format changes.
+
+## Buying
+
+```text
+buy ak47
+buy m4a1_silencer
+buy vesthelm
+buy defuser
+```
+
+`buy` resolves weapon names from the active match's catalog, with or without
+`weapon_`. Common aliases include `m4a4`, `m4a1s`, `usp`, `p2000`, `zeus`,
+`galil`, `sg553` and `scout`. Equipment accepts `vest`/`kevlar`,
+`vesthelm`/`assaultsuit` and `defuser`, optionally prefixed with `item_`.
+Unknown or ambiguous names report an error.
+
+The command queues one ordinary `TickInput.buy`, including while the console
+has focus. It uses the same mode, team, money, buy-time, buy-zone and carrying
+limits as the buy menu, and reports the reason when those checks reject it.
+A requested purchase is not a grant: authority checks the rules again when
+that tick arrives. Home, loading, pause and unready remote sessions reject
+purchases. Arbitrary command binds and buy scripts remain unsupported.
 
 ## Sessions
 

@@ -155,6 +155,7 @@ fn input(
     mut cursor: Single<(&Window, &mut CursorOptions), With<PrimaryWindow>>,
     menu: Res<crate::menu::Menu>,
 ) {
+    let was_open = console.open;
     console.blocked_frame = false;
     if !enabled.0 {
         // Disabled screenshot/input proofs retain their existing message paths.
@@ -266,8 +267,13 @@ fn input(
             local.pointer_attacks = 0;
             local.keyboard_attacks = 0;
             local.pending_slot = 0;
+            // Device edges are blocked; an explicit `use` console command has
+            // a separate one-shot queue until an authoritative tick consumes it.
+            local.pending_utility = 0;
             local.pending_drop = false;
-            local.pending_buys.clear();
+            // Opening discards old device requests; later console frames must
+            // retain explicit `buy` requests until a normal tick consumes them.
+            if !was_open { local.pending_buys.clear(); }
         }
         block.0 = 2;
         cursor.grab_mode = CursorGrabMode::None;
@@ -284,6 +290,8 @@ const COMMANDS: &[&str] = &[
     "bind",
     "unbind",
     "bindlist",
+    "use",
+    "buy",
     "volume",
     "mat_vsync",
     "mat_antialias",
@@ -413,6 +421,72 @@ fn bind(
 fn has_pending(console: Res<DeveloperConsole>) -> bool {
     !console.pending.is_empty()
 }
+fn use_utility(world: &mut World, name: &str) -> Result<String, String> {
+    if world.get_resource::<State<crate::AppState>>().is_none_or(|s| *s.get() != crate::AppState::Match)
+        || world.get_resource::<crate::menu::Menu>().is_none_or(|m| !m.in_match || m.open())
+        || world.get_resource::<crate::buymenu::BuyMenu>().is_some_and(|m| m.open)
+        || world.get_resource::<crate::player::InputEnabled>().is_none_or(|e| !e.0)
+        || world.get_resource::<crate::remote::RemoteClient>()
+            .is_some_and(|r| r.status() != &netcode::remote_session::Status::Ready) {
+        return Err("Resume a ready match before selecting a grenade.".into());
+    }
+    let local = world.get_resource::<crate::player::LocalPlayer>()
+        .filter(|p| !p.noclip).ok_or("No active player to select a grenade.")?;
+    let simulation = world.get_resource::<crate::player::SimWorld>()
+        .ok_or("No active match to select a grenade.")?;
+    let definition = crate::player::carried_utility(&simulation.0, local.id, name)
+        .ok_or("That named grenade is not carried by the living player.")?;
+    world.resource_mut::<crate::player::LocalPlayer>().console_utility = definition;
+    Ok(format!("Requested {name} through player input."))
+}
+/// Resolve content from this match, then use the same authoritative admission
+/// as the buy wheel. This queues a request and never grants an item directly.
+fn buy_request(world: &mut World, alias: &str) -> Result<String, String> {
+    if world.get_resource::<State<crate::AppState>>().is_none_or(|s| *s.get() != crate::AppState::Match)
+        || world.get_resource::<crate::menu::Menu>().is_none_or(|m| !m.in_match || m.open())
+        || world.get_resource::<crate::player::InputEnabled>().is_none_or(|e| !e.0)
+        || world.get_resource::<crate::remote::RemoteClient>()
+            .is_some_and(|r| r.status() != &netcode::remote_session::Status::Ready) {
+        return Err("Resume a ready match before buying.".into());
+    }
+    let local = world.get_resource::<crate::player::LocalPlayer>()
+        .ok_or("No active player to buy equipment.")?;
+    if !local.pending_buys.is_empty() {
+        return Err("A purchase is already queued; wait for it to be processed.".into());
+    }
+    let simulation = &world.get_resource::<crate::player::SimWorld>()
+        .ok_or("No active match to buy equipment.")?.0;
+    let name = alias.strip_prefix("weapon_").or_else(|| alias.strip_prefix("item_")).unwrap_or(alias);
+    let item = match name {
+        "vest" | "kevlar" => sim::Purchase::Kevlar,
+        "vesthelm" | "assaultsuit" => sim::Purchase::KevlarHelmet,
+        "defuser" => sim::Purchase::DefuseKit,
+        name => {
+            let name = match name {
+                "m4a4" => "m4a1", "m4a1s" | "m4a1-s" => "m4a1_silencer",
+                "usp" | "usp-s" => "usp_silencer", "p2000" => "hkp2000",
+                "zeus" => "taser", "galil" => "galilar", "sg553" => "sg556",
+                "scout" => "ssg08", other => other,
+            };
+            let mut matches = simulation.catalog.weapons.iter().filter(|weapon|
+                weapon.class_name.eq_ignore_ascii_case(alias)
+                    || weapon.class_name.strip_prefix("weapon_").unwrap_or(&weapon.class_name).eq_ignore_ascii_case(name));
+            let definition = matches.next().ok_or("Unknown buy alias or weapon name in this match.")?;
+            if matches.next().is_some() { return Err("That weapon name is ambiguous in this match.".into()); }
+            sim::Purchase::Weapon(definition.def_index)
+        }
+    };
+    let cost = simulation.buy_cost(local.id, item).map_err(|error| match error {
+        sim::BuyError::NotAllowedNow => "Buying is unavailable now; check the mode, buy time and whether you are alive.",
+        sim::BuyError::NotInBuyZone => "You must be in your team's buy zone.",
+        sim::BuyError::WrongTeam => "Your team cannot buy that item.",
+        sim::BuyError::AlreadyOwned => "You already carry that item or have reached its carrying limit.",
+        sim::BuyError::NotEnoughMoney => "You do not have enough money for that item.",
+        sim::BuyError::Unknown => "That item cannot be purchased in this match.",
+    })?;
+    world.resource_mut::<crate::player::LocalPlayer>().pending_buys.push(item);
+    Ok(format!("Requested purchase: {alias} (${cost})."))
+}
 fn execute(world: &mut World) {
     let pending = std::mem::take(&mut world.resource_mut::<DeveloperConsole>().pending);
     for command in pending {
@@ -431,12 +505,17 @@ fn run(world: &mut World, line: &str) -> Result<String, String> {
     let args = &tokens[1..];
     match name.as_str() {
         "help" => Ok(format!(
-            "{}\nExamples: volume 0.5 | cl_showfps 1 | bind mwheeldown +jump | bind space +jump\nSettings save immediately. Up/Down recalls commands; Tab completes command names.\nconnect accepts an IP:port (default 27015). map uses the current offline mode/team/bot selection.\nThis console does not yet implement every Source command or arbitrary command binds.",
+            "{}\nExamples: volume 0.5 | cl_showfps 1 | bind mwheeldown +jump | bind space +jump | use weapon_smokegrenade | buy ak47\nSettings save immediately. Up/Down recalls commands; Tab completes command names.\nconnect accepts an IP:port (default 27015). map uses the current offline mode/team/bot selection.\nThis console does not yet implement every Source command or arbitrary command binds.",
             COMMANDS.join("  ")
         )),
         "clear" if args.is_empty() => {
             world.resource_mut::<DeveloperConsole>().output.clear();
             Ok(String::new())
+        }
+        "use" if args.len() == 1 => use_utility(world, &args[0].to_ascii_lowercase()),
+        "buy" => {
+            if args.len() != 1 { return Err("Usage: buy <weapon name|vest|vesthelm|defuser>.".into()); }
+            buy_request(world, &args[0].to_ascii_lowercase())
         }
         "bind" | "unbind" => {
             let result = bind(
@@ -650,6 +729,153 @@ fn draw(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn console_buy_survives_focus_and_uses_authoritative_runtime_catalog_purchases() {
+        let catalog = std::sync::Arc::new(weapons::Catalog::from_items_game(r#"
+            items_game { items {
+                9017 { name weapon_ak47 baseitem 1 used_by_classes { terrorists 1 }
+                    attributes { "in game price" 2700 "primary clip size" 30 } }
+                9018 { name weapon_m4a1 baseitem 1 used_by_classes { counter-terrorists 1 }
+                    attributes { "in game price" 3100 "primary clip size" 30 } }
+            } }"#).unwrap());
+        let mut simulation = sim::World::with_catalog(
+            std::sync::Arc::new(collision::CollisionWorld::new()), catalog);
+        let id = simulation.add_player("Local", sim::Team::Terrorist);
+        simulation.set_mode(sim::GameMode::Competitive,
+            sim::RulesConfig { start_money: 10000, ..Default::default() });
+        simulation.objectives.buy_zones.push(sim::objectives::BuyZone {
+            team: sim::Team::Terrorist,
+            zone: sim::objectives::Zone { mins: glam::Vec3::splat(-1000.), maxs: glam::Vec3::splat(1000.) },
+        });
+        simulation.step(&[]);
+        let mut local = crate::player::LocalPlayer::new(id, glam::Vec3::ZERO, 0.);
+        local.pending_buys.push(sim::Purchase::DefuseKit);
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, bevy::input::InputPlugin))
+            .insert_resource(crate::player::SimWorld(simulation))
+            .insert_resource(local)
+            .insert_resource(crate::player::InputEnabled(true))
+            .insert_resource(State::new(crate::AppState::Match))
+            .init_resource::<DeveloperConsole>()
+            .init_resource::<crate::menu::Menu>()
+            .init_resource::<crate::player::InputBlockFrames>()
+            .add_systems(PreUpdate, input.after(InputSystems))
+            .add_systems(Update, execute);
+        let window = app.world_mut().spawn((Window::default(), CursorOptions::default(), PrimaryWindow)).id();
+        let key = |code| KeyboardInput {
+            key_code: code, logical_key: bevy::input::keyboard::Key::Character("".into()),
+            state: ButtonState::Pressed, text: None, repeat: false, window,
+        };
+        app.world_mut().resource_mut::<Messages<KeyboardInput>>().write(key(KeyCode::Backquote));
+        app.update();
+        assert!(app.world().resource::<crate::player::LocalPlayer>().pending_buys.is_empty(),
+            "opening discards an old device purchase");
+        app.world_mut().resource_mut::<DeveloperConsole>().line = "buy AK47".into();
+        app.world_mut().resource_mut::<Messages<KeyboardInput>>().write(key(KeyCode::Enter));
+        app.update();
+        app.update(); // A second open-console frame must not erase the explicit request.
+        let player = app.world().resource::<crate::player::SimWorld>().0.player(id).unwrap();
+        assert_eq!(player.money, 10000);
+        assert!(!player.has("weapon_ak47"), "the console cannot grant a weapon directly");
+        let keys = ButtonInput::default();
+        let mouse = ButtonInput::default();
+        let settings = crate::settings::Settings::default();
+        let controls = crate::player::Controls { keys: &keys, mouse: &mouse, settings: &settings,
+            enabled: true, blocked: true, captured: false, buy_menu: false };
+        let input = crate::player::sample_tick_input(
+            &mut app.world_mut().resource_mut::<crate::player::LocalPlayer>(), &controls);
+        assert_eq!(input.buy, sim::Purchase::Weapon(9017), "resolve this catalog, not a stock item number");
+        assert_eq!(input.buttons, 0);
+        assert_eq!(crate::player::sample_tick_input(
+            &mut app.world_mut().resource_mut::<crate::player::LocalPlayer>(), &controls).buy, sim::Purchase::None);
+        app.world_mut().resource_mut::<crate::player::SimWorld>().0.step(&[(id, input)]);
+        let simulation = &app.world().resource::<crate::player::SimWorld>().0;
+        assert!(simulation.player(id).unwrap().has("weapon_ak47"));
+        assert_eq!(simulation.player(id).unwrap().money, 7300);
+        assert!(simulation.events.iter().any(|event| matches!(event,
+            sim::GameEvent::Purchase { player, item: sim::Purchase::Weapon(9017) } if *player == id)));
+        assert!(run(app.world_mut(), "buy unknown").unwrap_err().contains("Unknown"));
+        assert!(run(app.world_mut(), "buy m4a4").unwrap_err().contains("team"));
+        assert!(run(app.world_mut(), "buy weapon_ak47").unwrap_err().contains("already"));
+        run(app.world_mut(), "buy item_assaultsuit").unwrap();
+        let input = crate::player::sample_tick_input(
+            &mut app.world_mut().resource_mut::<crate::player::LocalPlayer>(), &controls);
+        assert_eq!(input.buy, sim::Purchase::KevlarHelmet);
+        // Authority must still reject a request if its conditions changed after console admission.
+        app.world_mut().resource_mut::<crate::player::SimWorld>().0.player_mut(id).unwrap().money = 0;
+        app.world_mut().resource_mut::<crate::player::SimWorld>().0.step(&[(id, input)]);
+        let player = app.world().resource::<crate::player::SimWorld>().0.player(id).unwrap();
+        assert_eq!(player.armor, 0);
+        assert!(!player.helmet);
+        assert!(run(app.world_mut(), "buy vesthelm").unwrap_err().contains("money"));
+        app.world_mut().resource_mut::<crate::player::SimWorld>().0.player_mut(id).unwrap().in_buy_zone = false;
+        assert!(run(app.world_mut(), "buy vest").unwrap_err().contains("buy zone"));
+        app.world_mut().resource_mut::<crate::menu::Menu>().in_match = false;
+        assert!(run(app.world_mut(), "buy ak47").unwrap_err().contains("match"));
+        assert!(app.world().resource::<crate::player::LocalPlayer>().pending_buys.is_empty());
+    }
+    #[test]
+    fn named_grenade_use_queues_authority_and_rejects_absent_or_lost_ownership() {
+        let catalog = std::sync::Arc::new(weapons::Catalog::from_items_game(r#"
+            items_game { items {
+                7342 { name weapon_smokegrenade attributes { "primary default clip size" 1 } }
+                7343 { name weapon_flashbang attributes { "primary default clip size" 1 } }
+            } }"#).unwrap());
+        let mut simulation = sim::World::with_catalog(
+            std::sync::Arc::new(collision::CollisionWorld::new()), catalog.clone());
+        let id = simulation.add_player("Local", sim::Team::CounterTerrorist);
+        let player = simulation.player_mut(id).unwrap();
+        player.alive = true;
+        player.weapons = ["weapon_flashbang", "weapon_smokegrenade"].map(|name|
+            sim::weapon::WeaponState::new(std::sync::Arc::new(catalog.get(name).unwrap().clone()))).into();
+        player.active = 0;
+        let mut app = App::new();
+        app.insert_resource(crate::player::SimWorld(simulation))
+            .insert_resource(crate::player::LocalPlayer::new(id, glam::Vec3::ZERO, 0.))
+            .insert_resource(crate::player::InputEnabled(true))
+            .insert_resource(State::new(crate::AppState::Match))
+            .init_resource::<crate::menu::Menu>();
+        let mut settings = crate::settings::Settings::parse("bind13=KeyC\nvolume=0.4\n");
+        let tokens = words("bind x \"use weapon_smokegrenade\"").unwrap();
+        bind(&mut settings, &tokens[1..], false).unwrap();
+        bind(&mut settings, &["mouse4".into(), "use weapon_flashbang".into()], false).unwrap();
+        assert_eq!(crate::settings::Settings::parse(&settings.encode()), settings);
+        assert_eq!(settings.binds[crate::settings::KEY_ATTACK], Some(KeyCode::KeyC));
+        assert_eq!(settings.binds[crate::settings::KEY_GRENADE_FIRST + 2], Some(KeyCode::KeyX));
+        assert!(run(app.world_mut(), "use weapon_hegrenade").is_err());
+        run(app.world_mut(), "use weapon_smokegrenade").unwrap();
+        assert_eq!(app.world().resource::<crate::player::SimWorld>().0.player(id).unwrap().active, 0);
+        let keys = ButtonInput::default();
+        let mouse = ButtonInput::default();
+        let controls = crate::player::Controls { keys: &keys, mouse: &mouse, settings: &settings,
+            enabled: true, blocked: true, captured: false, buy_menu: false };
+        let input = crate::player::sample_tick_input(
+            &mut app.world_mut().resource_mut::<crate::player::LocalPlayer>(), &controls);
+        assert_eq!(input.utility, 7342, "explicit console selection survives device capture blocking");
+        assert_eq!(input.buttons, 0);
+        assert_eq!(crate::player::sample_tick_input(
+            &mut app.world_mut().resource_mut::<crate::player::LocalPlayer>(), &controls).utility, 0);
+        app.world_mut().resource_mut::<crate::player::SimWorld>().0.step(&[(id, input)]);
+        assert_eq!(app.world().resource::<crate::player::SimWorld>().0.player(id).unwrap()
+            .active_weapon().unwrap().def.class_name, "weapon_smokegrenade");
+        run(app.world_mut(), "use weapon_flashbang").unwrap();
+        {
+            let mut simulation = app.world_mut().resource_mut::<crate::player::SimWorld>();
+            let player = simulation.0.player_mut(id).unwrap();
+            player.weapons.retain(|w| w.def.class_name != "weapon_flashbang");
+            player.active = 0;
+        }
+        let input = crate::player::sample_tick_input(
+            &mut app.world_mut().resource_mut::<crate::player::LocalPlayer>(), &controls);
+        app.world_mut().resource_mut::<crate::player::SimWorld>().0.step(&[(id, input)]);
+        assert_eq!(app.world().resource::<crate::player::SimWorld>().0.player(id).unwrap().weapons.len(), 1,
+            "authority cannot grant a grenade that was dropped after sampling");
+        app.world_mut().resource_mut::<crate::player::SimWorld>().0.player_mut(id).unwrap().alive = false;
+        assert!(run(app.world_mut(), "use weapon_smokegrenade").is_err());
+        app.world_mut().resource_mut::<crate::player::SimWorld>().0.player_mut(id).unwrap().alive = true;
+        app.insert_resource(State::new(crate::AppState::Loading));
+        assert!(run(app.world_mut(), "use weapon_smokegrenade").is_err());
+    }
     #[test]
     fn keyboard_unbind_survives_reload_and_removes_tick_input_without_removing_mouse_jump() {
         let mut settings = crate::settings::Settings::parse("bind0=KeyW\nbind4=Space\n");

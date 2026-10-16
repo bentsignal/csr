@@ -150,6 +150,14 @@ pub(crate) struct LoadedMap {
     pub host: Option<crate::hosting::PreparedHost>,
 }
 
+// A completed CPU import is not yet permission to block the main thread on
+// scene/character uploads. Keep it owned until Loading gets a render opportunity.
+struct ReadyLoad {
+    serial: u64,
+    loaded: LoadedMap,
+    since: std::time::Instant,
+}
+
 #[derive(Resource, Default)]
 pub(crate) struct Loader {
     serial: u64,
@@ -158,6 +166,7 @@ pub(crate) struct Loader {
     host_selection: Option<crate::hosting::HostSelection>,
     job: Option<Job>,
     retired: Option<Job>,
+    ready: Option<ReadyLoad>,
     pub status: String,
     title: String,
 }
@@ -171,6 +180,8 @@ pub(crate) struct LoadingMap {
 }
 
 impl Loader {
+    pub(crate) fn generation(&self) -> Option<u64> { self.wanted.as_ref().map(|(serial, _)| *serial) }
+
     pub(crate) fn loading_map(&self) -> Option<LoadingMap> {
         let (serial, selection) = self.wanted.as_ref()?;
         let name = match selection {
@@ -201,6 +212,8 @@ impl Loader {
     }
 
     fn start(&mut self, game_dir: &std::path::Path) {
+        if self.ready.as_ref().is_some_and(|ready| self.generation() == Some(ready.serial)) { return; }
+        self.ready = None;
         if self.job.is_some() {
             return;
         }
@@ -357,6 +370,7 @@ impl Loader {
     }
 
     fn cancel_current(&mut self) {
+        self.ready = None;
         if let Some(job) = &self.job {
             job.progress.cancelled.store(true, Ordering::Relaxed);
         }
@@ -458,7 +472,46 @@ pub(crate) fn poll_load(
     mut menu: ResMut<crate::menu::Menu>,
     remote: Option<Res<crate::remote::RemoteClient>>,
     mut hosting: ResMut<crate::hosting::Hosting>,
+    front: Option<Res<crate::frontend::Frontend>>,
+    app_frame: Option<Res<bevy::diagnostic::FrameCount>>,
 ) {
+    if let Some(ready) = &loader.ready {
+        let wanted = loader.wanted.as_ref().filter(|(serial, _)| *serial == ready.serial)
+            .map(|(_, selection)| selection.clone());
+        if *state.get() != AppState::Loading || wanted.is_none() {
+            loader.ready = None;
+            if *state.get() == AppState::Loading { loader.start(&data.game_dir); }
+        } else {
+            let wanted = wanted.unwrap();
+            if let Selection::Remote(info) = &wanted {
+                if !remote.as_ref().is_some_and(|client| matches!(client.status(), netcode::remote_session::Status::AwaitingMap(current) if current == info)) {
+                    loader.invalidate();
+                    return;
+                }
+            }
+            let painted = front.as_ref().is_none_or(|front|
+                app_frame.as_ref().is_some_and(|frame| front.loading_painted(ready.serial, frame.0)));
+            // A missing/broken movie cannot deadlock map entry. This is a
+            // maximum escape path, never a minimum loading-screen duration.
+            if crate::frontend_loading_presentation::waiting(painted, ready.since.elapsed()) { return; }
+            if !painted { warn!(generation = ready.serial, "Loading art presentation unavailable; retaining progress fallback"); }
+            else if front.is_some() { info!(generation = ready.serial, "Loading presentation admitted before scene imports"); }
+            let ReadyLoad { serial, loaded, .. } = loader.ready.take().unwrap();
+            if matches!(wanted, Selection::Host(_)) {
+                if let Err(error) = hosting.stage(serial, loaded) {
+                    loader.invalidate();
+                    menu.status = error;
+                    next.set(AppState::Menu);
+                }
+                return;
+            }
+            info!("loaded {}: {:?}", loaded.level.name, loaded.level.timings);
+            *pending.0.lock().unwrap() = Some(loaded);
+            if let Selection::Offline(wanted) = wanted { options.0 = wanted.options; }
+            next.set(AppState::Match);
+            return;
+        }
+    }
     if let Some(retired) = &loader.retired {
         let finished = !matches!(
             retired.result.lock().unwrap().try_recv(),
@@ -507,29 +560,10 @@ pub(crate) fn poll_load(
         })
         .map(|(_, options)| options.clone());
     if *state.get() == AppState::Loading {
-        if let Some(wanted) = wanted {
+        if wanted.is_some() {
             match result {
                 Ok(loaded) => {
-                    if matches!(wanted, Selection::Host(_)) {
-                        if let Err(error) = hosting.stage(job.serial, loaded) {
-                            loader.invalidate();
-                            menu.status = error;
-                            next.set(AppState::Menu);
-                        }
-                        return;
-                    }
-                    if let Selection::Remote(info) = &wanted {
-                        if !remote.as_ref().is_some_and(|client| matches!(client.status(), netcode::remote_session::Status::AwaitingMap(current) if current == info)) {
-                            loader.invalidate();
-                            return;
-                        }
-                    }
-                    info!("loaded {}: {:?}", loaded.level.name, loaded.level.timings);
-                    *pending.0.lock().unwrap() = Some(loaded);
-                    if let Selection::Offline(wanted) = wanted {
-                        options.0 = wanted.options;
-                    }
-                    next.set(AppState::Match);
+                    loader.ready = Some(ReadyLoad { serial: job.serial, loaded, since: std::time::Instant::now() });
                 }
                 Err(error) => {
                     error!("Map load failed: {error}");

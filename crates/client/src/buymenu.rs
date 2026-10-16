@@ -169,6 +169,7 @@ pub fn input(
             local.pointer_attacks = 0;
             local.keyboard_attacks = 0;
             local.pending_slot = 0;
+            local.clear_utility_requests();
             local.pending_drop = false;
         } else {
             sounds.play(&mut commands, &level.0.vfs, &mut sources, "buymenu_cant_buy.click", None);
