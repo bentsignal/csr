@@ -55,8 +55,8 @@ payload validation and rejection of older peers.
 The implementation uses a 0.2-second interval as a candidate inferred from
 that aggregate. It shares the weapon's existing attack deadline, including
 deployment/reload/frozen/muzzle admission. It does not change ammunition,
-shot counts or recoil impulses. Only the exact observed installed AK opts in;
-its policy contributes to the catalog digest independently of recoil and
+shot counts or recoil impulses. The initial policy attached only to the exact observed installed AK;
+its identity contributes to the catalog digest independently of recoil and
 animation imports. Protocol23 rejects older peers.
 
 Other content may explicitly provide `WeaponDefinition.empty_trigger`.
@@ -64,7 +64,8 @@ The item-schema importer also accepts both `visuals/sound_empty` and the
 engine extension attribute `empty trigger interval`; neither field alone
 invents a default. Invalid or absent policies retain existing behavior.
 
-Rewrite runtime verification is pending. The native session finished
+The initial AK runtime path was verified in PR #140; the independently
+added M4 runtime checks are recorded below. The native session finished
 successfully, restored all 12 preference entries exactly, and left no game
 process. The root reviewer independently viewed the loaded/depleted AK and
 held-case before/after images, including the dynamic empty-wave overlay.
@@ -100,7 +101,7 @@ not replace the depleted M4A4: its actual model/HUD remained M4A4 at 0/0,
 and no M4A1-S near-shot wave was observed. That case is rejected, not evidence
 for another weapon. The original failing receipt and all raw captures stay
 private. All 12 native preference entries restored exactly and no native
-process remained. Rust and rendered verification of this addition is pending.
+process remained. Rust and rendered verification is recorded below.
 
 
 ## Independent M4A1-S retry
@@ -128,4 +129,42 @@ the owned game exited and no native game remained. A prior retry safely
 failed preflight on a TIME_WAIT NetCon port before launching anything;
 that receipt is preserved separately from this successful new-port run.
 Other guns, rapid re-press behavior, detached ready taps and historical
-2015 parity remain unestablished. Runtime rewrite checks remain pending.
+2015 parity remain unestablished.
+
+
+## Rewritten-client verification
+
+Code head `6019a49` (crates tree `15e44dd77fcd081cb4b1aa37e7969a761ec69b4d`)
+passed full workspace/real-data CI. Under the exclusive local Cargo slot,
+all 23 workspace packages were cleaned for play; focused level, sim and
+client checks passed. The soundcheck decoded all 1,425 weapon/feedback/foley
+sounds without unsupported/crashing entries. Play-profile probe and sim both
+reported zero failures. The immutable copied executable contains the unique
+M4A1-S policy reference and has a recorded source/cwd/hash receipt. Combined
+release verification is separate; no individual release pass is claimed here.
+
+Three private-profile clients used ordinary screenshot-only `TickInput`
+cycles to exhaust actual starting ammunition, then send a dedicated short
+and held depleted press. They exited normally, emitted no ERROR/panic, and
+kept the owner's config unchanged. Actual authoritative logs admit AK 120
+shots, M4A4 120 and M4A1-S 100, each ending at 0/0. Each dedicated tap/held
+segment produced nine authoritative events and nine decoded original empty
+cues. Faster/shorter magazines also reached 0/0 before the final scheduled
+hold ended: M4A4 emitted two extra depleted held cues, M4A1-S five. Those are
+separate from the nine dedicated cues, not additional bullets or reload clicks.
+
+The inherited private receipt helper first expected the outdated attack bit
+1, while current `movement::buttons::ATTACK` is 8 and actual inputs logged 8.
+Its later total-only AK count also rejected the legitimate extra M4A4 cues.
+Both original negative receipts remain untouched. Separate posthoc admissions
+check the actual raw input, ammunition, event/cue segments and successful
+process exits. The final M4A1-S helper validates the dedicated segment and
+full-stream event/audio agreement directly. No source behavior was changed
+to make these receipt expectations pass, and valid cases were not rerun.
+
+Both the implementing and coordinating agents independently viewed all three
+actual 1920x1080 screenshots: correct AK/M4A4/attached-M4A1-S identity, intact
+hands and visible 0/0 ammunition. This establishes empty-state integrity and
+the bounded event/runtime decode path, not complete pose, audio mix, native
+cadence at exact ticks, detached-ready-tap or historical fidelity. Raw captures,
+logs and account-bearing receipts remain private.
