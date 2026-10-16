@@ -57,7 +57,7 @@ fn apply_observed_release(weapon: &weapons::WeaponDefinition, bytes: &[u8], prof
     }
 }
 
-// Exact items_game identity accompanying the independently observed HE pair.
+// Exact items_game identity accompanying the independently observed HE/Molotov pairs.
 // A pack that replaces either schema or model must not borrow this response.
 const OBSERVED_LAUNCH_SCHEMA: [u8; 20] = [
     0xc1, 0x36, 0x1d, 0x35, 0x18, 0x02, 0xb7, 0xbe, 0x5f, 0x55,
@@ -65,6 +65,18 @@ const OBSERVED_LAUNCH_SCHEMA: [u8; 20] = [
 ];
 
 fn observed_launch(name: &str, schema: Option<[u8; 20]>, header: &str) -> Option<weapons::GrenadeLaunch> {
+    if name == "weapon_molotov" && schema == Some(OBSERVED_LAUNCH_SCHEMA)
+        && header == OBSERVED_HEADERS[3].1 {
+        return Some(weapons::GrenadeLaunch {
+            reference: "legacy-1.38.8.1-molotov-ground-primary-horizontal-128hz".into(),
+            grounded_overhand_horizontal_inheritance: 1.25,
+            grounded_underhand_horizontal_inheritance: None,
+            grounded_combined_horizontal_inheritance: None,
+            grounded_overhand_velocity: None,
+            grounded_underhand_velocity: None,
+            grounded_combined_velocity: None,
+        });
+    }
     (name == "weapon_hegrenade" && schema == Some(OBSERVED_LAUNCH_SCHEMA)
         && header == OBSERVED_HEADERS[0].1).then(|| weapons::GrenadeLaunch {
             reference: "legacy-1.38.8.1-he-ground-button-inheritance-128hz".into(),
@@ -94,7 +106,7 @@ pub(super) fn import(
 ) -> Option<[u8; 20]> {
     let mut digest = Sha1::new();
     digest.update(previous_hash?);
-    digest.update(b"grenade-animation-timing-v9-he-ground-button-inheritance");
+    digest.update(b"grenade-animation-timing-v10-molotov-ground-primary-horizontal");
     let mut definitions: Vec<_> = catalog
         .weapons
         .iter_mut()
@@ -155,6 +167,21 @@ mod tests {
         other_schema[0] ^= 1;
         assert!(observed_launch("weapon_hegrenade", Some(other_schema), header).is_none());
         assert!(observed_launch("weapon_hegrenade", Some(OBSERVED_LAUNCH_SCHEMA), "other").is_none());
+        let molotov_header = OBSERVED_HEADERS[3].1;
+        let molotov = observed_launch("weapon_molotov", Some(OBSERVED_LAUNCH_SCHEMA), molotov_header).unwrap();
+        assert_eq!(molotov.grounded_overhand_horizontal_inheritance, 1.25);
+        assert!(molotov.grounded_underhand_horizontal_inheritance.is_none()
+            && molotov.grounded_combined_horizontal_inheritance.is_none());
+        assert!(molotov.grounded_overhand_velocity.is_none() && molotov.grounded_underhand_velocity.is_none()
+            && molotov.grounded_combined_velocity.is_none());
+        for (name, schema, header) in [
+            ("weapon_molotov", Some(OBSERVED_LAUNCH_SCHEMA), header),
+            ("weapon_molotov", Some(other_schema), molotov_header),
+            ("weapon_molotov", None, molotov_header),
+            ("weapon_incgrenade", Some(OBSERVED_LAUNCH_SCHEMA), molotov_header),
+        ] {
+            assert!(observed_launch(name, schema, header).is_none());
+        }
     }
 
     #[test]
@@ -169,6 +196,11 @@ mod tests {
         assert!(launch.grounded_combined_velocity.is_some());
         assert_eq!(launch.grounded_underhand_horizontal_inheritance, Some(1.25));
         assert_eq!(launch.grounded_combined_horizontal_inheritance, Some(1.25));
+        let molotov = level.catalog.get("weapon_molotov").unwrap().grenade_launch.as_ref().unwrap();
+        assert_eq!(molotov.grounded_overhand_horizontal_inheritance, 1.25);
+        assert!(molotov.grounded_overhand_velocity.is_none()
+            && molotov.grounded_underhand_horizontal_inheritance.is_none()
+            && molotov.grounded_combined_horizontal_inheritance.is_none());
         for name in [
             "weapon_hegrenade",
             "weapon_flashbang",

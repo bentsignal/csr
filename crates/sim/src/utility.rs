@@ -471,6 +471,82 @@ mod tests {
     }
 
     #[test]
+    fn molotov_tick_input_inherits_observed_primary_run_delta_with_unsupported_controls_unchanged() {
+        use std::sync::Arc;
+        use crate::{TickInput, weapon::WeaponState};
+        use movement::buttons;
+        fn launch(rate: u32, mode: ThrowMode, measured: bool, running: bool, jump: bool) -> (Projectile, Vec3) {
+            let mut collision = collision::CollisionWorld::new();
+            collision.add_convex(collision::Convex {
+                mins: Vec3::new(-8192., -8192., -128.), maxs: Vec3::new(8192., 8192., 0.),
+                planes: [Vec3::X, -Vec3::X, Vec3::Y, -Vec3::Y, Vec3::Z, -Vec3::Z]
+                    .into_iter().zip([8192., 8192., 8192., 8192., 0., 128.])
+                    .map(|(normal, dist)| collision::Plane { normal, dist }).collect(),
+                contents: contents::SOLID, surface: 0,
+            });
+            collision.finalize();
+            let mut catalog = weapons::Catalog::from_items_game(r#"items_game { items {
+                46 { name weapon_molotov attributes { "primary default clip size" 1 } }
+            } }"#).unwrap();
+            let def = &mut catalog.weapons[0];
+            def.max_player_speed = 245.;
+            def.grenade_animations = Some(weapons::GrenadeAnimations {
+                pull_pin_duration: 0.25,
+                overhand: weapons::GrenadeReleaseAnimation { command_release_time: Some(0.1), duration: 0.5, release_time: 0.125 },
+                underhand: weapons::GrenadeReleaseAnimation { command_release_time: Some(0.1), duration: 0.5, release_time: 0.125 },
+            });
+            def.grenade_launch = measured.then(|| weapons::GrenadeLaunch {
+                reference: "observed-molotov-primary-horizontal-only".into(),
+                grounded_overhand_horizontal_inheritance: 1.25,
+                grounded_underhand_horizontal_inheritance: None,
+                grounded_combined_horizontal_inheritance: None,
+                grounded_overhand_velocity: None,
+                grounded_underhand_velocity: None,
+                grounded_combined_velocity: None,
+            });
+            let mut world = World::with_catalog(Arc::new(collision), Arc::new(catalog));
+            world.set_tick_rate(rate);
+            let id = world.add_player("thrower", Team::Terrorist);
+            let weapon = WeaponState::new(Arc::new(world.catalog.weapons[0].clone()));
+            let player = world.player_mut(id).unwrap();
+            player.alive = true;
+            player.weapons = vec![weapon]; player.active = 0;
+            player.movement.on_ground = true;
+            let forward_move = if running { 450. } else { 0. };
+            let hold = match mode {
+                ThrowMode::Overhand => buttons::ATTACK,
+                ThrowMode::Underhand => buttons::ATTACK2,
+                ThrowMode::Combined => buttons::ATTACK | buttons::ATTACK2,
+            };
+            for _ in 0..rate {
+                world.step(&[(id, TickInput { forward_move, buttons: hold, ..Default::default() })]);
+            }
+            assert!(world.projectiles.is_empty());
+            for _ in 0..rate / 2 {
+                world.step(&[(id, TickInput { forward_move, buttons: if jump { buttons::JUMP } else { 0 }, ..Default::default() })]);
+                if let Some(projectile) = world.projectiles.first() {
+                    return (projectile.clone(), world.player(id).unwrap().movement.velocity);
+                }
+            }
+            panic!("ordinary hold/release must create one Molotov");
+        }
+        for rate in [64, 128] {
+            let (stationary, _) = launch(rate, ThrowMode::Overhand, true, false, false);
+            let (moving, player_velocity) = launch(rate, ThrowMode::Overhand, true, true, false);
+            assert!((player_velocity.x - 245.).abs() < 0.001);
+            // Independent native vectors 970.995239 -664.745239 =306.25.
+            // Preserve the current base vector: this packet does not admit its law.
+            assert!((moving.velocity.x - stationary.velocity.x - 306.25).abs() < 0.002);
+            assert_eq!(stationary.velocity, launch(rate, ThrowMode::Overhand, false, false, false).0.velocity);
+            assert_eq!(moving.velocity.z, stationary.velocity.z);
+            for (mode, jump) in [(ThrowMode::Underhand, false), (ThrowMode::Combined, false), (ThrowMode::Overhand, true)] {
+                assert_eq!(launch(rate, mode, true, true, jump), launch(rate, mode, false, true, jump),
+                    "unobserved button/air scope preserves the complete actual release");
+            }
+        }
+    }
+
+    #[test]
     fn measured_he_running_contribution_matches_both_observed_directions_without_changing_air_or_vertical() {
         fn launch(velocity: Vec3, grounded: bool, mode: ThrowMode, measured: bool) -> Vec3 {
             launch_he(velocity, grounded, mode, measured, Vec3::new(15., 0., 0.), None).velocity
