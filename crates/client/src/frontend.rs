@@ -56,13 +56,15 @@ impl Data {
 struct LoadingContext {
     selected: crate::session::LoadingMap,
     title: String,
+    /// Installed gameTypes/gameModes keys for this known local selection.
+    mode: Option<(&'static str, &'static str)>,
     radar_only: bool,
     archive: Option<Arc<crate::frontend_loading::ArchiveArt>>,
     initialized: Arc<Mutex<Option<String>>>,
 }
 impl PartialEq for LoadingContext {
     fn eq(&self, other: &Self) -> bool {
-        self.selected == other.selected && self.title == other.title
+        self.selected == other.selected && self.title == other.title && self.mode == other.mode
             && self.radar_only == other.radar_only && self.archive == other.archive
     }
 }
@@ -83,7 +85,14 @@ impl LoadingContext {
         };
         if !has_radar || !data.fs.exists(&format!("resource/flash/images/map_icons/collection_icon_{icon_map}.png")) { return None; }
         let radar_only = archive.is_some() || !data.fs.exists(&format!("maps/{}_loading.jpg", selected.name));
-        Some(Self { selected, title, radar_only, archive, initialized: Default::default() })
+        let mode = match selected.mode {
+            Some(sim::GameMode::Competitive) => Some(("classic", "competitive")),
+            Some(sim::GameMode::Deathmatch) => Some(("gungame", "deathmatch")),
+            _ => None,
+        }.filter(|(kind, mode)| data.game_modes.path(&["gameTypes", kind, "gameModes", mode])
+            .and_then(kv::Value::as_block)
+            .is_some_and(|block| block.str("nameID").is_some() && block.str("descID").is_some()));
+        Some(Self { selected, title, mode, radar_only, archive, initialized: Default::default() })
     }
 
     fn overview_arguments(&self, path: &str) -> Vec<Value> {
@@ -95,9 +104,12 @@ impl LoadingContext {
     }
 
     fn arguments(&self) -> Vec<Value> {
-        // Observed map/title positions. The other argument domains remain
-        // unknown; never label a remote game Competitive by default.
-        vec![self.selected.name.clone().into(), Value::Null, self.title.clone().into(), Value::Null, Value::Null, Value::Null]
+        // Public setMapInfo observations identify the type/mode positions.
+        // Remote/unknown/sandbox metadata remains null, as does the still
+        // unobserved scenario domain. The authored movie owns its actual text.
+        let (kind, mode) = self.mode.map_or((Value::Null, Value::Null),
+            |(kind, mode)| (kind.into(), mode.into()));
+        vec![self.selected.name.clone().into(), Value::Null, self.title.clone().into(), kind, mode, Value::Null]
     }
 }
 enum Action {
@@ -732,8 +744,8 @@ impl Engine for Bridge {
                         calls.call(path, "setHintText", vec!["".into()]);
                         calls.call(path, "showPanel", vec![]);
                         calls.call(path, "showLoadinginfo", vec![]);
-                        for label in ["ModeText", "ScenarioText"] {
-                            calls.set(&format!("{path}.Panel.MainText.{label}"), "_visible", false.into());
+                        for (label, visible) in [("ModeText", context.mode.is_some()), ("ScenarioText", false)] {
+                            calls.set(&format!("{path}.Panel.MainText.{label}"), "_visible", visible.into());
                         }
                     } else {
                         calls.call("_global.csrBindings", "configureLoadingOverview", vec![path.clone().into(), Value::Null]);
@@ -1717,8 +1729,8 @@ pub(crate) fn update(
                 ] {
                     front.send(Input::Call { path: "_level1000".into(), function: function.into(), args });
                 }
-                for label in ["ModeText", "ScenarioText"] {
-                    front.send(Input::Set { path: format!("_level1000.Panel.MainText.{label}"), property: "_visible".into(), value: false.into() });
+                for (label, visible) in [("ModeText", context.mode.is_some()), ("ScenarioText", false)] {
+                    front.send(Input::Set { path: format!("_level1000.Panel.MainText.{label}"), property: "_visible".into(), value: visible.into() });
                 }
             } else {
                 front.send(Input::Call { path: "_global.csrBindings".into(), function: "configureLoadingOverview".into(), args: vec!["_level1000".into(), Value::Null] });
