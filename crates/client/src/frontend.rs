@@ -52,13 +52,21 @@ impl Data {
     }
 }
 
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone)]
 struct LoadingContext {
     selected: crate::session::LoadingMap,
     title: String,
     radar_only: bool,
     archive: Option<Arc<crate::frontend_loading::ArchiveArt>>,
+    initialized: Arc<Mutex<Option<String>>>,
 }
+impl PartialEq for LoadingContext {
+    fn eq(&self, other: &Self) -> bool {
+        self.selected == other.selected && self.title == other.title
+            && self.radar_only == other.radar_only && self.archive == other.archive
+    }
+}
+impl Eq for LoadingContext {}
 impl LoadingContext {
     fn installed(selected: crate::session::LoadingMap, data: &Data) -> Option<Self> {
         let map = data.game_modes.block("maps")?.block(&selected.name)?;
@@ -75,7 +83,7 @@ impl LoadingContext {
         };
         if !has_radar || !data.fs.exists(&format!("resource/flash/images/map_icons/collection_icon_{icon_map}.png")) { return None; }
         let radar_only = archive.is_some() || !data.fs.exists(&format!("maps/{}_loading.jpg", selected.name));
-        Some(Self { selected, title, radar_only, archive })
+        Some(Self { selected, title, radar_only, archive, initialized: Default::default() })
     }
 
     fn overview_arguments(&self, path: &str) -> Vec<Value> {
@@ -388,6 +396,19 @@ impl Engine for Bridge {
             }
         }
         let arg = |index: usize| args.get(index).map(Value::str).unwrap_or_default();
+        if object == "csr" && method == "LoadingOverviewReady" && self.dispatch_epoch.is_some() {
+            let data = self.data.lock().unwrap();
+            if data.state == AppState::Loading {
+                if let Some(context) = &data.loading_map {
+                    let target = self.roots.get("LoadingScreen").map(|path| format!("{path}.Panel.Overview"));
+                    if arg(0) == context.selected.name && arg(1) == context.selected.serial.to_string()
+                        && target.as_deref() == Some(arg(2).as_str()) {
+                        *context.initialized.lock().unwrap() = self.roots.get("LoadingScreen").cloned();
+                        info!(map = context.selected.name, generation = context.selected.serial, "Loading overview fitted after actual Init");
+                    }
+                }
+            }
+        }
         if object == "csr" && method == "LoadingArtInit"
             && std::env::var("CSR_TEST_FLOW_ARCHIVE_LOADING").as_deref() == Ok("1")
             && self.dispatch_epoch.is_some() {
@@ -998,6 +1019,7 @@ pub struct Frontend {
     actions: Arc<Mutex<ActionQueue>>,
     image: Handle<Image>,
     presented_serial: u64,
+    loading_presentation: crate::frontend_loading_presentation::Presentation,
     pause_presentation: crate::frontend_pause_surface::Presentation,
     performance_ack: Option<(u64, std::time::Instant)>,
     worker_generation: u64,
@@ -1091,6 +1113,9 @@ impl Frontend {
     pub(crate) fn lobby_staged(&self) -> bool { self.lobby.lock().unwrap().staged() }
     pub(crate) fn lobby_staged_map(&self) -> Option<String> { self.lobby.lock().unwrap().staged_map() }
     pub(crate) fn lobby_phase(&self) -> crate::frontend_lobby::Phase { self.lobby.lock().unwrap().phase() }
+    pub(crate) fn loading_painted(&self, serial: u64, frame: u32) -> bool {
+        self.loading_presentation.ready(serial, frame)
+    }
     /// Counts completed frame assignments to the Bevy image, not render loops.
     pub(crate) fn presented_serial(&self) -> u64 { self.presented_serial }
     pub(crate) fn observed_loading_image(&self) -> Option<(crate::session::LoadingMap, String)> {
@@ -1265,6 +1290,7 @@ pub(crate) fn setup(
         actions,
         image,
         presented_serial: 0,
+        loading_presentation: Default::default(),
         pause_presentation: presentation,
         performance_ack: None,
         worker_generation: 0,
@@ -1301,13 +1327,14 @@ pub(crate) fn update(
     mut menu: ResMut<crate::menu::Menu>,
     state: Res<State<AppState>>,
     mut settings: ResMut<Settings>,
-    (data, mut loader, options, request, remote, host_request): (
+    (data, mut loader, options, request, remote, host_request, app_frame): (
         Res<GameData>,
         ResMut<crate::session::Loader>,
         Res<Options>,
         Res<crate::menu::LoadRequest>,
         Option<Res<crate::remote::RemoteClient>>,
         Res<crate::hosting::HostRequest>,
+        Res<bevy::diagnostic::FrameCount>,
     ),
     loc: Res<crate::localize::Localization>,
     (inventory, practice): (
@@ -1769,6 +1796,28 @@ pub(crate) fn update(
             None => break,
         }
     }
+    front.loading_presentation.select((scene == AppState::Loading).then(|| loader.generation()).flatten());
+    if scene == AppState::Loading {
+        let (initialized, fallback) = {
+            let data = front.data.lock().unwrap();
+            (data.loading_map.as_ref().and_then(|context| context.initialized.lock().unwrap().clone()),
+                data.loading_map.as_ref().is_none_or(|context| !context.radar_only))
+        };
+        if fallback || front.failed.is_some() || options.0.screenshot.is_some() {
+            // Unsupported art keeps the progress/cancel surface for one full
+            // app/render iteration; no unrelated map image is substituted.
+            front.loading_presentation.fallback(app_frame.0);
+        } else if let Some(path) = initialized.filter(|_| front.loading_presentation.awaiting_init()) {
+            // Reuse the existing global presentation revision allocator. Only
+            // a frame submitted AFTER this actual Init can carry this revision.
+            front.pause_presentation.open();
+            let revision = front.pause_presentation.revision();
+            front.loading_presentation.request(revision);
+            front.send(Input::Present { commands: vec![scaleform::Command::Set {
+                path, property: "_visible".into(), value: true.into(),
+            }], revision });
+        }
+    }
     let frame = front.frame();
     if let Some(frame) = frame {
         if let Some(mut image) = images.get_mut(&front.image) {
@@ -1779,6 +1828,10 @@ pub(crate) fn update(
             };
             image.data = Some(frame.rgba);
             front.pause_presentation.presented(frame.presentation_revision);
+            if front.loading_presentation.assigned(frame.presentation_revision, app_frame.0) {
+                info!(generation = ?loader.generation(), revision = frame.presentation_revision,
+                    app_frame = app_frame.0, "Loading post-Init raster assigned to main image");
+            }
             front.presented_serial = front.presented_serial.saturating_add(1);
         }
     }
