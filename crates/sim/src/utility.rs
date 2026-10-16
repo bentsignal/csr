@@ -485,23 +485,28 @@ mod tests {
 
     #[test]
     fn stationary_he_button_endpoints_match_native_with_prior_nonprimary_inheritance() {
-        for (mode, speed, native_x, received_z) in [
-            (ThrowMode::Underhand, 202.5, 199.423584, 20.163757),
-            (ThrowMode::Combined, 438.75, 432.084351, 61.188133),
+        for (mode, speed, pitch, native_x, received_z) in [
+            (ThrowMode::Underhand, 202.5, 0., 199.423584, 20.163757),
+            (ThrowMode::Combined, 438.75, 0., 432.084351, 61.188133),
+            // Prospective angled holdouts: unchanged .3/.65 speed ratios
+            // and primary pitch family predicted these before observation.
+            (ThrowMode::Underhand, 202.5, 45., 155.124008, -145.164490),
+            (ThrowMode::Combined, 438.75, -30., 351.931519, 247.003326),
         ] {
+            let angles = Vec3::new(pitch, 0., 0.);
             let profile = || Some(weapons::GrenadeLaunchVelocity { speed, upward_pitch_bias_degrees: 10. });
-            let stationary = launch_he(Vec3::ZERO, true, mode, true, Vec3::ZERO, profile());
+            let stationary = launch_he(Vec3::ZERO, true, mode, true, angles, profile());
             assert!((stationary.velocity.x - native_x).abs() < 0.002);
             assert!(stationary.velocity.y.abs() < 0.002);
             // Receive-time velocity is not an exact construction timestamp.
             assert!((0. ..60.).contains(&(stationary.velocity.z - received_z)));
-            let old = launch_he(Vec3::ZERO, true, mode, true, Vec3::ZERO, None);
+            let old = launch_he(Vec3::ZERO, true, mode, true, angles, None);
             assert_eq!(stationary.pos, old.pos);
-            let moving = launch_he(Vec3::new(245., 80., 100.), true, mode, true, Vec3::ZERO, profile());
+            let moving = launch_he(Vec3::new(245., 80., 100.), true, mode, true, angles, profile());
             assert!((moving.velocity - stationary.velocity - Vec3::new(122.5, 40., 50.)).length() < 0.001,
                 "stationary mode evidence must not change unmeasured movement inheritance");
-            let air = launch_he(Vec3::new(245., 80., 100.), false, mode, true, Vec3::ZERO, profile());
-            let old_air = launch_he(Vec3::new(245., 80., 100.), false, mode, true, Vec3::ZERO, None);
+            let air = launch_he(Vec3::new(245., 80., 100.), false, mode, true, angles, profile());
+            let old_air = launch_he(Vec3::new(245., 80., 100.), false, mode, true, angles, None);
             assert_eq!(air, old_air);
         }
     }

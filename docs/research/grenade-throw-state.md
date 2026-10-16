@@ -444,15 +444,30 @@ Raw unadmitted numeric flags remain unchanged. All18 pose and15 projectile
 numeric images and the actual held ownership/mode fields were personally
 reviewed; this is not a claim that every world screenshot was reviewed.
 
-The separate candidate profile uses secondary speed202.5 and combined438.75,
-with the primary profile's10-degree pitch bias, yielding the observed level
-endpoints. Level observations alone do not prove that these modes share the
-primary pitch law at other angles; a further prospective angled holdout is
-still required. Their horizontal and vertical movement inheritance stays0.5;
+Before observing any angled mode result, a separate three-case session froze
+the675/10 pitch family and0.3/0.65 speed ratios. The level primary control
+predicts664.7452333; underhand at+45 predicts155.1239997; combined at-30 predicts
+351.9315508 units/second horizontally, with the same0.002 tolerance. Actual
+velocities are664.745239,155.124008 and351.931519, respectively. Both untouched
+angled predictions pass within0.000032 units/second. Actual pin/held button
+state, strengths1/0/0.5, ownership, current weapon/viewmodel handles and stable
+world-ground zero-movement/zero-punch pose are admitted independently in each
+case. All15 projectile and18 player bracket numeric images were personally
+reviewed. Four distinct pre-contact states per case have position residuals
+below0.02054 horizontal and0.01375 vertical units. Received vertical velocity
+is downward for underhand+45 and upward for combined-30, with gravity320
+coherence. No parameter was refit and no exact construction time was inferred.
+The private20261016-022325 packet retains48 raw captures, separate posthoc
+admission and exact12-preference restoration, with no native process remaining.
+
+The content-bound profile uses secondary speed202.5 and combined438.75 with
+the primary profile's10-degree pitch bias, matching the observed level and
+prospective angled endpoints. Finite samples do not uniquely establish the
+global pitch family. Their horizontal and vertical movement inheritance stays0.5;
 the measured primary horizontal1.25 response is not generalized to them.
 Airborne vectors, raw-aim spawn traces, other content, animation timing and
 projectile integration remain unchanged. Continuous strength transitions,
-moving or crouched secondary/combined releases, other angles, native64Hz and
+moving or crouched secondary/combined releases, unmeasured angles, native64Hz and
 historical2015 equivalence are unmeasured. The catalog policy generation
 advances; wire state does not change. Source regressions compare measured
 endpoints and preserve those unchanged scopes. Build and integration checks
