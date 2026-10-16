@@ -184,6 +184,7 @@ fn input(
     mut cursor: Single<(&Window, &mut CursorOptions), With<PrimaryWindow>>,
     menu: Res<crate::menu::Menu>,
 ) {
+    static INPUT_TRACE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     console.blocked_frame = false;
     if !enabled.0 {
         console.wheel_lines = 0.0;
@@ -207,6 +208,21 @@ fn input(
         }
         if !console.open {
             continue;
+        }
+        let trace_navigation = (matches!(
+            event.key_code,
+            KeyCode::PageUp | KeyCode::PageDown | KeyCode::Numpad9 | KeyCode::Numpad3
+        ) || matches!(
+            &event.logical_key,
+            bevy::input::keyboard::Key::PageUp | bevy::input::keyboard::Key::PageDown
+        )) && *INPUT_TRACE.get_or_init(|| {
+            std::env::var("CSR_CONSOLE_INPUT_TRACE").is_ok_and(|value| value == "1")
+        });
+        if trace_navigation {
+            info!(
+                "console input: phase=before physical={:?} logical={:?} repeat={} scroll_offset={} visible_rows={} output_rows={}",
+                event.key_code, event.logical_key, event.repeat, console.scrollback, rows, console.output.len()
+            );
         }
         match event.key_code {
             KeyCode::Escape => {
@@ -287,6 +303,12 @@ fn input(
                     }
                 }
             }
+        }
+        if trace_navigation {
+            info!(
+                "console input: phase=after physical={:?} logical={:?} scroll_offset={} visible_rows={} output_rows={}",
+                event.key_code, event.logical_key, console.scrollback, rows, console.output.len()
+            );
         }
     }
     if console.open && window.focused && !console.blocked_frame {
