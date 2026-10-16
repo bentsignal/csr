@@ -204,8 +204,8 @@ pub(super) struct Selection {
 /// The native dialog validates, supplies the same query, then commits via OnOk.
 pub(super) struct OfflineLaunch {
     difficulty: Option<u8>,
-    checked: Option<(String, Selection, bool)>,
-    staged: Option<(Selection, bool)>,
+    checked: Option<(String, Selection, u8)>,
+    staged: Option<(Selection, u8)>,
 }
 impl Default for OfflineLaunch {
     fn default() -> Self {
@@ -229,30 +229,21 @@ impl OfflineLaunch {
     pub fn check(&mut self, root: &kv::Block, text: Option<&str>) -> Result<(), String> {
         self.checked = None;
         self.staged = None;
-        let no_bots = match self.difficulty {
-            Some(0) => true,
-            Some(3) => false,
-            _ => {
-                return Err(
-                    "Choose No Bots or Medium Bots; other difficulties are not available yet."
-                        .into(),
-                );
-            }
-        };
+        let difficulty = self.difficulty.ok_or("Choose a supported bot difficulty.")?;
         let text = text.ok_or("Game settings could not be read.")?;
         let selection = offline_selection(root, text)?;
-        self.checked = Some((text.into(), selection, no_bots));
+        self.checked = Some((text.into(), selection, difficulty));
         Ok(())
     }
     pub fn query(&mut self, text: Option<&str>) {
         self.staged = None;
-        if let Some((checked, selection, no_bots)) = self.checked.take() {
+        if let Some((checked, selection, difficulty)) = self.checked.take() {
             if text == Some(checked.as_str()) {
-                self.staged = Some((selection, no_bots));
+                self.staged = Some((selection, difficulty));
             }
         }
     }
-    pub fn commit(&mut self) -> Option<(Selection, bool)> {
+    pub fn commit(&mut self) -> Option<(Selection, u8)> {
         self.staged.take()
     }
 }
@@ -518,13 +509,17 @@ mod tests {
         launch.difficulty(Some(0.0));
         launch.check(&root, Some(REQUEST)).unwrap();
         launch.query(Some(REQUEST));
-        assert!(launch.commit().unwrap().1);
+        assert_eq!(launch.commit().unwrap().1, 0);
         assert!(launch.commit().is_none());
         launch.check(&root, Some(REQUEST)).unwrap();
         assert!(launch.check(&root, Some("invalid")).is_err());
         launch.query(Some(REQUEST));
         assert!(launch.commit().is_none());
-        for invalid in [Some(f64::NAN), Some(3.5), Some(4.0), None] {
+        launch.difficulty(Some(4.0));
+        launch.check(&root, Some(REQUEST)).unwrap();
+        launch.query(Some(REQUEST));
+        assert_eq!(launch.commit().unwrap().1, 4, "retain the selected UI value, not a no-bots flag");
+        for invalid in [Some(f64::NAN), Some(3.5), Some(6.0), None] {
             launch.difficulty(invalid);
             assert!(launch.check(&root, Some(REQUEST)).is_err());
         }

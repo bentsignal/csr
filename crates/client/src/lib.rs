@@ -124,6 +124,8 @@ pub struct ClientOptions {
     pub size_explicit: bool,
     /// Enemy bots; the local team gets one fewer so teams are even.
     pub bots: u32,
+    /// Original picker value (0..5), resolved from content; None preserves legacy defaults.
+    pub bot_difficulty: Option<u8>,
     /// Play as a Terrorist instead of a Counter-Terrorist.
     pub terrorist: bool,
     /// Deathmatch (respawns, fixed loadout) instead of competitive rounds.
@@ -145,6 +147,7 @@ impl Default for ClientOptions {
             height: 900,
             size_explicit: false,
             bots: 5,
+            bot_difficulty: None,
             terrorist: false,
             deathmatch: false,
             grenade_practice: false,
@@ -547,7 +550,7 @@ fn spawn_level(
     };
     let id = if remote { 0 } else { world.add_player("You", mine) };
     let names = |team: sim::Team| if team == sim::Team::Terrorist { &BOT_NAMES_T } else { &BOT_NAMES_CT };
-    let bot_count = if remote { 0 } else { opts.bots };
+    let bot_count = if remote || opts.bot_difficulty == Some(0) { 0 } else { opts.bots };
     for i in 0..bot_count {
         world.add_bot(names(theirs)[i as usize % 8], theirs);
     }
@@ -690,7 +693,8 @@ fn spawn_level(
         menu_blur::PostProcessSettings::default(),
     ));
     commands.insert_resource(local);
-    if !remote { world.bots = sim::bots::Bots::with_skill(0.6).with_nav(level.nav.clone()); }
+    if !remote { world.bots = level.configured_bots(opts.bot_difficulty)
+        .expect("offline bot settings validated by the immutable loaded level"); }
     if let Some(admission) = admission.take() {
         commands.insert_resource(admission);
     }
