@@ -21,6 +21,17 @@ inserted immediately after its base map, then contiguous UI indices rebuilt.
 The existing Dust II schema test is retained. One focused Inferno test checks
 that the remake and archive resolve separately, the original art symbol is
 preserved, the group remains adjacent and an unoffered later snapshot is
-rejected. Workspace checks, real-data probe/simulation, actual rendered card
-selection and optimized combined verification are pending; this is not yet a
-delivered menu feature.
+rejected. The combined `d71d5f6` workspace and PLAY checks passed. Its installed
+classic Inferno probe and simulation report zero failures after the separate
+v44 prop importer correction in #170. Before that correction, the real probe
+rejected `light_fixture01.mdl`; the same failure was reproduced on the earlier
+RELEASE baseline and was not suppressed.
+
+The actual 1920x1080 chooser shows both Inferno cards adjacent, followed by
+Mirage, Nuke and Overpass. Its additional column moved Dust II on row two.
+The first rendered lifecycle consequently clicked Vertigo and correctly failed
+the expected-map assertion; that negative is retained. The opt-in fixture now
+uses the observed Dust II card position and can select the archived Inferno
+card with `CSR_TEST_FLOW_CLASSIC_INFERNO=1`. The fixture sends ordinary authored
+pointer input; it does not bypass the map callback. Full archived-card lifecycle
+and optimized combined verification remain pending.
