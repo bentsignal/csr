@@ -125,6 +125,13 @@ pub(crate) fn update(
                 (1163., 754.),
             ];
             if flow.step < points.len() && flow.seconds() >= 5. + flow.step as f64 * 3. {
+                if flow.step == 3 {
+                    capture(&mut commands, &options, if second {
+                        "flow-second-map-chooser.png"
+                    } else {
+                        "flow-first-map-chooser.png"
+                    });
+                }
                 let (x, y) = points[flow.step];
                 click(&front, &window, x, y);
                 flow.step += 1;
