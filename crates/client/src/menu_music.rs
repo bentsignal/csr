@@ -92,14 +92,21 @@ pub(crate) struct AuthoredMusicGain(f32);
 pub(crate) fn update_gain(
     settings: Res<Settings>,
     sounds: Res<SoundLibrary>,
-    mut players: Query<(&AuthoredMusicGain, &mut SoundGain, &mut PlaybackSettings, Option<&mut AudioSink>), With<FrontendMusic>>,
+    mut observed: Local<Option<Entity>>,
+    mut players: Query<(Entity, &AuthoredMusicGain, &mut SoundGain, &mut PlaybackSettings, Option<&mut AudioSink>), With<FrontendMusic>>,
 ) {
-    for (authored, mut gain, mut playback, sink) in &mut players {
+    for (entity, authored, mut gain, mut playback, sink) in &mut players {
         gain.0 = authored.0 * settings.audio_options.menu_music_volume;
         let volume = Volume::Linear(sounds.master_volume * gain.0);
         // Keep deferred starts and already-created sinks on the same value.
         playback.volume = volume;
-        if let Some(mut sink) = sink { sink.set_volume(volume); }
+        if let Some(mut sink) = sink {
+            sink.set_volume(volume);
+            if *observed != Some(entity) {
+                info!("menu_music sink observed {:?} volume {:.6}; not a PCM onset measurement", entity, sink.volume().to_linear());
+                *observed = Some(entity);
+            }
+        }
     }
 }
 

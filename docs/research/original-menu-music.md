@@ -18,6 +18,12 @@ The installed declaration binds the main-menu MP3 to a music entry with volume
 0.8 and the menu cue convar. Its update stack selects the SelectedMusic mixer;
 the retained default mixer has SelectedMusic0.6 versus Weapons1 0.7. That ratio
 is an initial backend normalization, not a measured full Source music mix.
+The bounded native lighting packet also queried the public music convars:
+`snd_menumusic_volume` reports current0.3 and **default1.0**; the fixed music
+gain and `snd_gain` report1, with `Default_Mix` selected. New local settings
+use the observed default1.0, not the archived personal value. This is a2023
+Legacy default observation, not an independent2015 default measurement.
+
 Complete music operators, DSP, dashboard gain, historical default volume,
 loop boundaries and transition fades require independent observation. Round,
 MVP and objective music controls remain hidden until they have real backends.

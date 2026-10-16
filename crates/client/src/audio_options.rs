@@ -12,7 +12,9 @@ impl Default for AudioOptions {
         Self {
             // Observed installed Legacy public console value (archive): 1.
             mute_lose_focus: true,
-            menu_music_volume: 0.2,
+            // Legacy's public help reports default 1.0; a player's archived
+            // current value is not the engine default.
+            menu_music_volume: 1.0,
         }
     }
 }
