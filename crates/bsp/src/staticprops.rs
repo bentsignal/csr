@@ -156,10 +156,7 @@ mod tests {
             let props = parse_sprp(&fixture(&[blue, warm]), version).unwrap();
             assert_eq!(props.props.len(), 2);
             assert_eq!(props.props[0].diffuse_modulation, Some([0, 85, 255, 255]));
-            assert_eq!(
-                props.props[1].diffuse_modulation,
-                Some([170, 1, 34, 129])
-            );
+            assert_eq!(props.props[1].diffuse_modulation, Some([170, 1, 34, 129]));
         }
     }
 
