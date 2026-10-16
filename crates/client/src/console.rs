@@ -224,7 +224,15 @@ fn input(
                 event.key_code, event.logical_key, event.repeat, console.scrollback, rows, console.output.len()
             );
         }
-        match event.key_code {
+        // Windows keypad navigation can report Numpad9/Numpad3 physically
+        // while the translated key is PageUp/PageDown. Num Lock digits keep
+        // their normal text path; do not alias the physical keypad positions.
+        let key_code = match &event.logical_key {
+            bevy::input::keyboard::Key::PageUp => KeyCode::PageUp,
+            bevy::input::keyboard::Key::PageDown => KeyCode::PageDown,
+            _ => event.key_code,
+        };
+        match key_code {
             KeyCode::Escape => {
                 console.open = false;
                 console.blocked_frame = true;
@@ -914,6 +922,25 @@ mod tests {
         };
         app.update();
         assert_eq!(app.world().get::<Text>(output).unwrap().0.lines().next(), Some("line 79"));
+        app.world_mut().resource_mut::<Messages<KeyboardInput>>().write(KeyboardInput {
+            logical_key: bevy::input::keyboard::Key::PageUp, ..key(KeyCode::Numpad9)
+        });
+        app.update();
+        assert_eq!(app.world().get::<Text>(output).unwrap().0.lines().last(), Some("line 78"));
+        app.world_mut().resource_mut::<Messages<KeyboardInput>>().write(KeyboardInput {
+            logical_key: bevy::input::keyboard::Key::PageDown, ..key(KeyCode::Numpad3)
+        });
+        app.update();
+        assert_eq!(app.world().get::<Text>(output).unwrap().0.lines().last(), Some("line 89"));
+        app.world_mut().resource_mut::<Messages<KeyboardInput>>().write(KeyboardInput {
+            logical_key: bevy::input::keyboard::Key::Character("9".into()), text: Some("9".into()),
+            ..key(KeyCode::Numpad9)
+        });
+        app.update();
+        assert_eq!(app.world().resource::<DeveloperConsole>().scrollback, 0);
+        assert_eq!(app.world().resource::<DeveloperConsole>().line, "draft9");
+        app.world_mut().resource_mut::<Messages<KeyboardInput>>().write(key(KeyCode::Backspace));
+        app.update();
         app.world_mut().resource_mut::<Messages<KeyboardInput>>().write(key(KeyCode::PageUp));
         app.update();
         assert_eq!(app.world().get::<Text>(output).unwrap().0.lines().last(), Some("line 78"));
