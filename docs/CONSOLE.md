@@ -136,6 +136,28 @@ and noclip states reject the command. The server resolves ownership again at
 the actual input tick, so a grenade dropped in the meantime is never granted.
 No stock item index, throw timing, physics or network format changes.
 
+## Buying
+
+```text
+buy ak47
+buy m4a1_silencer
+buy vesthelm
+buy defuser
+```
+
+`buy` resolves weapon names from the active match's catalog, with or without
+`weapon_`. Common aliases include `m4a4`, `m4a1s`, `usp`, `p2000`, `zeus`,
+`galil`, `sg553` and `scout`. Equipment accepts `vest`/`kevlar`,
+`vesthelm`/`assaultsuit` and `defuser`, optionally prefixed with `item_`.
+Unknown or ambiguous names report an error.
+
+The command queues one ordinary `TickInput.buy`, including while the console
+has focus. It uses the same mode, team, money, buy-time, buy-zone and carrying
+limits as the buy menu, and reports the reason when those checks reject it.
+A requested purchase is not a grant: authority checks the rules again when
+that tick arrives. Home, loading, pause and unready remote sessions reject
+purchases. Arbitrary command binds and buy scripts remain unsupported.
+
 ## Sessions
 
 ```text
