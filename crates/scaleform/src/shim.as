@@ -594,7 +594,8 @@ MovieClipLoader.prototype.loadClip = function(url, target) {
     }
     // Opt-in public loader observation for the existing menu probe only.
     if (_global.csrDiagnostics.loadingTraceBudget > 0 &&
-        (String(url).indexOf("_loading.jpg") >= 0 || String(url).indexOf("_radar") >= 0)) {
+        (String(url).indexOf("_loading.jpg") >= 0 || String(url).indexOf("_radar") >= 0 ||
+         String(url).indexOf("img://loading/") == 0 || String(url).indexOf("collection_icon_") >= 0)) {
         _global.csrDiagnostics.loadingTraceBudget -= 1;
         csrEI.call("csr.LoadingArtRequest", String(url), String(target));
         var observer = new Object();

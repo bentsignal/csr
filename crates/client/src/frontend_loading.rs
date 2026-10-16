@@ -3,7 +3,7 @@
 //! Decoding runs on the movie thread, outside the shared frontend-data lock.
 //! No archive bytes or installed artwork are included in the application.
 use sha2::{Digest, Sha256};
-use std::{io::Read, sync::OnceLock};
+use std::{io::Read, sync::{OnceLock, atomic::{AtomicBool, Ordering}}};
 
 #[derive(Clone, Copy)]
 struct Pin {
@@ -43,6 +43,7 @@ struct Images {
 pub(super) struct ArchiveArt {
     pub map: &'static workshop::OldMap,
     images: OnceLock<Option<Images>>,
+    observed_init: AtomicBool,
 }
 
 impl PartialEq for ArchiveArt {
@@ -57,6 +58,7 @@ impl ArchiveArt {
         supported(name).then(|| Self {
             map: workshop::find(name).expect("supported pinned archive"),
             images: OnceLock::new(),
+            observed_init: AtomicBool::new(false),
         })
     }
 
@@ -94,6 +96,9 @@ impl ArchiveArt {
     pub fn unavailable(&self) -> bool {
         matches!(self.images.get(), Some(None))
     }
+
+    pub fn observe_init(&self) { self.observed_init.store(true, Ordering::Relaxed); }
+    pub fn observed_init(&self) -> bool { self.observed_init.load(Ordering::Relaxed) }
 
     fn load(&self, fs: &vfs::Vfs) -> Option<Images> {
         let pin = PINS.iter().find(|pin| pin.name == self.map.name)?;
