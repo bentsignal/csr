@@ -33,5 +33,16 @@ The first rendered lifecycle consequently clicked Vertigo and correctly failed
 the expected-map assertion; that negative is retained. The opt-in fixture now
 uses the observed Dust II card position and can select the archived Inferno
 card with `CSR_TEST_FLOW_CLASSIC_INFERNO=1`. The fixture sends ordinary authored
-pointer input; it does not bypass the map callback. Full archived-card lifecycle
-and optimized combined verification remain pending.
+pointer input; it does not bypass the map callback.
+
+The corrected combined PLAY `ec95b6a` completed the ordinary launch through
+Dust II, Pause, original Video vsync Disabled/Enabled/Disabled, Back, Resume,
+Home and the archived Inferno card. Actual loaded-level logs identify
+`de_inferno_2016`; the private map matches the pinned BSP SHA1. The two chooser
+images, old Inferno match and three changed Video images were personally
+reviewed at 1920x1080. Both Home visits start one music sink and stop it before
+Loading; owner configuration is unchanged. This verifies the selection and
+session integration, not exact old card art, overall lighting, physical input
+latency or download/cancellation behavior. The initial wrong-card fixture
+negative is retained. The corrected full workspace also passes; combined
+RELEASE verification remains in progress.
