@@ -67,10 +67,18 @@ const OBSERVED_LAUNCH_SCHEMA: [u8; 20] = [
 fn observed_launch(name: &str, schema: Option<[u8; 20]>, header: &str) -> Option<weapons::GrenadeLaunch> {
     (name == "weapon_hegrenade" && schema == Some(OBSERVED_LAUNCH_SCHEMA)
         && header == OBSERVED_HEADERS[0].1).then(|| weapons::GrenadeLaunch {
-            reference: "legacy-1.38.8.1-he-ground-primary-vector-128hz".into(),
+            reference: "legacy-1.38.8.1-he-ground-button-vectors-128hz".into(),
             grounded_overhand_horizontal_inheritance: 1.25,
             grounded_overhand_velocity: Some(weapons::GrenadeLaunchVelocity {
                 speed: 675.,
+                upward_pitch_bias_degrees: 10.,
+            }),
+            grounded_underhand_velocity: Some(weapons::GrenadeLaunchVelocity {
+                speed: 202.5,
+                upward_pitch_bias_degrees: 10.,
+            }),
+            grounded_combined_velocity: Some(weapons::GrenadeLaunchVelocity {
+                speed: 438.75,
                 upward_pitch_bias_degrees: 10.,
             }),
         })
@@ -84,7 +92,7 @@ pub(super) fn import(
 ) -> Option<[u8; 20]> {
     let mut digest = Sha1::new();
     digest.update(previous_hash?);
-    digest.update(b"grenade-animation-timing-v7-he-ground-launch-vector");
+    digest.update(b"grenade-animation-timing-v8-he-ground-button-vectors");
     let mut definitions: Vec<_> = catalog
         .weapons
         .iter_mut()
@@ -154,6 +162,9 @@ mod tests {
         assert!(level.catalog.get("weapon_hegrenade").unwrap().grenade_launch.is_some());
         assert!(level.catalog.get("weapon_hegrenade").unwrap().grenade_launch.as_ref()
             .unwrap().grounded_overhand_velocity.is_some());
+        let launch = level.catalog.get("weapon_hegrenade").unwrap().grenade_launch.as_ref().unwrap();
+        assert!(launch.grounded_underhand_velocity.is_some());
+        assert!(launch.grounded_combined_velocity.is_some());
         for name in [
             "weapon_hegrenade",
             "weapon_flashbang",
