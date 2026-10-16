@@ -378,7 +378,19 @@ pub(super) fn import(catalog: &mut Catalog, schema: Option<[u8; 20]>) -> Option<
                         reference: "legacy-1.38.8.1-ak-public-weapon-phase-standing-128hz".into(),
                         decay_decades_per_second: 2.,
                     }),
-                }),
+                }).or_else(|| is_observed_m4a4(def).then(|| RecoilResponse {
+                    reference: "legacy-1.38.8.1-m4a4-public-state-1-30-standing-128hz".into(),
+                    reference_hz: 128,
+                    angle_decay: 8., angle_linear: 18., velocity_decay: 4.5,
+                    // Rounded endpoint estimates from independent public
+                    // release curves, frozen before the 3/10-shot restarts.
+                    // Capture/display phase and held-marker bounds remain.
+                    first_impulse: [-16.25, 3.55],
+                    final_impulse: [-20.82, -10.10],
+                    held_tolerance_degrees: 0.19,
+                    // Direct M4 weapon-phase observation is still pending.
+                    phase_recovery: None,
+                })),
             });
             digest.update(def.id.to_string().as_bytes());
             hash_profile(
@@ -428,7 +440,9 @@ mod tests {
         assert!(profile.response.is_some());
         let m4 = catalog.get("weapon_m4a1").unwrap();
         let m4_profile = m4.recoil_trajectory.as_ref().unwrap();
-        assert!(m4_profile.response.is_none());
+        let m4_response = m4_profile.response.as_ref().unwrap();
+        assert_ne!(m4_response.reference, profile.response.as_ref().unwrap().reference);
+        assert_ne!(m4_response.final_impulse, profile.response.as_ref().unwrap().final_impulse);
         assert_eq!(m4_profile.bullet_angles.len(), 30);
         assert_ne!(m4_profile.bullet_angles, profile.bullet_angles);
         let galil = catalog.get("weapon_galilar").unwrap();
@@ -465,6 +479,7 @@ mod tests {
         assert_eq!(attached.bullet_angles.len(), 20);
         assert_eq!(detached.bullet_angles.len(), 20);
         assert_ne!(attached.bullet_angles, detached.bullet_angles);
+        assert!(attached.response.is_none() && detached.response.is_none());
         let mut modified = m4s.clone();
         modified.recoil_trajectory = None;
         modified.recoil_trajectory_unsuppressed = None;
