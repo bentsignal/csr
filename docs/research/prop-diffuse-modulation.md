@@ -58,8 +58,12 @@ to carry the ninth texel. White modulation is the exact identity value.
 
 Classic BSP SHA1 `8d0bfcabeecc4600208f495308a50681ca7e9eeb` contains rusty
 barrel instance1083 at `828.271 797.292 0.883`, with authored RGBA
-`67 95 118 255`. Sixteen eligible rock meshes have a warm `179 170 162 255`
-modulation. The previously measured tunnel arches244/264 and crate247 have
+`67 95 118 255`. The complete BSP has 104 nonwhite instances across rocks,
+rusty barrels and plaster edges; thirty rock instances have a warm
+`179 170 162 255` modulation. Their resolved materials have no active normal
+map, so this map can establish colored unbumped behavior and unchanged white
+normal-mapped controls, not colored normal-mapped parity. The previously
+measured tunnel arches244/264 and crate247 have
 white modulation, so this feature does not explain their remaining lighting
 differences.
 
