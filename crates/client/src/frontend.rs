@@ -1335,7 +1335,8 @@ pub(crate) fn update(
             if let Some(case) = catalog.cases.iter().find(|case| case.id == definition) {
                 for copy in 0..count {
                     items.push(Item {
-                        id: format!("case:{definition}:{copy}"),
+                        // The movie embeds this opaque ID in an img:// inventory URL host.
+                        id: format!("case-{definition}-{copy}"),
                         name: case.name.clone(),
                         icon: case.icon.trim_end_matches(".png").to_string(),
                         definition,
