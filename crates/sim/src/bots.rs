@@ -687,8 +687,12 @@ impl Bots {
                 }
                 brain.next_utility=time+1.0;
             }
+            // Reuse this decision's exact actor/definition/target solution at
+            // the release gate below; no cache survives a think/tick.
+            let mut planned_throw = None;
             if let Some((def,target,until))=brain.throw {
                 let angles=world.bot_lob_angles(bot,def,target).unwrap_or(bot.view_angles);
+                planned_throw = Some((def, target, angles));
                 if time>until || !bot.weapons.iter().any(|w|w.def.def_index==def) || time-brain.hurt_at<0.6 || (brain.visible&&eye.distance(brain.target_pos)<300.0) {
                     brain.throw=None;brain.next_utility=time+5.0;
                 } else {
@@ -741,7 +745,10 @@ impl Bots {
                 }
             }
             if let Some((def,target,_))=brain.throw {
-                let angles=world.bot_lob_angles(bot,def,target).unwrap_or(bot.view_angles);
+                let angles = match planned_throw {
+                    Some((planned_def, planned_target, angles)) if planned_def == def && planned_target == target => angles,
+                    _ => world.bot_lob_angles(bot,def,target).unwrap_or(bot.view_angles),
+                };
                 if input.utility==def && angle_diff(angles.x,brain.pitch).abs()<1.5 && angle_diff(angles.y,brain.yaw).abs()<1.5
                     && bot.movement.velocity.length()<35.0 && bot.active_weapon().is_some_and(|w|w.def.def_index==def && time>=w.next_attack)
                     && world.clear_bot_lob(bot,def,target,angles) {input.buttons|=buttons::ATTACK;}

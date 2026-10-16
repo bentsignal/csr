@@ -509,7 +509,7 @@ mod tests {
         def.grenade_animations = Some(weapons::GrenadeAnimations {
             pull_pin_duration: 0.5, overhand: release.clone(), underhand: release,
         });
-        let mut world = World::with_catalog(Arc::new(collision.clone()), Arc::new(catalog));
+        let mut world = World::with_catalog(Arc::new(collision), Arc::new(catalog));
         world.set_tick_rate(128);
         let owner = world.add_player("thrower", Team::Terrorist);
         let def = Arc::new(world.catalog.weapons[0].clone());
@@ -526,6 +526,8 @@ mod tests {
         airborne.movement.on_ground = false;
         assert_eq!(world.bot_lob_angles(&airborne, 44, target), lob_angles(airborne.eye(), target));
         let mut blocked = world.clone();
+        let mut collision = CollisionWorld::new();
+        collision.add_convex(solid(Vec3::new(-2000., -2000., -16.), Vec3::new(2000., 2000., 0.)));
         collision.add_convex(solid(Vec3::new(300., -1000., 0.), Vec3::new(316., 1000., 512.)));
         collision.finalize();
         blocked.collision = Arc::new(collision);
