@@ -758,6 +758,7 @@ pub fn update(
         seq.fade_in,
         &state.pose,
     );
+    inspection.sample_base(&mut state.pose);
     clip.sample_layered(t, &mut state.pose, |b| weights.get(b).copied().unwrap_or(1.0));
     inspection.apply(now, &mut state.pose);
     state.inspection = inspection;
