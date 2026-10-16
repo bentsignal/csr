@@ -94,6 +94,7 @@ pub(crate) fn update(
     options: Res<Options>,
     settings: Res<crate::settings::Settings>,
     state: Res<State<AppState>>,
+    app_frame: Res<bevy::diagnostic::FrameCount>,
     level: Option<Res<LoadedLevel>>,
     world: Option<Res<SimWorld>>,
     mut menu: ResMut<Menu>,
@@ -126,7 +127,8 @@ pub(crate) fn update(
                     flow.loading_ready_serial = Some((selected.clone(), front.presented_serial()));
                 }
                 let serial = flow.loading_ready_serial.as_ref().unwrap().1;
-                if front.presented_serial() >= serial.saturating_add(2) {
+                if front.presented_serial() >= serial.saturating_add(2)
+                    && front.archive_loading_painted(Some(selected.serial), app_frame.0) {
                     capture(&mut commands, &options, if index == 0 { "flow-loading-classic-dust2.png" } else { "flow-loading-classic-inferno.png" });
                     info!("frontend flow: captured actual archive Loading map={} generation={} url={} raster={}", selected.name, selected.serial, url, front.presented_serial());
                     flow.loading_captures[index] = true;
