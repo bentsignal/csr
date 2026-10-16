@@ -236,6 +236,14 @@ impl WeaponDefinition {
         self.attributes.get(key).and_then(|v| kv::parse_f32(v))
     }
 
+    /// Optional authored head damage scale. Absent or malformed pack metadata
+    /// retains the simulation's existing head-group fallback.
+    pub fn declared_headshot_multiplier(&self) -> Option<f32> {
+        self.attributes.get("headshot multiplier")
+            .and_then(|value| value.trim().parse::<f32>().ok())
+            .filter(|value| value.is_finite() && *value > 0.)
+    }
+
     /// Rounds per minute.
     pub fn rpm(&self) -> f32 {
         if self.cycle_time > 0.0 { 60.0 / self.cycle_time } else { 0.0 }
