@@ -16,11 +16,19 @@ fallback remains available. Expiry permits retrying temporary obstructions;
 round reset, death and respawn discard the old brain or its failed crossings.
 Navigation interruptions, such as combat, reset the progress baseline rather
 than treating the time spent elsewhere as failed crossing attempts.
+If exclusions disconnect a fixed objective, the failed query is cached by its
+start/target areas. Wandering still runs each tick, without repeating full A*
+searches for the same result. Entering another area changes the key; changing
+or expiring excluded edges invalidates the failure. No extra retry timer is
+introduced. The existing regression checks actual search counts, area changes
+and retry after expiry.
 
 Progress toward the same portal requires approaching it by the existing
 48-unit threshold, rather than sideways displacement. Advancing a route area
 resets the baseline; completed grounded height changes retain the prior
 recovery behavior. A same-area exact target never fabricates a self-edge.
+Stuck-recovery jumping also respects the next area's explicit `NO_JUMP`, as
+the existing normal portal-height jump condition already does.
 Human movement, animation, networking and render-frame gameplay are unchanged.
 
 Two synthetic regressions cover the next replan after jump/sideways
