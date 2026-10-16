@@ -232,6 +232,44 @@ mod life_tests {
 
     #[test]
     #[ignore = "requires the player's installed CS:GO Legacy; no GPU required"]
+    fn installed_reload_interrupts_inspect_through_the_incoming_authored_fade() {
+        let (mut app, id) = installed_app(Some("weapon_ak47"));
+        app.world_mut().resource_mut::<crate::tracers::InspectRequest>().start();
+        app.update();
+        app.world_mut().resource_mut::<Time>().advance_by(std::time::Duration::from_millis(100));
+        app.update();
+        assert_eq!(app.world().resource::<ViewModelState>().activity, "INSPECT");
+        let displayed = app.world().resource::<ViewModelState>().pose.clone();
+        let fade = app.world().resource::<ViewModels>().weapons["weapon_ak47"].clips["ACT_VM_RELOAD"][0].fade_in;
+        assert!(fade.is_finite() && fade > 0.);
+        let authoritative = {
+            let mut world = app.world_mut().resource_mut::<SimWorld>();
+            world.0.player_mut(id).unwrap().weapons[0].clip -= 5;
+            world.0.step(&[(id, sim::TickInput {
+                buttons: movement::buttons::RELOAD, ..Default::default()
+            })]);
+            assert!(world.0.events.iter().any(|e| matches!(e, sim::GameEvent::Reload { player } if *player == id)));
+            assert!(world.0.player(id).unwrap().active_weapon().unwrap().reload_end.is_some());
+            world.0.state()
+        };
+        app.world_mut().resource_mut::<Time>().advance_by(std::time::Duration::from_millis(1));
+        app.update();
+        let state = app.world().resource::<ViewModelState>();
+        assert_eq!(state.activity, "ACT_VM_RELOAD");
+        assert_eq!(state.pose, displayed, "the actual reload starts from the displayed inspect pose");
+        app.world_mut().resource_mut::<Time>().advance_by(std::time::Duration::from_secs_f32(fade * 0.5));
+        app.update();
+        assert_ne!(app.world().resource::<ViewModelState>().pose, displayed,
+            "the authored reload fade progresses instead of restarting every render frame");
+        app.world_mut().resource_mut::<Time>().advance_by(std::time::Duration::from_secs_f32(fade));
+        app.update();
+        assert!(app.world().resource::<ViewModelState>().pose.iter().all(|(p, q)| p.is_finite() && q.is_finite()));
+        assert_eq!(app.world().resource::<SimWorld>().0.state(), authoritative,
+            "presentation cannot change the actual reload deadline, ammunition or readiness");
+    }
+
+    #[test]
+    #[ignore = "requires the player's installed CS:GO Legacy; no GPU required"]
     fn installed_knife_inspect_and_cancel_preserve_the_actual_stab_deadline() {
         let (mut app, id) = installed_app(Some("weapon_knife"));
         let input = sim::TickInput { buttons: movement::buttons::ATTACK2, ..Default::default() };
@@ -370,6 +408,8 @@ pub struct ViewModelState {
     last_attack_seen: u64,
     inspect_seen: u64,
     reloading: bool,
+    /// Keep the captured inspect pose through an incoming magazine reload fade.
+    reload_from_inspect: bool,
     /// Last shell insert seen (for the debug trace).
     shell_seen: Option<i32>,
     planting: bool,
@@ -394,6 +434,7 @@ impl ViewModelState {
         self.last_attack_seen = attack_serial;
         self.inspect_seen = inspect_serial;
         self.reloading = false;
+        self.reload_from_inspect = false;
         self.shell_seen = None;
         self.planting = false;
         self.grenade_seen = None;
@@ -717,6 +758,8 @@ pub fn update(
     let shell = w.and_then(|w| w.shell_stage(sim_now));
     let shell_gun = w.is_some_and(|w| w.shell_reload().is_some());
     if reloading && !state.reloading {
+        state.reload_from_inspect = state.activity == "INSPECT" && !shell_gun
+            && grenade.is_none() && suppressor.is_none();
         state.activity = if shell_gun { "ACT_SHOTGUN_RELOAD_START" } else { "ACT_VM_RELOAD" }.into();
         state.started = now;
     } else if !reloading && state.reloading && shell_gun && attack.is_none() && view.clips.contains_key("ACT_SHOTGUN_RELOAD_FINISH") {
@@ -735,6 +778,9 @@ pub fn update(
         state.activity="INSPECT".into();state.started=now;state.clip_index=0;
     }
     if state.activity=="INSPECT" && w.is_some_and(|w|w.zoom_level>0) {state.activity="ACT_VM_IDLE".into();state.started=now;}
+    if !reloading || state.activity != "ACT_VM_RELOAD" || grenade.is_some() || suppressor.is_some() {
+        state.reload_from_inspect = false;
+    }
     state.reloading = reloading;
     state.planting = p.plant_start.is_some();
     if let Some(grenade)=grenade {
@@ -809,12 +855,13 @@ pub fn update(
         state.pose = mdl::skeleton::rest_pose(&model.bones);
     }
     let weights = seq.weights.clone();
-    // Restart inspection from what was actually displayed, including an
-    // interrupted earlier inspect. Sampling against last frame repeatedly
+    // Restart inspection, or its incoming magazine reload, from what was
+    // actually displayed, including an interrupted earlier inspect. Sampling against last frame repeatedly
     // would turn the authored duration into a frame-rate-dependent filter.
     let mut inspection = std::mem::take(&mut state.inspection);
     inspection.begin(
-        matches!(state.activity.as_str(), "INSPECT" | "INSPECT_CANCEL").then_some(state.started),
+        (matches!(state.activity.as_str(), "INSPECT" | "INSPECT_CANCEL")
+            || state.reload_from_inspect).then_some(state.started),
         seq.fade_in,
         &state.pose,
     );
