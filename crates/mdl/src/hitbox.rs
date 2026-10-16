@@ -102,7 +102,7 @@ pub(crate) fn read_sets(r: &R<'_>, version: i32, bones: usize) -> io::Result<Vec
     if sets == 0 {
         return Ok(Vec::new());
     }
-    if !matches!(version, 48 | 49) {
+    if !matches!(version, 44 | 48 | 49) {
         return Err(invalid(format!("unsupported MDL v{version} hitbox layout")));
     }
     let base = usize::try_from(r.i32(176)?).map_err(|_| invalid("negative hitbox set offset"))?;
@@ -121,6 +121,12 @@ pub(crate) fn read_sets(r: &R<'_>, version: i32, bones: usize) -> io::Result<Vec
         let mut hitboxes = Vec::with_capacity(n);
         for index in 0..n {
             let at = first + index * HITBOX_STRIDE;
+            // The installed v44 static props use this 68-byte AABB layout
+            // with a file-relative name and zero reserved bytes. Do not infer
+            // a newer rotation/capsule extension for other v44 records.
+            if version == 44 && r.0[at + 36..at + HITBOX_STRIDE].iter().any(|&v| v != 0) {
+                return Err(invalid("unsupported MDL v44 hitbox reserved data"));
+            }
             let bone = r.i32(at)?;
             if bone < 0 || bone as usize >= bones {
                 return Err(invalid(format!(
@@ -152,7 +158,12 @@ pub(crate) fn read_sets(r: &R<'_>, version: i32, bones: usize) -> io::Result<Vec
                 max,
                 radius,
                 rotation,
-                name: name(r, at, r.i32(at + 32)?, "hitbox")?,
+                name: name(
+                    r,
+                    if version == 44 { 0 } else { at },
+                    r.i32(at + 32)?,
+                    "hitbox",
+                )?,
             });
         }
         output.push(HitboxSet {
@@ -504,6 +515,65 @@ mod tests {
     }
 
     #[test]
+    fn v44_aabb_names_are_file_relative_and_geometry_is_retained() {
+        let mut data = vec![0; 300];
+        put_i32(&mut data, 172, 1);
+        put_i32(&mut data, 176, 180);
+        put_i32(&mut data, 180, 100);
+        put_i32(&mut data, 184, 1);
+        put_i32(&mut data, 188, 12);
+        put_i32(&mut data, 196, 7);
+        for (at, value) in [
+            (200, -2.0),
+            (204, -3.0),
+            (208, -4.0),
+            (212, 5.0),
+            (216, 6.0),
+            (220, 7.0),
+        ] {
+            put_f32(&mut data, at, value);
+        }
+        put_i32(&mut data, 224, 290);
+        data[280..284].copy_from_slice(b"set\0");
+        data[290..294].copy_from_slice(b"box\0");
+        let sets = read_sets(&R(&data), 44, 1).unwrap();
+        assert_eq!(sets[0].name, "set");
+        let b = &sets[0].hitboxes[0];
+        assert_eq!(
+            (b.bone, b.group, b.radius, b.rotation, b.name.as_str()),
+            (0, 7, -1.0, Vec3::ZERO, "box")
+        );
+        assert_eq!(
+            (b.min, b.max),
+            (Vec3::new(-2.0, -3.0, -4.0), Vec3::new(5.0, 6.0, 7.0))
+        );
+        // This same field must not silently become absolute for newer files.
+        assert!(read_sets(&R(&data), 48, 1).is_err());
+        assert!(read_sets(&R(&data), 49, 1).is_err());
+        for (at, value) in [
+            (192, 1),
+            (224, -1),
+            (224, 301),
+            (228, 1),
+            (200, f32::NAN.to_bits() as i32),
+            (212, (-10.0f32).to_bits() as i32),
+        ] {
+            let mut malformed = data.clone();
+            put_i32(&mut malformed, at, value);
+            assert!(
+                read_sets(&R(&malformed), 44, 1).is_err(),
+                "accepted mutation at {at}"
+            );
+        }
+        let mut unterminated = data.clone();
+        unterminated[290..].fill(b'x');
+        assert!(read_sets(&R(&unterminated), 44, 1).is_err());
+        for version in [43, 45, 46, 47, 50] {
+            assert!(read_sets(&R(&data), version, 1).is_err());
+        }
+    }
+
+    #[test]
     fn capsules_cover_side_caps_parallel_tangents_and_inside() {
         let capsule = PosedHitbox {
             shape: Shape::Capsule {
@@ -616,6 +686,48 @@ mod tests {
                 &crate::skeleton::rest_pose(&model.bones),
             );
             assert_eq!(set.pose(&pose).unwrap().len(), 19, "{path}");
+        }
+    }
+
+    #[test]
+    fn installed_v44_props_keep_aabbs_and_render_geometry() {
+        let Some(game_dir) = vfs::find_csgo_dir() else {
+            return;
+        };
+        let mut fs = vfs::Vfs::new();
+        fs.mount_game_dir(&game_dir).unwrap();
+        for stem in [
+            "light_fixture01",
+            "patio_table2",
+            "railing04",
+            "railing04long",
+            "railing04med",
+            "railing04small",
+        ] {
+            let base = format!("models/props_urban/{stem}");
+            let mdl = fs.read(&format!("{base}.mdl")).unwrap();
+            let vvd = fs.read(&format!("{base}.vvd")).unwrap();
+            let vtx = fs.read(&format!("{base}.dx90.vtx")).unwrap();
+            let model = crate::Model::load(&mdl, &vvd, &vtx).unwrap();
+            assert_eq!(model.version, 44, "{stem}");
+            assert_eq!(model.hitbox_sets.len(), 1, "{stem}");
+            let set = &model.hitbox_sets[0];
+            assert_eq!(set.name, "default", "{stem}");
+            assert_eq!(set.hitboxes.len(), 1, "{stem}");
+            let b = &set.hitboxes[0];
+            assert_eq!(
+                (b.bone, b.group, b.radius, b.rotation),
+                (0, 0, -1.0, Vec3::ZERO),
+                "{stem}"
+            );
+            assert!(b.name.is_empty(), "{stem}");
+            assert!(
+                model
+                    .meshes
+                    .iter()
+                    .any(|m| !m.vertices.is_empty() && !m.indices.is_empty()),
+                "{stem}"
+            );
         }
     }
 }
