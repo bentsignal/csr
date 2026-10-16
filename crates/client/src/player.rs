@@ -329,16 +329,9 @@ pub fn look(
     }
     local.latched |= b;
 
-    if !menu.open {
-        for (key, slot) in [
-            (KeyCode::Digit1, 1u8),
-            (KeyCode::Digit2, 2),
-            (KeyCode::Digit3, 3),
-            (KeyCode::Digit4, 4),
-            (KeyCode::Digit5, 5),
-            (KeyCode::KeyQ, sim::SLOT_LAST),
-        ] {
-            if keys.just_pressed(key) {
+    if grabbed && alive {
+        for (index, slot) in crate::settings::SELECTION_SLOTS.iter().copied().enumerate() {
+            if settings.action_just_pressed(crate::settings::KEY_SELECTION_FIRST + index, &keys, &mouse, blocked_mouse) {
                 local.pending_slot = slot;
             }
         }
@@ -775,6 +768,63 @@ mod remote_input_tests {
         }));
         app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::KeyW);
         app
+    }
+
+    #[test]
+    fn persisted_weapon_selection_replaces_fixed_keys_and_preserves_short_taps() {
+        use crate::settings::{Settings, KEY_SELECTION_FIRST};
+        let mut settings = Settings::parse("volume=0.4\nbind13=KeyR\n");
+        assert_eq!(settings.binds[KEY_SELECTION_FIRST], Some(KeyCode::KeyQ));
+        assert_eq!(settings.binds[KEY_SELECTION_FIRST + 1], Some(KeyCode::Digit1));
+        settings.rebind(KEY_SELECTION_FIRST, KeyCode::KeyX);
+        settings.unbind_key(KeyCode::Digit1);
+        settings.rebind(KEY_SELECTION_FIRST + 1, KeyCode::KeyZ);
+        settings.rebind(KEY_SELECTION_FIRST + 6, KeyCode::KeyC);
+        settings.rebind(KEY_SELECTION_FIRST + 7, KeyCode::Digit2);
+        let settings = Settings::parse(&settings.encode());
+        assert_eq!(settings.binds[crate::settings::KEY_ATTACK], Some(KeyCode::KeyR));
+        assert_eq!(settings.volume, 0.4);
+        let mut app = capture_app();
+        app.insert_resource(settings.clone());
+        app.world_mut().query::<&mut CursorOptions>().single_mut(app.world_mut()).unwrap().grab_mode = CursorGrabMode::Locked;
+        for key in [KeyCode::KeyQ, KeyCode::Digit1] {
+            app.world_mut().resource_mut::<ButtonInput<KeyCode>>().reset_all();
+            app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(key);
+            app.update();
+            assert_eq!(app.world().resource::<Sampled>().0.weapon_slot, 0,
+                "old keys cannot fall through after unbinding or moving their actions");
+        }
+        for (key, slot) in [
+            (KeyCode::KeyX, sim::SLOT_LAST), (KeyCode::KeyZ, 1),
+            (KeyCode::KeyC, sim::SLOT_NEXT), (KeyCode::Digit2, sim::SLOT_PREVIOUS),
+            (KeyCode::Digit4, 4), (KeyCode::Digit5, 5),
+        ] {
+            app.world_mut().resource_mut::<ButtonInput<KeyCode>>().reset_all();
+            app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(key);
+            app.world_mut().run_system_cached(look).unwrap();
+            app.world_mut().resource_mut::<ButtonInput<KeyCode>>().release(key);
+            app.world_mut().resource_mut::<ButtonInput<KeyCode>>().clear();
+            app.world_mut().run_system_cached(sample_after_capture).unwrap();
+            assert_eq!(app.world().resource::<Sampled>().0.weapon_slot, slot);
+            app.world_mut().run_system_cached(sample_after_capture).unwrap();
+            assert_eq!(app.world().resource::<Sampled>().0.weapon_slot, 0, "one request per tap");
+        }
+        for (enabled, blocked, captured, buy_menu) in [
+            (false, false, true, false), (true, true, true, false),
+            (true, false, false, false), (true, false, true, true),
+        ] {
+            app.world_mut().resource_mut::<InputEnabled>().0 = enabled;
+            app.world_mut().resource_mut::<InputBlockFrames>().0 = if blocked { 2 } else { 0 };
+            app.world_mut().resource_mut::<crate::buymenu::BuyMenu>().open = buy_menu;
+            app.world_mut().query::<&mut CursorOptions>().single_mut(app.world_mut()).unwrap().grab_mode =
+                if captured { CursorGrabMode::Locked } else { CursorGrabMode::None };
+            app.world_mut().resource_mut::<ButtonInput<KeyCode>>().reset_all();
+            app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::Digit4);
+            app.world_mut().run_system_cached(look).unwrap();
+            app.world_mut().run_system_cached(sample_after_capture).unwrap();
+            assert_eq!(app.world().resource::<Sampled>().0.weapon_slot, 0,
+                "blocked device edge never enters the one-shot selection queue");
+        }
     }
 
     #[test]
