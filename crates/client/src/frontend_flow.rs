@@ -28,6 +28,7 @@ pub(crate) struct Flow {
     pause_hover_started: Option<Instant>,
     pause_ready_serial: Option<u64>,
     archive_loading: bool,
+    installed_loading: bool,
     loading_ready_serial: Option<(crate::session::LoadingMap, u64)>,
     loading_captures: [bool; 2],
 }
@@ -47,6 +48,7 @@ impl Default for Flow {
             pause_hover_started: None,
             pause_ready_serial: None,
             archive_loading: std::env::var("CSR_TEST_FLOW_ARCHIVE_LOADING").as_deref() == Ok("1"),
+            installed_loading: std::env::var("CSR_TEST_FLOW_INSTALLED_LOADING").as_deref() == Ok("1"),
             loading_ready_serial: None,
             loading_captures: [false; 2],
         }
@@ -107,6 +109,7 @@ pub(crate) fn update(
 ) {
     if (options.0.screenshot.is_none() && std::env::var_os("CSR_TEST_FLOW_OUTPUT").is_none())
         || front.failed.is_some()
+        || (flow.archive_loading && flow.installed_loading)
         || flow.start.elapsed().as_secs() > 180
     {
         error!(
@@ -118,19 +121,25 @@ pub(crate) fn update(
     }
     // Capture natural Loading only after an actual owned loader Init and two
     // subsequent raster assignments. Never hold the job or fake completion.
-    if flow.archive_loading && *state.get() == AppState::Loading {
+    if (flow.archive_loading || flow.installed_loading) && *state.get() == AppState::Loading {
         let index = usize::from(flow.phase == 7);
-        let expected = ["de_dust2_2017", "de_inferno_2016"][index];
+        let expected = if flow.installed_loading { ["de_nuke", "de_mirage"] }
+            else { ["de_dust2_2017", "de_inferno_2016"] }[index];
         if matches!(flow.phase, 1 | 7) && !flow.loading_captures[index] {
-            if let Some((selected, url)) = front.observed_loading_image().filter(|(map, _)| map.name == expected) {
+            let observed = if flow.installed_loading { front.observed_installed_loading_image() }
+                else { front.observed_loading_image() };
+            if let Some((selected, url)) = observed.filter(|(map, _)| map.name == expected) {
                 if flow.loading_ready_serial.as_ref().is_none_or(|(map, _)| *map != selected) {
                     flow.loading_ready_serial = Some((selected.clone(), front.presented_serial()));
                 }
                 let serial = flow.loading_ready_serial.as_ref().unwrap().1;
-                if front.presented_serial() >= serial.saturating_add(2)
-                    && front.archive_loading_painted(Some(selected.serial), app_frame.0) {
-                    capture(&mut commands, &options, if index == 0 { "flow-loading-classic-dust2.png" } else { "flow-loading-classic-inferno.png" });
-                    info!("frontend flow: captured actual archive Loading map={} generation={} url={} raster={}", selected.name, selected.serial, url, front.presented_serial());
+                let painted = if flow.installed_loading { front.radar_loading_painted(Some(selected.serial), app_frame.0, false) }
+                    else { front.archive_loading_painted(Some(selected.serial), app_frame.0) };
+                if front.presented_serial() >= serial.saturating_add(2) && painted {
+                    let file = if flow.installed_loading { ["flow-loading-nuke.png", "flow-loading-mirage.png"] }
+                        else { ["flow-loading-classic-dust2.png", "flow-loading-classic-inferno.png"] }[index];
+                    capture(&mut commands, &options, file);
+                    info!("frontend flow: captured actual {} Loading map={} generation={} url={} raster={}", if flow.installed_loading { "installed" } else { "archive" }, selected.name, selected.serial, url, front.presented_serial());
                     flow.loading_captures[index] = true;
                 }
             }
@@ -149,7 +158,9 @@ pub(crate) fn update(
                 (1450., 206.),
                 // The archived Inferno card occupies column two. Dust II
                 // therefore moved to column two on the second row too.
-                (if !second && flow.archive_loading { 1170. } else if second && !classic_inferno { 810. } else { 990. }, if second { 500. } else { 680. }),
+                (if flow.installed_loading { if second { 1168. } else { 1345. } }
+                    else if !second && flow.archive_loading { 1170. } else if second && !classic_inferno { 810. } else { 990. },
+                    if second || flow.installed_loading { 500. } else { 680. }),
                 (1450., 1017.),
                 (1197., 580.),
                 (1163., 754.),
@@ -174,7 +185,9 @@ pub(crate) fn update(
             if *state.get() != AppState::Match {
                 return;
             }
-            let expected = if flow.phase == 1 {
+            let expected = if flow.installed_loading {
+                if flow.phase == 1 { "de_nuke" } else { "de_mirage" }
+            } else if flow.phase == 1 {
                 if flow.archive_loading { "de_dust2_2017" } else { "de_dust2" }
             } else {
                 if flow.archive_loading || std::env::var("CSR_TEST_FLOW_CLASSIC_INFERNO").as_deref() == Ok("1") {
@@ -188,8 +201,8 @@ pub(crate) fn update(
                 exit.write(AppExit::error());
                 return;
             }
-            if flow.archive_loading && !flow.loading_captures[usize::from(flow.phase == 7)] {
-                error!("frontend flow: natural Loading completed without an admitted current archive raster: {expected}");
+            if (flow.archive_loading || flow.installed_loading) && !flow.loading_captures[usize::from(flow.phase == 7)] {
+                error!("frontend flow: natural Loading completed without an admitted current radar raster: {expected}");
                 exit.write(AppExit::error());
                 return;
             }
@@ -205,7 +218,9 @@ pub(crate) fn update(
                 capture(
                     &mut commands,
                     &options,
-                    if flow.phase == 1 {
+                    if flow.installed_loading {
+                        if flow.phase == 1 { "flow-nuke.png" } else { "flow-mirage.png" }
+                    } else if flow.phase == 1 {
                         "flow-dust2.png"
                     } else {
                         "flow-inferno.png"
@@ -385,7 +400,12 @@ pub(crate) fn update(
             if flow.seconds() < 3. {
                 return;
             }
-            info!("frontend flow: Dust II -> Pause -> Resume -> Menu -> Inferno; failures: 0");
+            if flow.installed_loading {
+                info!("frontend flow: Nuke -> Pause -> Resume -> Menu -> Mirage; failures: 0");
+                info!("frontend flow: both installed Loading rasters admitted; failures: 0");
+            } else {
+                info!("frontend flow: Dust II -> Pause -> Resume -> Menu -> Inferno; failures: 0");
+            }
             if flow.archive_loading {
                 info!("frontend flow: both original archive Loading rasters admitted; failures: 0");
             }

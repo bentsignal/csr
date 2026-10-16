@@ -435,6 +435,13 @@ impl Engine for Bridge {
                         && target.as_deref() == Some(arg(2).as_str()) {
                         *context.initialized.lock().unwrap() = self.roots.get("LoadingScreen").cloned();
                         info!(map = context.selected.name, generation = context.selected.serial, "Loading overview fitted after actual Init");
+                        if std::env::var("CSR_TEST_FLOW_INSTALLED_LOADING").as_deref() == Ok("1")
+                            && context.archive.is_none() && context.radar_only {
+                            // This callback comes from the fit listener AFTER
+                            // its current context/target/serial admission.
+                            info!("frontend flow: actual owned loading image initialized map={} generation={} url=../overviews/{}_radar.dds",
+                                context.selected.name, context.selected.serial, context.selected.name);
+                        }
                     }
                 }
             }
@@ -754,7 +761,8 @@ impl Engine for Bridge {
                 if data.state == AppState::Loading {
                     calls.call(path, "setLoadingText", vec![data.loading.clone().into()]);
                     if let Some(context) = &data.loading_map {
-                        if std::env::var("CSR_TEST_FLOW_ARCHIVE_LOADING").as_deref() == Ok("1") {
+                        if std::env::var("CSR_TEST_FLOW_ARCHIVE_LOADING").as_deref() == Ok("1")
+                            || std::env::var("CSR_TEST_FLOW_INSTALLED_LOADING").as_deref() == Ok("1") {
                             calls.set("_global.csrDiagnostics", "loadingTraceBudget", 32.into());
                         }
                         calls.call("_global.csrBindings", "configureLoadingOverview", context.overview_arguments(path));
@@ -1149,7 +1157,7 @@ impl Frontend {
     pub(crate) fn archive_loading_painted(&self, serial: Option<u64>, frame: u32) -> bool {
         self.radar_loading_painted(serial, frame, true)
     }
-    fn radar_loading_painted(&self, serial: Option<u64>, frame: u32, archive_only: bool) -> bool {
+    pub(crate) fn radar_loading_painted(&self, serial: Option<u64>, frame: u32, archive_only: bool) -> bool {
         let Some(serial) = serial else { return false; };
         if self.failed.is_some() || !self.loading_presentation.art_ready(serial, frame) { return false; }
         let data = self.data.lock().unwrap();
@@ -1164,6 +1172,15 @@ impl Frontend {
         let context = data.loading_map.as_ref()?;
         let art = context.archive.as_ref()?;
         art.observed_init().then(|| (context.selected.clone(), art.url(context.selected.serial, crate::frontend_loading::Image::Radar)))
+    }
+    pub(crate) fn observed_installed_loading_image(&self) -> Option<(crate::session::LoadingMap, String)> {
+        let data = self.data.lock().ok()?;
+        if data.state != AppState::Loading { return None; }
+        let context = data.loading_map.as_ref()?;
+        // Production fit readiness follows the real same-listener Init. The
+        // installed proof cannot borrow the archive's opaque image admission.
+        (context.archive.is_none() && context.fitted_radar(context.selected.serial, false))
+            .then(|| (context.selected.clone(), format!("../overviews/{}_radar.dds", context.selected.name)))
     }
     /// Requested worker viewport and the last assigned raster, for opt-in diagnostics.
     pub(crate) fn raster_dimensions(&self, images: &Assets<Image>) -> Option<((u32, u32), (u32, u32))> {
@@ -1736,7 +1753,8 @@ pub(crate) fn update(
         front.loading_map = loading_map.clone();
         if front.movie_ready("LoadingScreen") {
             if let Some(context) = loading_map {
-                if std::env::var("CSR_TEST_FLOW_ARCHIVE_LOADING").as_deref() == Ok("1") {
+                if std::env::var("CSR_TEST_FLOW_ARCHIVE_LOADING").as_deref() == Ok("1")
+                    || std::env::var("CSR_TEST_FLOW_INSTALLED_LOADING").as_deref() == Ok("1") {
                     front.send(Input::Set { path: "_global.csrDiagnostics".into(), property: "loadingTraceBudget".into(), value: 32.into() });
                 }
                 front.send(Input::Call { path: "_global.csrBindings".into(), function: "configureLoadingOverview".into(), args: context.overview_arguments("_level1000") });
