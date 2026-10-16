@@ -92,7 +92,7 @@ pub fn gather(world: &mut World) -> Result<SceneAssets, GatherError> {
         }
     }
     if let Some(models) = world.get_resource::<GroundModels>() {
-        for asset in models.planted.iter().chain(models.kit.iter()) {
+        for asset in models.planted.iter().chain(models.kit.iter()).chain(models.weapons.values()) {
             owners.model(asset)?;
         }
     }
@@ -116,6 +116,7 @@ pub fn gather(world: &mut World) -> Result<SceneAssets, GatherError> {
             &material.phong_map,
             &material.skin_surface,
             &material.skin_position,
+            &material.detail,
         ] {
             owners.images.insert(image.id());
         }
@@ -155,6 +156,7 @@ mod tests {
             phong_map: handles[7].clone(),
             skin_surface: handles[8].clone(),
             skin_position: handles[9].clone(),
+            detail: handles[10].clone(),
             alpha_mode: AlphaMode::Opaque,
             cull: false,
         })
@@ -168,18 +170,19 @@ mod tests {
     }
 
     #[test]
-    fn reused_entity_and_retained_model_owners_include_all_ten_images_once() {
+    fn reused_entity_and_retained_model_owners_include_all_eleven_images_once() {
         let mut world = World::new();
         let mut meshes = Assets::<Mesh>::default();
         let mut images = Assets::<Image>::default();
         let mut materials = Assets::<WorldMaterial>::default();
-        let handles = (0..10)
+        let handles = (0..11)
             .map(|_| images.add(Image::default()))
             .collect::<Vec<_>>();
         let material = material(&mut materials, &handles);
         let entity_mesh = mesh(&mut meshes);
         let model_mesh = mesh(&mut meshes);
         let ground_mesh = mesh(&mut meshes);
+        let dropped_mesh = mesh(&mut meshes);
         // These images/meshes already existed before the scene; ownership,
         // rather than a fresh-ID difference, must include them.
         world.spawn((
@@ -203,15 +206,19 @@ mod tests {
             sun: None,
         });
         world.insert_resource(GroundModels {
-            planted: Some(model(ground_mesh.clone(), material)),
+            planted: Some(model(ground_mesh.clone(), material.clone())),
             kit: None,
+            weapons: HashMap::from([(
+                "mod_weapon_ground_fixture".parse().unwrap(),
+                model(dropped_mesh.clone(), material),
+            )]),
         });
         world.insert_resource(ViewModels::default());
         world.insert_resource(meshes);
         world.insert_resource(images);
         world.insert_resource(materials);
         let scene = gather(&mut world).unwrap();
-        let mut expected_meshes = vec![entity_mesh.id(), model_mesh.id(), ground_mesh.id()];
+        let mut expected_meshes = vec![entity_mesh.id(), model_mesh.id(), ground_mesh.id(), dropped_mesh.id()];
         expected_meshes.sort();
         let mut expected_images = handles.iter().map(Handle::id).collect::<Vec<_>>();
         expected_images.sort();
@@ -239,8 +246,8 @@ mod tests {
         let scene_mesh = mesh(&mut meshes);
         let old_mesh = mesh(&mut meshes);
         let unused_mesh = mesh(&mut meshes);
-        let mat = material(&mut materials, &vec![scene_image.clone(); 10]);
-        let old_mat = material(&mut materials, &vec![old_image.clone(); 10]);
+        let mat = material(&mut materials, &vec![scene_image.clone(); 11]);
+        let old_mat = material(&mut materials, &vec![old_image.clone(); 11]);
         world.spawn((MatchEntity, Mesh3d(scene_mesh.clone()), MeshMaterial3d(mat)));
         world.spawn((
             crate::session::Persistent,
@@ -286,7 +293,7 @@ mod tests {
         let mut images = Assets::<Image>::default();
         let mut materials = Assets::<WorldMaterial>::default();
         let image = images.add(Image::default());
-        let mat = material(&mut materials, &vec![image; 10]);
+        let mat = material(&mut materials, &vec![image; 11]);
         let id = mat.id();
         materials.remove(id);
         world.spawn((MatchEntity, MeshMaterial3d(mat)));
@@ -301,7 +308,7 @@ mod tests {
         let mut images = Assets::<Image>::default();
         let mut materials = Assets::<WorldMaterial>::default();
         let image = images.add(Image::default());
-        let mat = material(&mut materials, &vec![image; 10]);
+        let mat = material(&mut materials, &vec![image; 11]);
         let parts = (0..MAX_SCENE_ASSETS)
             .map(|_| (mesh(&mut meshes), mat.clone()))
             .collect();

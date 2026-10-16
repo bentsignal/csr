@@ -236,9 +236,13 @@ pub fn spawn(
     let mut material_cache: HashMap<String, Handle<WorldMaterial>> = HashMap::new();
     let mut batches: HashMap<(AssetId<WorldMaterial>, bool, [i32; 3]), (Handle<WorldMaterial>, Batch)> = HashMap::new();
 
-    let mut light_data = vec![0u8; bsp.static_props.props.len().max(1) * 8 * 8];
+    // Six ambient faces, Sun direction/color, then per-instance diffuse tint.
+    const PROP_TEXELS: usize = 9;
+    let mut light_data = vec![0u8; bsp.static_props.props.len().max(1) * PROP_TEXELS * 8];
     let mut authored_meshes = 0usize;
     let mut authored_vertices = 0usize;
+    let mut detail_meshes = 0usize;
+    let mut tinted_instances = 0usize;
     for (prop_index, prop) in bsp.static_props.props.iter().enumerate() {
         let Some(Some((model, flips))) = models.get(&prop.model) else { continue };
         let authored = vertex_lighting::load(level, prop_index, model);
@@ -248,9 +252,21 @@ pub fn spawn(
         let radius = (model.hull_max - model.hull_min).length() * 0.5 * scale;
         let light = prop_light(bsp, collision, sun, center, prop.origin, radius);
         let cube = [0, 1, 4, 5, 3, 2].map(|i| light.cube[i].extend(1.0));
-        for (i, v) in cube.into_iter().chain([to_bevy(light.to_sun).extend(1.0), light.sun.extend(1.0)]).enumerate() {
+        // Opacity changes need separate native admission and material modes.
+        // Unsupported layouts/alpha retain the previous identity modulation.
+        let tint = match prop.diffuse_modulation {
+            Some([r, g, b, 255]) => {
+                if [r, g, b] != [255; 3] {
+                    tinted_instances += 1;
+                    debug!("Authored prop diffuse tint: instance={prop_index} rgb_bytes={r},{g},{b} alpha=255");
+                }
+                glam::Vec3::new(r as f32, g as f32, b as f32) / 255.0
+            }
+            _ => glam::Vec3::ONE,
+        };
+        for (i, v) in cube.into_iter().chain([to_bevy(light.to_sun).extend(1.0), light.sun.extend(1.0), tint.extend(1.0)]).enumerate() {
             for (c, value) in v.to_array().into_iter().enumerate() {
-                let offset = (prop_index * 8 + i) * 8 + c * 2;
+                let offset = (prop_index * PROP_TEXELS + i) * 8 + c * 2;
                 light_data[offset..offset + 2].copy_from_slice(&crate::textures::f32_to_f16(value).to_le_bytes());
             }
         }
@@ -278,6 +294,10 @@ pub fn spawn(
                     materials.add(material_from_vmt(vmt.as_ref(), fs, textures, images, shared, exposure, false))
                 })
                 .clone();
+            if let Some(m) = materials.get(&material).filter(|m| m.params.flags & crate::material::flags::DETAIL != 0) {
+                detail_meshes += 1;
+                debug!("Authored prop detail: instance={prop_index} mesh={mesh_index} flags={} scale={},{} factor={} model={}", m.params.flags, m.params.detail.x, m.params.detail.y, m.params.detail.z, bsp.static_props.models[prop.model as usize]);
+            }
             let authored_colors = materials.get(&material)
                 .filter(|m| m.params.flags & crate::material::flags::VERTEX_LIT != 0
                     && m.params.flags & crate::material::flags::NORMAL == 0)
@@ -321,7 +341,7 @@ pub fn spawn(
 
     use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
     let lighting = images.add(Image::new(
-        Extent3d { width: 8, height: bsp.static_props.props.len().max(1) as u32, depth_or_array_layers: 1 },
+        Extent3d { width: PROP_TEXELS as u32, height: bsp.static_props.props.len().max(1) as u32, depth_or_array_layers: 1 },
         TextureDimension::D2, light_data, TextureFormat::Rgba16Float, RenderAssetUsages::RENDER_WORLD,
     ));
     for handle in material_cache.values() {
@@ -345,5 +365,7 @@ pub fn spawn(
         stats.draws += 1;
     }
     info!("Authored equal-group prop lighting: meshes={authored_meshes} vertices={authored_vertices}; unsupported meshes retain ambient/Sun fallback");
+    info!("Authored static-prop diffuse tint: nonwhite_instances={tinted_instances}");
+    info!("Authored ordinary static-prop detail: meshes={detail_meshes}; unsupported layers retain base material");
     stats
 }

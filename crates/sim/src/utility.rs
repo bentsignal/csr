@@ -181,17 +181,31 @@ impl World {
         let strength=p.active_weapon().and_then(|w|w.grenade_throw).map_or(1.,|s|s.mode.strength());
         // Read the release tick's actual movement, not the pull-pin tick. This
         // includes running/backpedalling/jumping; crouch uses the current eye.
-        // Only the content-bound grounded primary HE response is admitted.
-        // Keep vertical movement inheritance, air and other modes unchanged.
+        // Button endpoint velocities are independent observations. Only the
+        // independently admitted modes receive a measured movement response;
+        // retain absent modes' prior inheritance and every airborne vector.
         let mut inherited = p.movement.velocity * 0.5;
         let mut launch = forward * (750.0 * strength);
-        if p.movement.on_ground && p.active_weapon().and_then(|w| w.grenade_throw)
-            .is_some_and(|s| s.mode == ThrowMode::Overhand)
-        {
+        let mode = p.active_weapon().and_then(|w| w.grenade_throw).map(|s| s.mode);
+        if p.movement.on_ground {
             if let Some(profile) = p.active_weapon().and_then(|w| w.def.grenade_launch.as_ref()) {
-                inherited.x = p.movement.velocity.x * profile.grounded_overhand_horizontal_inheritance;
-                inherited.y = p.movement.velocity.y * profile.grounded_overhand_horizontal_inheritance;
-                if let Some(profile) = &profile.grounded_overhand_velocity {
+                let horizontal_inheritance = match mode {
+                    Some(ThrowMode::Overhand) => Some(profile.grounded_overhand_horizontal_inheritance),
+                    Some(ThrowMode::Underhand) => profile.grounded_underhand_horizontal_inheritance,
+                    Some(ThrowMode::Combined) => profile.grounded_combined_horizontal_inheritance,
+                    None => None,
+                };
+                if let Some(inheritance) = horizontal_inheritance {
+                    inherited.x = p.movement.velocity.x * inheritance;
+                    inherited.y = p.movement.velocity.y * inheritance;
+                }
+                let velocity_profile = match mode {
+                    Some(ThrowMode::Overhand) => profile.grounded_overhand_velocity.as_ref(),
+                    Some(ThrowMode::Underhand) => profile.grounded_underhand_velocity.as_ref(),
+                    Some(ThrowMode::Combined) => profile.grounded_combined_velocity.as_ref(),
+                    None => None,
+                };
+                if let Some(profile) = velocity_profile {
                     // Keep the separately uncalibrated spawn trace on the raw
                     // aim ray above. Only the release velocity uses this law.
                     let mut launch_angles = angles;
@@ -425,15 +439,24 @@ mod tests {
 
     fn launch_he(velocity: Vec3, grounded: bool, mode: ThrowMode, measured: bool,
         angles: Vec3, vector: Option<weapons::GrenadeLaunchVelocity>) -> Projectile {
+        launch_he_with_mode_inheritance(velocity, grounded, mode, measured, angles, vector, None)
+    }
+
+    fn launch_he_with_mode_inheritance(velocity: Vec3, grounded: bool, mode: ThrowMode, measured: bool,
+        angles: Vec3, vector: Option<weapons::GrenadeLaunchVelocity>, horizontal: Option<f32>) -> Projectile {
         use std::sync::Arc;
         let mut world = arena();
         world.add_player("thrower", Team::Terrorist);
         let catalog = weapons::Catalog::from_items_game(r#""items_game" { "items" { "44" { "name" "weapon_hegrenade" "attributes" { "primary default clip size" "1" } } } }"#).unwrap();
         let mut definition = catalog.weapons[0].clone();
         definition.grenade_launch = measured.then(|| weapons::GrenadeLaunch {
-            reference: "native-grounded-primary-he-pair".into(),
+            reference: "native-grounded-he-button-vectors".into(),
             grounded_overhand_horizontal_inheritance: 1.25,
-            grounded_overhand_velocity: vector,
+            grounded_underhand_horizontal_inheritance: (mode == ThrowMode::Underhand).then_some(horizontal).flatten(),
+            grounded_combined_horizontal_inheritance: (mode == ThrowMode::Combined).then_some(horizontal).flatten(),
+            grounded_overhand_velocity: (mode == ThrowMode::Overhand).then(|| vector.clone()).flatten(),
+            grounded_underhand_velocity: (mode == ThrowMode::Underhand).then(|| vector.clone()).flatten(),
+            grounded_combined_velocity: (mode == ThrowMode::Combined).then_some(vector).flatten(),
         });
         let mut weapon = crate::weapon::WeaponState::new(Arc::new(definition));
         weapon.grenade_throw = Some(ThrowState { phase: ThrowPhase::Throwing, mode,
@@ -474,6 +497,61 @@ mod tests {
     }
 
     #[test]
+    fn running_nonprimary_he_matches_independent_stationary_and_moving_vectors() {
+        for (mode, speed, player_x, native_stationary, native_moving, native_delta) in [
+            (ThrowMode::Underhand, 202.5, 245., 199.423584, 505.673584, 306.25),
+            (ThrowMode::Combined, 438.75, -245., 432.084351, 125.834351, -306.25),
+        ] {
+            let launch = |velocity: Vec3, grounded: bool, measured: bool| launch_he_with_mode_inheritance(
+                velocity, grounded, mode, true, Vec3::ZERO,
+                Some(weapons::GrenadeLaunchVelocity { speed, upward_pitch_bias_degrees: 10. }),
+                measured.then_some(1.25));
+            let stationary = launch(Vec3::ZERO, true, true);
+            let moving = launch(Vec3::new(player_x, 0., 0.), true, true);
+            assert!((stationary.velocity.x - native_stationary).abs() < 0.002);
+            assert!((moving.velocity.x - native_moving).abs() < 0.002);
+            // Independent stationary and moving native observations, not a
+            // copy of the configured inheritance coefficient.
+            assert!((moving.velocity.x - stationary.velocity.x - native_delta).abs() < 0.001);
+            let vertical = launch(Vec3::new(player_x, 80., 100.), true, true);
+            assert!((vertical.velocity.z - stationary.velocity.z - 50.).abs() < 0.001);
+            assert_eq!(moving.pos, launch(Vec3::new(player_x, 0., 0.), true, false).pos);
+            assert_eq!(launch(Vec3::new(player_x, 80., 100.), false, true),
+                launch(Vec3::new(player_x, 80., 100.), false, false));
+            let unmatched = launch(Vec3::new(player_x, 80., 100.), true, false);
+            assert!((unmatched.velocity - stationary.velocity - Vec3::new(player_x * 0.5, 40., 50.)).length() < 0.001);
+        }
+    }
+
+    #[test]
+    fn stationary_he_button_endpoints_match_native_with_prior_nonprimary_inheritance() {
+        for (mode, speed, pitch, native_x, received_z) in [
+            (ThrowMode::Underhand, 202.5, 0., 199.423584, 20.163757),
+            (ThrowMode::Combined, 438.75, 0., 432.084351, 61.188133),
+            // Prospective angled holdouts: unchanged .3/.65 speed ratios
+            // and primary pitch family predicted these before observation.
+            (ThrowMode::Underhand, 202.5, 45., 155.124008, -145.164490),
+            (ThrowMode::Combined, 438.75, -30., 351.931519, 247.003326),
+        ] {
+            let angles = Vec3::new(pitch, 0., 0.);
+            let profile = || Some(weapons::GrenadeLaunchVelocity { speed, upward_pitch_bias_degrees: 10. });
+            let stationary = launch_he(Vec3::ZERO, true, mode, true, angles, profile());
+            assert!((stationary.velocity.x - native_x).abs() < 0.002);
+            assert!(stationary.velocity.y.abs() < 0.002);
+            // Receive-time velocity is not an exact construction timestamp.
+            assert!((0. ..60.).contains(&(stationary.velocity.z - received_z)));
+            let old = launch_he(Vec3::ZERO, true, mode, true, angles, None);
+            assert_eq!(stationary.pos, old.pos);
+            let moving = launch_he(Vec3::new(245., 80., 100.), true, mode, true, angles, profile());
+            assert!((moving.velocity - stationary.velocity - Vec3::new(122.5, 40., 50.)).length() < 0.001,
+                "stationary mode evidence must not change unmeasured movement inheritance");
+            let air = launch_he(Vec3::new(245., 80., 100.), false, mode, true, angles, profile());
+            let old_air = launch_he(Vec3::new(245., 80., 100.), false, mode, true, angles, None);
+            assert_eq!(air, old_air);
+        }
+    }
+
+    #[test]
     fn grounded_he_velocity_matches_native_pitches_and_prospective_negative_holdout() {
         fn profile() -> Option<weapons::GrenadeLaunchVelocity> {
             Some(weapons::GrenadeLaunchVelocity { speed: 675., upward_pitch_bias_degrees: 10. })
@@ -502,8 +580,7 @@ mod tests {
             assert_eq!(result.pos, old.pos, "velocity calibration must not move the spawn trace");
         }
         for (grounded, mode, measured) in [
-            (false, ThrowMode::Overhand, true), (true, ThrowMode::Underhand, true),
-            (true, ThrowMode::Combined, true), (true, ThrowMode::Overhand, false),
+            (false, ThrowMode::Overhand, true), (true, ThrowMode::Overhand, false),
         ] {
             let actual = launch_he(Vec3::new(245., 80., 100.), grounded, mode, measured, Vec3::ZERO, profile());
             let old = launch_he(Vec3::new(245., 80., 100.), grounded, mode, measured, Vec3::ZERO, None);

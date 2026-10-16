@@ -21,6 +21,8 @@ pub const DEFUSER_MODEL: &str = "models/weapons/w_defuser.mdl";
 pub struct GroundModels {
     pub planted: Option<SkinnedAsset>,
     pub kit: Option<SkinnedAsset>,
+    /// Separate authored drops; holding still uses CharacterModels.weapons.
+    pub weapons: HashMap<content::ContentId, SkinnedAsset>,
 }
 
 struct Placed {
@@ -68,7 +70,16 @@ pub fn load(
             true,
         ))
     };
+    let mut weapons = HashMap::new();
+    for def in &level.catalog.weapons {
+        if !def.dropped_model.is_empty() {
+            if let Some(model) = asset(&def.dropped_model) {
+                weapons.insert(def.id.clone(), model);
+            }
+        }
+    }
     GroundModels {
+        weapons,
         planted: asset(PLANTED_C4_MODEL),
         kit: asset(DEFUSER_MODEL),
     }
@@ -151,12 +162,15 @@ pub fn sync(
         }
         let (asset, on_side) = match &item.kind {
             sim::GroundKind::Weapon(w) => (
-                characters.weapons.get(&w.def.class_name),
+                ground.weapons.get(&w.def.id).or_else(|| characters.weapons.get(&w.def.class_name)),
                 w.def.class_name != sim::weapon::C4,
             ),
             sim::GroundKind::DefuseKit => (ground.kit.as_ref(), false),
         };
         let Some(asset) = asset else { continue };
+        if std::env::var_os("CSR_WEAPON_TRACE").is_some() {
+            info!("ground item model: item={} class={} model={}", item.id, item.class_name(), asset.model.name);
+        }
         let instance = skinning::spawn_posed(
             &mut commands,
             asset,

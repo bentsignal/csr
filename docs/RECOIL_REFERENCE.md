@@ -705,9 +705,35 @@ uses an explicitly reviewed longer finite image-review boundary; no model
 parameters changed between those attempts. No native source or asset bytes
 are included here.
 
-Direct M4 weapon-phase observation is still pending. Until that separate
-gate passes, this addition does not claim native phase recovery or later
-resumed spraying. Actual Rust ray, snapshot/prediction, rendered and full
-CI verification of this candidate remain pending. Native 64 Hz behavior,
-nonstanding recovery, camera tracking and requested historical 2015 parity
-remain unestablished.
+A separate six-shot public weapon-field packet positively identified the
+selected M4A4 entity and its floating recoil index. The index remains 6
+through the readable attack-cooldown plateau, then its displayed values fit
+repeated 128 Hz multiplication by 10^(-2/128), with no fitted coefficient.
+The integer index stays zero and does not establish discrete impulse
+selection. The post-burst rendered camera shifts even though the public
+view-angle rows stay fixed; this field packet does not establish camera
+tracking parity. The sim currently couples phase recovery to discrete
+resumed impulse selection, which this M4 field observation does not admit.
+Therefore this profile deliberately keeps `phase_recovery: None`; later
+continued-spray phase selection remains open.
+
+The compiled authoritative recoilcheck from the frozen integration source
+emits all 30 M4A4 held rays at both 64 and 128 Hz with maximum nominal
+angle error 0.077327 degrees, below the declared 0.19-degree held bound.
+Its 128 Hz three-shot and ten-shot resumed rays miss the independent native
+marker centers by 1.043690 and 0.440392 pixels. The same endpoints and
+intermediate impulses are unchanged. The 64 Hz run only checks resampling:
+its ten-shot restart advances to the next 64 Hz tick and misses that 128 Hz
+native marker by 2.146215 pixels; native 64 Hz behavior is not established.
+Full source CI passed. The frozen integration executable also rendered
+ordinary TickInput firing after 13 shots and an exhausted 30-shot tail.
+Both original images show an intact M4A4/hand pose; the tail visibly shows
+0/90. The held HUD is one tick behind its capture-authority clip and is not
+used as exact ammo-state evidence. The first helper retained a negative
+because it expected a frontend startup log on the direct-match path; its
+actual child exited successfully, and separate review admits that existing
+image with the exact fresh private configuration receipt. Only the missing
+tail capture was retried, successfully. No VSync/backend parity is inferred
+from that configuration. Required combined release checks are owned by the
+integration run. Nonstanding recovery, camera tracking and requested
+historical 2015 parity remain unestablished.

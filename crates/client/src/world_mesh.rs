@@ -520,6 +520,7 @@ pub fn material_from_vmt(
         phong_map: textures.white.clone(),
         skin_surface:textures.white.clone(),
         skin_position:textures.white.clone(),
+        detail: textures.white.clone(),
         alpha_mode: AlphaMode::Opaque,
         cull: true,
     };
@@ -600,6 +601,23 @@ pub fn material_from_vmt(
     }
     let tint = mat.color("$color").or_else(|| mat.color("$color2")).unwrap_or([1.0; 3]);
     params.color = Vec4::new(tint[0], tint[1], tint[2], mat.alpha());
+    if mat.shader == "vertexlitgeneric" && mat.flag("$blendtintbybasealpha") {
+        f |= flags::TINT_BY_BASE_ALPHA;
+    }
+    match mat.detail_layer() {
+        Ok(Some(detail)) if detail.factor > 0.0 => {
+            if let Some(info) = textures.load(fs, images, detail.texture, false) {
+                out.detail = info.handle;
+                params.detail = Vec4::new(detail.scale[0], detail.scale[1], detail.factor, 0.0);
+                f |= flags::DETAIL;
+                debug!("Authored ordinary detail: shader={} flags={f} texture={} scale={},{} factor={}", mat.shader, detail.texture, detail.scale[0], detail.scale[1], detail.factor);
+            } else {
+                warn!("authored detail texture unavailable; retaining base material: {}", detail.texture);
+            }
+        }
+        Ok(None) | Ok(Some(_)) => {}
+        Err(error) => warn!("unsupported authored detail layer ({error:?}); retaining base material"),
+    }
     params.flags = f;
     out.params = params;
     out

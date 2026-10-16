@@ -271,6 +271,18 @@ impl NavMesh {
 
     /// Additional nonnegative tactical traversal cost (fire, exposed approaches).
     pub fn find_path_with_cost(&self, from: u32, to: u32, extra: impl Fn(&Area)->f32) -> Option<Vec<u32>> {
+        self.find_path_with_traversal(from, to, extra, |_, _| true)
+    }
+
+    /// Tactical costs with an additional directed-transition admission rule.
+    /// Rejecting one crossing does not exclude its destination from other routes.
+    pub fn find_path_with_traversal(
+        &self,
+        from: u32,
+        to: u32,
+        extra: impl Fn(&Area) -> f32,
+        allow_transition: impl Fn(u32, u32) -> bool,
+    ) -> Option<Vec<u32>> {
         #[derive(PartialEq)]
         struct Node(f32, u32);
         impl Eq for Node {}
@@ -306,6 +318,9 @@ impl NavMesh {
             let g = cost[&id];
             for dir in &a.connections {
                 for &next in dir {
+                    if !allow_transition(id, next) {
+                        continue;
+                    }
                     let Some(b) = self.area(next) else { continue };
                     let mut step = a.center().distance(b.center());
                     if b.flags & attr::AVOID != 0 {
