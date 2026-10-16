@@ -93,9 +93,10 @@ mod tests {
     fn installed_all_six_bot_difficulty_choices_resolve_through_content_vfs() {
         use sha1::{Digest, Sha1};
         let (game, fs) = crate::mount_game(None).expect("installed Legacy content");
-        println!("installed bot profile sources: game={} gamemodes_sha1={:x} botprofile_sha1={:x}",
-            game.display(), Sha1::digest(fs.read("gamemodes.txt").expect("game modes")),
-            Sha1::digest(fs.read("BotProfile.db").expect("bot personalities")));
+        let hex = |path| Sha1::digest(fs.read(path).expect("mounted bot metadata")).iter()
+            .map(|byte| format!("{byte:02x}")).collect::<String>();
+        println!("installed bot profile sources: game={} gamemodes_sha1={} botprofile_sha1={}",
+            game.display(), hex("gamemodes.txt"), hex("BotProfile.db"));
         let profiles = Profiles::load(&fs);
         let mut admitted = Vec::new();
         for choice in 0..=5 {
