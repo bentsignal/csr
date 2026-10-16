@@ -4,6 +4,7 @@
 #[derive(Clone, Debug, PartialEq)]
 pub struct AudioOptions {
     pub mute_lose_focus: bool,
+    pub menu_music_volume: f32,
 }
 
 impl Default for AudioOptions {
@@ -11,6 +12,9 @@ impl Default for AudioOptions {
         Self {
             // Observed installed Legacy public console value (archive): 1.
             mute_lose_focus: true,
+            // Legacy's public help reports default 1.0; a player's archived
+            // current value is not the engine default.
+            menu_music_volume: 1.0,
         }
     }
 }
@@ -27,12 +31,17 @@ impl AudioOptions {
     pub(crate) fn convar_number(&self, name: &str) -> Option<f64> {
         match name {
             "snd_mute_losefocus" => Some(u8::from(self.mute_lose_focus) as f64),
+            "snd_menumusic_volume" => Some(self.menu_music_volume as f64),
             _ => None,
         }
     }
 
     pub(crate) fn set_convar_number(&mut self, name: &str, value: f64) -> bool {
         match name {
+            "snd_menumusic_volume" if value.is_finite() => {
+                self.menu_music_volume = value.clamp(0.0, 1.0) as f32;
+                true
+            }
             "snd_mute_losefocus" if value == 0.0 || value == 1.0 => {
                 self.mute_lose_focus = value == 1.0;
                 true
@@ -52,6 +61,7 @@ impl AudioOptions {
             "snd_mute_losefocus={}\n",
             u8::from(self.mute_lose_focus)
         ));
+        text.push_str(&format!("snd_menumusic_volume={}\n", self.menu_music_volume));
     }
 }
 

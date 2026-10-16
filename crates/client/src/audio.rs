@@ -613,7 +613,7 @@ impl SoundLibrary {
         (self.rng.wrapping_mul(0x2545_F491_4F6C_DD1D) >> 40) as f32 / (1u64 << 24) as f32
     }
 
-    fn source(&mut self, fs: &vfs::Vfs, sources: &mut Assets<AudioSource>, path: &str) -> Option<(Handle<AudioSource>, u16)> {
+    pub(crate) fn source(&mut self, fs: &vfs::Vfs, sources: &mut Assets<AudioSource>, path: &str) -> Option<(Handle<AudioSource>, u16)> {
         self.loaded
             .entry(path.to_string())
             .or_insert_with(|| {
