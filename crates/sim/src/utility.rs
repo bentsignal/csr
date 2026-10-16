@@ -181,8 +181,18 @@ impl World {
         let strength=p.active_weapon().and_then(|w|w.grenade_throw).map_or(1.,|s|s.mode.strength());
         // Read the release tick's actual movement, not the pull-pin tick. This
         // includes running/backpedalling/jumping; crouch uses the current eye.
-        // The inherited 0.5 coefficient remains an uncalibrated approximation.
-        let velocity = forward * (750.0*strength) + p.movement.velocity * 0.5;
+        // Only the content-bound grounded primary HE response is measured.
+        // Keep vertical, air and other button modes on their prior policy.
+        let mut inherited = p.movement.velocity * 0.5;
+        if p.movement.on_ground && p.active_weapon().and_then(|w| w.grenade_throw)
+            .is_some_and(|s| s.mode == ThrowMode::Overhand)
+        {
+            if let Some(profile) = p.active_weapon().and_then(|w| w.def.grenade_launch.as_ref()) {
+                inherited.x = p.movement.velocity.x * profile.grounded_overhand_horizontal_inheritance;
+                inherited.y = p.movement.velocity.y * profile.grounded_overhand_horizontal_inheritance;
+            }
+        }
+        let velocity = forward * (750.0*strength) + inherited;
         self.next_item += 1;
         self.projectiles.push(Projectile {
             id: self.next_item,
@@ -402,6 +412,50 @@ impl World {
 mod tests {
     use super::*;
     use crate::Team;
+
+    #[test]
+    fn measured_he_running_contribution_matches_both_observed_directions_without_changing_air_or_vertical() {
+        use std::sync::Arc;
+        fn launch(velocity: Vec3, grounded: bool, mode: ThrowMode, measured: bool) -> Vec3 {
+            let mut world = arena();
+            world.add_player("thrower", Team::Terrorist);
+            let catalog = weapons::Catalog::from_items_game(r#""items_game" { "items" { "44" { "name" "weapon_hegrenade" "attributes" { "primary default clip size" "1" } } } }"#).unwrap();
+            let mut definition = catalog.weapons[0].clone();
+            definition.grenade_launch = measured.then(|| weapons::GrenadeLaunch {
+                reference: "native-grounded-primary-he-pair".into(),
+                grounded_overhand_horizontal_inheritance: 1.25,
+            });
+            let mut weapon = crate::weapon::WeaponState::new(Arc::new(definition));
+            weapon.grenade_throw = Some(ThrowState { phase: ThrowPhase::Throwing, mode,
+                pull_started_tick: 0, throw_started_tick: Some(0), release_requested: true, spawned: false });
+            world.players[0].weapons = vec![weapon];
+            world.players[0].active = 0;
+            world.players[0].movement.on_ground = grounded;
+            world.players[0].movement.velocity = velocity;
+            world.players[0].view_angles = Vec3::new(15., 0., 0.);
+            assert!(world.spawn_grenade(0));
+            world.projectiles[0].velocity
+        }
+        let baseline = launch(Vec3::ZERO, true, ThrowMode::Overhand, true);
+        // Native moving minus independently repeated stationary projectile:
+        // +976.685791-670.435852 and +364.185883-670.435852 respectively.
+        // Deliberately do not assert the still-uncalibrated base launch vector.
+        for (speed, observed_delta) in [(244.999985, 306.249939), (-244.999985, -306.249969)] {
+            let result = launch(Vec3::new(speed, 0., 0.), true, ThrowMode::Overhand, true);
+            assert!((result.x - baseline.x - observed_delta).abs() < 0.001);
+            assert_eq!(result.z, baseline.z);
+        }
+        for (grounded, mode, measured) in [
+            (false, ThrowMode::Overhand, true), (true, ThrowMode::Underhand, true),
+            (true, ThrowMode::Combined, true), (true, ThrowMode::Overhand, false),
+        ] {
+            let baseline = launch(Vec3::ZERO, grounded, mode, measured);
+            let result = launch(Vec3::new(-245., 80., 100.), grounded, mode, measured);
+            assert!((result - baseline - Vec3::new(-122.5, 40., 50.)).length() < 0.001);
+        }
+        let result = launch(Vec3::new(245., 0., 100.), true, ThrowMode::Overhand, true);
+        assert!((result.z - baseline.z - 50.).abs() < 0.001, "vertical inheritance remains unchanged");
+    }
 
     #[test]
     fn decoy_expiry_is_once_at_deadline_and_never_round_cleanup() {

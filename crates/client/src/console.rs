@@ -286,6 +286,8 @@ const COMMANDS: &[&str] = &[
     "volume",
     "mat_vsync",
     "mat_antialias",
+    "snd_mute_losefocus",
+    "snd_menumusic_volume",
     "sensitivity",
     "m_pitch",
     "cl_showfps",

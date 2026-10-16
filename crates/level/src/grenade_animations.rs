@@ -57,14 +57,30 @@ fn apply_observed_release(weapon: &weapons::WeaponDefinition, bytes: &[u8], prof
     }
 }
 
+// Exact items_game identity accompanying the independently observed HE pair.
+// A pack that replaces either schema or model must not borrow this response.
+const OBSERVED_LAUNCH_SCHEMA: [u8; 20] = [
+    0xc1, 0x36, 0x1d, 0x35, 0x18, 0x02, 0xb7, 0xbe, 0x5f, 0x55,
+    0x24, 0x5c, 0x33, 0x1f, 0x5f, 0x1d, 0x6b, 0x36, 0xad, 0x35,
+];
+
+fn observed_launch(name: &str, schema: Option<[u8; 20]>, header: &str) -> Option<weapons::GrenadeLaunch> {
+    (name == "weapon_hegrenade" && schema == Some(OBSERVED_LAUNCH_SCHEMA)
+        && header == OBSERVED_HEADERS[0].1).then(|| weapons::GrenadeLaunch {
+            reference: "legacy-1.38.8.1-he-ground-primary-horizontal-128hz".into(),
+            grounded_overhand_horizontal_inheritance: 1.25,
+        })
+}
+
 pub(super) fn import(
     catalog: &mut weapons::Catalog,
     fs: &vfs::Vfs,
     previous_hash: Option<[u8; 20]>,
+    item_schema: Option<[u8; 20]>,
 ) -> Option<[u8; 20]> {
     let mut digest = Sha1::new();
     digest.update(previous_hash?);
-    digest.update(b"grenade-animation-timing-v5-observed-release-natural");
+    digest.update(b"grenade-animation-timing-v6-he-ground-horizontal-launch");
     let mut definitions: Vec<_> = catalog
         .weapons
         .iter_mut()
@@ -82,6 +98,8 @@ pub(super) fn import(
             continue;
         };
         digest.update(Sha1::digest(&bytes));
+        let header: String = Sha1::digest(&bytes).iter().map(|byte| format!("{byte:02x}")).collect();
+        weapon.grenade_launch = observed_launch(&weapon.class_name, item_schema, &header);
         let Some(model) = mdl::Model::load_header(&bytes).ok() else {
             continue;
         };
@@ -113,9 +131,23 @@ pub(super) fn import(
 #[cfg(test)]
 mod tests {
     #[test]
+    fn launch_response_requires_exact_schema_model_and_item() {
+        use super::*;
+        let header = OBSERVED_HEADERS[0].1;
+        assert!(observed_launch("weapon_hegrenade", Some(OBSERVED_LAUNCH_SCHEMA), header).is_some());
+        assert!(observed_launch("weapon_smokegrenade", Some(OBSERVED_LAUNCH_SCHEMA), header).is_none());
+        assert!(observed_launch("weapon_hegrenade", None, header).is_none());
+        let mut other_schema = OBSERVED_LAUNCH_SCHEMA;
+        other_schema[0] ^= 1;
+        assert!(observed_launch("weapon_hegrenade", Some(other_schema), header).is_none());
+        assert!(observed_launch("weapon_hegrenade", Some(OBSERVED_LAUNCH_SCHEMA), "other").is_none());
+    }
+
+    #[test]
     #[ignore = "requires the player's installed CS:GO Legacy; no GPU"]
     fn installed_six_grenades_import_complete_event_timing_profiles() {
         let level = crate::Level::load("de_dust2", None).expect("installed Legacy");
+        assert!(level.catalog.get("weapon_hegrenade").unwrap().grenade_launch.is_some());
         for name in [
             "weapon_hegrenade",
             "weapon_flashbang",

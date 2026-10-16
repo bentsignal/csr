@@ -59,7 +59,7 @@ impl Scene {
                 let block = value.as_block()?;
                 let convar = block.str("convar")?;
                 let kind = match (block.str("type")?, convar) {
-                    ("slider", "volume" | "sensitivity" | "cl_radar_scale") => {
+                    ("slider", "volume" | "sensitivity" | "cl_radar_scale" | "snd_menumusic_volume") => {
                         let min = f64::from(block.f32("minvalue")?);
                         let max = f64::from(block.f32("maxvalue")?);
                         if !min.is_finite() || !max.is_finite() || min >= max {

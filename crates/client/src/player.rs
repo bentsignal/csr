@@ -467,14 +467,21 @@ pub fn tick(
                 }
             }
         } else if std::env::var("CSR_TEST_SWITCH").as_deref() == Ok("empty-trigger") {
-            // Screenshot-only ordinary inputs: four full AK magazines with
-            // released-trigger reloads, then a short and held depleted press.
+            // Screenshot-only ordinary rifle inputs: exhaust declared ammo
+            // with released-trigger reloads, then short/held depleted presses.
             // No direct ammo/state writes manufacture the empty condition.
             input.buttons &= !(buttons::ATTACK | buttons::ATTACK2);
             let now = world.0.time();
-            if ((1.5..22.5).contains(&now) && (now - 1.5).rem_euclid(6.) < 3.)
-                || (23.5..23.65).contains(&now) || (24.2..25.7).contains(&now) {
-                input.buttons |= buttons::ATTACK;
+            if let Some(gun) = world.0.player(local.id).and_then(|p| p.active_weapon())
+                .filter(|gun| gun.def.full_auto && gun.def.clip_size > 0) {
+                let magazines = 1 + (gun.def.reserve_ammo.max(0) as u32)
+                    .div_ceil(gun.def.clip_size as u32);
+                let end = 1.5 + (magazines - 1) as f32 * 6. + 3.;
+                if ((1.5..end).contains(&now) && (now - 1.5).rem_euclid(6.) < 3.)
+                    || (end + 1.0..end + 1.15).contains(&now)
+                    || (end + 1.7..end + 3.2).contains(&now) {
+                    input.buttons |= buttons::ATTACK;
+                }
             }
             if let Some(player) = world.0.player(local.id) {
                 if input.buttons != player.last_input.buttons {

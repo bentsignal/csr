@@ -200,3 +200,146 @@ trial was rejected after rendered comparison: event3005 does not establish the
 native visible hand-release phase. Physical release/audio timing are verified
 independently; exact hand-phase matching, native animation speed, movement/VR
 trajectories and historical parity remain open.
+
+### Public throw-state capability checkpoint
+
+A fresh standing HE observation identified the actual selected weapon and
+predicted viewmodel through the ordinary public prediction list. The player
+dump showed a settled origin/eye offset, zero movement velocity and zero
+punch; the viewmodel's weapon handle independently identified the selected
+HE. Entity indices were read from that session rather than reused.
+
+The weapon dump exposes `m_bPinPulled` and `m_flThrowStrength`; the settled
+values were false and 1. The viewmodel exposes `m_nSequence`,
+`m_flPlaybackRate` and `m_flAnimTime`, showing idle sequence 0 and playback
+rate 1. This receiver did not expose the required grenade throw-time or
+viewmodel cycle fields. The complete capability gate was therefore rejected
+before any throw, preserving five images as negative evidence. All 12
+preference targets were restored exactly and no native process remained.
+An animation-time field is not silently substituted for an absent cycle.
+
+The existing installed-model format reader separately enumerates HE
+sequences in order: idle, pullpin, throw, deploy, underhand and
+throwcharge_blend. Throw and underhand each declare 13 frames at 30 fps,
+with event 3005 at cycle approximately 0.833. These are authored metadata,
+not evidence of a native playback clock or physical release time. Runtime
+sequence transitions and the exposed clock fields still need an actual
+released throw before they can constrain the rendering discrepancy.
+
+Ordinary public help also describes entity lookup and dump commands. Their
+availability alone does not establish an actual projectile position/velocity
+receiver. Launch pitch, origin, speed, movement inheritance and throw-strength
+blending remain uncalibrated; no numeric launch policy changes follow from
+this capability checkpoint. Raw installed-game images and logs remain private.
+
+A subsequent finite packet admitted only the fields actually exposed above,
+including the viewmodel's explicit HE weapon handle, and executed one held
+primary release. The held viewmodel reports sequence 1, playback rate 1 and
+animation time 205.679688. By the first post-release viewmodel capture,
+bounded at 0.0652 to 0.0724 scaled seconds, it reports sequence 2, playback
+rate 1 and animation time 207.171875. Sequence 2 and that rate/time persist
+through the 0.3278 to 0.3349-second capture. The independently read installed
+sequence order identifies these as pullpin and throw. A world HE projectile
+and throwing arm are visible at 0.1398 to 0.1481 seconds. This supports
+retaining the selected natural release clip; it does not identify an exact
+spawn tick, establish a cycle field, or justify compressing playback to the
+authored event marker. Exact arm-pose comparison also needs matched arm
+models and viewmodel settings.
+
+The ordinary server entity dump independently identifies a real
+`hegrenade_projectile`, reporting gravity 0.40 and friction 0.20. Two dumps
+expose no position or velocity, so this is a negative numeric-trajectory
+receiver rather than a launch measurement. A client lookup restricted to
+the substring `hegrenade` finds the held weapon only; no projectile entity
+index is invented from that result. The packet completed 17 captures,
+restored all 12 preferences exactly and left no native process.
+
+
+A further one-release packet attempted to identify the actual client projectile
+through public lookup before inspecting any numeric fields. Fresh selected HE,
+player state and prediction-list admission passed. Its additional clock change
+to 0.001 was acknowledged, but the following ordinary help/readback and its
+acknowledgement arrived about 6.2 seconds later, beyond the inherited four-second
+command deadline. The packet therefore aborted before entity lookup or numeric
+field capture. The late console output confirms the requested clock value;
+it does not retroactively admit the interrupted packet or establish a missing
+projectile receiver. All 12 preferences were restored and no process remained.
+No launch constants follow from this transport/scheduling negative.
+
+
+The bounded transport correction used a positively reported 0.01 clock rate
+without lengthening any command, admission or global deadline. It completed
+one fresh held HE release and discovered exactly one actual non-weapon client
+projectile, `C_BaseCSGrenadeProjectile`, before selecting its public dump. The
+actual entity index came from that session's lookup. Five captured states
+expose changing network origins and nonzero `m_vecVelocity`, duplicated under
+`CBaseGrenade`; the generic `m_vecAbsVelocity` remains zero and is not treated
+as the moving body's velocity. Server debug text and the visible body move
+consistently with the network origin. Render/absolute origin lags the network
+origin and is recorded separately.
+
+At actual standing pitch 15 degrees and yaw 0, horizontal projectile velocity
+is 670.435852 units/second throughout those samples. Vertical velocity changes
+from -123.362717 to -175.862717 as network X advances from 1094.15625 to
+1204.15625. Pairwise position/velocity differences are consistent with downward
+acceleration 320: conservative one-thirty-second-unit endpoint bounds encompass
+approximately 319.25 to 320.79, and trapezoid vertical-position residuals stay
+below 0.012 units. Two disjoint background areas remain stable, and ordinary
+before/after position and view angles agree. All 13 captures, real timing
+bounds and exact restoration of 12 preferences are retained privately.
+
+This admits a numeric trajectory receiver and exposes a real discrepancy with
+the retained raw-pitch launch baseline. It does not yet identify native initial
+velocity, spawn position, spawn tick, moving-player inheritance or underhand
+law. No production coefficient changes follow from this single standing case.
+The installed schema separately declares throw velocity 750; that declaration
+alone is not the actual velocity law. The target here is installed 2023 Legacy,
+with historical 2015 equivalence still unmeasured.
+
+### Grounded primary HE horizontal movement response
+
+A finite stationary/forward/backward Train packet independently repeated the
+stationary horizontal projectile velocity, 670.435852 units/second. During the
+forward release, the actual player velocity stayed at 244.999985 and the actual
+projectile velocity stayed at 976.685791. The third case was rejected because
+the newly observed projectile reused an earlier weapon entity index and an old
+index exclusion incorrectly discarded it. Two replacement attempts then expired
+their manual admission deadline before throwing. Those negative receipts remain
+preserved; neither absent backward data nor requested movement was substituted.
+
+One further bounded backward-only packet completed with a fresh personally
+reviewed player state and prediction list. Ordinary public lookup uniquely
+identified a non-weapon C_BaseCSGrenadeProjectile from that session. Five
+independent captures show horizontal projectile velocity 364.185883 throughout.
+The player states before release and at the four subsequent capture brackets
+retain actual velocity [-244.999985, 0, 0], world ground, the same standing eye
+offset and floor, and aim [15, 0, 0]. Network position advances coherently with
+the changing vertical velocity: gravity-derived intervals give horizontal
+residuals below 0.009 units and vertical trapezoid residuals below 0.005 units.
+Generic absolute velocity remains zero and is excluded from this calculation.
+
+Subtracting the independently repeated stationary projectile velocity gives
+forward and backward horizontal inheritance ratios 1.24999983 and 1.24999995.
+Both independently support 1.25 instead of the retained provisional 0.5. The
+backward packet completed 17 captures, restored all 12 preferences exactly and
+left no native process. Raw images, timing bounds and separate posthoc numeric
+admission remain private under the 20261015-235754 packet; the original raw
+receipt's unadmitted numeric flags are retained rather than overwritten.
+
+The importer binds this response to the exact observed item schema and HE model
+header. Simulation applies it to the horizontal release velocity for grounded
+primary HE throws only. As a horizontal-vector law it also applies after aim
+rotation; independent perpendicular movement is not measured. Airborne throws,
+vertical inheritance, underhand/combined modes, other grenade definitions and
+unmatched private content keep their previous behavior. Base speed, pitch law,
+spawn origin, fuse, collision integration and hand-animation timing do not
+change. Consequently this fixes a measured contribution to running throws,
+not complete trajectory fidelity. This is 128-tick installed Legacy 1.38.8.1
+evidence, not a native 64-tick or historical 2015 parity claim.
+
+The catalog timing/launch policy generation advances so a changed launch law
+cannot silently join an older peer. Wire state and protocol schema are unchanged.
+Source validation checks opposite-direction native velocity differences, content
+identity admission, unchanged airborne/vertical/unmeasured-mode behavior and the
+installed profile. Compilation, full checks and actual rendered integration are
+pending at this checkpoint.

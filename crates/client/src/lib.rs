@@ -6,6 +6,7 @@
 
 pub mod audio;
 pub mod audio_options;
+mod menu_music;
 pub mod session;
 pub mod frontend;
 mod frontend_display;
@@ -208,7 +209,7 @@ impl Plugin for CsgoPlugin {
             .add_systems(Startup, (ui_assets::load, case_ui::setup, menu_scene::setup, menu::setup, frontend::setup, server_browser::setup, host_sharing_ui::setup).chain())
             .add_systems(Update, (frontend::update, host_sharing_ui::update, pack_ui::update, server_browser::update, server_browser::input, server_browser::draw, pack_ui::scroll, pack_ui::draw, frontend::input, frontend::cancel_loading).chain())
             .add_systems(Last, (hosting::gate_exit, host_sharing_ui::gate_exit, server_browser::gate_exit, pack_ui::gate_exit).chain().after(bevy::window::ExitSystems))
-            .add_systems(Update, (menu::apply, audio::update).chain().after(player::update_camera))
+            .add_systems(Update, (menu::apply, audio::update, menu_music::update, menu_music::update_gain).chain().after(player::update_camera))
             .add_systems(Last, audio::prune)
             .add_systems(OnEnter(AppState::Loading), session::begin_load)
             .add_systems(OnExit(AppState::Loading), session::cancel_load)
@@ -316,6 +317,7 @@ pub fn run(opts: ClientOptions) -> i32 {
     .insert_resource(inventory::Collection(data.catalog.clone()))
     .insert_resource(cosmetics::Catalog::load(&data.vfs).unwrap_or_else(|e| { error!("Cosmetics: {e}"); default() }))
     .insert_resource(audio::SoundLibrary::load(&data.vfs))
+    .insert_resource(menu_music::MenuMusic::load(&data.vfs))
     .insert_resource(localize::Localization::load(&data.vfs))
     .insert_resource(data)
     .insert_resource(Options(opts.clone()))
