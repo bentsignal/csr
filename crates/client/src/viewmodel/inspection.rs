@@ -87,27 +87,34 @@ mod tests {
 
     #[test]
     fn intermediate_render_frames_do_not_change_the_transition() {
+        let clip = mdl::anim::Clip {
+            name: "fractionally masked inspect".into(),
+            fps: 5.,
+            looping: false,
+            delta: false,
+            frames: vec![pose(10.).to_vec(), pose(20.).to_vec()],
+            animated: vec![true],
+        };
         let mut dense = Inspection::default();
         let mut sparse = Inspection::default();
         for blend in [&mut dense, &mut sparse] {
             blend.begin(Some(0.), 0.3, &pose(2.));
         }
-        for now in [0.01, 0.02, 0.05, 0.1] {
-            dense.begin(Some(0.), 0.3, &pose(99.));
-            dense.apply(now, &mut pose(10.));
-        }
-        let mut a = pose(10.);
+        let mut a = pose(2.);
         let mut b = a;
+        for now in [0.01, 0.02, 0.05, 0.1] {
+            dense.begin(Some(0.), 0.3, &a);
+            dense.sample_base(&mut a);
+            clip.sample_layered(now, &mut a, |_| 0.5);
+            dense.apply(now, &mut a);
+        }
+        dense.sample_base(&mut a);
+        sparse.sample_base(&mut b);
+        clip.sample_layered(0.15, &mut a, |_| 0.5);
+        clip.sample_layered(0.15, &mut b, |_| 0.5);
         dense.apply(0.15, &mut a);
         sparse.apply(0.15, &mut b);
         assert_eq!(a, b);
-        // The production sampler layers fractional masks over its input.
-        // Feeding it the previously blended output would depend on FPS even
-        // if the outer interpolation used absolute elapsed time.
-        dense.sample_base(&mut a);
-        sparse.sample_base(&mut b);
-        assert_eq!(a, pose(2.));
-        assert_eq!(b, pose(2.));
         dense.begin(None, 0.3, &a);
         let mut attack = pose(-5.);
         dense.apply(0.16, &mut attack);
