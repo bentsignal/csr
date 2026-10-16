@@ -600,6 +600,9 @@ pub fn material_from_vmt(
     }
     let tint = mat.color("$color").or_else(|| mat.color("$color2")).unwrap_or([1.0; 3]);
     params.color = Vec4::new(tint[0], tint[1], tint[2], mat.alpha());
+    if mat.shader == "vertexlitgeneric" && mat.flag("$blendtintbybasealpha") {
+        f |= flags::TINT_BY_BASE_ALPHA;
+    }
     params.flags = f;
     out.params = params;
     out
