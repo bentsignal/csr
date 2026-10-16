@@ -115,11 +115,14 @@ pub(crate) fn update(
                 return;
             }
             let second = flow.phase == 6;
+            let classic_inferno = std::env::var("CSR_TEST_FLOW_CLASSIC_INFERNO").as_deref() == Ok("1");
             let points = [
                 (486., 26.),
                 (503., 264.),
                 (1450., 206.),
-                (810., if second { 500. } else { 680. }),
+                // The archived Inferno card occupies column two. Dust II
+                // therefore moved to column two on the second row too.
+                (if second && !classic_inferno { 810. } else { 990. }, if second { 500. } else { 680. }),
                 (1450., 1017.),
                 (1197., 580.),
                 (1163., 754.),
@@ -147,7 +150,11 @@ pub(crate) fn update(
             let expected = if flow.phase == 1 {
                 "de_dust2"
             } else {
-                "de_inferno"
+                if std::env::var("CSR_TEST_FLOW_CLASSIC_INFERNO").as_deref() == Ok("1") {
+                    "de_inferno_2016"
+                } else {
+                    "de_inferno"
+                }
             };
             if level.as_ref().is_none_or(|level| level.0.name != expected) {
                 error!("frontend flow loaded an unexpected map");
@@ -347,6 +354,9 @@ pub(crate) fn update(
                 return;
             }
             info!("frontend flow: Dust II -> Pause -> Resume -> Menu -> Inferno; failures: 0");
+            if std::env::var("CSR_TEST_FLOW_CLASSIC_INFERNO").as_deref() == Ok("1") {
+                info!("frontend flow: archived Inferno (2016) selected through authored map card");
+            }
             exit.write(AppExit::Success);
             flow.next();
         }
