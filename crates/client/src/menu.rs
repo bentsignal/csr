@@ -117,7 +117,7 @@ pub(crate) fn setup(
 ) {
     let mut maps: Vec<String> = level::maps::list(&level.game_dir, &level.vfs)
         .into_iter()
-        .filter(|map| map.old.is_none() || map.name == crate::frontend_game::CLASSIC_DUST2)
+        .filter(|map| map.old.is_none() || crate::frontend_game::menu_archive(&map.name))
         .map(|map| map.name)
         .collect();
     if maps.is_empty() {
