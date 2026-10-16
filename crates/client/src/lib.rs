@@ -804,6 +804,11 @@ fn smoke_test(
                 weapon.map(|g| g.burst_mode), weapon.and_then(|g| g.burst), weapon.map(|g| g.clip),
                 w.0.player(l.id).map(|p| p.shots));
             if std::env::var_os("CSR_WEAPON_TRACE").is_some() {
+                for bot in w.0.players.iter().filter(|p| p.is_bot) {
+                    info!("capture bot: id={} alive={} pos={:?} velocity={:?} on_ground={} {}",
+                        bot.id, bot.alive, bot.movement.origin, bot.movement.velocity,
+                        bot.movement.on_ground, w.0.bots.describe(&w.0, bot.id));
+                }
                 for projectile in &w.0.projectiles {
                     info!("capture projectile: id={} kind={:?} pos={:?} velocity={:?} settled={}",
                         projectile.id, projectile.kind, projectile.pos, projectile.velocity, projectile.settled);
