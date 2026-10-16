@@ -181,18 +181,28 @@ impl World {
         let strength=p.active_weapon().and_then(|w|w.grenade_throw).map_or(1.,|s|s.mode.strength());
         // Read the release tick's actual movement, not the pull-pin tick. This
         // includes running/backpedalling/jumping; crouch uses the current eye.
-        // Only the content-bound grounded primary HE response is measured.
-        // Keep vertical, air and other button modes on their prior policy.
+        // Only the content-bound grounded primary HE response is admitted.
+        // Keep vertical movement inheritance, air and other modes unchanged.
         let mut inherited = p.movement.velocity * 0.5;
+        let mut launch = forward * (750.0 * strength);
         if p.movement.on_ground && p.active_weapon().and_then(|w| w.grenade_throw)
             .is_some_and(|s| s.mode == ThrowMode::Overhand)
         {
             if let Some(profile) = p.active_weapon().and_then(|w| w.def.grenade_launch.as_ref()) {
                 inherited.x = p.movement.velocity.x * profile.grounded_overhand_horizontal_inheritance;
                 inherited.y = p.movement.velocity.y * profile.grounded_overhand_horizontal_inheritance;
+                if let Some(profile) = &profile.grounded_overhand_velocity {
+                    // Keep the separately uncalibrated spawn trace on the raw
+                    // aim ray above. Only the release velocity uses this law.
+                    let mut launch_angles = angles;
+                    launch_angles.x -= profile.upward_pitch_bias_degrees
+                        * (1. - angles.x.abs() / 90.);
+                    let (direction, _, _) = movement::angle_vectors(launch_angles);
+                    launch = direction * profile.speed;
+                }
             }
         }
-        let velocity = forward * (750.0*strength) + inherited;
+        let velocity = launch + inherited;
         self.next_item += 1;
         self.projectiles.push(Projectile {
             id: self.next_item,
@@ -413,33 +423,39 @@ mod tests {
     use super::*;
     use crate::Team;
 
+    fn launch_he(velocity: Vec3, grounded: bool, mode: ThrowMode, measured: bool,
+        angles: Vec3, vector: Option<weapons::GrenadeLaunchVelocity>) -> Projectile {
+        use std::sync::Arc;
+        let mut world = arena();
+        world.add_player("thrower", Team::Terrorist);
+        let catalog = weapons::Catalog::from_items_game(r#""items_game" { "items" { "44" { "name" "weapon_hegrenade" "attributes" { "primary default clip size" "1" } } } }"#).unwrap();
+        let mut definition = catalog.weapons[0].clone();
+        definition.grenade_launch = measured.then(|| weapons::GrenadeLaunch {
+            reference: "native-grounded-primary-he-pair".into(),
+            grounded_overhand_horizontal_inheritance: 1.25,
+            grounded_overhand_velocity: vector,
+        });
+        let mut weapon = crate::weapon::WeaponState::new(Arc::new(definition));
+        weapon.grenade_throw = Some(ThrowState { phase: ThrowPhase::Throwing, mode,
+            pull_started_tick: 0, throw_started_tick: Some(0), release_requested: true, spawned: false });
+        world.players[0].weapons = vec![weapon];
+        world.players[0].active = 0;
+        world.players[0].movement.on_ground = grounded;
+        world.players[0].movement.velocity = velocity;
+        world.players[0].view_angles = angles;
+        assert!(world.spawn_grenade(0));
+        world.projectiles[0].clone()
+    }
+
     #[test]
     fn measured_he_running_contribution_matches_both_observed_directions_without_changing_air_or_vertical() {
-        use std::sync::Arc;
         fn launch(velocity: Vec3, grounded: bool, mode: ThrowMode, measured: bool) -> Vec3 {
-            let mut world = arena();
-            world.add_player("thrower", Team::Terrorist);
-            let catalog = weapons::Catalog::from_items_game(r#""items_game" { "items" { "44" { "name" "weapon_hegrenade" "attributes" { "primary default clip size" "1" } } } }"#).unwrap();
-            let mut definition = catalog.weapons[0].clone();
-            definition.grenade_launch = measured.then(|| weapons::GrenadeLaunch {
-                reference: "native-grounded-primary-he-pair".into(),
-                grounded_overhand_horizontal_inheritance: 1.25,
-            });
-            let mut weapon = crate::weapon::WeaponState::new(Arc::new(definition));
-            weapon.grenade_throw = Some(ThrowState { phase: ThrowPhase::Throwing, mode,
-                pull_started_tick: 0, throw_started_tick: Some(0), release_requested: true, spawned: false });
-            world.players[0].weapons = vec![weapon];
-            world.players[0].active = 0;
-            world.players[0].movement.on_ground = grounded;
-            world.players[0].movement.velocity = velocity;
-            world.players[0].view_angles = Vec3::new(15., 0., 0.);
-            assert!(world.spawn_grenade(0));
-            world.projectiles[0].velocity
+            launch_he(velocity, grounded, mode, measured, Vec3::new(15., 0., 0.), None).velocity
         }
         let baseline = launch(Vec3::ZERO, true, ThrowMode::Overhand, true);
         // Native moving minus independently repeated stationary projectile:
         // +976.685791-670.435852 and +364.185883-670.435852 respectively.
-        // Deliberately do not assert the still-uncalibrated base launch vector.
+        // Isolate movement inheritance from the separately tested base vector.
         for (speed, observed_delta) in [(244.999985, 306.249939), (-244.999985, -306.249969)] {
             let result = launch(Vec3::new(speed, 0., 0.), true, ThrowMode::Overhand, true);
             assert!((result.x - baseline.x - observed_delta).abs() < 0.001);
@@ -455,6 +471,44 @@ mod tests {
         }
         let result = launch(Vec3::new(245., 0., 100.), true, ThrowMode::Overhand, true);
         assert!((result.z - baseline.z - 50.).abs() < 0.001, "vertical inheritance remains unchanged");
+    }
+
+    #[test]
+    fn grounded_he_velocity_matches_native_pitches_and_prospective_negative_holdout() {
+        fn profile() -> Option<weapons::GrenadeLaunchVelocity> {
+            Some(weapons::GrenadeLaunchVelocity { speed: 675., upward_pitch_bias_degrees: 10. })
+        }
+        for (pitch, native_x, received_z) in [
+            (0., 664.745239, Some(102.212517)),
+            (45., 517.080017, Some(-448.881622)),
+            (-45., 433.881653, Some(502.080017)),
+            // Preregistered before this independent native session: predicted
+            // 541.4331551, observed 541.433167. No refit to this result.
+            (-30., 541.433167, Some(388.082062)),
+            (15., 670.435852, None),
+        ] {
+            let angles = Vec3::new(pitch, 0., 0.);
+            let result = launch_he(Vec3::ZERO, true, ThrowMode::Overhand, true, angles, profile());
+            assert!((result.velocity.x - native_x).abs() < 0.002, "pitch {pitch}");
+            assert!(result.velocity.y.abs() < 0.002);
+            if let Some(received_z) = received_z {
+                // Public receive-time fields are later than construction.
+                // Gravity must lower Z, within a conservative command-to-frame
+                // bound. This is not an assertion of an exact spawn timestamp.
+                let gravity_change = result.velocity.z - received_z;
+                assert!((0. ..60.).contains(&gravity_change), "pitch {pitch}: {gravity_change}");
+            }
+            let old = launch_he(Vec3::ZERO, true, ThrowMode::Overhand, true, angles, None);
+            assert_eq!(result.pos, old.pos, "velocity calibration must not move the spawn trace");
+        }
+        for (grounded, mode, measured) in [
+            (false, ThrowMode::Overhand, true), (true, ThrowMode::Underhand, true),
+            (true, ThrowMode::Combined, true), (true, ThrowMode::Overhand, false),
+        ] {
+            let actual = launch_he(Vec3::new(245., 80., 100.), grounded, mode, measured, Vec3::ZERO, profile());
+            let old = launch_he(Vec3::new(245., 80., 100.), grounded, mode, measured, Vec3::ZERO, None);
+            assert_eq!(actual, old, "unobserved scopes retain their existing complete launch");
+        }
     }
 
     #[test]
