@@ -248,5 +248,10 @@ The private read-only metadata audit used the installed PCF SHA256
 and an independent format reader. Focused source checks cover Source box
 corners/center/sample bounds, upper-half placement and the disabled/unhandled
 compatibility paths. Compilation and actual before/after captures are pending.
+The existing weapon trace now records actual HE emitter birth, seed and position.
+The emitter still seeds from the render-frame event-drain tick; paired captures
+can therefore differ in random seed and event age even with identical ordinary
+throw inputs. They establish functioning/visible geometry, not a pixel-error
+measurement or native appearance parity.
 The ignored nonlinear radius-scale bias/timing, tint blending, drag, missing
 HE children and `$mod2x` composition still prevent a complete native effect.
