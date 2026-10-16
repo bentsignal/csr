@@ -26,9 +26,10 @@ retain their existing playback paths.
 
 This restores inspection continuity with authored durations. The linear
 interpolation policy is not an independently measured native easing law.
-Outgoing fade policy, immediate stab-to-inspect admission, R/F cancellation,
-rare inspect selection and continuous karambit loops remain open. Gameplay
-attack readiness and the current inspect eligibility checks are unchanged.
+The subsequent [#174 knife-input correction](knife-inspect-input.md) adds
+bounded stab-to-inspect admission and rebound reload cancellation without
+changing gameplay attack readiness. Outgoing fade policy, native repeated
+R/F timing, rare inspect selection and continuous karambit loops remain open.
 
 Final source `f423376` passed the orchestrator's complete DEV and PLAY checks
 in frozen union `7746327eec9f891996cb95a69ab7860489352b2b`, crates tree
@@ -54,5 +55,6 @@ were fresh, and exact artifact/process guards, a finite per-child bound and
 the canonical native mutex were used; no owner userdata was changed.
 
 These images admit model integrity during ordinary inspection, not repeated
-input timing or native interpolation parity. Required combined RELEASE
-verification and final CI remain pending.
+input timing or native interpolation parity. The [final combined RELEASE
+verification and CI](overnight-fidelity-verification.md) passed; no separate
+feature-branch RELEASE build is claimed.

@@ -33,9 +33,11 @@ second actual simulation attack remains rejected until the unchanged deadline.
 The test reuses the existing installed viewmodel fixture and needs no GPU.
 Final source `01535ad8e8eeecb4b9fffcbf73b5891bb425c3b6` passed both
 CI jobs in run `38880083763`. The orchestrator's frozen union `52ff900` passed
-full DEV/PLAY checks and both installed production viewmodel tests. Combined
-RELEASE verification remains an integration gate; this is not a standalone
-RELEASE pass.
+full DEV/PLAY checks and both installed production viewmodel tests. The
+[final combined RELEASE checks](overnight-fidelity-verification.md) also
+passed; this is not a standalone feature-branch RELEASE claim. The subsequent
+normal-merge head `80dbb7f` passed CI run `38891064045` with the exact final
+tested crates tree.
 
 The exact immutable union executable (SHA-256
 `58E91BC08E180AE2F1FD55A1293911506F6405F8AEBD3EA05B55B40D869E4705`)

@@ -112,7 +112,7 @@ a source-data count, not a measured visible/drawn count.
 
 This admits a bounded visible world-detail improvement. Exact detail transfer,
 fine-grain parity, the two-axis static-prop scale and the remaining classic
-lighting/arch differences stay open. Combined RELEASE verification remains
-pending; there is no separate `46ea73d` RELEASE claim. The earlier four-image
+lighting/arch differences stay open. The [final combined RELEASE checks](overnight-fidelity-verification.md)
+passed on `a9997ea`; there is no separate `46ea73d` RELEASE claim. The earlier four-image
 static-only zero-effect packet is preserved with its occlusion/target-identity
 explanation.
