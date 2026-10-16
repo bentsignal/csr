@@ -233,7 +233,7 @@ impl Level {
             .unwrap_or_default();
         let item_schema_sha1 = catalog_sha1;
         let catalog_sha1=recoil_trajectories::import(&mut catalog,catalog_sha1);
-        let catalog_sha1=grenade_animations::import(&mut catalog,&fs,catalog_sha1);
+        let catalog_sha1=grenade_animations::import(&mut catalog,&fs,catalog_sha1,item_schema_sha1);
         let catalog_sha1=suppressor_animations::import(&mut catalog,&fs,catalog_sha1);
         let catalog_sha1=empty_trigger::import(&mut catalog,item_schema_sha1,catalog_sha1);
         timings.push(("weapons", t.elapsed().as_secs_f32()));

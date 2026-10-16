@@ -295,3 +295,51 @@ law. No production coefficient changes follow from this single standing case.
 The installed schema separately declares throw velocity 750; that declaration
 alone is not the actual velocity law. The target here is installed 2023 Legacy,
 with historical 2015 equivalence still unmeasured.
+
+### Grounded primary HE horizontal movement response
+
+A finite stationary/forward/backward Train packet independently repeated the
+stationary horizontal projectile velocity, 670.435852 units/second. During the
+forward release, the actual player velocity stayed at 244.999985 and the actual
+projectile velocity stayed at 976.685791. The third case was rejected because
+the newly observed projectile reused an earlier weapon entity index and an old
+index exclusion incorrectly discarded it. Two replacement attempts then expired
+their manual admission deadline before throwing. Those negative receipts remain
+preserved; neither absent backward data nor requested movement was substituted.
+
+One further bounded backward-only packet completed with a fresh personally
+reviewed player state and prediction list. Ordinary public lookup uniquely
+identified a non-weapon C_BaseCSGrenadeProjectile from that session. Five
+independent captures show horizontal projectile velocity 364.185883 throughout.
+The player states before release and at the four subsequent capture brackets
+retain actual velocity [-244.999985, 0, 0], world ground, the same standing eye
+offset and floor, and aim [15, 0, 0]. Network position advances coherently with
+the changing vertical velocity: gravity-derived intervals give horizontal
+residuals below 0.009 units and vertical trapezoid residuals below 0.005 units.
+Generic absolute velocity remains zero and is excluded from this calculation.
+
+Subtracting the independently repeated stationary projectile velocity gives
+forward and backward horizontal inheritance ratios 1.24999983 and 1.24999995.
+Both independently support 1.25 instead of the retained provisional 0.5. The
+backward packet completed 17 captures, restored all 12 preferences exactly and
+left no native process. Raw images, timing bounds and separate posthoc numeric
+admission remain private under the 20261015-235754 packet; the original raw
+receipt's unadmitted numeric flags are retained rather than overwritten.
+
+The importer binds this response to the exact observed item schema and HE model
+header. Simulation applies it to the horizontal release velocity for grounded
+primary HE throws only. As a horizontal-vector law it also applies after aim
+rotation; independent perpendicular movement is not measured. Airborne throws,
+vertical inheritance, underhand/combined modes, other grenade definitions and
+unmatched private content keep their previous behavior. Base speed, pitch law,
+spawn origin, fuse, collision integration and hand-animation timing do not
+change. Consequently this fixes a measured contribution to running throws,
+not complete trajectory fidelity. This is 128-tick installed Legacy 1.38.8.1
+evidence, not a native 64-tick or historical 2015 parity claim.
+
+The catalog timing/launch policy generation advances so a changed launch law
+cannot silently join an older peer. Wire state and protocol schema are unchanged.
+Source validation checks opposite-direction native velocity differences, content
+identity admission, unchanged airborne/vertical/unmeasured-mode behavior and the
+installed profile. Compilation, full checks and actual rendered integration are
+pending at this checkpoint.

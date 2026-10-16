@@ -115,6 +115,7 @@ fn def(name: &str, index: u32, class: WeaponClass, side: Side, price: i32, clip:
         recoil_trajectory: None,
         recoil_trajectory_unsuppressed: None,
         suppressor_animations: None,
+        grenade_launch: None,
         grenade_animations: (class==WeaponClass::Grenade).then_some(weapons::GrenadeAnimations {
             pull_pin_duration:0.25,
             overhand:weapons::GrenadeReleaseAnimation { command_release_time: None,duration:0.4,release_time:0.1},
