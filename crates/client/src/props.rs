@@ -296,7 +296,7 @@ pub fn spawn(
                 .clone();
             if let Some(m) = materials.get(&material).filter(|m| m.params.flags & crate::material::flags::DETAIL != 0) {
                 detail_meshes += 1;
-                debug!("Authored prop detail: instance={prop_index} mesh={mesh_index} scale={},{} factor={} model={}", m.params.detail.x, m.params.detail.y, m.params.detail.z, bsp.static_props.models[prop.model as usize]);
+                debug!("Authored prop detail: instance={prop_index} mesh={mesh_index} flags={} scale={},{} factor={} model={}", m.params.flags, m.params.detail.x, m.params.detail.y, m.params.detail.z, bsp.static_props.models[prop.model as usize]);
             }
             let authored_colors = materials.get(&material)
                 .filter(|m| m.params.flags & crate::material::flags::VERTEX_LIT != 0

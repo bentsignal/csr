@@ -610,7 +610,7 @@ pub fn material_from_vmt(
                 out.detail = info.handle;
                 params.detail = Vec4::new(detail.scale[0], detail.scale[1], detail.factor, 0.0);
                 f |= flags::DETAIL;
-                debug!("Authored ordinary detail: texture={} scale={},{} factor={}", detail.texture, detail.scale[0], detail.scale[1], detail.factor);
+                debug!("Authored ordinary detail: shader={} flags={f} texture={} scale={},{} factor={}", mat.shader, detail.texture, detail.scale[0], detail.scale[1], detail.factor);
             } else {
                 warn!("authored detail texture unavailable; retaining base material: {}", detail.texture);
             }

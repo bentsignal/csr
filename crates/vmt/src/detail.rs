@@ -22,13 +22,16 @@ pub enum DetailError {
 }
 
 impl Material {
-    /// The authored VertexLitGeneric ordinary/default detail candidate. Explicit
+    /// The authored lit world/static-prop ordinary/default detail candidate. Explicit
     /// unsupported declarations are errors, never silently accepted defaults.
     pub fn detail_layer(&self) -> Result<Option<DetailLayer<'_>>, DetailError> {
         let Some(texture) = self.str("$detail") else {
             return Ok(None);
         };
-        if self.shader != "vertexlitgeneric" {
+        if !matches!(
+            self.shader.as_str(),
+            "vertexlitgeneric" | "lightmappedgeneric"
+        ) {
             return Err(DetailError::Shader);
         }
         if texture.trim().is_empty() {
@@ -37,6 +40,19 @@ impl Material {
         if self
             .str("$detailblendmode")
             .is_some_and(|v| v.trim().parse::<i32>() != Ok(0))
+        {
+            return Err(DetailError::Mode);
+        }
+        // Alternate operators and alpha-mask paths have separate semantics.
+        // Their presence must not silently select this ordinary RGB operator.
+        if [
+            "$detail1blendmode",
+            "$detail2",
+            "$detailblendmode2",
+            "$detail_alpha_mask_base_texture",
+        ]
+        .iter()
+        .any(|key| self.str(key).is_some())
         {
             return Err(DetailError::Mode);
         }
@@ -128,6 +144,40 @@ mod tests {
             })
         );
         assert!(material("").detail_layer().unwrap().is_none());
+        let world = Material::parse_with(
+            r#"LightmappedGeneric { "$detail" "wall_grain" }"#,
+            &|_| None,
+            0,
+        )
+        .unwrap();
+        assert_eq!(
+            world.detail_layer().unwrap(),
+            Some(DetailLayer {
+                texture: "wall_grain",
+                scale: [4.; 2],
+                factor: 1.
+            })
+        );
+        let world = Material::parse_with(r#"LightmappedGeneric { "$detail" "wall_grain" "$detailscale" "6" "$detailblendfactor" ".7" "$detailblendmode" "0" }"#, &|_| None, 0).unwrap();
+        assert_eq!(
+            world.detail_layer().unwrap(),
+            Some(DetailLayer {
+                texture: "wall_grain",
+                scale: [6.; 2],
+                factor: 0.7
+            })
+        );
+        let unlit =
+            Material::parse_with(r#"UnlitGeneric { "$detail" "wall_grain" }"#, &|_| None, 0)
+                .unwrap();
+        assert_eq!(unlit.detail_layer(), Err(DetailError::Shader));
+        let world_other_mode = Material::parse_with(
+            r#"LightmappedGeneric { "$detail" "wall_grain" "$detailblendmode" "5" }"#,
+            &|_| None,
+            0,
+        )
+        .unwrap();
+        assert_eq!(world_other_mode.detail_layer(), Err(DetailError::Mode));
     }
     #[test]
     fn malformed_or_unsupported_declarations_do_not_become_defaults() {
@@ -160,6 +210,12 @@ mod tests {
         for (declaration, error) in [
             (r#""$detailblendmode" "1""#, DetailError::Mode),
             (r#""$detailblendmode" "nonsense""#, DetailError::Mode),
+            (r#""$detail1blendmode" "0""#, DetailError::Mode),
+            (
+                r#""$detail_alpha_mask_base_texture" "0""#,
+                DetailError::Mode,
+            ),
+            (r#""$detail2" "other_grain""#, DetailError::Mode),
             (
                 r#""$detailtexturetransform" "identity""#,
                 DetailError::Transform,
