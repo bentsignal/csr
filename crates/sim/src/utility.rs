@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 
 mod throw_state;
 pub use throw_state::{ThrowMode,ThrowPhase,ThrowState};
+mod bot_lob;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Kind {
@@ -143,42 +144,22 @@ impl World {
         }
         true
     }
-    fn spawn_grenade(&mut self, i: usize) -> bool {
-        let time = self.time();
-        let p = &self.players[i];
-        let Some(kind) = p
-            .active_weapon()
-            .and_then(|w| Kind::from_name(&w.def.class_name))
-        else {
-            return false;
-        };
-        let (from, angles) = p.aim_origin_angles();
+    /// Same release calculation for authoritative spawning and bot prediction.
+    /// Only callers choose a mode; metadata/content admission stays on the definition.
+    fn grenade_release(&self, p: &crate::Player, definition: &weapons::WeaponDefinition,
+        mode: Option<ThrowMode>, angles: Vec3) -> Option<(Vec3, Vec3)> {
+        let (from, _) = p.aim_origin_angles();
         let (forward, _, _) = movement::angle_vectors(angles);
-        let tr = self.collision.trace_box(
-            from,
-            from + forward * 18.0,
-            Vec3::splat(-2.0),
-            Vec3::splat(2.0),
-            contents::MASK_SOLID,
-        );
-        if tr.start_solid {
-            return false;
-        }
+        let tr = self.collision.trace_box(from, from + forward * 18.0,
+            Vec3::splat(-2.0), Vec3::splat(2.0), contents::MASK_SOLID);
+        if tr.start_solid { return None; }
         let pos = from + forward * 18.0 * tr.fraction;
-        let owner = p.id;
-        let decoy_weapon = (kind == Kind::Decoy).then(|| {
-            p.weapons.iter()
-                .filter(|w| matches!(w.def.class, weapons::WeaponClass::Pistol |
-                    weapons::WeaponClass::Smg | weapons::WeaponClass::Rifle |
-                    weapons::WeaponClass::Sniper | weapons::WeaponClass::Shotgun |
-                    weapons::WeaponClass::MachineGun))
-                .min_by_key(|w| crate::weapon::slot(&w.def))
-                .map(|w| w.def.id.to_string())
-                .or_else(|| self.catalog.get(if p.team == crate::Team::Terrorist {
-                    "weapon_glock"
-                } else { "weapon_usp_silencer" }).map(|w| w.id.to_string()))
-        }).flatten();
-        let strength=p.active_weapon().and_then(|w|w.grenade_throw).map_or(1.,|s|s.mode.strength());
+        Some((pos, Self::grenade_launch_velocity(p, definition, mode, angles)))
+    }
+    fn grenade_launch_velocity(p: &crate::Player, definition: &weapons::WeaponDefinition,
+        mode: Option<ThrowMode>, angles: Vec3) -> Vec3 {
+        let (forward, _, _) = movement::angle_vectors(angles);
+        let strength=mode.map_or(1.,ThrowMode::strength);
         // Read the release tick's actual movement, not the pull-pin tick. This
         // includes running/backpedalling/jumping; crouch uses the current eye.
         // Button endpoint velocities are independent observations. Only the
@@ -186,9 +167,8 @@ impl World {
         // retain absent modes' prior inheritance and every airborne vector.
         let mut inherited = p.movement.velocity * 0.5;
         let mut launch = forward * (750.0 * strength);
-        let mode = p.active_weapon().and_then(|w| w.grenade_throw).map(|s| s.mode);
         if p.movement.on_ground {
-            if let Some(profile) = p.active_weapon().and_then(|w| w.def.grenade_launch.as_ref()) {
+            if let Some(profile) = definition.grenade_launch.as_ref() {
                 let horizontal_inheritance = match mode {
                     Some(ThrowMode::Overhand) => Some(profile.grounded_overhand_horizontal_inheritance),
                     Some(ThrowMode::Underhand) => profile.grounded_underhand_horizontal_inheritance,
@@ -216,7 +196,34 @@ impl World {
                 }
             }
         }
-        let velocity = launch + inherited;
+        launch + inherited
+    }
+    fn spawn_grenade(&mut self, i: usize) -> bool {
+        let time = self.time();
+        let p = &self.players[i];
+        let Some(kind) = p
+            .active_weapon()
+            .and_then(|w| Kind::from_name(&w.def.class_name))
+        else {
+            return false;
+        };
+        let (_, angles) = p.aim_origin_angles();
+        let definition = &p.active_weapon().unwrap().def;
+        let mode = p.active_weapon().and_then(|w| w.grenade_throw).map(|s| s.mode);
+        let Some((pos, velocity)) = self.grenade_release(p, definition, mode, angles) else { return false; };
+        let owner = p.id;
+        let decoy_weapon = (kind == Kind::Decoy).then(|| {
+            p.weapons.iter()
+                .filter(|w| matches!(w.def.class, weapons::WeaponClass::Pistol |
+                    weapons::WeaponClass::Smg | weapons::WeaponClass::Rifle |
+                    weapons::WeaponClass::Sniper | weapons::WeaponClass::Shotgun |
+                    weapons::WeaponClass::MachineGun))
+                .min_by_key(|w| crate::weapon::slot(&w.def))
+                .map(|w| w.def.id.to_string())
+                .or_else(|| self.catalog.get(if p.team == crate::Team::Terrorist {
+                    "weapon_glock"
+                } else { "weapon_usp_silencer" }).map(|w| w.id.to_string()))
+        }).flatten();
         self.next_item += 1;
         self.projectiles.push(Projectile {
             id: self.next_item,
@@ -468,6 +475,87 @@ mod tests {
         world.players[0].view_angles = angles;
         assert!(world.spawn_grenade(0));
         world.projectiles[0].clone()
+    }
+
+    #[test]
+    fn bot_he_plan_reaches_target_through_tick_input_and_rejects_real_wall() {
+        use std::sync::Arc;
+        use collision::{CollisionWorld, Convex, Plane};
+        let solid = |mins: Vec3, maxs: Vec3| Convex {
+            mins, maxs,
+            planes: [Vec3::X, -Vec3::X, Vec3::Y, -Vec3::Y, Vec3::Z, -Vec3::Z]
+                .into_iter().zip([maxs.x, -mins.x, maxs.y, -mins.y, maxs.z, -mins.z])
+                .map(|(normal, dist)| Plane { normal, dist }).collect(),
+            contents: contents::SOLID, surface: 0,
+        };
+        let mut collision = CollisionWorld::new();
+        collision.add_convex(solid(Vec3::new(-2000., -2000., -16.), Vec3::new(2000., 2000., 0.)));
+        collision.finalize();
+        let mut catalog = weapons::Catalog::from_items_game(r#""items_game" { "items" { "44" { "name" "weapon_hegrenade" "attributes" { "primary default clip size" "1" } } } }"#).unwrap();
+        let def = &mut catalog.weapons[0];
+        def.grenade_launch = Some(weapons::GrenadeLaunch {
+            reference: "grounded-he-profile-fixture".into(),
+            grounded_overhand_horizontal_inheritance: 1.25,
+            grounded_underhand_horizontal_inheritance: None,
+            grounded_combined_horizontal_inheritance: None,
+            grounded_overhand_velocity: Some(weapons::GrenadeLaunchVelocity {
+                speed: 675., upward_pitch_bias_degrees: 10.,
+            }),
+            grounded_underhand_velocity: None, grounded_combined_velocity: None,
+        });
+        let release = weapons::GrenadeReleaseAnimation {
+            duration: 0.5, release_time: 0.3, command_release_time: Some(0.1),
+        };
+        def.grenade_animations = Some(weapons::GrenadeAnimations {
+            pull_pin_duration: 0.5, overhand: release.clone(), underhand: release,
+        });
+        let mut world = World::with_catalog(Arc::new(collision.clone()), Arc::new(catalog));
+        world.set_tick_rate(128);
+        let owner = world.add_player("thrower", Team::Terrorist);
+        let def = Arc::new(world.catalog.weapons[0].clone());
+        world.players[0].weapons = vec![crate::weapon::WeaponState::new(def)];
+        world.players[0].active = 0;
+        world.players[0].is_bot = true;
+        world.players[0].movement.origin = Vec3::Z * 0.03125;
+        world.players[0].movement.on_ground = true;
+        for _ in 0..4 { world.step(&[(owner, crate::TickInput::default())]); }
+        let target = Vec3::new(700., 120., 8.);
+        let angles = world.bot_lob_angles(&world.players[0], 44, target).unwrap();
+        assert!(world.clear_bot_lob(&world.players[0], 44, target, angles));
+        let mut airborne = world.players[0].clone();
+        airborne.movement.on_ground = false;
+        assert_eq!(world.bot_lob_angles(&airborne, 44, target), lob_angles(airborne.eye(), target));
+        let mut blocked = world.clone();
+        collision.add_convex(solid(Vec3::new(300., -1000., 0.), Vec3::new(316., 1000., 512.)));
+        collision.finalize();
+        blocked.collision = Arc::new(collision);
+        assert!(!blocked.clear_bot_lob(&blocked.players[0], 44, target, angles));
+        for candidate in [&mut world, &mut blocked] {
+            for _ in 0..80 { candidate.step(&[(owner, crate::TickInput {
+                view_angles: angles, buttons: movement::buttons::ATTACK, ..Default::default()
+            })]); }
+        }
+        let direction = target.truncate().normalize();
+        let mut previous: Option<Vec3> = None;
+        let mut crossing = None;
+        let mut bounced = false;
+        for _ in 0..200 {
+            for candidate in [&mut world, &mut blocked] {
+                candidate.step(&[(owner, crate::TickInput { view_angles: angles, ..Default::default() })]);
+            }
+            bounced |= blocked.events.iter().any(|e| matches!(e, GameEvent::UtilityBounced { .. }));
+            if let Some(p) = blocked.projectiles.first() { assert!(p.pos.x < 300.); }
+            if let Some(p) = world.projectiles.first() {
+                if let Some(before) = previous {
+                    let a = (before - target).truncate().dot(direction);
+                    let b = (p.pos - target).truncate().dot(direction);
+                    if a < 0. && b >= 0. { crossing = Some(before.lerp(p.pos, -a / (b-a))); }
+                }
+                previous = Some(p.pos);
+            }
+        }
+        assert!((crossing.expect("ordinary thrown HE crosses the target plane") - target).length() < 1.0);
+        assert!(bounced, "the same real launch hits the rejected wall");
     }
 
     #[test]
