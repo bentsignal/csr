@@ -135,6 +135,10 @@ pub struct GrenadeLaunch {
     /// Grounded primary throws only; vertical and airborne response remain
     /// unchanged until separately observed. Applied to the horizontal vector.
     pub grounded_overhand_horizontal_inheritance: f32,
+    /// Admit each additional mode independently; an absent measurement retains
+    /// its prior movement response even when stationary velocity is measured.
+    pub grounded_underhand_horizontal_inheritance: Option<f32>,
+    pub grounded_combined_horizontal_inheritance: Option<f32>,
     /// Independently observed stationary response. Absent profiles retain the
     /// existing raw-aim launch vector; this does not calibrate spawn position.
     pub grounded_overhand_velocity: Option<GrenadeLaunchVelocity>,
