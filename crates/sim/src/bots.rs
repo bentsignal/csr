@@ -688,7 +688,7 @@ impl Bots {
                 brain.next_utility=time+1.0;
             }
             if let Some((def,target,until))=brain.throw {
-                let angles=crate::utility::lob_angles(eye,target).unwrap_or(bot.view_angles);
+                let angles=world.bot_lob_angles(bot,def,target).unwrap_or(bot.view_angles);
                 if time>until || !bot.weapons.iter().any(|w|w.def.def_index==def) || time-brain.hurt_at<0.6 || (brain.visible&&eye.distance(brain.target_pos)<300.0) {
                     brain.throw=None;brain.next_utility=time+5.0;
                 } else {
@@ -741,10 +741,10 @@ impl Bots {
                 }
             }
             if let Some((def,target,_))=brain.throw {
-                let angles=crate::utility::lob_angles(eye,target).unwrap_or(bot.view_angles);
+                let angles=world.bot_lob_angles(bot,def,target).unwrap_or(bot.view_angles);
                 if input.utility==def && angle_diff(angles.x,brain.pitch).abs()<1.5 && angle_diff(angles.y,brain.yaw).abs()<1.5
                     && bot.movement.velocity.length()<35.0 && bot.active_weapon().is_some_and(|w|w.def.def_index==def && time>=w.next_attack)
-                    && world.clear_lob(eye,target,angles) {input.buttons|=buttons::ATTACK;}
+                    && world.clear_bot_lob(bot,def,target,angles) {input.buttons|=buttons::ATTACK;}
                 if bot.active_weapon().and_then(|w|w.grenade_throw).is_some_and(|s|s.phase==crate::utility::ThrowPhase::Holding) {
                     input.buttons&=!(buttons::ATTACK|buttons::ATTACK2);
                 }
@@ -773,7 +773,7 @@ fn average(points: impl Iterator<Item = Vec3>) -> Vec3 {
 }
 
 fn choose_utility(world: &World, bot: &Player, contact: Option<crate::tactics::Contact>, task: Task) -> Option<(u32,Vec3)> {
-    use crate::utility::{Kind,lob_angles};
+    use crate::utility::Kind;
     let eye=bot.eye();
     let recent=contact.filter(|c|world.time()-c.observed<3.0);
     let defending=bot.team==Team::CounterTerrorist && world.bomb.is_none();
@@ -798,8 +798,8 @@ fn choose_utility(world: &World, bot: &Player, contact: Option<crate::tactics::C
             let predicted=p.eye()+p.movement.velocity*0.5;
             predicted.distance(target)<if kind==Kind::Flash {650.0}else{260.0} && world.visible(predicted,target)
         }) {continue}
-        let Some(angles)=lob_angles(eye+Vec3::Z*0.0,target) else {continue};
-        if world.clear_lob(eye,target,angles) {return Some((w.def.def_index,target))}
+        let Some(angles)=world.bot_lob_angles(bot,w.def.def_index,target) else {continue};
+        if world.clear_bot_lob(bot,w.def.def_index,target,angles) {return Some((w.def.def_index,target))}
     }
     None
 }
