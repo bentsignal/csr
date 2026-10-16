@@ -525,7 +525,7 @@ Stage.addProperty("visibleRect", function() {
 // not the unrelated modern full-screen photo, in the authored overview box.
 // The frontend owns the generation and clears it on Home/cancellation.
 _global.csrLoadingOverviews = new Object();
-_global.csrBindings.configureLoadingOverview = function(path, map, serial, radarOnly) {
+_global.csrBindings.configureLoadingOverview = function(path, map, serial, radarOnly, ownedRadarUrl, ownedIconUrl) {
     var previous = _global.csrLoadingOverviews[path];
     if (previous != undefined && previous.map == map && previous.serial == serial) { return true; }
     delete _global.csrLoadingOverviews[path];
@@ -539,18 +539,32 @@ _global.csrBindings.configureLoadingOverview = function(path, map, serial, radar
     if (box == undefined || box._width <= 0 || box._height <= 0 ||
         box._width > 4096 || box._height > 4096) { return false; }
     _global.csrLoadingOverviews[path] = {map: map, serial: serial,
-        target: root.Panel.Overview, x: box._x, y: box._y, width: box._width, height: box._height};
+        target: root.Panel.Overview, x: box._x, y: box._y, width: box._width, height: box._height,
+        ownedRadarUrl: ownedRadarUrl, ownedIconUrl: ownedIconUrl};
     return true;
 };
 var csrLoadClip = MovieClipLoader.prototype.loadClip;
 MovieClipLoader.prototype.loadClip = function(url, target) {
+    // A selected archive owns opaque engine images. Only this root's exact
+    // authored collection-icon URL is redirected; there is no general alias.
+    for (var ownerPath in _global.csrLoadingOverviews) {
+        var owner = _global.csrLoadingOverviews[ownerPath];
+        if (typeof owner.ownedIconUrl == "string" &&
+            String(target).indexOf(ownerPath + ".") == 0 &&
+            String(url) == "images/map_icons/collection_icon_" + owner.map + ".png") {
+            url = owner.ownedIconUrl;
+            arguments[0] = url;
+            break;
+        }
+    }
     var rootPath = String(target).split(".Panel.Overview")[0];
     var context = _global.csrLoadingOverviews[rootPath];
     if (context != undefined && String(target) == rootPath + ".Panel.Overview" &&
         String(url) == "../../maps/" + context.map + "_loading.jpg") {
-        // The normal radar is an observed installed resource. No synthetic
-        // success or invented authored error callback is needed.
-        url = "../overviews/" + context.map + "_radar.dds";
+        // The owned archive route supplies its verified embedded older radar.
+        // Ordinary installed maps keep the previous normal-radar compatibility.
+        url = typeof context.ownedRadarUrl == "string" ? context.ownedRadarUrl :
+            "../overviews/" + context.map + "_radar.dds";
         arguments[0] = url;
         if (context.loader != undefined) {
             context.loader.removeListener(context.listener);

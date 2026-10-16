@@ -57,19 +57,33 @@ struct LoadingContext {
     selected: crate::session::LoadingMap,
     title: String,
     radar_only: bool,
+    archive: Option<Arc<crate::frontend_loading::ArchiveArt>>,
 }
 impl LoadingContext {
     fn installed(selected: crate::session::LoadingMap, data: &Data) -> Option<Self> {
         let map = data.game_modes.block("maps")?.block(&selected.name)?;
         let title = map.str("nameID")?;
         let title = data.localization.get(title).unwrap_or(title).to_owned();
-        // Photo compatibility is deferred. The installed radar and icon are
-        // sufficient for the explicit radar surface. Unknown art keeps
-        // the engine progress/cancel surface, never an invented map alias.
-        if !data.fs.exists(&format!("resource/overviews/{}_radar.dds", selected.name))
-            || !data.fs.exists(&format!("resource/flash/images/map_icons/collection_icon_{}.png", selected.name)) { return None; }
-        let radar_only = !data.fs.exists(&format!("maps/{}_loading.jpg", selected.name));
-        Some(Self { selected, title, radar_only })
+        let archive = crate::frontend_loading::ArchiveArt::new(&selected.name).map(Arc::new);
+        // Archives own their original embedded radar. Never borrow the remake
+        // overview just because the old BSP used the same original map name.
+        let icon_map = archive.as_ref().map_or(selected.name.as_str(), |art| art.map.base);
+        let has_radar = if archive.is_some() {
+            data.fs.exists(&format!("maps/{}.bsp", selected.name))
+        } else {
+            data.fs.exists(&format!("resource/overviews/{}_radar.dds", selected.name))
+        };
+        if !has_radar || !data.fs.exists(&format!("resource/flash/images/map_icons/collection_icon_{icon_map}.png")) { return None; }
+        let radar_only = archive.is_some() || !data.fs.exists(&format!("maps/{}_loading.jpg", selected.name));
+        Some(Self { selected, title, radar_only, archive })
+    }
+
+    fn overview_arguments(&self, path: &str) -> Vec<Value> {
+        use crate::frontend_loading::Image;
+        let image = |kind| self.archive.as_ref().map_or(Value::Null,
+            |art| art.url(self.selected.serial, kind).into());
+        vec![path.into(), self.selected.name.clone().into(), self.selected.serial.to_string().into(),
+            self.radar_only.into(), image(Image::Radar), image(Image::Icon)]
     }
 
     fn arguments(&self) -> Vec<Value> {
@@ -314,6 +328,26 @@ impl Engine for Bridge {
         !active || self.actions.lock().unwrap().resume()
     }
     fn image(&mut self, url: &str) -> Option<Vec<u8>> {
+        if url.starts_with("img://loading/") {
+            let epoch = self.actions.lock().ok()?.current()?;
+            let (selected, art, fs, image) = {
+                let data = self.data.lock().ok()?;
+                if data.state != AppState::Loading { return None; }
+                let context = data.loading_map.as_ref()?;
+                let art = context.archive.as_ref()?;
+                let image = art.requested(context.selected.serial, url)?;
+                (context.selected.clone(), art.clone(), data.fs.clone(), image)
+            };
+            // File verification/decode can be slow. Do it on this movie worker
+            // without holding the lock the main thread needs for snapshots.
+            let pixels = art.image(&fs, image)?;
+            let still_selected = {
+                let data = self.data.lock().ok()?;
+                data.state == AppState::Loading
+                    && data.loading_map.as_ref().is_some_and(|context| context.selected == selected)
+            };
+            return (still_selected && self.actions.lock().ok()?.current() == Some(epoch)).then_some(pixels);
+        }
         let id = url.strip_prefix("img://inventory_")?;
         let data = self.data.lock().ok()?;
         let path = data.inventory.image_path(id)?;
@@ -648,7 +682,7 @@ impl Engine for Bridge {
                 if data.state == AppState::Loading {
                     calls.call(path, "setLoadingText", vec![data.loading.clone().into()]);
                     if let Some(context) = &data.loading_map {
-                        calls.call("_global.csrBindings", "configureLoadingOverview", vec![path.clone().into(), context.selected.name.clone().into(), context.selected.serial.to_string().into(), context.radar_only.into()]);
+                        calls.call("_global.csrBindings", "configureLoadingOverview", context.overview_arguments(path));
                         calls.call(path, "setMapInfo", context.arguments());
                         calls.call(path, "setHintText", vec!["".into()]);
                         calls.call(path, "showPanel", vec![]);
@@ -1278,6 +1312,12 @@ pub(crate) fn update(
         if loading_selection_changed {
             snapshot.loading_map = loading_selection.and_then(|selected| LoadingContext::installed(selected, &snapshot));
         }
+        if snapshot.loading_map.as_ref().is_some_and(|context|
+            context.archive.as_ref().is_some_and(|art| art.unavailable())) {
+            // Invalid/replaced/missing archive art keeps the existing engine
+            // progress/cancel surface. Do not substitute a remake overview.
+            snapshot.loading_map = None;
+        }
         snapshot.pause_surface.activate(front.worker_generation,
             scene == AppState::Match && matches!(menu.page, Some(crate::menu::Page::Main | crate::menu::Page::Pause)));
     }
@@ -1596,7 +1636,7 @@ pub(crate) fn update(
         front.loading_map = loading_map.clone();
         if front.movie_ready("LoadingScreen") {
             if let Some(context) = loading_map {
-                front.send(Input::Call { path: "_global.csrBindings".into(), function: "configureLoadingOverview".into(), args: vec!["_level1000".into(), context.selected.name.clone().into(), context.selected.serial.to_string().into(), context.radar_only.into()] });
+                front.send(Input::Call { path: "_global.csrBindings".into(), function: "configureLoadingOverview".into(), args: context.overview_arguments("_level1000") });
                 for (function, args) in [
                     ("setMapInfo", context.arguments()),
                     ("setHintText", vec!["".into()]),
