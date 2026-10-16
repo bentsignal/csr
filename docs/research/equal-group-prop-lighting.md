@@ -1,10 +1,10 @@
 # Equal-group static-prop lighting candidate
 
 This candidate replaces the ambient-cube/Sun approximation only for static
-prop meshes with an admitted map-scoped VHV correspondence and a restricted
-payload. It is not yet a verified VHV color decoder; native and candidate
-captures must admit or reject the proposed channel and transfer interpretation
-before this branch is merged.
+prop meshes with a map-scoped VHV correspondence and a restricted payload.
+Matched classic Dust II captures show a substantial correction on crate247,
+but decorative arches244/264 remain too bright. This is a partial visible
+improvement, not a verified general VHV color decoder or native lighting parity.
 
 The existing VHV parser checks version, bounded spans, counts and non-overlap.
 The selected map's content identity, BSP SHA1 and static-prop ordinal select
@@ -33,9 +33,9 @@ hardware-order cohort; they do not establish a complete decoder or transfer.
 ## Installed-data scope
 
 The pre-rework archived Dust II BSP SHA1
-`8d0bfcabeecc4600208f495308a50681ca7e9eeb` contains1,523 props and1,523 VHV
-entries with949,935 opaque records. Decorative arch instances244/264 each
-have1,203 records. Their VHV, MDL, VVD and VTX checksums match, all three
+`8d0bfcabeecc4600208f495308a50681ca7e9eeb` contains 1,523 props and 1,523 VHV
+entries with 949,935 opaque records. Decorative arch instances244/264 each
+have 1,203 records. Their VHV, MDL, VVD and VTX checksums match, all three
 groups are identical and all fourth bytes are zero. Nearby crate247 satisfies
 the same byte restrictions. This identifies a concrete classic-map target;
 it does not prove native consumption of those exact entries.
@@ -50,10 +50,118 @@ Private admission reports are retained under
 `classic-vhv-record-statistics-private.json` and
 `tunnel-arch-vhv-admission-private.json`. No game bytes or images are committed.
 
-## Verification pending
+## Matched rendered observations
 
-The source has not yet received a Cargo build lease. Focused decoder checks,
-workspace checks, release probe/simulation and matched original-map
-native/before/after renders remain required. Capture the same resolved BSP,
-viewport, eye/angles and video settings, then personally inspect the actual
-arch pixels. Do not call an unmeasured correction native or historical parity.
+Source `00da221` was included in the frozen root integration build `3f654a33`
+(crates tree `6a25fa05fa675ee8b1db3491b258e74b177d1a92`) with the separate
+grenade and video-settings changes. Those changes do not alter static-prop
+lighting. The immutable PLAY executable SHA256 is
+`b46e75d1819ef3c1c6a1d24b364352869fb0ec55ba6e7ab2fb5d100e43353fee`.
+The before executable is the previous verified RELEASE union, with crates
+identical to merged master `2d4366f`, SHA256
+`76eaa58bcbe1fba4f3c26ffc9966533559331937024bf4c6264588fb8adbc477`.
+The profile difference permits a visual comparison, not an FPS comparison.
+
+Both native views and all four before/after images were personally inspected.
+All use the same classic BSP bytes, a 1600x900 viewport, eye
+`-1810 1169 140`, pitch5, and yaw90 (north) or -90 (south). The native mount
+was private-first with the read-only installed Legacy directory as fallback;
+its acknowledged search path, selected relative map and before/after map hashes
+were retained. This establishes map selection through the acknowledged mount
+contract, not an absolute native filesystem-open trace. Native preferences,
+installed configuration and map bytes were unchanged after cleanup.
+
+Actual candidate logs admitted 577 meshes / 224,398 vertices on this classic
+map, including both 1,203-vertex arch meshes and the 576-vertex crate247 mesh.
+The result is local: previously near-black arch/crate surfaces recover visible
+stone/wood details, while the sampled world-wall controls are byte-identical
+before and after. The crates are close to the native reference; the arches
+are visibly overbright. Missing exterior glow, world lighting and other
+material differences remain outside this change.
+
+Raw RGB errors below are in 0..255 levels, with no image registration, color
+correction or fitted parameters. Regions were selected from the actual
+surfaces before computing metrics; they were not preregistered. Native
+automatic exposure was not independently measured. These limits matter when
+interpreting absolute brightness.
+
+| Surface region | Before RGB MAE | After RGB MAE | Before / after block8 luma SSIM |
+| --- | ---: | ---: | ---: |
+| Crate247 upper patch | 65.00 | 5.98 | 0.259 / 0.838 |
+| Crate247 middle patch | 85.93 | 7.21 | 0.241 / 0.847 |
+| Crate247 lower patch | 103.37 | 11.55 | 0.258 / 0.843 |
+| Arch264 north left face | 25.79 | 26.05 | 0.404 / 0.790 |
+| Arch264 north crown | 16.01 | 28.78 | 0.559 / 0.713 |
+| Arch244 south left face | 19.46 | 25.99 | 0.535 / 0.766 |
+| Arch244 south shoulder | 24.95 | 25.31 | 0.487 / 0.812 |
+| Arch244 south crown | 24.97 | 23.44 | 0.378 / 0.641 |
+
+The crate's three separated patches support the proposed channel/normalized
+record path. Improved arch structural similarity does not cancel its increased
+brightness error: several arch regions are worse in raw RGB MAE. The candidate
+must not be described as an exact transfer function or complete arch fix.
+
+## Remaining arch defect and bounded audit
+
+The selected classic arch and crate instances use skin0, zero common flags,
+zero extended flags and white diffuse modulation. Their model flags are the
+same (`0x11`). Both resolved materials are plain `VertexLitGeneric` with a
+base texture and no authored color/color2 modulation or normal map. The map
+contains no replacement model or material for those paths. Both base textures
+are DXT1 with zero texture flags; the current renderer uploads their full mip
+chains as sRGB. No differing material modulation has been found that justifies
+an arch-only scale or gamma adjustment. Matching silhouettes and material
+details support the model selection, but native model/material filesystem
+opens have not been traced.
+
+An independent audit compared hardware-output and source-VVD indexing. Both
+target meshes have a complete bijection, but fewer than 0.5% of ordinals are
+identical. The current hardware correspondence preserves distinct lighting
+for differently oriented crate faces; indexing the source VVD vector instead
+largely erases that distinction. This supports retaining hardware order. It
+does not prove every record's native spatial correspondence or resolve the
+arch's brightness error. No fitted per-model correction was added.
+
+Other classic prop flag combinations have not been visually admitted. The
+current candidate does not interpret those flags. Directional payloads,
+nonzero fourth bytes and normal-mapped materials retain the previous fallback.
+
+## Verification and retained negatives
+
+The source CI run `38854784894` passed the complete workflow. The combined
+PLAY build passed client/simulation/level/netcode tests, the launcher build,
+normal Dust II probe/simulation and classic Dust II simulation. Its classic
+probe reported ten failures: nine `EmptyTopology` faces and the missing
+`greygrid` dependency on `millwall_01`. The actual immutable baseline reports
+the same eleven diagnostic lines byte-for-byte; the candidate build receipt
+records `classic_probe_pass=false`. This is a qualified existing negative,
+not a successful classic probe.
+
+The nine faces contain only zero-area compiled primitive triangles in both
+f32 and f64 arithmetic. An invented polygon fan would create geometry on some
+of them and is not an appropriate lighting fix. The missing material belongs
+to one tiny nonzero-area triangle on a separate millwall prop. Neither finding
+accounts for the visible tunnel arches. No map bytes were changed.
+
+Combined RELEASE verification remains pending for this source. No standalone
+RELEASE pass or complete native/historical parity is claimed. The earlier UV
+transform PR158 was merged after root's separate combined RELEASE verification;
+its reworked-map wall correction is distinct from this classic-map candidate.
+
+Private packets retain the original safe failures as well as admitted images:
+
+- `native-classic-vhv-reference-20261016-012621`: prelaunch map-hash pin typo;
+  no native launch or preference changes.
+- `native-classic-vhv-reference-20261016-013235`: north image admitted; the
+  later south angle270 normalized to -90 and failed the strict numeric guard.
+- `native-classic-vhv-south-reference-20261016-014302`: corrected south-only
+  reference, exit0 and exact preference/config/map restoration.
+- `csr-classic-vhv-pairs-20261016-015753`: all four owned captures exit0,
+  no capture failure and no owned process remaining.
+- `classic-vhv-local-comparison.json`: all six input image hashes and local
+  surface metrics; `classic-vhv-hardware-vvd-order-audit.json`: order audit.
+
+The separate reworked-map cascade interventions remain negative observations:
+existing entity Enable/Disable acknowledgements did not remove hard shadows,
+and the public CVar off command was rejected before an off image was taken.
+They do not establish that missing CSM is the cause of the classic arches.
