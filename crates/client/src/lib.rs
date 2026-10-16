@@ -27,6 +27,7 @@ pub mod tracers;
 pub mod inventory;
 pub mod cosmetics;
 pub mod cosmetic_catalog;
+mod classic_cosmetics;
 pub mod skin_finish;
 pub mod decorations;
 pub mod cosmetic_geometry;
