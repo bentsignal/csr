@@ -45,4 +45,8 @@ Loading; owner configuration is unchanged. This verifies the selection and
 session integration, not exact old card art, overall lighting, physical input
 latency or download/cancellation behavior. The initial wrong-card fixture
 negative is retained. The corrected full workspace also passes; combined
-RELEASE verification remains in progress.
+RELEASE verification also passed on immutable730F23C3, including both map
+probes/simulations, all1,425 sound decodes and the same ordinary archived-card
+lifecycle. Six changed1920x1080 images were independently reviewed. Merged
+master601ebc3 has the exact tested ec95b6a crates tree; no separate branch
+RELEASE build or complete native map parity is claimed.

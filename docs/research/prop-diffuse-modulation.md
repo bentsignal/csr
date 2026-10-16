@@ -67,13 +67,20 @@ measured tunnel arches244/264 and crate247 have
 white modulation, so this feature does not explain their remaining lighting
 differences.
 
-The blue barrel is a prospective native target, not yet a viewed/admitted
-reference. Matched same-BSP native/before/after captures must establish visible
-behavior and judge the normalized RGB interpretation. No native tint parity
-or visible correction is claimed before those captures. All game data and
-reference images remain private and read-only.
+Matched same-BSP native/before/after captures now establish a bounded visible
+correction. In two barrel views, the authored blue body replaces the erroneous
+white body while the rusty cap and nearby world control stay byte-identical.
+Preselected upper/lower body RGB error against native improves from55.16/58.98
+to27.44/31.74 in the west view and45.47/50.99 to16.02/20.67 in the north view.
+Classic crate and actual reworked normal-mapped white controls are unchanged;
+the classic arch mean delta is0.00174/255. Residual barrel brightness and the
+older arch-lighting errors remain. No exposure/gamma/per-model fit was used,
+and complete tint transfer or native lighting parity is not claimed.
 
-Focused synthetic parser tests cover independently colored adjacent records,
-preserving alpha, exact v10/v11 layouts and unsupported/ambiguous fallback.
-Cargo, complete workspace checks, RELEASE probe/simulation and graphical
-verification remain queued behind the shared machine's build/native leases.
+All seven actual PLAY images and both native barrel references were independently
+viewed. Frozen d71d5f6 contains the same static-render/parser source as final166;
+its full workspace and real-data checks passed. Combined ec95b6a then passed
+RELEASE probe/simulation/audio and ordinary frontend lifecycle verification.
+The original broad preflight rejection of CI's headless sim is preserved;
+no graphical child had launched, and the amended guard admits only exact known
+probe/sim command lines. All game assets and reference images remain private.

@@ -6,16 +6,19 @@ concurrently (one agent or worktree per track), and the dependencies between
 them are listed. Every item ends in a verified state (`cargo test`,
 `csr probe`, `csr sim`, and screenshots for anything visual; see AGENTS.md).
 
-## Where we are (assessed 2026-10-15)
+## Where we are (assessed 2026-10-16)
 
 Owner return-home playtest on 2026-10-14: all reported defects, required
 features, accepted improvements and priorities are retained in
 [PLAYTEST-2026-10-14.md](PLAYTEST-2026-10-14.md). Work continues without another
-test request until the owner asks. Immediate parallel tracks are grenade
-release/launch synchronization, measured walking viewmodel bob, and original
-combat HUD integration. Console and persistent wheel/key bindings have landed;
-menu coverage/performance, movement/surfing, additional weapon profiles and
-lighting remain open alongside those tracks.
+test request until the owner asks. The latest merged source includes grounded HE launch/button corrections,
+measured M4 recovery, original menu music and supported Video controls, authored
+prop tint, dropped weapon models and the pre-rework Inferno chooser. Full
+workspace, combined RELEASE and ordinary rendered frontend checks passed for
+that source. Current parallel tracks are authored grenade/material effects,
+knife inspection continuity and input, and persistent bot navigation stalls.
+Movement/surfing, remaining weapon states, UI coverage/performance and full
+lighting fidelity remain open; bounded improvements are not whole-game parity.
 
 The inherited code is a **real, playable single-player base**. Phase 0 and
 the installer/updater release are complete. Gameplay now lives in the fixed
@@ -366,6 +369,11 @@ thing is uncanny. Fidelity is measured, never eyeballed:
 - [ ] Validate the map pool beyond Dust II (Mirage, Inferno, Nuke, Overpass,
       Train, Cache, Vertigo, Office, Italy, ...).
 - [ ] The inherited fidelity checklist below (M2–M4).
+
+- [x] Offer pre-rework Inferno (2016) beside the remake in the original map
+      chooser; distinct ContentIds, actual authored-card loading and combined
+      RELEASE lifecycle passed. The narrow v44 prop importer preserves original
+      geometry. Exact2015 content/card art remain open. PR167/170.
 
 ### Track E: Content packs and modding
 
