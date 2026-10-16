@@ -56,13 +56,15 @@ impl Data {
 struct LoadingContext {
     selected: crate::session::LoadingMap,
     title: String,
+    /// Installed localized type/mode names for this known local selection.
+    mode: Option<(String, String)>,
     radar_only: bool,
     archive: Option<Arc<crate::frontend_loading::ArchiveArt>>,
     initialized: Arc<Mutex<Option<String>>>,
 }
 impl PartialEq for LoadingContext {
     fn eq(&self, other: &Self) -> bool {
-        self.selected == other.selected && self.title == other.title
+        self.selected == other.selected && self.title == other.title && self.mode == other.mode
             && self.radar_only == other.radar_only && self.archive == other.archive
     }
 }
@@ -83,7 +85,25 @@ impl LoadingContext {
         };
         if !has_radar || !data.fs.exists(&format!("resource/flash/images/map_icons/collection_icon_{icon_map}.png")) { return None; }
         let radar_only = archive.is_some() || !data.fs.exists(&format!("maps/{}_loading.jpg", selected.name));
-        Some(Self { selected, title, radar_only, archive, initialized: Default::default() })
+        let mode = match selected.mode {
+            Some(sim::GameMode::Competitive) => Some(("classic", "competitive")),
+            Some(sim::GameMode::Deathmatch) => Some(("gungame", "deathmatch")),
+            _ => None,
+        }.and_then(|(kind, mode)| {
+            let kind = data.game_modes.path(&["gameTypes", kind])?.as_block()?;
+            let mode = kind.block("gameModes")?.block(mode)?;
+            mode.str("descID")?;
+            let localized_name = |block: &kv::Block| {
+                let text = data.localization.get(block.str("nameID")?)?;
+                (!text.starts_with('#')).then(|| text.to_owned())
+            };
+            // The installed Classic/GunGame type names intentionally resolve
+            // to "". Preserve that authored prefix; only the mode must be text.
+            let mode_name = localized_name(mode)?;
+            if mode_name.trim().is_empty() { return None; }
+            Some((localized_name(kind)?, mode_name))
+        });
+        Some(Self { selected, title, mode, radar_only, archive, initialized: Default::default() })
     }
 
     fn overview_arguments(&self, path: &str) -> Vec<Value> {
@@ -95,9 +115,13 @@ impl LoadingContext {
     }
 
     fn arguments(&self) -> Vec<Value> {
-        // Observed map/title positions. The other argument domains remain
-        // unknown; never label a remote game Competitive by default.
-        vec![self.selected.name.clone().into(), Value::Null, self.title.clone().into(), Value::Null, Value::Null, Value::Null]
+        // Actual ModeText rendering shows these positions take display strings,
+        // not catalog keys. Preserve installed localization and authored layout.
+        // Remote/unknown/sandbox metadata remains null, as does the still
+        // unobserved scenario domain. The authored movie owns its actual text.
+        let (kind, mode) = self.mode.as_ref().map_or((Value::Null, Value::Null),
+            |(kind, mode)| (kind.clone().into(), mode.clone().into()));
+        vec![self.selected.name.clone().into(), Value::Null, self.title.clone().into(), kind, mode, Value::Null]
     }
 }
 enum Action {
@@ -732,8 +756,8 @@ impl Engine for Bridge {
                         calls.call(path, "setHintText", vec!["".into()]);
                         calls.call(path, "showPanel", vec![]);
                         calls.call(path, "showLoadinginfo", vec![]);
-                        for label in ["ModeText", "ScenarioText"] {
-                            calls.set(&format!("{path}.Panel.MainText.{label}"), "_visible", false.into());
+                        for (label, visible) in [("ModeText", context.mode.is_some()), ("ScenarioText", false)] {
+                            calls.set(&format!("{path}.Panel.MainText.{label}"), "_visible", visible.into());
                         }
                     } else {
                         calls.call("_global.csrBindings", "configureLoadingOverview", vec![path.clone().into(), Value::Null]);
@@ -1717,8 +1741,8 @@ pub(crate) fn update(
                 ] {
                     front.send(Input::Call { path: "_level1000".into(), function: function.into(), args });
                 }
-                for label in ["ModeText", "ScenarioText"] {
-                    front.send(Input::Set { path: format!("_level1000.Panel.MainText.{label}"), property: "_visible".into(), value: false.into() });
+                for (label, visible) in [("ModeText", context.mode.is_some()), ("ScenarioText", false)] {
+                    front.send(Input::Set { path: format!("_level1000.Panel.MainText.{label}"), property: "_visible".into(), value: visible.into() });
                 }
             } else {
                 front.send(Input::Call { path: "_global.csrBindings".into(), function: "configureLoadingOverview".into(), args: vec!["_level1000".into(), Value::Null] });
