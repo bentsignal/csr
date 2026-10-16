@@ -58,3 +58,26 @@ These images admit model integrity during ordinary inspection, not repeated
 input timing or native interpolation parity. The [final combined RELEASE
 verification and CI](overnight-fidelity-verification.md) passed; no separate
 feature-branch RELEASE build is claimed.
+
+## Inspect interrupted by a magazine reload
+
+The inspection-entry and knife-cancel transitions above did not cover a gun
+reload interrupting a displayed inspect pose: entering `ACT_VM_RELOAD` cleared
+the transition source and snapped to the reload's first sampled pose. Installed
+AK `ak47_reload` and M4A1-S `reload` sequences both declare a 0.2-second incoming
+fade. Their header SHA1 identities are respectively
+`c63dfcc6acaafeb4c5e5b5369b48886cb7dc6959` and
+`c1d36194ca0c483c310fd130552e8950fb796ff9`.
+
+An incoming magazine reload now captures the displayed inspection pose once,
+then uses that reload sequence's own fade-in and fixed masked sample source.
+Fire interruptions remain immediate. Shotgun stages, grenades, suppressor
+transitions and new-life resets retain their existing boundaries. This changes
+presentation only; normal TickInput still starts and controls the actual reload.
+
+One installed production-system regression starts inspection, sends a real
+TickInput reload, checks its exact first displayed pose and subsequent fade
+progress, and verifies that rendering changes no authoritative reload/ammo
+state. This requires installed Legacy but no GPU. Compilation and rendered
+verification are pending coordinated checks; exact native interruption easing,
+rapid repeated input, general reload timing and historical parity remain open.
