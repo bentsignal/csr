@@ -598,6 +598,15 @@ MovieClipLoader.prototype.loadClip = function(url, target) {
             }
             this.loader.removeListener(this);
         };
+<<<<<<< HEAD
+=======
+        fit.onLoadError = function(mc, error) {
+            if (this.traceUrl != undefined) {
+                csrEI.call("csr.LoadingArtError", this.traceUrl, this.traceRequested, String(mc), String(error));
+            }
+            this.loader.removeListener(this);
+        };
+>>>>>>> origin/master
         context.loader = this;
         context.listener = fit;
         this.addListener(fit);

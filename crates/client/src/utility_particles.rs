@@ -37,6 +37,8 @@ pub struct Layer {
     ring: f32,
     thickness: f32,
     bias: Vec3,
+    box_position: Option<[Vec3; 2]>,
+    absolute_source_z: bool,
     velocity: [Vec3; 2],
     speed: [f32; 2],
     gravity: Vec3,
@@ -93,12 +95,45 @@ fn vector(e: Option<&Element>, name: &str, fallback: Vec3) -> Vec3 {
     })
 }
 
+/// Only the HE load opts into this newly supported geometry subset. Other
+/// effects retain their existing interpretation until separately rendered.
+fn position_geometry(initializers: &[&Element], enabled: bool) -> (Option<[Vec3; 2]>, bool) {
+    if !enabled {
+        return (None, false);
+    }
+    let sphere = op(initializers, "Position Within Sphere Random");
+    let box_position = if sphere.is_none() && op(initializers, "Position Along Ring").is_none() {
+        op(initializers, "Position Within Box Random").map(|e| [
+            vector(Some(e), "min", Vec3::ZERO),
+            vector(Some(e), "max", Vec3::ZERO),
+        ])
+    } else {
+        None // Mixed positional initializer ordering is not implemented.
+    };
+    let absolute_source_z = sphere.is_some_and(|e|
+        e.vector("distance_bias_absolute_value", [0.; 3]) == [0., 0., 1.]);
+    (box_position, absolute_source_z)
+}
+
+fn initial_position(mut sphere: Vec3, box_position: Option<[Vec3; 2]>, absolute_source_z: bool,
+    samples: Vec3) -> Vec3 {
+    if let Some([min, max]) = box_position {
+        min + (max - min) * samples
+    } else {
+        if absolute_source_z {
+            sphere.y = sphere.y.abs(); // Source Z is Bevy Y; preserve X/Y spread.
+        }
+        sphere
+    }
+}
+
 pub fn load(
     fs: &vfs::Vfs,
     path: &str,
     names: &[&str],
     materials: &mut Assets<ParticleMaterial>,
     images: &mut Assets<Image>,
+    authored_positions: bool,
 ) -> Vec<Layer> {
     let Some(elements) = fs.read(path).and_then(|data| particle_data::pcf(&data)) else {
         warn!("Cannot read particle definitions {path}");
@@ -191,6 +226,7 @@ pub fn load(
         let emit = op(&emitters, "emit_continuously");
         let burst = op(&emitters, "emit_instantaneously");
         let position = op(&init, "Position Within Sphere Random");
+        let (box_position, absolute_source_z) = position_geometry(&init, authored_positions);
         let ring = op(&init, "Position Along Ring");
         let offset = op(&init, "Position Modify Offset Random");
         let radius = e.number("radius", 1.0);
@@ -279,6 +315,8 @@ pub fn load(
             ring: ring.map_or(0.0, |e| e.number("initial radius", 0.0)),
             thickness: ring.map_or(0.0, |e| e.number("thickness", 0.0)),
             bias: vector(position, "distance_bias", Vec3::ONE),
+            box_position,
+            absolute_source_z,
             velocity: [
                 vector(position, "speed_in_local_coordinate_system_min", Vec3::ZERO),
                 vector(position, "speed_in_local_coordinate_system_max", Vec3::ZERO),
@@ -515,23 +553,30 @@ impl Emitter {
                     continue;
                 }
                 let radius = rng.range(l.radius);
-                let angle = rng.unit() * std::f32::consts::TAU;
+                // Reuse the same three independent draws as the old sphere
+                // path, preserving all later tint/fade/rotation draws.
+                let angle_sample = rng.unit();
+                let distance_sample = rng.unit();
+                let angle = angle_sample * std::f32::consts::TAU;
                 let distance = if l.ring > 0.0 {
-                    l.ring + (rng.unit() - 0.5) * l.thickness
+                    l.ring + (distance_sample - 0.5) * l.thickness
                 } else {
-                    rng.unit().cbrt() * l.distance
+                    distance_sample.cbrt() * l.distance
                 };
-                let y = if l.ring > 0.0 {
-                    0.0
+                let height_sample = if l.ring > 0.0 {
+                    0.5
                 } else {
-                    rng.between(-1.0, 1.0)
+                    rng.unit()
                 };
+                let y = height_sample * 2.0 - 1.0;
                 let direction = Vec3::new(
                     angle.cos() * (1.0 - y * y).sqrt(),
                     y,
                     angle.sin() * (1.0 - y * y).sqrt(),
                 );
-                let mut pos = direction * distance * l.bias.abs()
+                let mut pos = initial_position(direction * distance * l.bias.abs(),
+                    l.box_position, l.absolute_source_z,
+                    Vec3::new(angle_sample, distance_sample, height_sample))
                     + rng.vector(l.offset) * if l.offset_scaled { radius } else { 1.0 };
                 let mut normal = Vec3::Y;
                 if self.fire {
@@ -774,6 +819,52 @@ impl Rng {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn authored_box_positions_preserve_source_bounds_and_axis_conversion() {
+        let mut box_init = Element { name: "Position Within Box Random".into(), ..Default::default() };
+        box_init.attrs.insert("min".into(), particle_data::Value::Vector([-20., -20., -80.]));
+        box_init.attrs.insert("max".into(), particle_data::Value::Vector([20., 20., 100.]));
+        let (bounds, absolute) = position_geometry(&[&box_init], true);
+        assert!(!absolute);
+        for (samples, expected) in [
+            (Vec3::ZERO, glam::Vec3::new(-20., -20., -80.)),
+            (Vec3::ONE, glam::Vec3::new(20., 20., 100.)),
+            (Vec3::splat(0.5), glam::Vec3::new(0., 0., 10.)),
+        ] {
+            assert_eq!(crate::coords::to_source(initial_position(Vec3::ZERO, bounds, absolute, samples)), expected);
+        }
+        let mut rng = Rng(91);
+        for _ in 0..128 {
+            let samples = Vec3::new(rng.unit(), rng.unit(), rng.unit());
+            let source = crate::coords::to_source(initial_position(Vec3::ZERO, bounds, absolute, samples));
+            assert!((-20. ..=20.).contains(&source.x));
+            assert!((-20. ..=20.).contains(&source.y));
+            assert!((-80. ..=100.).contains(&source.z));
+        }
+        assert_eq!(position_geometry(&[&box_init], false), (None, false));
+        let sphere = Element { name: "Position Within Sphere Random".into(), ..Default::default() };
+        assert_eq!(position_geometry(&[&box_init, &sphere], true).0, None,
+            "mixed positional initializer ordering remains unsupported");
+    }
+
+    #[test]
+    fn explicit_source_z_hemisphere_keeps_other_axes_and_unopted_effects() {
+        let mut sphere = Element { name: "Position Within Sphere Random".into(), ..Default::default() };
+        sphere.attrs.insert("distance_bias_absolute_value".into(), particle_data::Value::Vector([0., 0., 1.]));
+        let (bounds, absolute) = position_geometry(&[&sphere], true);
+        assert!(absolute);
+        for z in [-13., 0., 17.] {
+            let old = to_bevy(glam::Vec3::new(-3., 4., z));
+            let corrected = initial_position(old, bounds, absolute, Vec3::ZERO);
+            assert_eq!(crate::coords::to_source(corrected), glam::Vec3::new(-3., 4., z.abs()));
+            assert_eq!(initial_position(old, None, false, Vec3::ZERO), old);
+        }
+        assert_eq!(position_geometry(&[&sphere], false), (None, false));
+        sphere.attrs.insert("distance_bias_absolute_value".into(), particle_data::Value::Vector([1., 1., 0.]));
+        assert!(!position_geometry(&[&sphere], true).1,
+            "other flag patterns do not silently change the held wick");
+    }
 
     fn particle(sequence: usize, born: f32, pos: Vec3, velocity: Vec3) -> Particle {
         Particle {

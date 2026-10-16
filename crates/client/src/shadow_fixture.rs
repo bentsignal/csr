@@ -226,6 +226,7 @@ fn setup(world: &mut World) {
         phong_map: white.clone(),
         skin_surface: white.clone(),
         skin_position: white.clone(),
+        detail: white.clone(),
         alpha_mode: if masked {
             AlphaMode::Mask(0.5)
         } else {
