@@ -333,6 +333,7 @@ struct PendingReadback {
     width: u32,
     height: u32,
     presentation_revision: u64,
+    raster_fence: u64,
     viewport_generation: u64,
     completion: MapReceiver<Result<(), wgpu::BufferAsyncError>>,
     started: Option<Instant>,
@@ -352,6 +353,7 @@ pub(crate) struct CapturedFrame {
     pub height: u32,
     pub rgba: Vec<u8>,
     pub presentation_revision: u64,
+    pub raster_fence: u64,
 }
 
 pub(crate) struct Host {
@@ -365,6 +367,7 @@ pub(crate) struct Host {
     work_trace_remaining: usize,
     pending_readback: Option<PendingReadback>,
     viewport_generation: u64,
+    rendered_raster_fence: u64,
     overlay: bool,
 }
 
@@ -448,7 +451,7 @@ impl Host {
             Box::new(|_| {}),
         );
         Ok(Self { player, dispatcher, executor, mouse: (0.0, 0.0), held_keys: HashMap::new(), held_buttons: HashSet::new(),
-            pending_readback: None, viewport_generation: 0, overlay,
+            pending_readback: None, viewport_generation: 0, rendered_raster_fence: 0, overlay,
             work_trace_remaining: if std::env::var("CSR_UI_WORKER_TRACE").as_deref() == Ok("1") { 2048 } else { 0 },
             render_trace_remaining: if std::env::var("CSR_UI_RENDER_TRACE").as_deref() == Ok("1") { 1024 } else { 0 },
         })
@@ -579,9 +582,16 @@ impl Host {
     }
 
     pub fn lifecycle(&mut self, active: bool) -> Result<(), Error> {
-        let mut calls = Calls::default();
+        let mut calls = Calls {
+            raster_fence: self.dispatcher.borrow().calls.raster_fence,
+            ..Calls::default()
+        };
         let accepted = self.dispatcher.borrow().engine.borrow_mut().lifecycle(active, &mut calls);
-        self.dispatcher.borrow_mut().calls.queue.extend(calls.queue);
+        {
+            let mut dispatcher = self.dispatcher.borrow_mut();
+            dispatcher.calls.raster_fence = calls.raster_fence;
+            dispatcher.calls.queue.extend(calls.queue);
+        }
         self.drain_calls();
         if accepted { Ok(()) } else { Err("The menu session limit was reached. Restart the game.".into()) }
     }
@@ -695,6 +705,7 @@ impl Host {
 
     pub fn needs_render(&self) -> bool {
         self.player.lock().unwrap().needs_render()
+            || self.dispatcher.borrow().calls.raster_fence != self.rendered_raster_fence
     }
 
     pub fn readback_pending(&self) -> bool {
@@ -708,6 +719,7 @@ impl Host {
             return Err("menu render attempted during pending readback".into());
         }
         let started = (self.render_trace_remaining != 0).then(Instant::now);
+        let raster_fence = self.dispatcher.borrow().calls.raster_fence;
         let (buffer, dimensions, device, width, height) = {
             let mut player = self.player.lock().unwrap();
             player.render();
@@ -720,10 +732,11 @@ impl Host {
         };
         let (completion, receiver) = mpsc::sync_channel(1);
         self.pending_readback = Some(PendingReadback {
-            buffer, device, dimensions, width, height, presentation_revision,
+            buffer, device, dimensions, width, height, presentation_revision, raster_fence,
             viewport_generation: self.viewport_generation, completion: receiver,
             started, submitted: Instant::now(),
         });
+        self.rendered_raster_fence = raster_fence;
         if started.is_some() {
             self.render_trace_remaining -= 1;
         }
@@ -781,7 +794,7 @@ impl Host {
                 "UI readback completed (age includes intervening input and movie work)");
         }
         Ok(Some(CapturedFrame { width: pending.width, height, rgba,
-            presentation_revision: pending.presentation_revision }))
+            presentation_revision: pending.presentation_revision, raster_fence: pending.raster_fence }))
     }
 }
 
@@ -909,9 +922,17 @@ mod tests {
         let (events, _receiver) = mpsc::channel();
         let mut host = Host::new(&config, Box::new(Offline), events).unwrap();
         host.begin_render(11).unwrap();
+        assert!(!host.needs_render(), "the submitted movie is otherwise idle");
+        let fence = host.dispatcher.borrow_mut().calls.require_raster();
         assert!(host.begin_render(12).is_err(), "must not reuse a pending target");
         let frame = finish(&mut host).expect("original capture should complete");
         assert_eq!((frame.width, frame.height, frame.presentation_revision), (64, 48, 11));
+        assert!(frame.raster_fence < fence, "pending pixels predate the callback");
+        assert!(host.needs_render(), "a settled callback still requires fresh pixels");
+        host.begin_render(11).unwrap();
+        assert_eq!(host.rendered_raster_fence, fence);
+        let frame = finish(&mut host).expect("post-callback capture should complete");
+        assert_eq!((frame.presentation_revision, frame.raster_fence), (11, fence));
 
         host.begin_render(12).unwrap();
         host.resize(80, 60);

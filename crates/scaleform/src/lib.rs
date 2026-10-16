@@ -124,9 +124,19 @@ pub trait Engine: Send + 'static {
 #[derive(Default)]
 pub struct Calls {
     pub(crate) queue: Vec<Command>,
+    raster_fence: u64,
 }
 
 impl Calls {
+    /// Require a capture submitted after this callback, even if the movie's
+    /// pixels have stopped changing. Older pending readbacks retain their fence.
+    /// Compare the returned value with [`Frame::raster_fence`] before accepting
+    /// a readiness callback and its pixels as one presentation.
+    pub fn require_raster(&mut self) -> u64 {
+        self.raster_fence = self.raster_fence.checked_add(1).expect("menu raster fence limit");
+        self.raster_fence
+    }
+
     /// `path.function(args)`, e.g. `("_global.MainMenuMovie",
     /// "ScaleformComponent_FriendsList_RebuildFriendsList")`.
     pub fn call(&mut self, path: &str, function: &str, args: Vec<Value>) {
@@ -205,6 +215,8 @@ pub struct Frame {
     pub serial: u64,
     /// Most recent completed display transition (zero before any transition).
     pub presentation_revision: u64,
+    /// Latest callback capture requirement present when rendering began.
+    pub raster_fence: u64,
 }
 
 /// Notifications from the menu thread.
@@ -666,6 +678,7 @@ fn run(
                                         // Completion can follow a newer Present input. Only the
                                         // revision captured at submission describes these pixels.
                                         presentation_revision: capture.presentation_revision,
+                                        raster_fence: capture.raster_fence,
                                     });
                                 }
                             }
