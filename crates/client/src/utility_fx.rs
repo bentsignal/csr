@@ -274,6 +274,9 @@ pub fn update(
     }
     for (kind, pos) in effects.utility_detonations.drain(..) {
         if kind == Kind::He && explosions.len() < 16 {
+            if std::env::var_os("CSR_WEAPON_TRACE").is_some() {
+                info!("HE emitter: birth={time:.5} seed={} pos={pos:?} layers={}", w.tick as u32, he.len());
+            }
             explosions.push(crate::utility_particles::Emitter::spawn(
                 &mut commands,
                 &mut meshes,
