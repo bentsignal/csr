@@ -16,7 +16,9 @@ The original movie's public runtime members identified `infoGameType` and
 `gamemodes.txt` and the already observed offline GO requests use
 `classic/competitive` and `gungame/deathmatch`. These keys admit only the
 corresponding installed type/mode records. Both localized `nameID` strings
-must exist and be nonempty, and the mode must supply `descID`. The localized
+must exist, the mode name must be nonempty, and the mode must supply `descID`.
+The installed Classic/GunGame type names are intentionally empty; that authored
+prefix is preserved rather than replaced with a guessed label. The localized
 display names, rather than the catalog keys, are passed to the original movie,
 which renders its own ModeText. No custom label/font or copied description is
 added. Scenario metadata remains unobserved and hidden.
