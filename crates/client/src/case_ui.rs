@@ -731,7 +731,7 @@ pub fn draw(
                 text(
                     &mut commands,
                     grid,
-                    "Your collection is empty. Open the console and type: give_case Chroma 5",
+                    "Your collection is empty. Open the console and type: give_case 4061 5",
                     21.,
                     Color::WHITE,
                 );
