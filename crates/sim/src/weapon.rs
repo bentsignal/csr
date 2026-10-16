@@ -720,7 +720,11 @@ pub fn think(w: &mut WeaponState, time: f32, dt: f32, ducked: bool, firing: bool
 /// Returns (health damage, armour damage).
 pub fn damage(def: &WeaponDefinition, distance: f32, group: HitGroup, armor: i32, helmet: bool) -> (i32, i32) {
     let mut dmg = def.damage * def.range_modifier.powf(distance / 500.0);
-    dmg *= group.multiplier();
+    dmg *= if group == HitGroup::Head {
+        def.declared_headshot_multiplier().unwrap_or_else(|| group.multiplier())
+    } else {
+        group.multiplier()
+    };
     let armored = armor > 0 && match group {
         HitGroup::Head => helmet,
         HitGroup::LeftLeg | HitGroup::RightLeg => false,

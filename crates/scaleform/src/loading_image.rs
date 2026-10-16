@@ -129,6 +129,15 @@ fn decode_dds(bytes: &[u8]) -> Option<image::RgbaImage> {
     )
 }
 
+pub(super) fn radar_png(bytes: &[u8]) -> Option<Vec<u8>> {
+    if bytes.len() > MAX_INPUT { return None; }
+    let image = decode_dds(bytes)?;
+    let mut png = Cursor::new(Vec::new());
+    image.write_to(&mut png, image::ImageFormat::Png).ok()?;
+    let png = png.into_inner();
+    (png.len() <= MAX_PNG).then_some(png)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -333,6 +333,7 @@ pub(crate) fn input(
         buy.just_closed = false;
         local.latched = 0;
         local.pointer_attacks = 0;
+        local.keyboard_attacks = 0;
         local.pending_drop = false;
         local.pending_slot = 0;
         local.pending_buys.clear();
@@ -1227,7 +1228,7 @@ pub fn draw(
                     if menu.capture == Some(i) {
                         "Press a key…".into()
                     } else {
-                        crate::settings::key_name(settings.binds[i])
+                        settings.binds[i].map(crate::settings::key_name).unwrap_or_else(|| "Unbound".into())
                     },
                     Action::Bind(i),
                     px(180.0),

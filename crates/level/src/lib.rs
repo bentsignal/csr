@@ -246,6 +246,18 @@ impl Level {
                 hash.finalize().into()
             })
         } else { catalog_sha1 };
+        // Raw metadata was already retained by older builds, but those builds
+        // ignored nondefault headshot multipliers. Distinguish actual damage
+        // semantics without changing raw schema gates or gameplay wire fields.
+        let catalog_sha1 = if catalog.weapons.iter().any(|w|
+            w.declared_headshot_multiplier().is_some_and(|scale| scale != 4.)) {
+            catalog_sha1.map(|previous| {
+                let mut hash = Sha1::new();
+                hash.update(b"csr-authored-headshot-multiplier-v1\0");
+                hash.update(previous);
+                hash.finalize().into()
+            })
+        } else { catalog_sha1 };
         // Scope-mode recoil interpretation affects authoritative rays without
         // changing the raw schema or serialized weapon state.
         let catalog_sha1 = if catalog.weapons.iter().any(|w|
