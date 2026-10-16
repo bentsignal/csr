@@ -73,6 +73,9 @@ struct Brain {
     progress_time: f32,
     last_navigation_tick: Option<u64>,
     failed_transitions: Vec<FailedTransition>,
+    /// An unreachable query under the current temporary edge exclusions.
+    failed_route: Option<(u32, u32)>,
+    route_searches: u64,
     /// Round the bot finished buying in, and failed attempts this round.
     bought_round: u32,
     buy_attempts: u32,
@@ -302,7 +305,7 @@ impl Bots {
     pub fn describe(&self, world: &World, id: PlayerId) -> String {
         let (Some(b), Some(p)) = (self.brains.get(&id), world.player(id)) else { return String::new() };
         format!(
-            "task {:?} target {:?} path {}/{} goal {:?} site {:?} role {:?} economy {:?} failed_edges {:?}",
+            "task {:?} target {:?} path {}/{} goal {:?} site {:?} role {:?} economy {:?} failed_edges {:?} route_searches {}",
             Self::task(world, p),
             b.target,
             b.path_index,
@@ -310,6 +313,7 @@ impl Bots {
             b.goal_area,
             b.site_area, self.team.role(p), self.team.plans.get(&p.team).map(|p|p.economy),
             b.failed_transitions,
+            b.route_searches,
         )
     }
 
@@ -464,6 +468,7 @@ impl Bots {
                 // New round: drop the old path and objectives.
                 brain.path.clear();
                 brain.failed_transitions.clear();
+                brain.failed_route = None;
                 brain.goal_area = None;
                 brain.site_area = None;
                 brain.hold = None;
@@ -833,7 +838,11 @@ fn follow_path(
     point: Option<Vec3>,
 ) -> bool {
     let pos = bot.movement.origin;
+    let old_failed_count = brain.failed_transitions.len();
     brain.failed_transitions.retain(|edge| time < edge.retry_at);
+    if brain.failed_transitions.len() != old_failed_count {
+        brain.failed_route = None;
+    }
     // A cached route may pause during combat. Time spent not following it
     // must not turn the first resumed command into a failed crossing.
     if brain.last_navigation_tick.is_some_and(|tick| world.tick.saturating_sub(tick) > 1) {
@@ -845,6 +854,7 @@ fn follow_path(
         brain.goal_area = goal;
         brain.path.clear();
         brain.path_index = 0;
+        brain.failed_route = None;
     }
     if (world.tick+bot.id as u64)%interval(world, FIRE_CHECK_RATE)==0 && brain.path.iter().skip(brain.path_index).take(3).any(|id|mesh.area(*id).is_some_and(|a|world.fire_at(a.center()))) {brain.path.clear();}
     let need_path = brain.path_index + 1 >= brain.path.len();
@@ -870,12 +880,23 @@ fn follow_path(
         brain.path_index = 0;
         let target = goal.or_else(|| pick_goal(mesh, rng));
         if let (Some(start), Some(target)) = (start, target) {
-            if let Some(p) = mesh.find_path_with_traversal(
-                start, target,
-                |a| if world.fire_at(a.center()) {5000.0}else{0.0},
-                |from, to| !brain.failed_transitions.iter().any(|e| e.from == from && e.to == to),
-            ) {
-                brain.path = p;
+            // A disconnected fixed objective must not trigger a full A*
+            // search every tick while the bot wanders. The key changes as
+            // soon as it enters another area; changing/expiring the edge
+            // exclusions also invalidates this result, without a new timer.
+            if brain.failed_route != Some((start, target)) {
+                brain.route_searches = brain.route_searches.wrapping_add(1);
+                let route = mesh.find_path_with_traversal(
+                    start, target,
+                    |a| if world.fire_at(a.center()) {5000.0}else{0.0},
+                    |from, to| !brain.failed_transitions.iter().any(|e| e.from == from && e.to == to),
+                );
+                brain.failed_route = if route.is_none() && !brain.failed_transitions.is_empty() {
+                    Some((start, target))
+                } else { None };
+                if let Some(p) = route {
+                    brain.path = p;
+                }
             }
         }
         brain.progress_time = time;
@@ -958,6 +979,7 @@ fn follow_path(
             brain.failed_transitions.push(FailedTransition {
                 from: cur, to: next, retry_at: time + FAILED_TRANSITION_SECONDS,
             });
+            brain.failed_route = None;
         }
         brain.path.clear();
         brain.progress_time = time;
@@ -965,7 +987,9 @@ fn follow_path(
         input.side_move = 0.0;
         input.buttons &= !buttons::JUMP;
     } else if time - brain.progress_time > 0.75 {
-        input.buttons |= buttons::JUMP;
+        if mesh.area(next).is_some_and(|a| a.flags & nav::attr::NO_JUMP == 0) {
+            input.buttons |= buttons::JUMP;
+        }
         if time >= brain.escape_until {
             let (_, right, _) = movement::angle_vectors(Vec3::new(0.0, brain.yaw, 0.0));
             let preferred = if bot.id % 2 == 0 { 1.0 } else { -1.0 };
@@ -1172,7 +1196,7 @@ mod tests {
     #[test]
     fn blocked_jump_and_sideways_loop_replans_via_another_approach() {
         for rate in [64, 128] {
-            let (mesh, mut world, id, mut brain) = blocked_shortcut_fixture(true);
+            let (mut mesh, mut world, id, mut brain) = blocked_shortcut_fixture(true);
             world.set_tick_rate(rate);
             let mut rng = Rng::from_parts(&[17]);
             for tick in 1..=world.ticks(2.1) {
@@ -1200,6 +1224,21 @@ mod tests {
             // Only 1 -> 2 was rejected, not area 2 or the reverse crossing.
             assert_eq!(mesh.find_path_with_traversal(2, 1, |_| 0.,
                 |from, to| !(from == 1 && to == 2)), Some(vec![2, 1]));
+            // Recovery must not override the same explicit NO_JUMP flag
+            // already honored by normal portal-height jumping.
+            mesh.areas.iter_mut().find(|a| a.id == 3).unwrap().flags |= nav::attr::NO_JUMP;
+            let p = world.player_mut(id).unwrap();
+            p.movement.origin.z = 0.;
+            p.movement.on_ground = true;
+            let end = world.tick + world.ticks(1.0);
+            for tick in world.tick + 1..=end {
+                world.tick = tick;
+                let mut input = TickInput::default();
+                follow_path(&mesh, &world, world.player(id).unwrap(), &mut brain,
+                    &mut input, &mut rng, world.time(), 4., Some(4), None);
+                assert_eq!(input.buttons & buttons::JUMP, 0);
+            }
+            assert!(world.time() - brain.progress_time > 0.75, "exercise stuck recovery, not only normal movement");
         }
     }
 
@@ -1234,10 +1273,33 @@ mod tests {
             assert!(brain.path.is_empty(), "no alternate crossing must use existing wander fallback");
             assert_eq!(input.forward_move, 450.);
             assert_eq!(input.buttons & buttons::JUMP, 0);
+            assert_eq!(brain.failed_route, Some((1, 4)));
+            let searches = brain.route_searches;
+            world.tick += 1;
+            follow_path(&mesh, &world, world.player(id).unwrap(), &mut brain,
+                &mut TickInput::default(), &mut rng, world.time(), 4., Some(4), None);
+            assert_eq!(brain.route_searches, searches, "same disconnected query must not repeat A*");
+            // Entering the excluded edge's destination through another
+            // approach remains valid, and changes the query immediately.
+            world.player_mut(id).unwrap().movement.origin = Vec3::X * 96.;
+            world.tick += 1;
+            follow_path(&mesh, &world, world.player(id).unwrap(), &mut brain,
+                &mut TickInput::default(), &mut rng, world.time(), 4., Some(4), None);
+            assert_eq!(brain.route_searches, searches + 1);
+            assert_eq!(brain.path, [2, 4]);
+            assert_eq!(brain.failed_route, None);
+            world.player_mut(id).unwrap().movement.origin = Vec3::ZERO;
+            brain.path.clear();
+            world.tick += 1;
+            follow_path(&mesh, &world, world.player(id).unwrap(), &mut brain,
+                &mut TickInput::default(), &mut rng, world.time(), 4., Some(4), None);
+            assert_eq!(brain.failed_route, Some((1, 4)));
+            let searches = brain.route_searches;
             world.tick = world.ticks(retry_at + 0.01);
             follow_path(&mesh, &world, world.player(id).unwrap(), &mut brain,
                 &mut TickInput::default(), &mut rng, world.time(), 4., Some(4), None);
             assert!(brain.failed_transitions.is_empty());
+            assert_eq!(brain.route_searches, searches + 1, "expiry invalidates the failed query");
             assert_eq!(brain.path, [1, 2, 4], "a temporary obstruction can be retried after expiry");
             // An unreachable point within the current area is not an edge.
             world.tick += 1;
