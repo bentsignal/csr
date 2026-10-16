@@ -649,6 +649,9 @@ mod tests {
             alpha_ref: 0.37,
             exposure: 2.5,
             lightmap_scale: 0.75,
+            base2_uv: Vec4::new(2.0, 2.0, 0.0, 0.0),
+            normal2_uv: Vec4::new(3.0, 4.0, 0.1, 0.2),
+            modulate_uv: Vec4::new(0.65, 0.65, 0.5, -0.5),
             ..Default::default()
         };
         let mut buffer = UniformBuffer::new(Vec::new());
@@ -664,8 +667,10 @@ mod tests {
             [f(20), f(24), f(28)],
             [params.alpha_ref, params.exposure, params.lightmap_scale]
         );
-        // The shadow fragment reads only this32-byte prefix, leaving the
-        // original cube/sun/cosmetic data and normal-render layout unchanged.
-        assert!(bytes.len() > 32);
+        for (offset, expected) in [(32, params.base2_uv), (48, params.normal2_uv), (64, params.modulate_uv)] {
+            assert_eq!([f(offset), f(offset + 4), f(offset + 8), f(offset + 12)], expected.to_array());
+        }
+        // Forward and shadow-depth alpha sampling share this80-byte prefix.
+        assert!(bytes.len() > 80);
     }
 }

@@ -75,6 +75,10 @@ pub struct WorldParams {
     pub alpha_ref: f32,
     pub exposure: f32,
     pub lightmap_scale: f32,
+    /// Authored secondary color, secondary normal, and blend-mask UV scale/offset.
+    pub base2_uv: Vec4,
+    pub normal2_uv: Vec4,
+    pub modulate_uv: Vec4,
     /// Dynamic lighting: +X, -X, +Y, -Y, +Z, -Z (Bevy axes).
     pub ambient_cube: [Vec4; 6],
     /// xyz: direction towards the sun (Bevy axes); w: sun visibility 0..1.
@@ -105,6 +109,9 @@ impl Default for WorldParams {
             alpha_ref: 0.5,
             exposure: 1.0,
             lightmap_scale: 1.0,
+            base2_uv: Vec4::new(1.0, 1.0, 0.0, 0.0),
+            normal2_uv: Vec4::new(1.0, 1.0, 0.0, 0.0),
+            modulate_uv: Vec4::new(1.0, 1.0, 0.0, 0.0),
             ambient_cube: [Vec4::splat(0.4); 6],
             sun_dir: Vec4::new(0.0, 1.0, 0.0, 0.0),
             sun_color: Vec4::ZERO,

@@ -548,12 +548,14 @@ pub fn material_from_vmt(
     if let Some(info) = mat.base_texture2().and_then(|n| textures.load(fs, images, n, true)) {
         out.base2 = info.handle;
         f |= flags::BLEND;
+        params.base2_uv = authored_uv_transform(mat, "$basetexturetransform2");
         if let Some(m) = mat
             .str("$blendmodulatetexture")
             .and_then(|n| textures.load(fs, images, n, false))
         {
             out.modulate = m.handle;
             f |= flags::BLEND_MODULATE;
+            params.modulate_uv = authored_uv_transform(mat, "$blendmodulatetransform");
         }
     }
     if let Some(info) = mat.str("$bumpmap").and_then(|n| textures.load(fs, images, n, false)) {
@@ -565,6 +567,7 @@ pub fn material_from_vmt(
     if let Some(info) = mat.str("$bumpmap2").and_then(|n| textures.load(fs, images, n, false)) {
         out.normal2 = info.handle;
         f |= flags::NORMAL2;
+        params.normal2_uv = authored_uv_transform(mat, "$bumptransform2");
     }
     if !lightmapped && mat.flag("$phong") {
         params.phong=Vec4::new(mat.f32("$phongexponent").unwrap_or(20.0).max(1.0),mat.f32("$phongboost").unwrap_or(1.0),0.0,if mat.flag("$basemapalphaphongmask"){1.0}else{0.0});
@@ -600,6 +603,44 @@ pub fn material_from_vmt(
     params.flags = f;
     out.params = params;
     out
+}
+
+fn authored_uv_transform(mat: &vmt::Material, key: &str) -> Vec4 {
+    let identity = Vec4::new(1.0, 1.0, 0.0, 0.0);
+    let Some(text) = mat.str(key) else { return identity };
+    match vmt::AxisAlignedTextureTransform::parse(text) {
+        Ok(transform) => Vec4::from_array(transform.scale_offset),
+        Err(error) => {
+            warn!("unsupported authored {key} transform ({error:?}); retaining identity UVs: {text}");
+            identity
+        }
+    }
+}
+
+#[cfg(test)]
+mod authored_transform_tests {
+    use super::*;
+
+    #[test]
+    fn independent_layer_parameters_and_rejected_rotation_keep_their_own_mapping() {
+        let mat = vmt::Material::parse_with(
+            r#""WorldVertexTransition" {
+                "$basetexturetransform2" "center 0 0 scale 2 2 rotate 0 translate 0 0"
+                "$bumptransform2" "center 0 0 scale 3 4 rotate 0 translate .25 -.5"
+                "$blendmodulatetransform" "center 0 0 scale .65 .65 rotate 0 translate 0 0"
+            }"#,
+            &|_| None, 0,
+        ).unwrap();
+        assert_eq!(authored_uv_transform(&mat, "$basetexturetransform2"), Vec4::new(2., 2., 0., 0.));
+        assert_eq!(authored_uv_transform(&mat, "$bumptransform2"), Vec4::new(3., 4., 0.25, -0.5));
+        assert_eq!(authored_uv_transform(&mat, "$blendmodulatetransform"), Vec4::new(0.65, 0.65, 0., 0.));
+        assert_eq!(authored_uv_transform(&mat, "$absent"), Vec4::new(1., 1., 0., 0.));
+        let rotated = vmt::Material::parse_with(
+            r#""WorldVertexTransition" { "$bumptransform2" "center 0 0 scale 2 2 rotate 90 translate 0 0" }"#,
+            &|_| None, 0,
+        ).unwrap();
+        assert_eq!(authored_uv_transform(&rotated, "$bumptransform2"), Vec4::new(1., 1., 0., 0.));
+    }
 }
 
 /// Keep batches local so their actual bounds can be rejected by the frustum.

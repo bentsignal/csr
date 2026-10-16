@@ -46,8 +46,9 @@ light, and release variant handles. No gameplay or authoritative state changes.
 The implementation uses the installed Bevy0.19.1 `Material` shadow/prepass
 callbacks, per-view directional light bindings, `fetch_directional_shadow`,
 `CascadeShadowConfigBuilder`, `RenderLayers`, and visibility propagation APIs.
-Its depth shader is a custom material fragment, with a tested32-byte prefix
-of the existing WorldParams serialization. The normal forward shader receives
+Its depth shader is a custom material fragment, with a tested 80-byte prefix
+of the WorldParams serialization, including the authored layer UV scale/offset
+fields. The normal forward shader receives
 the diagnostic shader definition only in the opt-in specialization.
 
 Coverage400 and caster reach400 are diagnostic Source-inch bounds. The native

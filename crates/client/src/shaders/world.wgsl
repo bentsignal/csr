@@ -22,6 +22,9 @@ struct WorldParams {
     alpha_ref: f32,
     exposure: f32,
     lightmap_scale: f32,
+    base2_uv: vec4<f32>,
+    normal2_uv: vec4<f32>,
+    modulate_uv: vec4<f32>,
     ambient_cube: array<vec4<f32>, 6>,
     sun_dir: vec4<f32>,
     sun_color: vec4<f32>,
@@ -213,11 +216,11 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
 
     var blend_weight = 0.0;
     if (params.flags & BLEND) != 0u {
-        let second = textureSample(base2_tex, base2_samp, uv);
+        let second = textureSample(base2_tex, base2_samp, uv * params.base2_uv.xy + params.base2_uv.zw);
         var t = vcolor.a;
         if (params.flags & BLEND_MODULATE) != 0u {
             // Blend modulation: G = blend centre, R = softness.
-            let m = textureSample(mod_tex, mod_samp, uv);
+            let m = textureSample(mod_tex, mod_samp, uv * params.modulate_uv.xy + params.modulate_uv.zw);
             let lo = clamp(m.g - m.r, 0.0, 1.0);
             let hi = clamp(m.g + m.r, 0.0, 1.0);
             t = smoothstep(lo, hi + 0.0001, t);
@@ -239,7 +242,7 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
         var tangent_normal = bump_normal(b1);
         weights = bump_weights(b1);
         if (params.flags & NORMAL2) != 0u {
-            let b2 = textureSample(normal2_tex, normal2_samp, uv).rgb;
+            let b2 = textureSample(normal2_tex, normal2_samp, uv * params.normal2_uv.xy + params.normal2_uv.zw).rgb;
             tangent_normal = normalize(mix(tangent_normal, bump_normal(b2), blend_weight));
             weights = mix(weights, bump_weights(b2), blend_weight);
         }
