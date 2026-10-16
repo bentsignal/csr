@@ -79,8 +79,11 @@ crate247 mesh. The subsequent flags0 containment gate narrows this scope;
 those earlier aggregate counts must not be presented as post-gate counts.
 All three measured target instances have flags0 and remain eligible.
 Filtering the retained pre-gate per-instance log against actual BSP flags
-predicts 173 meshes / 95,965 vertices after containment; this is a data/log
-prediction pending the next rendered run, not a new runtime count.
+predicted173 meshes /95,965 vertices after containment. The later actual
+flags0 packet024127 against frozen union220b107 confirms exactly those counts
+in both owned north/south renders, with both target arches and crate247 still
+admitted. These later runtime counts must not be attributed to the earlier
+pre-gate executable.
 The result is local: previously near-black arch/crate surfaces recover visible
 stone/wood details, while the sampled world-wall controls are byte-identical
 before and after. The crates are close to the native reference; the arches
@@ -151,10 +154,16 @@ of them and is not an appropriate lighting fix. The missing material belongs
 to one tiny nonzero-area triangle on a separate millwall prop. Neither finding
 accounts for the visible tunnel arches. No map bytes were changed.
 
-The flags0 containment change still needs root's next combined build and
-rendered aggregate-count check. Combined RELEASE verification remains pending
-for this source. No standalone
-RELEASE pass or complete native/historical parity is claimed. The earlier UV
+The final flags0 source was admitted in two actual PLAY renders024127. South
+is byte-identical to the prior after image; north full-frame RGB MAE is0.00225,
+with measured arch/crate patches0..0.0049 and both wall controls unchanged.
+Root personally reviewed all six original native/before/after images and both
+final flags0 images. PR163 then merged after full CI and combined RELEASE9197101C
+(build, workspace, installed-map probe/simulation, classic-map simulation,
+1,425 sound decodes and actual frontend/Video/match lifecycle). Classic DustII
+probe still reports the10 independently matched baseline faults; it is not a
+passing whole-map probe. There is no separate RELEASE classic-pose pair or
+complete native/historical parity claim. The earlier UV
 transform PR158 was merged after root's separate combined RELEASE verification;
 its reworked-map wall correction is distinct from this classic-map candidate.
 

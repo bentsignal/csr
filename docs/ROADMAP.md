@@ -209,6 +209,13 @@ byte-identical to 2018.
       normal map loading. Production-input stress and a five-bot movement,
       fire/reload, pause/resume run pass with inspected captures; this does not
       establish physical display latency or full fidelity. [MENU_PERFORMANCE.md](MENU_PERFORMANCE.md).
+- [x] Original main-menu music with its runtime track and saved/live gain;
+      actual sink lifecycle and combined RELEASE passed. Physical focus,
+      complete original mix and2015 historical defaults remain open. PR159.
+- [x] Connect original Video display/vsync controls to supported preferences;
+      ordinary authored vsync selection changes saved settings and live Window
+      policy, with reviewed1920x1080 images. Exclusive/triple modes, physical
+      latency and the remaining Video page remain open. PR161.
 - [ ] Complete the game API bridge for inventory/cases and the remaining
       classic panels. Original reset defaults still need verified evidence.
 - The fallback (a native Bevy layout built from the SWFs with the `swf`
@@ -275,6 +282,10 @@ thing is uncanny. Fidelity is measured, never eyeballed:
       other weapons' recovery and historical parity remain open.
       [PR #147](https://github.com/bentsignal/global-offensive/pull/147),
       [PR #151](https://github.com/bentsignal/global-offensive/pull/151).
+- [x] Separate independently measured M4A4 punch angle/velocity recovery;
+      actual128Hz held/restart rays and held/exhausted renders passed, together
+      with combined RELEASE/CI. Spray-phase selection stays unchanged;64Hz
+      native and historical parity remain open. PR164.
 - [x] Restore measured finite-history M4A4 look translation without changing
       the aim ray or weapon orientation. Actual rendered yaw/pitch cases have
       about one pixel of remaining rear-sight discrepancy; walking bob and
@@ -295,6 +306,10 @@ thing is uncanny. Fidelity is measured, never eyeballed:
       payload intervention, with a repeated control and unchanged installed
       data. A second marker supports hardware order for 16 selected records;
       general record-order and color-decoder admission remain open.
+- [x] Bounded selected-map authored lighting for flags0 unbumped static props
+      with equal-group records. Actual classic north/south renders admit173
+      meshes/95,965 vertices and preserve unsupported fallbacks; arches remain
+      overbright and complete record/color/lighting fidelity remains open. PR163.
 - [ ] Match jumping and **surfing** with native traces: supported input,
       ramp/crease/seam contact, speed retention and landing impact at recorded
       server settings and tick rates. Synthetic correctness tests and native
