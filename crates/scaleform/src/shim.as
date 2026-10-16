@@ -589,6 +589,8 @@ MovieClipLoader.prototype.loadClip = function(url, target) {
             mc._yscale *= scale;
             mc._x = this.context.x + (this.context.width - mc._width) / 2;
             mc._y = this.context.y + (this.context.height - mc._height) / 2;
+            // Production readiness follows the real, current fit's Init.
+            csrEI.call("csr.LoadingOverviewReady", this.context.map, this.context.serial, String(mc));
         };
         fit.onLoadError = function(mc, error) {
             if (this.traceUrl != undefined) {
