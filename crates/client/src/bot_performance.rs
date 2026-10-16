@@ -359,11 +359,11 @@ fn step(world: &mut World, p: &mut Proof, frame: f64) -> Result<(), String> {
             p.enter(Stage::Release);
         }
         Stage::Release if p.frames >= 2 && p.elapsed() >= 0.25 => {
-            p.key(binds[0], true);
+            p.key(binds[0].ok_or("movement key is unbound")?, true);
             p.enter(Stage::Move);
         }
         Stage::Move if p.elapsed() >= 1.0 => {
-            p.key(binds[0], false);
+            p.key(binds[0].ok_or("movement key is unbound")?, false);
             if position.distance(p.position) < 8.0 {
                 return Err("normal movement input produced no displacement".into());
             }
@@ -376,14 +376,14 @@ fn step(world: &mut World, p: &mut Proof, frame: f64) -> Result<(), String> {
         }
         Stage::Fire if shots > p.shots && clip < p.clip => {
             p.inputs.push(Input::Mouse(false));
-            p.key(binds[8], true);
+            p.key(binds[8].ok_or("reload key is unbound")?, true);
             p.enter(Stage::Reload);
         }
         Stage::Fire if p.elapsed() > 5.0 => {
             return Err("fresh attack did not fire/consume ammo".into());
         }
         Stage::Reload if reloading => {
-            p.key(binds[8], false);
+            p.key(binds[8].ok_or("reload key is unbound")?, false);
             p.enter(Stage::Reloading);
         }
         Stage::Reload if p.elapsed() > 2.0 => {

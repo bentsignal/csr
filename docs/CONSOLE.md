@@ -60,7 +60,10 @@ bind mwheelup invprev
 bind mwheeldown invnext
 ```
 
-`unbind mwheelup` or `unbind mwheeldown` disables that direction. Keyboard binds
+`unbind mwheelup` or `unbind mwheeldown` disables that direction. `unbind space`
+or `bind space ""` removes that keyboard binding without removing mouse or wheel
+bindings for the same action. Unbound keys stay unbound after relaunch;
+`bind space +jump` restores keyboard jump. Keyboard binds
 support the existing 13 configurable actions shown by `bindlist`: movement,
 jump, crouch, walk, use, reload, buy, drop, scoreboard and inspect. For example,
 `bind f +use` uses the existing key-swapping behavior: if F already belongs to
@@ -77,7 +80,7 @@ or `bind mouse4 ""` clears that button. These bindings save and load with the
 other settings. Pointer-capture clicks remain suppressed until release,
 including when the click has been rebound to jump.
 
-Keyboard unbind, arbitrary command binds and slot/Q/console rebinding remain
+Keyboard attack bindings, arbitrary command binds and slot/Q/console rebinding remain
 open. The classic keyboard settings page
 currently exposes only its connected sensitivity/inversion controls; the
 console makes these action bindings reachable from the classic frontend.
