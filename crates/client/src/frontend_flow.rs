@@ -80,11 +80,6 @@ fn capture(commands: &mut Commands, options: &Options, name: &str) {
         .spawn(bevy::render::view::screenshot::Screenshot::primary_window())
         .observe(bevy::render::view::screenshot::save_to_disk(path));
 }
-fn key(front: &Frontend, name: &str, vkey: u32) {
-    for down in [true, false] {
-        front.send(scaleform::Input::Key { name: name.into(), vkey, down });
-    }
-}
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn update(
@@ -240,8 +235,9 @@ pub(crate) fn update(
                     }
                     3 if flow.video_options && flow.video_edit => {
                         capture(&mut commands, &options, "flow-video-vsync-open.png");
-                        key(&front, "KEY_DOWN", 40);
-                        key(&front, "KEY_ENTER", 13);
+                        // Original popup row observed at 1920x1080. Exercise its
+                        // authored pointer control rather than assume key focus.
+                        click(&front, &window, 1250., 302.);
                     }
                     4 if flow.video_options && flow.video_edit => {
                         if !settings.vsync || window.present_mode != bevy::window::PresentMode::AutoVsync { return; }
@@ -250,8 +246,7 @@ pub(crate) fn update(
                         click(&front, &window, 1430., 230.);
                     }
                     5 if flow.video_options && flow.video_edit => {
-                        key(&front, "KEY_UP", 38);
-                        key(&front, "KEY_ENTER", 13);
+                        click(&front, &window, 1250., 270.);
                     }
                     6 if flow.video_options && flow.video_edit => {
                         if settings.vsync || window.present_mode != bevy::window::PresentMode::AutoNoVsync { return; }
