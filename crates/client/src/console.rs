@@ -19,11 +19,14 @@ pub struct DeveloperConsole {
     history_at: Option<usize>,
     draft: String,
     output: VecDeque<String>,
+    // Number of newer output lines below the viewport; zero follows output.
+    scrollback: usize,
+    wheel_lines: f32,
     pending: Vec<String>,
 }
 impl Default for DeveloperConsole {
     fn default() -> Self {
-        Self { open: false, blocked_frame: false, line: String::new(), cursor: 0, history: Vec::new(), history_at: None, draft: String::new(), output: VecDeque::from(["Developer Console - type help. ` or Escape closes; Up/Down history; Tab completes.".into()]), pending: Vec::new() }
+        Self { open: false, blocked_frame: false, line: String::new(), cursor: 0, history: Vec::new(), history_at: None, draft: String::new(), output: VecDeque::from(["Developer Console - type help. ` or Escape closes; Up/Down history; Tab completes.".into()]), scrollback: 0, wheel_lines: 0.0, pending: Vec::new() }
     }
 }
 impl DeveloperConsole {
@@ -34,10 +37,31 @@ impl DeveloperConsole {
         let line = line.into();
         for line in line.lines() {
             self.output.push_back(line.to_owned());
+            if self.scrollback > 0 {
+                self.scrollback += 1;
+            }
         }
         while self.output.len() > 200 {
             self.output.pop_front();
         }
+    }
+    fn follow_output(&mut self) {
+        self.scrollback = 0;
+        self.wheel_lines = 0.0;
+    }
+    fn clear(&mut self) {
+        self.output.clear();
+        self.follow_output();
+    }
+    fn scroll_by(&mut self, lines: isize, rows: usize) {
+        let oldest = self.output.len().saturating_sub(rows);
+        self.scrollback = self.scrollback.saturating_add_signed(lines).min(oldest);
+    }
+    fn visible_output(&mut self, rows: usize) -> String {
+        self.scroll_by(0, rows); // Also clamps the viewport after a resize/eviction.
+        let end = self.output.len() - self.scrollback;
+        self.output.iter().skip(end.saturating_sub(rows)).take(rows.min(end))
+            .cloned().collect::<Vec<_>>().join("\n")
     }
     fn recall(&mut self, up: bool) {
         if self.history.is_empty() || (!up && self.history_at.is_none()) {
@@ -61,6 +85,11 @@ impl DeveloperConsole {
             .unwrap_or_else(|| self.draft.clone());
         self.cursor = self.line.len();
     }
+}
+// Match the 75%-height root, padding/border, title/prompt and two gaps.
+const OUTPUT_LINE_HEIGHT: f32 = 23.0;
+fn visible_rows(height: f32) -> usize {
+    ((height * 0.75 - 98.0) / OUTPUT_LINE_HEIGHT).clamp(2.0, 30.0) as usize
 }
 #[derive(Component)]
 struct ConsoleRoot;
@@ -157,11 +186,13 @@ fn input(
 ) {
     console.blocked_frame = false;
     if !enabled.0 {
+        console.wheel_lines = 0.0;
         // Disabled screenshot/input proofs retain their existing message paths.
         reader.read(&events).for_each(drop);
         return;
     }
     let (window, cursor) = &mut *cursor;
+    let rows = visible_rows(window.height());
     let received: Vec<_> = reader.read(&events).cloned().collect();
     for event in &received {
         if !window.focused || event.state != ButtonState::Pressed {
@@ -185,6 +216,7 @@ fn input(
             KeyCode::Enter | KeyCode::NumpadEnter => {
                 let line = console.line.trim().to_string();
                 if !line.is_empty() {
+                    console.follow_output();
                     console.print(format!("] {line}"));
                     if console.history.last() != Some(&line) {
                         console.history.push(line.clone());
@@ -199,6 +231,8 @@ fn input(
                 console.history_at = None;
                 console.draft.clear();
             }
+            KeyCode::PageUp => console.scroll_by(rows as isize, rows),
+            KeyCode::PageDown => console.scroll_by(-(rows as isize), rows),
             KeyCode::ArrowUp => console.recall(true),
             KeyCode::ArrowDown => console.recall(false),
             KeyCode::ArrowLeft => {
@@ -254,6 +288,20 @@ fn input(
                 }
             }
         }
+    }
+    if console.open && window.focused && !console.blocked_frame {
+        let lines = match scroll.unit {
+            bevy::input::mouse::MouseScrollUnit::Line => scroll.delta.y,
+            bevy::input::mouse::MouseScrollUnit::Pixel => scroll.delta.y / OUTPUT_LINE_HEIGHT,
+        };
+        if lines.is_finite() {
+            console.wheel_lines += lines.clamp(-200.0, 200.0);
+            let whole = console.wheel_lines.trunc() as isize;
+            console.wheel_lines -= whole as f32;
+            console.scroll_by(whole, rows);
+        }
+    } else {
+        console.wheel_lines = 0.0;
     }
     if console.blocks_input() {
         events.clear();
@@ -458,7 +506,7 @@ fn run(world: &mut World, line: &str) -> Result<String, String> {
             COMMANDS.join("  ")
         )),
         "clear" if args.is_empty() => {
-            world.resource_mut::<DeveloperConsole>().output.clear();
+            world.resource_mut::<DeveloperConsole>().clear();
             Ok(String::new())
         }
         "use" if args.len() == 1 => use_utility(world, &args[0].to_ascii_lowercase()),
@@ -621,7 +669,7 @@ fn parse_address(text: &str) -> Result<std::net::SocketAddr, String> {
         })
 }
 fn draw(
-    console: Res<DeveloperConsole>,
+    mut console: ResMut<DeveloperConsole>,
     diagnostics: Res<DiagnosticsStore>,
     window: Single<&Window, With<PrimaryWindow>>,
     mut roots: Query<(&mut Visibility, &mut Node), With<ConsoleRoot>>,
@@ -648,19 +696,12 @@ fn draw(
         .get(&FrameTimeDiagnosticsPlugin::FPS)
         .and_then(|d| d.smoothed())
         .unwrap_or(0.0);
-    let rows = ((window.height() * 0.8 - 120.0) / 23.0).clamp(2.0, 30.0) as usize;
-    let lines = console
-        .output
-        .iter()
-        .skip(console.output.len().saturating_sub(rows))
-        .cloned()
-        .collect::<Vec<_>>()
-        .join("\n");
+    let lines = console.visible_output(visible_rows(window.height()));
     let (before, after) = console.line.split_at(console.cursor);
     for (mut text, part) in &mut texts {
         let display = match part {
             ConsoleText::Title => {
-                format!("Developer Console                                      {fps:.0} fps")
+                format!("Developer Console    PageUp/PageDown or wheel: scroll ({} lines below)    {fps:.0} fps", console.scrollback)
             }
             ConsoleText::Output => lines.clone(),
             ConsoleText::Prompt => format!("] {before}|{after}"),
@@ -817,6 +858,91 @@ mod tests {
         console.recall(false);
         console.recall(false);
         assert_eq!(console.line, "sens");
+    }
+    #[test]
+    fn scrollback_input_resizes_clears_and_respects_console_focus() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, bevy::input::InputPlugin))
+            .init_resource::<DeveloperConsole>()
+            .init_resource::<DiagnosticsStore>()
+            .init_resource::<crate::menu::Menu>()
+            .init_resource::<crate::player::InputBlockFrames>()
+            .insert_resource(crate::player::InputEnabled(true))
+            .add_systems(PreUpdate, input.after(InputSystems))
+            .add_systems(Update, draw);
+        let mut window = Window::default();
+        window.resolution.set(1280.0, 480.0);
+        let window = app.world_mut().spawn((window, CursorOptions::default(), PrimaryWindow)).id();
+        let output = app.world_mut().spawn((Text::new(""), ConsoleText::Output)).id();
+        {
+            let mut console = app.world_mut().resource_mut::<DeveloperConsole>();
+            console.open = true;
+            console.clear();
+            for n in 0..90 { console.print(format!("line {n}")); }
+            console.line = "draft".into();
+            console.cursor = 5;
+        }
+        let key = |code| KeyboardInput {
+            key_code: code,
+            logical_key: bevy::input::keyboard::Key::Unidentified(bevy::input::keyboard::NativeKey::Unidentified),
+            state: ButtonState::Pressed, text: None, repeat: false, window,
+        };
+        let wheel = |unit, y| bevy::input::mouse::MouseWheel {
+            unit, x: 0.0, y, window, phase: bevy::input::touch::TouchPhase::Moved,
+        };
+        app.update();
+        assert_eq!(app.world().get::<Text>(output).unwrap().0.lines().next(), Some("line 79"));
+        app.world_mut().resource_mut::<Messages<KeyboardInput>>().write(key(KeyCode::PageUp));
+        app.update();
+        assert_eq!(app.world().get::<Text>(output).unwrap().0.lines().last(), Some("line 78"));
+        // New asynchronous output leaves an older view anchored.
+        app.world_mut().resource_mut::<DeveloperConsole>().print("new output");
+        app.update();
+        assert_eq!(app.world().get::<Text>(output).unwrap().0.lines().last(), Some("line 78"));
+        app.world_mut().resource_mut::<Messages<bevy::input::mouse::MouseWheel>>()
+            .write(wheel(bevy::input::mouse::MouseScrollUnit::Pixel, 46.0));
+        app.update();
+        assert_eq!(app.world().get::<Text>(output).unwrap().0.lines().last(), Some("line 76"));
+        assert!(app.world().resource::<Messages<bevy::input::mouse::MouseWheel>>().is_empty());
+        assert_eq!(app.world().resource::<bevy::input::mouse::AccumulatedMouseScroll>().delta, Vec2::ZERO);
+        app.world_mut().resource_mut::<Messages<KeyboardInput>>().write(key(KeyCode::Home));
+        app.update();
+        assert_eq!(app.world().resource::<DeveloperConsole>().cursor, 0);
+        app.world_mut().resource_mut::<Messages<KeyboardInput>>().write(key(KeyCode::End));
+        app.update();
+        assert_eq!(app.world().resource::<DeveloperConsole>().cursor, 5);
+        // Large scroll is bounded, and a taller window still fills its viewport.
+        app.world_mut().resource_mut::<Messages<bevy::input::mouse::MouseWheel>>()
+            .write(wheel(bevy::input::mouse::MouseScrollUnit::Line, 1000.0));
+        app.update();
+        app.world_mut().get_mut::<Window>(window).unwrap().resolution.set(1280.0, 1080.0);
+        app.update();
+        assert_eq!(app.world().get::<Text>(output).unwrap().0.lines().next(), Some("line 0"));
+        assert_eq!(app.world().get::<Text>(output).unwrap().0.lines().count(), 30);
+        app.world_mut().resource_mut::<Messages<KeyboardInput>>().write(key(KeyCode::PageDown));
+        app.update();
+        assert_eq!(app.world().get::<Text>(output).unwrap().0.lines().next(), Some("line 30"));
+        let offset = app.world().resource::<DeveloperConsole>().scrollback;
+        app.world_mut().get_mut::<Window>(window).unwrap().focused = false;
+        app.world_mut().resource_mut::<Messages<bevy::input::mouse::MouseWheel>>()
+            .write(wheel(bevy::input::mouse::MouseScrollUnit::Line, -20.0));
+        app.world_mut().resource_mut::<Messages<KeyboardInput>>().write(key(KeyCode::PageDown));
+        app.update();
+        assert_eq!(app.world().resource::<DeveloperConsole>().scrollback, offset);
+        app.world_mut().get_mut::<Window>(window).unwrap().focused = true;
+        app.world_mut().resource_mut::<Messages<KeyboardInput>>().write(key(KeyCode::Enter));
+        app.update();
+        assert_eq!(app.world().resource::<DeveloperConsole>().scrollback, 0);
+        assert_eq!(app.world().resource::<DeveloperConsole>().pending, ["draft"]);
+        assert!(run(app.world_mut(), "clear").unwrap().is_empty());
+        app.update();
+        assert!(app.world().get::<Text>(output).unwrap().0.is_empty());
+        assert_eq!(app.world().resource::<DeveloperConsole>().scrollback, 0);
+        let mut console = app.world_mut().resource_mut::<DeveloperConsole>();
+        for n in 0..250 { console.print(format!("bounded {n}")); }
+        assert_eq!(console.output.len(), 200);
+        console.scroll_by(200, 30);
+        assert_eq!(console.visible_output(30).lines().next(), Some("bounded 50"));
     }
     #[test]
     fn console_consumes_open_typing_and_escape_before_gameplay_and_movie_readers() {
