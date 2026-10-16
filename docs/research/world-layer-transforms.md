@@ -44,14 +44,57 @@ relative to the old renderer. All these observed declarations specify a zero
 center, zero rotation and zero translation, so their intended scale does not
 depend on unobserved transform defaults or operation-order differences.
 
-## Verification status
+## Matched verification
 
-Focused asset-free coverage checks identity, a repeated tile crossing UV one,
+Source `ae5733546bd589db85a507a4ecaa5e2ee6ae32be`, crates tree
+`649eec5427aa487f380d2e3a8b4c3133bbdbefe5`, passed the full workspace CI
+in [run 38848645310](https://github.com/bentsignal/global-offensive/actions/runs/38848645310).
+Local focused VMT tests passed 7/7; local PLAY client tests passed 315 with
+three ignored. Coverage checks identity, a repeated tile crossing UV one,
 negative incoming UVs, centered nonuniform scaling with translation, reordered
-fields, rejection/fallback and the forward/shadow uniform prefix. The installed
-scene comparison, full workspace checks and required release probe/simulation
-are pending coordinated build/render admission. No rendered improvement is
-claimed at this checkpoint.
+fields, rejection/fallback and the actual forward/shadow uniform prefix.
+The local PLAY launcher build, required Dust II probe and simulation exited
+zero, with zero reported probe/simulation failures.
+
+All 23 local workspace packages were cleaned for PLAY before building in the
+isolated worktree. The immutable copied executable SHA-256 was
+`1257DC6B7F7552786B37A9F62804C6C596AA4671A7C550D0148FDF831BCEC0EB`;
+its compiled unsupported-transform diagnostic was checked in the copied binary.
+The existing read-only `vhv_metadata` example loaded the actual selected BSP
+through the shared level loader, verified the map hash above and exited zero.
+This identifies the installed reworked Dust II, not the pinned pre-rework
+`de_dust2_2017` archive or a 2015 map.
+
+Native Legacy and before/after CSR captures used 1600x900 and native `getpos`
+readback eyes `(250,450,350)` and `(250,650,400)`, both at pitch/yaw/roll zero.
+The baseline executable was built from `aaa2e72fd1bd7d33b3112c054dec81c495322a43`.
+Both native images and all four CSR images were personally inspected: the
+previous doubled stone-course size is corrected in both views. Each owned CSR
+process exited zero without ERROR/panic; the native session restored all twelve
+preference snapshots exactly and left no native process. The orchestrator
+independently inspected the native/before/after trio at the low camera; that is
+not a claim of independent review of all six images.
+
+Fixed unoccluded wall rectangles, selected from the viewed images before
+computing metrics, exclude sky, foreground dishes/rails and the dark roof
+shadow. RGB MAE uses the 0-255 range; SSIM uses non-overlapping 8x8 luma blocks.
+
+| Wall reference | Pixel rectangle x0,y0,x1,y1 | RGB MAE before / after | SSIM before / after |
+| --- | --- | --- | --- |
+| Low | 920,250,1160,600 | 19.22 / 15.32 | 0.344 / 0.465 |
+| High | 650,380,1000,520 | 15.56 / 12.31 | 0.442 / 0.553 |
+
+Whole-frame RGB MAE improved 22.67 to 22.00 and 23.79 to 23.36; SSIM improved
+0.696 to 0.720 and 0.725 to 0.746. Remaining lighting, prop and texture-blend
+differences are visible; these local structural improvements do not establish
+whole-scene parity. The original global process-present flag is retained: a CI
+headless `csr sim de_dust2` was observed after the last screenshot child exited.
+It was not an owned screenshot leak and was not stopped. Private posthoc
+admission keeps that distinction separate from the original receipt.
+
+Required RELEASE build/probe/simulation validation is pending the orchestrator's
+frozen combined integration build. No separate RELEASE pass for `ae57335` is
+claimed here. Captures establish material mapping, not an FPS improvement.
 
 This does not fix missing cascaded sun shadows, the unknown original owner
 screenshot pose, new-layer blend/border composition, general world lighting,
