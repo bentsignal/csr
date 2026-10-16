@@ -69,9 +69,9 @@ impl Scene {
                     }
                     (
                         kind @ ("choice" | "dropdown"),
-                        "m_pitch" | "cl_radar_rotate" | "cl_crosshaircolor" | "closeonbuy" | "snd_mute_losefocus",
+                        "m_pitch" | "cl_radar_rotate" | "cl_crosshaircolor" | "closeonbuy" | "snd_mute_losefocus" | "fullscreen_restart" | "sys_vsync",
                     ) => {
-                        let choices = block
+                        let mut choices = block
                             .block(if kind == "dropdown" {
                                 "dropdown"
                             } else {
@@ -85,6 +85,24 @@ impl Scene {
                                     .then(|| (loc.get(label).unwrap_or(label).into(), value))
                             })
                             .collect::<Option<Vec<_>>>()?;
+                        // Offer only modes with working backends. In particular,
+                        // exclusive fullscreen is not borderless fullscreen, and
+                        // a triple-buffer preference is not this FIFO toggle.
+                        choices.retain(|(_, value)| match convar {
+                            "fullscreen_restart" => *value == 0.0 || *value == 2.0,
+                            "sys_vsync" => *value == 0.0 || *value == 1.0,
+                            _ => true,
+                        });
+                        if convar == "sys_vsync" {
+                            for (label, value) in &mut choices {
+                                if *value == 1.0 {
+                                    // This backend implements synchronized
+                                    // presentation, not Source's buffer-count
+                                    // selection. Use the original generic token.
+                                    *label = loc.get("#SFUI_Settings_Enabled").unwrap_or("Enabled").into();
+                                }
+                            }
+                        }
                         if choices.len() < 2 || choices.len() > 32 {
                             return None;
                         }
@@ -290,10 +308,10 @@ impl Scene {
             );
         }
         calls.call(path, "ShowPanel", vec![]);
-        if self.mode == 8 {
+        if matches!(self.mode, 6 | 8) {
             // Observed original controller dead-zone art remains visible in
-            // Audio mode. Its public visibility counterfact removes the empty
-            // black panel without replacing the authored settings layout.
+            // Video and Audio modes. Its public visibility counterfact removes
+            // the empty black panel without replacing the authored layout.
             calls.set(&format!("{path}.DeadZone"), "_visible", false.into());
         }
     }
@@ -427,6 +445,25 @@ fn dropdown_presentation(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn video_dropdowns_offer_working_modes_and_map_list_indices_to_native_values() {
+        use super::*;
+        let block = kv::parse(r#"
+            display { type dropdown convar fullscreen_restart priority 1 dropdown { Windowed 0 Exclusive 1 Borderless 2 } }
+            vsync { type dropdown convar sys_vsync priority 2 dropdown { Disabled 0 Double 1 Triple 2 } }
+        "#).unwrap();
+        let mut scene = Scene::from_block(&block, 6, &Localization::default());
+        assert_eq!(scene.count(), 2);
+        let mut calls = Calls::default();
+        let (name, value) = scene.value(&0u32.into(), &1.0.into(), "_level21", &mut calls).unwrap();
+        assert_eq!(name, "fullscreen_restart");
+        assert_eq!(value.num(), 2.0, "second displayed choice must select borderless, not exclusive");
+        assert!(scene.value(&0u32.into(), &2.0.into(), "_level21", &mut calls).is_none());
+        let (name, value) = scene.value(&1u32.into(), &1.0.into(), "_level21", &mut calls).unwrap();
+        assert_eq!(name, "sys_vsync");
+        assert_eq!(value.num(), 1.0);
+        assert!(scene.value(&1u32.into(), &2.0.into(), "_level21", &mut calls).is_none());
+    }
     use super::*;
     #[test]
     fn close_on_buy_choice_cycles_from_saved_no_and_reopens_with_saved_yes() {
