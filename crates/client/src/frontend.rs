@@ -1316,6 +1316,8 @@ pub(crate) fn update(
             context.archive.as_ref().is_some_and(|art| art.unavailable())) {
             // Invalid/replaced/missing archive art keeps the existing engine
             // progress/cancel surface. Do not substitute a remake overview.
+            // Keep front.loading_selection: the failed generation remains
+            // observed and cannot rebuild/retry until the selection changes.
             snapshot.loading_map = None;
         }
         snapshot.pause_surface.activate(front.worker_generation,
