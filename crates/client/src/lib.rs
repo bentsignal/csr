@@ -734,7 +734,9 @@ fn smoke_test(
         && world.as_ref().is_some_and(|w|w.0.time()>=capture_time.unwrap()) { *probe_frame=Some(*frame); }
     let capture_frame = if probe.active()||capture_time.is_some() { probe_frame.unwrap_or(u32::MAX - 30) } else { opts.frames };
     if *frame > 120 && *frame <= capture_frame { frame_times.push(real.delta_secs() * 1000.0); }
-    if *frame == capture_frame.saturating_sub(90) && std::env::var_os("CSR_INSPECT").is_some(){inspect.0+=1;}
+    if *frame == capture_frame.saturating_sub(90) && std::env::var_os("CSR_INSPECT").is_some(){inspect.start();}
+    // This system has already required an actual screenshot request above.
+    if capture_frame.checked_sub(10) == Some(*frame) && std::env::var_os("CSR_INSPECT_CANCEL").is_some(){inspect.cancel();}
     // CSR_BUY_MENU=n: show the buy menu on category n (0 = none picked).
     if let Ok(cat) = std::env::var("CSR_BUY_MENU").map(|v| v.parse::<usize>().unwrap_or(0)) {
         // The close-on-buy proof must leave subsequent state to the real
