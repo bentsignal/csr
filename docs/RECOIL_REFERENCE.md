@@ -650,3 +650,64 @@ cases, even though angle/velocity already advance while holstered. This
 patch does not establish those cases, native 64 Hz behavior or historical
 2015 parity. Final actual-source ray checks and rendered validation remain
 pending.
+
+
+## M4A4 independent punch release and restart response
+
+The exact installed M4A4 profile now has a separate candidate punch response.
+It uses the existing generic angle/velocity state and authoritative TickInput
+path, with independently observed M4 endpoints rather than scaled AK values.
+Other M4A1-S modes, Galil, FAMAS and custom content keep their prior recovery.
+AK policy and its declared endpoints are unchanged.
+
+An owned Legacy 1.38.8.1 session positively identified actual M4A4 30/90,
+one local near-shot wave, a fresh central impact and 29/90 afterward.
+Before/after/settled images expose readable public angle and angular velocity,
+zero movement, the same eye and stationary geometry. One-shot and full-30
+release-only curves each provide eleven same-frame public samples. Recovered
+starts show 30/89 and 30/88 with zero punch; the full curve ends at 0/88.
+Native images/logs remain private; all 12 preference entries restored exactly.
+
+The separately observed M4 trajectories support radial angle shrink, velocity
+contribution, then velocity decay with public parameters 8, 18 and 4.5 at the
+declared 128 Hz reference step. Advancing from displayed initial states,
+relative update counts aligned by velocity envelopes miss the one-shot and
+full-magazine angles by at most 0.0301 and 0.0384 degrees. Both initial and
+later displayed states have 1/32-degree quantization. These are bounded
+observations, not exact engine state or absolute native sample-tick claims.
+
+The frozen rounded endpoint estimates are first impulse (-16.25,+3.55) and
+final impulse (-20.82,-10.10) degrees per second. The first estimate assumes
+one update before the earliest readable velocity. The final estimate uses
+two updates and nominal rounded final held-ray angles; held-marker uncertainty
+means the physical parameters are not uniquely recovered. No restart marker
+was used to select or refit these estimates. All 29 independently counted
+native full-magazine shot intervals, rounded at 128 Hz, match the actual
+rewrite deadline-carry schedule used to reconstruct intermediate impulses.
+
+A separate prospective three-shot/ten-shot restart packet checks this frozen
+response. It emitted exactly four and eleven requested local near waves.
+Achieved last-partial-to-resumed sound-engine intervals were 0.383 and 0.366
+seconds. Fresh camera rotations checked in two regions fit focal lengths
+599.85 to 600.075 pixels at 1600x900. Old colored impact markers are visibly
+absent before each restart, followed by one new resumed marker. Frozen
+predictions differ from the observed centers by 1.044 and 0.441 pixels,
+within the original approximately two-pixel bound. Same-frame public pose
+rows retain the selected M4A4, fixed eye, zero movement and recovered start.
+A partial ten-shot HUD capture lagged at 21; the weapon-pose/clean-before-
+restart images show 20 and the resumed image 19. Shot ordering comes from
+counted local waves, not that lagging HUD frame or console receipt times.
+
+Two earlier copies of the restart observation timed out at their image-
+admission gates before any restart cases. Their negative receipts and late
+decision files remain intact and are not admissions. The successful packet
+uses an explicitly reviewed longer finite image-review boundary; no model
+parameters changed between those attempts. No native source or asset bytes
+are included here.
+
+Direct M4 weapon-phase observation is still pending. Until that separate
+gate passes, this addition does not claim native phase recovery or later
+resumed spraying. Actual Rust ray, snapshot/prediction, rendered and full
+CI verification of this candidate remain pending. Native 64 Hz behavior,
+nonstanding recovery, camera tracking and requested historical 2015 parity
+remain unestablished.
