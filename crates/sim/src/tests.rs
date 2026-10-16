@@ -740,6 +740,50 @@ fn scope_cycles_on_presses_and_uses_scoped_stats() {
 }
 
 #[test]
+fn scope_input_uses_authored_alt_recoil_without_resetting_the_existing_spray() {
+    let mut normal = world();
+    let id = normal.add_player("scoped recoil", Team::CounterTerrorist);
+    let mut aug = def("weapon_aug", 8, WeaponClass::Rifle, Side::CounterTerrorist, 3300, 5);
+    aug.recoil.magnitude = 30.;
+    for (key, value) in [("zoom levels", "2"), ("zoom fov 1", "45"), ("zoom fov 2", "20"),
+        ("recoil angle alt", "0"), ("recoil angle variance alt", "0"),
+        ("recoil magnitude alt", "0"), ("recoil magnitude variance alt", "0")] {
+        aug.attributes.insert(key.into(), value.into());
+    }
+    // This synthetic normal-only observation must not leak into the scoped mode.
+    aug.recoil_trajectory = Some(weapons::RecoilTrajectory {
+        reference: "unscoped-only-fixture".into(),
+        bullet_angles: vec![[0., 0.], [-2., 0.], [-4., 0.], [-6., 0.], [-8., 0.]],
+        response: None,
+    });
+    let p = normal.player_mut(id).unwrap();
+    p.weapons = vec![WeaponState::new(Arc::new(aug))];
+    p.active = 0;
+    p.weapons[0].recoil_index = 3.;
+    assert_ne!(p.weapons[0].aim_punch(), [0.; 2]); // Warm the normal derived cache.
+    let deadline = p.weapons[0].next_attack;
+    let mut scoped = normal.clone();
+    scoped.step(&[(id, TickInput { buttons: buttons::ATTACK2, ..Default::default() })]);
+    normal.step(&[(id, TickInput::default())]);
+    let w = scoped.player(id).unwrap().active_weapon().unwrap();
+    assert_eq!(w.zoom_level, 1);
+    assert_eq!(w.next_attack, deadline);
+    assert_eq!(w.recoil_index, normal.player(id).unwrap().active_weapon().unwrap().recoil_index);
+    assert!(w.recoil_index > 0., "scope preserves the ongoing spray rather than resetting it");
+    for candidate in [&mut normal, &mut scoped] {
+        candidate.step(&[(id, TickInput { buttons: buttons::ATTACK, ..Default::default() })]);
+        assert_eq!(candidate.events.iter().filter(|e| matches!(e, GameEvent::Fire { .. })).count(), 1);
+        assert_eq!(candidate.player(id).unwrap().active_weapon().unwrap().clip, 4);
+    }
+    let ray = |world: &World| world.events.iter().find_map(|e| match e {
+        GameEvent::Tracer { start, end, .. } => Some((*end - *start).normalize()), _ => None,
+    }).unwrap();
+    assert!(ray(&scoped).abs_diff_eq(Vec3::X, 0.00001),
+        "the real scoped shot uses the authored zero-alt recoil, not the warmed normal observation");
+    assert!(ray(&normal).z > 0.01, "the ordinary unscoped control retains its recoil");
+}
+
+#[test]
 fn bolt_action_unscopes_and_resumes_the_same_zoom() {
     let (mut world, id) = scoped_world();
     world.player_mut(id).unwrap().weapons[0].set_zoom(2, 0.0);
