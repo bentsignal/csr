@@ -283,8 +283,9 @@ pub fn spawn(
                     && m.params.flags & crate::material::flags::NORMAL == 0)
                 .and_then(|_| authored.as_ref()?.get(mesh_index)?.as_deref());
             if let Some(colors) = authored_colors {
-                // The scoped candidate has already checked this hardware mesh's
-                // count and traversal. Do not index the source VVD vector here.
+                // The scoped candidate checked mesh identity/counts; its
+                // individual hardware-order interpretation still needs native
+                // spatial admission. Never index the source VVD vector here.
                 authored_meshes += 1;
                 authored_vertices += colors.len();
             }

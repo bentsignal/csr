@@ -6,9 +6,10 @@
 
 use mdl::vhv::{InstanceKey, ScopedFile};
 
-/// Keep the complete selected-map/checksum/hardware correspondence gate ahead
-/// of decoding. `Model::meshes` and each mesh's vertices are in the existing
-/// hardware-output traversal, not fixup-resolved VVD index order.
+/// Keep the selected-map/checksum/hardware-count candidate gate ahead of
+/// decoding. The proposed correspondence uses the existing mesh's hardware-
+/// output order, not VVD order. Counts/checksums alone do not prove individual
+/// record ordering; that interpretation still needs spatial native admission.
 pub(super) fn load(
     level: &level::Level,
     ordinal: usize,

@@ -10,8 +10,11 @@ The existing VHV parser checks version, bounded spans, counts and non-overlap.
 The selected map's content identity, BSP SHA1 and static-prop ordinal select
 `sp_hdr_<ordinal>.vhv` from that map's embedded archive only. The candidate
 also requires the model checksum, complete mesh counts, LOD0/default-submodel
-hardware identities and per-mesh hardware vertex counts. Records index the
-existing hardware-output vertex traversal, never the fixup-resolved VVD vector.
+hardware identities and per-mesh hardware vertex counts. The proposed record
+correspondence indexes the existing hardware-output vertex traversal, never the
+fixup-resolved VVD vector. Those count/checksum gates do not themselves prove
+individual ordering; multiple spatially separated native prop/vertex regions
+must admit or reject the correspondence along with the color interpretation.
 
 Only raw flags2, three identical four-byte groups per record, and zero fourth
 bytes qualify. One unsupported record rejects that complete mesh. Only the
