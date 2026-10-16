@@ -68,6 +68,7 @@ pub fn setup(
         ],
         &mut mats,
         &mut images,
+        false,
     );
     let fire = crate::utility_particles::load(
         fs,
@@ -80,6 +81,7 @@ pub fn setup(
         ],
         &mut mats,
         &mut images,
+        false,
     );
     let he = crate::utility_particles::load(
         fs,
@@ -91,6 +93,7 @@ pub fn setup(
         ],
         &mut mats,
         &mut images,
+        true,
     );
     let wick = crate::utility_particles::load(
         fs,
@@ -98,6 +101,7 @@ pub fn setup(
         &["weapon_molotov_fp_wick"],
         &mut mats,
         &mut images,
+        false,
     );
     // Prewarm each material without a visible particle, so a first short HE
     // flash does not expire while its pipeline compiles.
