@@ -246,6 +246,15 @@ impl Player {
         self.weapons.iter().any(|w| w.def.class_name == class_name)
     }
 
+    /// Shared inventory capacity for buying and collecting grenades.
+    fn can_carry_grenade(&self, def: &weapons::WeaponDefinition) -> bool {
+        let count = self.weapons.iter().filter(|w| w.def.class_name == def.class_name).count();
+        let total = self.weapons.iter().filter(|w| w.def.class == weapons::WeaponClass::Grenade).count();
+        total < 4 && count < if def.class_name == "weapon_flashbang" { 2 } else { 1 }
+            && !(utility::Kind::from_name(&def.class_name).is_some_and(|k| k.fire())
+                && self.weapons.iter().any(|w| utility::Kind::from_name(&w.def.class_name).is_some_and(|k| k.fire())))
+    }
+
     pub fn has_bomb(&self) -> bool {
         self.has(C4)
     }
@@ -1113,6 +1122,7 @@ impl World {
             let ok = match &item.kind {
                 GroundKind::DefuseKit => p.team == Team::CounterTerrorist && !p.defuse_kit,
                 GroundKind::Weapon(w) if w.def.class_name == C4 => p.team == Team::Terrorist,
+                GroundKind::Weapon(w) if w.def.class == weapons::WeaponClass::Grenade => p.can_carry_grenade(&w.def),
                 GroundKind::Weapon(w) => p.weapon_in_slot(weapon::slot(&w.def)).is_none() && !p.has(&w.def.class_name),
             };
             if ok {
@@ -1169,10 +1179,7 @@ impl World {
                     return Err(BuyError::WrongTeam);
                 }
                 if if def.class == weapons::WeaponClass::Grenade {
-                    let count=p.weapons.iter().filter(|w| w.def.class_name==def.class_name).count();
-                    let total=p.weapons.iter().filter(|w| w.def.class==weapons::WeaponClass::Grenade).count();
-                    total>=4 || count>=if def.class_name=="weapon_flashbang" {2} else {1}
-                        || (utility::Kind::from_name(&def.class_name).is_some_and(|k| k.fire()) && p.weapons.iter().any(|w| utility::Kind::from_name(&w.def.class_name).is_some_and(|k| k.fire())))
+                    !p.can_carry_grenade(def)
                 } else { p.has(&def.class_name) } {
                     return Err(BuyError::AlreadyOwned);
                 }
