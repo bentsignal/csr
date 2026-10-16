@@ -308,10 +308,10 @@ impl Scene {
             );
         }
         calls.call(path, "ShowPanel", vec![]);
-        if self.mode == 8 {
+        if matches!(self.mode, 6 | 8) {
             // Observed original controller dead-zone art remains visible in
-            // Audio mode. Its public visibility counterfact removes the empty
-            // black panel without replacing the authored settings layout.
+            // Video and Audio modes. Its public visibility counterfact removes
+            // the empty black panel without replacing the authored layout.
             calls.set(&format!("{path}.DeadZone"), "_visible", false.into());
         }
     }

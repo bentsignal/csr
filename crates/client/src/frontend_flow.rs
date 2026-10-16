@@ -22,6 +22,7 @@ pub(crate) struct Flow {
     tick: u64,
     options_roundtrip: bool,
     video_options: bool,
+    video_edit: bool,
     home_ready_ms: Option<f64>,
     pause_hover: bool,
     pause_hover_started: Option<Instant>,
@@ -37,6 +38,7 @@ impl Default for Flow {
             tick: 0,
             options_roundtrip: matches!(std::env::var("CSR_TEST_FLOW_OPTIONS").as_deref(), Ok("1" | "video")),
             video_options: std::env::var("CSR_TEST_FLOW_OPTIONS").as_deref() == Ok("video"),
+            video_edit: std::env::var("CSR_TEST_FLOW_VIDEO_EDIT").as_deref() == Ok("1"),
             home_ready_ms: None,
             pause_hover: std::env::var("CSR_TEST_PAUSE_HOVER").as_deref() == Ok("1"),
             pause_hover_started: None,
@@ -78,12 +80,18 @@ fn capture(commands: &mut Commands, options: &Options, name: &str) {
         .spawn(bevy::render::view::screenshot::Screenshot::primary_window())
         .observe(bevy::render::view::screenshot::save_to_disk(path));
 }
+fn key(front: &Frontend, name: &str, vkey: u32) {
+    for down in [true, false] {
+        front.send(scaleform::Input::Key { name: name.into(), vkey, down });
+    }
+}
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn update(
     mut flow: Local<Flow>,
     front: Res<Frontend>,
     options: Res<Options>,
+    settings: Res<crate::settings::Settings>,
     state: Res<State<AppState>>,
     level: Option<Res<LoadedLevel>>,
     world: Option<Res<SimWorld>>,
@@ -224,6 +232,31 @@ pub(crate) fn update(
                     2 => {
                         if !front.options_requested() || !front.movie_ready("OptionsMenu") { return; }
                         capture(&mut commands, &options, if flow.video_options { "flow-pause-video.png" } else { "flow-pause-audio.png" });
+                        if flow.video_options && flow.video_edit {
+                            click(&front, &window, 1430., 230.);
+                        } else {
+                            click(&front, &window, 380., 970.);
+                        }
+                    }
+                    3 if flow.video_options && flow.video_edit => {
+                        capture(&mut commands, &options, "flow-video-vsync-open.png");
+                        key(&front, "KEY_DOWN", 40);
+                        key(&front, "KEY_ENTER", 13);
+                    }
+                    4 if flow.video_options && flow.video_edit => {
+                        if !settings.vsync || window.present_mode != bevy::window::PresentMode::AutoVsync { return; }
+                        info!("frontend flow: authored Video choice applied saved vsync=true and actual AutoVsync window policy");
+                        capture(&mut commands, &options, "flow-video-vsync-enabled.png");
+                        click(&front, &window, 1430., 230.);
+                    }
+                    5 if flow.video_options && flow.video_edit => {
+                        key(&front, "KEY_UP", 38);
+                        key(&front, "KEY_ENTER", 13);
+                    }
+                    6 if flow.video_options && flow.video_edit => {
+                        if settings.vsync || window.present_mode != bevy::window::PresentMode::AutoNoVsync { return; }
+                        info!("frontend flow: authored Video choice restored saved vsync=false and actual AutoNoVsync window policy");
+                        capture(&mut commands, &options, "flow-video-vsync-disabled.png");
                         click(&front, &window, 380., 970.);
                     }
                     _ => {
