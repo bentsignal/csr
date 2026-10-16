@@ -793,6 +793,7 @@ mod tests {
             recoil_trajectory: None,
             recoil_trajectory_unsuppressed: None,
             grenade_animations: None,
+            grenade_launch: None,
             suppressor_animations: None,
             id: ContentId::csgo(ContentKind::Weapon, "ak47"),
             class_name: "weapon_ak47".into(),

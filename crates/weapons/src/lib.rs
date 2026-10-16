@@ -127,6 +127,16 @@ pub struct GrenadeAnimations {
     pub underhand: GrenadeReleaseAnimation,
 }
 
+/// Independently observed launch response, separate from animation timing.
+/// The optional scope is intentionally narrower than a complete ballistic law.
+#[derive(Clone, Debug, PartialEq)]
+pub struct GrenadeLaunch {
+    pub reference: String,
+    /// Grounded primary throws only; vertical and airborne response remain
+    /// unchanged until separately observed. Applied to the horizontal vector.
+    pub grounded_overhand_horizontal_inheritance: f32,
+}
+
 /// Authored viewmodel transition metadata; gameplay lockout follows the clip
 /// until native attack timing is independently measured.
 #[derive(Clone, Debug, PartialEq)]
@@ -185,6 +195,7 @@ pub struct WeaponDefinition {
     pub recoil_trajectory_unsuppressed: Option<RecoilTrajectory>,
     pub view_model: String,
     pub grenade_animations: Option<GrenadeAnimations>,
+    pub grenade_launch: Option<GrenadeLaunch>,
     pub suppressor_animations: Option<SuppressorAnimations>,
     pub world_model: String,
     /// Soundscript entry for the default equipped shot, e.g. `Weapon_AK47.Single`.
@@ -352,6 +363,7 @@ fn build(index: &str, class_name: &str, r: &Resolved) -> WeaponDefinition {
     };
     WeaponDefinition {
         grenade_animations: None,
+        grenade_launch: None,
         recoil_trajectory: None,
         recoil_trajectory_unsuppressed: None,
         suppressor_animations: None,
