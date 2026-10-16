@@ -387,6 +387,26 @@ impl Engine for Bridge {
             }
         }
         let arg = |index: usize| args.get(index).map(Value::str).unwrap_or_default();
+        if object == "csr" && method == "LoadingArtInit"
+            && std::env::var("CSR_TEST_FLOW_ARCHIVE_LOADING").as_deref() == Ok("1")
+            && self.dispatch_epoch.is_some() {
+            let data = self.data.lock().unwrap();
+            if data.state == AppState::Loading {
+                if let Some(context) = &data.loading_map {
+                    if let Some(art) = &context.archive {
+                        let expected = self.roots.get("LoadingScreen").map(|path| format!("{path}.Panel.Overview"));
+                        if art.requested(context.selected.serial, &arg(0)) == Some(crate::frontend_loading::Image::Radar)
+                            && expected.as_deref() == Some(arg(1).as_str()) && arg(1) == arg(2)
+                            && args.get(3).is_some_and(|v| v.num().is_finite() && v.num() > 0. && v.num() <= 4096.)
+                            && args.get(4).is_some_and(|v| v.num().is_finite() && v.num() > 0. && v.num() <= 4096.) {
+                            art.observe_init();
+                            info!("frontend flow: actual owned loading image initialized map={} generation={} url={}",
+                                context.selected.name, context.selected.serial, arg(0));
+                        }
+                    }
+                }
+            }
+        }
         if object.starts_with("OwnedQuit") {
             if !self.quit.owns(object) || self.dispatch_epoch.is_none()
                 || !matches!(self.data.lock().unwrap().state, AppState::Menu | AppState::Browser) { return None; }
@@ -682,6 +702,9 @@ impl Engine for Bridge {
                 if data.state == AppState::Loading {
                     calls.call(path, "setLoadingText", vec![data.loading.clone().into()]);
                     if let Some(context) = &data.loading_map {
+                        if std::env::var("CSR_TEST_FLOW_ARCHIVE_LOADING").as_deref() == Ok("1") {
+                            calls.set("_global.csrDiagnostics", "loadingTraceBudget", 32.into());
+                        }
                         calls.call("_global.csrBindings", "configureLoadingOverview", context.overview_arguments(path));
                         calls.call(path, "setMapInfo", context.arguments());
                         calls.call(path, "setHintText", vec!["".into()]);
@@ -1069,6 +1092,13 @@ impl Frontend {
     pub(crate) fn lobby_phase(&self) -> crate::frontend_lobby::Phase { self.lobby.lock().unwrap().phase() }
     /// Counts completed frame assignments to the Bevy image, not render loops.
     pub(crate) fn presented_serial(&self) -> u64 { self.presented_serial }
+    pub(crate) fn observed_loading_image(&self) -> Option<(crate::session::LoadingMap, String)> {
+        let data = self.data.lock().ok()?;
+        if data.state != AppState::Loading { return None; }
+        let context = data.loading_map.as_ref()?;
+        let art = context.archive.as_ref()?;
+        art.observed_init().then(|| (context.selected.clone(), art.url(context.selected.serial, crate::frontend_loading::Image::Radar)))
+    }
     /// Requested worker viewport and the last assigned raster, for opt-in diagnostics.
     pub(crate) fn raster_dimensions(&self, images: &Assets<Image>) -> Option<((u32, u32), (u32, u32))> {
         let size = images.get(&self.image)?.texture_descriptor.size;
@@ -1637,6 +1667,9 @@ pub(crate) fn update(
         front.loading_map = loading_map.clone();
         if front.movie_ready("LoadingScreen") {
             if let Some(context) = loading_map {
+                if std::env::var("CSR_TEST_FLOW_ARCHIVE_LOADING").as_deref() == Ok("1") {
+                    front.send(Input::Set { path: "_global.csrDiagnostics".into(), property: "loadingTraceBudget".into(), value: 32.into() });
+                }
                 front.send(Input::Call { path: "_global.csrBindings".into(), function: "configureLoadingOverview".into(), args: context.overview_arguments("_level1000") });
                 for (function, args) in [
                     ("setMapInfo", context.arguments()),
