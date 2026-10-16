@@ -31,4 +31,21 @@ starts inspection before the real attack deadline, and cancels inspection.
 Both new transitions must preserve the exact displayed pose at entry, and a
 second actual simulation attack remains rejected until the unchanged deadline.
 The test reuses the existing installed viewmodel fixture and needs no GPU.
-Runtime verification remains pending.
+Final source `01535ad8e8eeecb4b9fffcbf73b5891bb425c3b6` passed both
+CI jobs in run `38880083763`. The orchestrator's frozen union `52ff900` passed
+full DEV/PLAY checks and both installed production viewmodel tests. Combined
+RELEASE verification remains an integration gate; this is not a standalone
+RELEASE pass.
+
+The exact immutable union executable (SHA-256
+`58E91BC08E180AE2F1FD55A1293911506F6405F8AEBD3EA05B55B40D869E4705`)
+ran two ordinary screenshot-only cases. Both exited zero. The CT knife case
+logged actual `INSPECT` then `INSPECT_CANCEL`, zero shots and intact personally
+reviewed knife/hand/sleeve geometry. The AK case logged actual `INSPECT`, zero
+shots, 30/90 ammunition and intact personally reviewed weapon/both hands.
+Private packets are `knife-interruption-20261016/render-52ff900-ct-knife-inspect-cancel`
+and `render-52ff900-ak47-inspect` under the owner's fidelity folder. Raw
+receipts are unchanged; separate agent image reviews record these findings.
+This admits requested activity and model integrity only. A single cancel
+still image does not establish native easing, repeated-input timing or spin
+loop parity.
