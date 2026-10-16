@@ -216,6 +216,8 @@ pub struct WeaponDefinition {
     pub grenade_launch: Option<GrenadeLaunch>,
     pub suppressor_animations: Option<SuppressorAnimations>,
     pub world_model: String,
+    /// Authored unheld model. Empty keeps the held-model fallback for packs.
+    pub dropped_model: String,
     /// Soundscript entry for the default equipped shot, e.g. `Weapon_AK47.Single`.
     /// Suppressor-equipped definitions use their `sound_special1` entry.
     pub fire_sound: String,
@@ -423,6 +425,7 @@ fn build(index: &str, class_name: &str, r: &Resolved) -> WeaponDefinition {
         },
         view_model: f("model_player"),
         world_model: f("model_world"),
+        dropped_model: f("model_dropped"),
         fire_sound: default_fire_sound(r),
         unsuppressed_fire_sound: f("visuals/sound_single_shot"),
         // Content packs may explicitly declare both fields. The custom
@@ -513,6 +516,8 @@ mod tests {
             "item_class" "weapon_ak47"
             "item_name" "#SFUI_WPNHUD_AK47"
             "model_player" "models/weapons/v_rif_ak47.mdl"
+            "model_world" "models/weapons/w_rif_ak47.mdl"
+            "model_dropped" "models/weapons/w_rif_ak47_dropped.mdl"
             "used_by_classes" { "terrorists" "1" }
             "attributes" { "damage" "36" "cycletime" "0.100000" "is full auto" "1" "max player speed" "215" "in game price" "2700" "armor ratio" "1.550000" "primary clip size" "30" "recoil seed" "223" }
         }
@@ -533,6 +538,8 @@ mod tests {
         let ak = cat.get("weapon_ak47").unwrap();
         assert_eq!(ak.id.to_string(), "csgo_weapon_ak47");
         assert_eq!(ak.def_index, 7);
+        assert_eq!(ak.world_model, "models/weapons/w_rif_ak47.mdl");
+        assert_eq!(ak.dropped_model, "models/weapons/w_rif_ak47_dropped.mdl");
         assert_eq!(ak.damage, 36.0);
         assert_eq!(ak.price, 2700);
         assert!(ak.full_auto);
