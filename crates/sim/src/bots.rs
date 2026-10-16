@@ -37,6 +37,17 @@ const UTILITY_RATE: u32 = 4;
 const FIRE_CHECK_RATE: u32 = 2;
 /// A wandering bot that has not moved for this long turns away (1/8 s).
 const STUCK_SECONDS: f32 = 0.125;
+/// A failed crossing is retried after a bounded recovery window: a temporary
+/// player obstruction must not permanently disconnect the bot's navigation.
+const FAILED_TRANSITION_SECONDS: f32 = 8.0;
+const MAX_FAILED_TRANSITIONS: usize = 8;
+
+#[derive(Clone, Debug)]
+struct FailedTransition {
+    from: u32,
+    to: u32,
+    retry_at: f32,
+}
 
 #[derive(Clone, Debug, Default)]
 struct Brain {
@@ -60,6 +71,7 @@ struct Brain {
     path_index: usize,
     progress_pos: Vec3,
     progress_time: f32,
+    failed_transitions: Vec<FailedTransition>,
     /// Round the bot finished buying in, and failed attempts this round.
     bought_round: u32,
     buy_attempts: u32,
@@ -449,6 +461,7 @@ impl Bots {
             if frozen {
                 // New round: drop the old path and objectives.
                 brain.path.clear();
+                brain.failed_transitions.clear();
                 brain.goal_area = None;
                 brain.site_area = None;
                 brain.hold = None;
@@ -818,6 +831,7 @@ fn follow_path(
     point: Option<Vec3>,
 ) -> bool {
     let pos = bot.movement.origin;
+    brain.failed_transitions.retain(|edge| time < edge.retry_at);
     if goal != brain.goal_area {
         brain.goal_area = goal;
         brain.path.clear();
@@ -847,7 +861,11 @@ fn follow_path(
         brain.path_index = 0;
         let target = goal.or_else(|| pick_goal(mesh, rng));
         if let (Some(start), Some(target)) = (start, target) {
-            if let Some(p) = mesh.find_path_with_cost(start, target, |a| if world.fire_at(a.center()) {5000.0}else{0.0}) {
+            if let Some(p) = mesh.find_path_with_traversal(
+                start, target,
+                |a| if world.fire_at(a.center()) {5000.0}else{0.0},
+                |from, to| !brain.failed_transitions.iter().any(|e| e.from == from && e.to == to),
+            ) {
                 brain.path = p;
             }
         }
@@ -870,6 +888,8 @@ fn follow_path(
         let k = brain.path_index + ahead;
         if k < brain.path.len() && inside(brain.path[k]) {
             brain.path_index = k;
+            brain.progress_pos = pos;
+            brain.progress_time = time;
             break;
         }
     }
@@ -908,15 +928,33 @@ fn follow_path(
     // rise keeps resetting the recovery clock, so the route never replans.
     // A completed step onto a different floor still counts once grounded.
     let displacement = pos - brain.progress_pos;
-    let progressed = displacement.truncate().length() > 48.0
+    // Escape strafing around the same corner is not progress toward its
+    // portal. Otherwise a sideways oscillation renews the timer forever.
+    let progressed = (target - brain.progress_pos).truncate().length()
+        - (target - pos).truncate().length() > 48.0
         || (bot.movement.on_ground && displacement.z.abs() > 48.0);
     // Stuck handling: jump after 0.75 s without progress, re-path after 2 s.
     if progressed {
         brain.progress_pos = pos;
         brain.progress_time = time;
     } else if time - brain.progress_time > 2.0 {
+        // Replanning the identical deterministic A* route immediately would
+        // retry this same inaccessible crossing indefinitely. Remember only
+        // the attempted directed edge, leaving other approaches available.
+        if cur != next && mesh.area(cur).is_some_and(|a| a.connections.iter().any(|d| d.contains(&next))) {
+            brain.failed_transitions.retain(|e| e.from != cur || e.to != next);
+            if brain.failed_transitions.len() == MAX_FAILED_TRANSITIONS {
+                brain.failed_transitions.remove(0);
+            }
+            brain.failed_transitions.push(FailedTransition {
+                from: cur, to: next, retry_at: time + FAILED_TRANSITION_SECONDS,
+            });
+        }
         brain.path.clear();
         brain.progress_time = time;
+        input.forward_move = 0.0;
+        input.side_move = 0.0;
+        input.buttons &= !buttons::JUMP;
     } else if time - brain.progress_time > 0.75 {
         input.buttons |= buttons::JUMP;
         if time >= brain.escape_until {
@@ -1101,6 +1139,89 @@ mod tests {
         assert_eq!(brain.progress_time, 1.9);
         assert_eq!(brain.progress_pos.z, 56.);
         assert!(!brain.path.is_empty());
+    }
+
+    fn blocked_shortcut_fixture(detour: bool) -> (NavMesh, World, PlayerId, Brain) {
+        let area = |id, x0, y0, x1, y1, connections| nav::Area {
+            id, flags: 0, nw: Vec3::new(x0, y0, 0.), se: Vec3::new(x1, y1, 0.),
+            ne_z: 0., sw_z: 0., connections, place: 0, hiding_spots: vec![],
+        };
+        let mesh = NavMesh::from_areas(vec![
+            area(1, -64., -64., 64., 64., [vec![], vec![2], if detour { vec![3] } else { vec![] }, vec![]]),
+            area(2, 64., -64., 128., 64., [vec![], vec![4], vec![], vec![1]]),
+            area(3, -64., 64., 64., 128., [vec![], vec![4], vec![], vec![]]),
+            area(4, 128., -64., 192., 64., [vec![], vec![], vec![], vec![]]),
+        ]);
+        let (_, mut world, id, mut brain) = stuck_path_fixture();
+        world.player_mut(id).unwrap().movement.on_ground = true;
+        brain.goal_area = Some(4);
+        brain.path = mesh.find_path(1, 4).unwrap();
+        assert_eq!(brain.path, [1, 2, 4]);
+        (mesh, world, id, brain)
+    }
+
+    #[test]
+    fn blocked_jump_and_sideways_loop_replans_via_another_approach() {
+        for rate in [64, 128] {
+            let (mesh, mut world, id, mut brain) = blocked_shortcut_fixture(true);
+            world.set_tick_rate(rate);
+            let mut rng = Rng::from_parts(&[17]);
+            for tick in 1..=world.ticks(2.1) {
+                world.tick = tick;
+                let p = world.player_mut(id).unwrap();
+                // Motion is large enough to defeat displacement-only recovery,
+                // but it never gets closer to the blocked eastern crossing.
+                p.movement.origin.y = if tick % rate as u64 < rate as u64 / 2 { 56. } else { -56. };
+                p.movement.origin.z = if tick % (rate as u64 / 2) < rate as u64 / 4 { 56. } else { 0. };
+                p.movement.on_ground = p.movement.origin.z == 0.;
+                follow_path(&mesh, &world, world.player(id).unwrap(), &mut brain,
+                    &mut TickInput::default(), &mut rng, world.time(), 4., Some(4), None);
+                if brain.path.is_empty() { break; }
+            }
+            assert!(brain.path.is_empty(), "corner loop must expire at {rate} Hz");
+            assert_eq!(brain.failed_transitions.len(), 1);
+            let edge = &brain.failed_transitions[0];
+            assert_eq!((edge.from, edge.to), (1, 2));
+            world.tick += 1;
+            let mut input = TickInput::default();
+            follow_path(&mesh, &world, world.player(id).unwrap(), &mut brain,
+                &mut input, &mut rng, world.time(), 4., Some(4), None);
+            assert_eq!(brain.path, [1, 3, 4], "replanning must not immediately retry the failed crossing");
+            assert_eq!(input.buttons & buttons::JUMP, 0);
+            // Only 1 -> 2 was rejected, not area 2 or the reverse crossing.
+            assert_eq!(mesh.find_path_with_traversal(2, 1, |_| 0.,
+                |from, to| !(from == 1 && to == 2)), Some(vec![2, 1]));
+        }
+    }
+
+    #[test]
+    fn failed_crossing_falls_back_and_expires_without_blocking_goal_area() {
+        for rate in [64, 128] {
+            let (mesh, mut world, id, mut brain) = blocked_shortcut_fixture(false);
+            world.set_tick_rate(rate);
+            world.tick = world.ticks(2.01);
+            let mut rng = Rng::from_parts(&[17]);
+            follow_path(&mesh, &world, world.player(id).unwrap(), &mut brain,
+                &mut TickInput::default(), &mut rng, world.time(), 4., Some(4), None);
+            let retry_at = brain.failed_transitions[0].retry_at;
+            world.tick += 1;
+            let mut input = TickInput::default();
+            follow_path(&mesh, &world, world.player(id).unwrap(), &mut brain,
+                &mut input, &mut rng, world.time(), 4., Some(4), None);
+            assert!(brain.path.is_empty(), "no alternate crossing must use existing wander fallback");
+            assert_eq!(input.forward_move, 450.);
+            assert_eq!(input.buttons & buttons::JUMP, 0);
+            world.tick = world.ticks(retry_at + 0.01);
+            follow_path(&mesh, &world, world.player(id).unwrap(), &mut brain,
+                &mut TickInput::default(), &mut rng, world.time(), 4., Some(4), None);
+            assert!(brain.failed_transitions.is_empty());
+            assert_eq!(brain.path, [1, 2, 4], "a temporary obstruction can be retried after expiry");
+            // An unreachable point within the current area is not an edge.
+            world.tick += 1;
+            follow_path(&mesh, &world, world.player(id).unwrap(), &mut brain,
+                &mut TickInput::default(), &mut rng, world.time(), 4., Some(1), Some(Vec3::X * 40.));
+            assert!(brain.failed_transitions.is_empty());
+        }
     }
     #[test]
     fn removed_bot_bookkeeping_stays_bounded_through_replacement_churn() {
