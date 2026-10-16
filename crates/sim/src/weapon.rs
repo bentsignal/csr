@@ -282,8 +282,8 @@ impl WeaponState {
                 // A default-equipped observation cannot establish detached spray.
                 def.recoil_trajectory = def.recoil_trajectory_unsuppressed.clone();
             }
-            if self.burst_mode {
-                // A normal-mode observation does not establish burst recoil.
+            if self.burst_mode || self.zoom_level > 0 {
+                // A normal-mode observation does not establish burst/scoped recoil.
                 def.recoil_trajectory = None;
                 let alt = |key, base| def.attr_f32(key).filter(|v| v.is_finite()).unwrap_or(base);
                 def.recoil = weapons::Recoil { angle: alt("recoil angle alt", def.recoil.angle),
@@ -297,7 +297,7 @@ impl WeaponState {
     }
 
     fn motion_profile(&self) -> Option<&weapons::RecoilTrajectory> {
-        if self.burst_mode { return None; }
+        if self.burst_mode || self.zoom_level > 0 { return None; }
         let profile = if self.def.suppressor_animations.is_some() && !self.suppressor_attached {
             self.def.recoil_trajectory_unsuppressed.as_ref()
         } else { self.def.recoil_trajectory.as_ref() }?;
@@ -417,7 +417,14 @@ impl WeaponState {
 
     pub fn set_zoom(&mut self, level: u8, time: f32) {
         self.zoom_from_fov = self.rendered_fov(time);
-        self.zoom_level = level.min(self.zoom_levels());
+        let next = level.min(self.zoom_levels());
+        if (self.zoom_level > 0) != (next > 0) {
+            self.pattern = RecoilPatternCache::default();
+            // A normal-only observed response cannot survive a different mode.
+            // Keep the recoil index and attack deadlines through the scope edge.
+            self.reset_recoil_motion();
+        }
+        self.zoom_level = next;
         self.zoom_changed_at = time;
     }
 
@@ -713,7 +720,11 @@ pub fn think(w: &mut WeaponState, time: f32, dt: f32, ducked: bool, firing: bool
 /// Returns (health damage, armour damage).
 pub fn damage(def: &WeaponDefinition, distance: f32, group: HitGroup, armor: i32, helmet: bool) -> (i32, i32) {
     let mut dmg = def.damage * def.range_modifier.powf(distance / 500.0);
-    dmg *= group.multiplier();
+    dmg *= if group == HitGroup::Head {
+        def.declared_headshot_multiplier().unwrap_or_else(|| group.multiplier())
+    } else {
+        group.multiplier()
+    };
     let armored = armor > 0 && match group {
         HitGroup::Head => helmet,
         HitGroup::LeftLeg | HitGroup::RightLeg => false,

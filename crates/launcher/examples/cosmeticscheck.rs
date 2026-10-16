@@ -26,7 +26,9 @@ fn main() {
             assert!(c.contents.iter().all(|&i| catalog.finishes[i].rarity < 7));
         }
     }
-    let revolution = catalog.find_case("Revolution").unwrap();
+    // Raw asset metadata stays complete even when a case is unavailable to play.
+    let revolution = catalog.cases.iter().find(|case| case.id == 4880).unwrap();
+    let classic = catalog.find_case("4061").unwrap();
     let counts: Vec<_> = (3..=6)
         .map(|r| {
             revolution
@@ -135,7 +137,14 @@ fn main() {
     for case in &catalog.cases {
         let mut i = Inventory::default();
         i.grant(case.id, 1).unwrap();
-        let item = i.open(case, &catalog, &mut Random(case.id as u64)).unwrap();
+        let opened = i.open(case, &catalog, &mut Random(case.id as u64));
+        if catalog.find_case(&case.key).is_err() {
+            assert!(opened.is_err());
+            assert_eq!(i.cases[&case.id], 1);
+            assert!(i.skins.is_empty());
+            continue;
+        }
+        let item = opened.unwrap();
         assert_eq!(item.souvenir.is_some(), case.souvenir);
         if case.souvenir {
             assert!(item.stattrak.is_none());
@@ -217,23 +226,23 @@ fn main() {
     ));
     let path = temp.join("cosmetics.cfg");
     let mut inventory = Inventory::default();
-    command("give_case Revolution 1000", &catalog, &mut inventory, &path).unwrap();
+    command("give_case 4061 1000", &catalog, &mut inventory, &path).unwrap();
     let mut rng = Random(42);
     let mut distribution = [0; 8];
     for _ in 0..1000 {
         let item = inventory
-            .transaction(&path, |i| i.open(revolution, &catalog, &mut rng))
+            .transaction(&path, |i| i.open(classic, &catalog, &mut rng))
             .unwrap();
         let finish = catalog.finish(&item).unwrap();
         distribution[finish.rarity as usize] += 1;
         assert!(item.seed <= 1000 && item.wear >= finish.wear[0] && item.wear <= finish.wear[1]);
     }
     assert_eq!(inventory.skins.len(), 1000);
-    assert_eq!(inventory.cases[&revolution.id], 0);
+    assert_eq!(inventory.cases[&classic.id], 0);
     let before = std::fs::read(&path).unwrap();
     assert!(
         inventory
-            .transaction(&path, |i| i.open(revolution, &catalog, &mut rng))
+            .transaction(&path, |i| i.open(classic, &catalog, &mut rng))
             .is_err()
     );
     assert_eq!(before, std::fs::read(&path).unwrap());

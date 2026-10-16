@@ -13,10 +13,14 @@ features, accepted improvements and priorities are retained in
 [PLAYTEST-2026-10-14.md](PLAYTEST-2026-10-14.md). Work continues without another
 test request until the owner asks. The latest merged source includes grounded HE launch/button corrections,
 measured M4 recovery, original menu music and supported Video controls, authored
-prop tint, dropped weapon models and the pre-rework Inferno chooser. Full
-workspace, combined RELEASE and ordinary rendered frontend checks passed for
-that source. Current parallel tracks are authored grenade/material effects,
-knife inspection continuity and input, and persistent bot navigation stalls.
+prop tint, dropped weapon models and the pre-rework Inferno chooser. The next
+merged batch adds ordinary world/static-prop detail, authored HE dust placement,
+inspection continuity/cosmetic knife cancellation, bounded 2015 weapon-case and
+knife availability, and additional bot recovery. Full workspace, combined
+RELEASE and ordinary rendered frontend checks passed for the exact combined
+source; [evidence and retained limits](research/overnight-fidelity-verification.md)
+distinguish those checks from complete native or 2015 parity. Loading-screen
+rendering and original Inventory thumbnails remain candidate/follow-up work.
 Movement/surfing, remaining weapon states, UI coverage/performance and full
 lighting fidelity remain open; bounded improvements are not whole-game parity.
 
@@ -224,6 +228,12 @@ byte-identical to 2018.
       latency and the remaining Video page remain open. PR161.
 - [ ] Complete the game API bridge for inventory/cases and the remaining
       classic panels. Original reset defaults still need verified evidence.
+- [x] Bound recognized Legacy weapon cases and rare knives to the documented
+      2015 subset: 17 cases, nine families and 177 supported model/paint pairs,
+      preserving raw catalog indices, owned later records and custom identities.
+      Installed catalog and transactional opening checks pass. Original Inventory
+      labels render; thumbnails (#181), full case UI, other historical cosmetic
+      categories and earned progression remain open. [Policy](research/classic-case-knives.md), PR177.
 - The fallback (a native Bevy layout built from the SWFs with the `swf`
   crate) is not needed.
 - [ ] Screenshot-diff harness: render the menu at 1920x1080 and diff it
@@ -316,6 +326,17 @@ thing is uncanny. Fidelity is measured, never eyeballed:
       with equal-group records. Actual classic north/south renders admit173
       meshes/95,965 vertices and preserve unsupported fallbacks; arches remain
       overbright and complete record/color/lighting fidelity remains open. PR163.
+- [x] Render ordinary authored detail on the supported world/static-prop subset.
+      Actual visible wall grain and selected broad color errors improve; controls
+      remain unchanged. Mixed fine-detail metrics, unsupported modes and global
+      lighting remain open; the occluded static-only zero-effect packet is retained.
+      [Evidence](research/prop-detail-texture.md), PR171.
+- [x] Preserve displayed inspection poses through incoming authored fades and
+      cosmetic knife stab/inspect/rebound-reload cancellation, while the real
+      attack deadline stays unchanged. Installed production checks and actual
+      knife/AK images pass; native easing, repeated-input timing, rare selection
+      and continuous Karambit loops remain open. [Transitions](research/inspection-transitions.md),
+      [input](research/knife-inspect-input.md), PR173/174.
 - [ ] Match jumping and **surfing** with native traces: supported input,
       ramp/crease/seam contact, speed retention and landing impact at recorded
       server settings and tick rates. Synthetic correctness tests and native
@@ -353,6 +374,11 @@ thing is uncanny. Fidelity is measured, never eyeballed:
       and audio work; measure the original rather than invent a debounce.
 
 - [ ] Grenades: HE, flash, smoke, molotov/incendiary, decoy.
+- [x] Restore supported authored HE dust boxes and the explicit Source-Z upper
+      hemisphere. Four actual before/after images and combined RELEASE checks
+      pass; different seeds/profile builds prevent pixel-parity claims. Full
+      HE children/operators/materials, other effects and 2015 appearance remain
+      open. [Placement](research/utility-particles.md#he-authored-initial-placement), PR172.
 - [ ] Wall penetration (surface properties) and hit groups from the models'
       real hitboxes.
 - [x] Footsteps, reload/deploy event sounds, surface impact sounds: soundscript
@@ -376,7 +402,8 @@ thing is uncanny. Fidelity is measured, never eyeballed:
 - [x] Offer pre-rework Inferno (2016) beside the remake in the original map
       chooser; distinct ContentIds, actual authored-card loading and combined
       RELEASE lifecycle passed. The narrow v44 prop importer preserves original
-      geometry. Exact2015 content/card art remain open. PR167/170.
+      geometry. MA02's actual chooser/session integration is verified; exact2015
+      content/card art and full loading-screen fidelity remain open. PR167/170.
 
 ### Track E: Content packs and modding
 

@@ -37,8 +37,13 @@ pub struct LocalPlayer {
     /// Fresh pointer edges retain their own capture admission when two physical
     /// buttons share an attack command.
     pub(crate) pointer_attacks: u32,
+    /// Keyboard attack taps are independent of pointer-capture suppression.
+    pub(crate) keyboard_attacks: u32,
     /// Inventory slot requested since the last tick (0 = none).
     pub pending_slot: u8,
+    /// Device edges and explicit console actions have separate capture admission.
+    pub(crate) pending_utility: u32,
+    pub(crate) console_utility: u32,
     /// Purchases waiting to be sent, one per tick.
     pub pending_buys: Vec<Purchase>,
     pub pending_drop: bool,
@@ -65,7 +70,10 @@ impl LocalPlayer {
             render_angles: glam::Vec3::new(0.0, yaw, 0.0),
             latched: 0,
             pointer_attacks: 0,
+            keyboard_attacks: 0,
             pending_slot: 0,
+            pending_utility: 0,
+            console_utility: 0,
             pending_buys: Vec::new(),
             pending_drop: false,
             spectating: None,
@@ -88,10 +96,17 @@ impl LocalPlayer {
         self.spectating = None;
         self.latched = 0;
         self.pointer_attacks = 0;
+        self.keyboard_attacks = 0;
         self.pending_slot = 0;
+        self.clear_utility_requests();
         self.pending_drop = false;
         self.pending_buys.clear();
         self.capture_mouse = 0;
+    }
+
+    pub(crate) fn clear_utility_requests(&mut self) {
+        self.pending_utility = 0;
+        self.console_utility = 0;
     }
 
     fn release_capture_attacks(&mut self, mouse: &ButtonInput<MouseButton>) {
@@ -128,6 +143,7 @@ impl LocalPlayer {
         let Some(me) = world.player(id) else { return; };
         if me.alive {
             if self.remote_life != me.life_epoch || !self.was_alive {
+                self.clear_utility_requests();
                 self.pitch = me.view_angles.x;
                 self.yaw = me.view_angles.y;
                 self.prev_eye = me.eye();
@@ -135,6 +151,7 @@ impl LocalPlayer {
             self.curr_eye = me.eye();
             self.spectating = None;
         } else {
+            self.clear_utility_requests();
             if !self.spectating.and_then(|s| world.player(s)).is_some_and(|p| p.alive) {
                 self.spectating = spectate_candidates(world, me).first().copied();
             }
@@ -146,6 +163,16 @@ impl LocalPlayer {
         self.remote_life = me.life_epoch;
         self.was_alive = me.alive;
     }
+}
+
+/// Resolve names against the selected catalog and actual carried ownership.
+/// The wire already carries this definition index; no client grants inventory.
+pub(crate) fn carried_utility(world: &sim::World, id: PlayerId, name: &str) -> Option<u32> {
+    let player = world.player(id).filter(|p| p.alive)?;
+    let def = world.catalog.get(name)?;
+    (def.class == weapons::WeaponClass::Grenade && def.def_index != 0
+        && player.weapons.iter().any(|w| w.def.id == def.id && w.def.class == weapons::WeaponClass::Grenade))
+        .then_some(def.def_index)
 }
 
 #[derive(Component)]
@@ -245,7 +272,7 @@ pub fn look(
     }
     let me = world.0.player(local.id);
     let alive = me.is_some_and(|p| p.alive);
-    if alive && grabbed && settings.action_just_pressed(12, &keys, &mouse, blocked_mouse) {inspect.0=inspect.0.wrapping_add(1);}
+    if alive && grabbed && settings.action_just_pressed(12, &keys, &mouse, blocked_mouse) {inspect.start();}
 
     // Spectating: left click cycles through living teammates.
     if !alive && grabbed && mouse.just_pressed(MouseButton::Left) {
@@ -277,6 +304,9 @@ pub fn look(
     }
     if settings.action_just_pressed(8, &keys, &mouse, blocked_mouse) {
         b |= buttons::RELOAD;
+        if me.and_then(|p| p.active_weapon()).is_some_and(|w| w.def.class == weapons::WeaponClass::Knife) {
+            inspect.cancel();
+        }
     }
     // The shared sampler also guards held attacks after grab_cursor captures.
     if grabbed && alive && settings.mouse_just_pressed(crate::settings::MouseAction::Attack, &mouse, blocked_mouse) {
@@ -285,18 +315,23 @@ pub fn look(
     if grabbed && alive && settings.mouse_just_pressed(crate::settings::MouseAction::Attack2, &mouse, blocked_mouse) {
         local.pointer_attacks |= buttons::ATTACK2;
     }
+    if grabbed && alive {
+        for (index, name) in crate::settings::GRENADE_NAMES.iter().enumerate() {
+            if settings.action_just_pressed(crate::settings::KEY_GRENADE_FIRST + index, &keys, &mouse, blocked_mouse) {
+                local.pending_utility = carried_utility(&world.0, local.id, name).unwrap_or(0);
+            }
+        }
+        for (binding, button) in [(crate::settings::KEY_ATTACK, buttons::ATTACK), (crate::settings::KEY_ATTACK2, buttons::ATTACK2)] {
+            if settings.binds[binding].is_some_and(|key| keys.just_pressed(key)) {
+                local.keyboard_attacks |= button;
+            }
+        }
+    }
     local.latched |= b;
 
-    if !menu.open {
-        for (key, slot) in [
-            (KeyCode::Digit1, 1u8),
-            (KeyCode::Digit2, 2),
-            (KeyCode::Digit3, 3),
-            (KeyCode::Digit4, 4),
-            (KeyCode::Digit5, 5),
-            (KeyCode::KeyQ, sim::SLOT_LAST),
-        ] {
-            if keys.just_pressed(key) {
+    if grabbed && alive {
+        for (index, slot) in crate::settings::SELECTION_SLOTS.iter().copied().enumerate() {
+            if settings.action_just_pressed(crate::settings::KEY_SELECTION_FIRST + index, &keys, &mouse, blocked_mouse) {
                 local.pending_slot = slot;
             }
         }
@@ -361,24 +396,35 @@ pub fn sample_tick_input(local: &mut LocalPlayer, controls: &Controls<'_>) -> Ti
     let keys = if controls.enabled && !controls.blocked && !controls.buy_menu {
         controls.keys
     } else { &empty };
-    let mouse_allowed = controls.enabled && !controls.blocked && controls.captured && !controls.buy_menu;
-    let blocked_mouse = if mouse_allowed { local.capture_mouse } else { u8::MAX };
+    let attack_allowed = controls.enabled && !controls.blocked && controls.captured && !controls.buy_menu;
+    let blocked_mouse = if attack_allowed { local.capture_mouse } else { u8::MAX };
     let (forward_move, side_move) = move_axes(keys, controls.mouse, controls.settings, blocked_mouse);
     let mut held = 0;
     for (binding, button) in [(4, buttons::JUMP), (5, buttons::DUCK), (6, buttons::WALK), (7, buttons::USE)] {
         if controls.settings.action_pressed(binding, keys, controls.mouse, blocked_mouse) { held |= button; }
     }
-    if controls.enabled && !controls.blocked && controls.captured && !controls.buy_menu {
+    if attack_allowed {
         if controls.settings.mouse_pressed(crate::settings::MouseAction::Attack, controls.mouse, blocked_mouse) { held |= buttons::ATTACK; }
         if controls.settings.mouse_pressed(crate::settings::MouseAction::Attack2, controls.mouse, blocked_mouse) { held |= buttons::ATTACK2; }
+        for (binding, button) in [(crate::settings::KEY_ATTACK, buttons::ATTACK), (crate::settings::KEY_ATTACK2, buttons::ATTACK2)] {
+            if controls.settings.binds[binding].is_some_and(|key| keys.pressed(key)) { held |= button; }
+        }
     }
+    let keyboard_attacks = std::mem::take(&mut local.keyboard_attacks);
     let pointer_attacks = std::mem::take(&mut local.pointer_attacks);
+    let device_utility = std::mem::take(&mut local.pending_utility);
+    let console_utility = std::mem::take(&mut local.console_utility);
     TickInput {
         view_angles: glam::Vec3::new(local.pitch, local.yaw, 0.),
         forward_move, side_move,
-        buttons: held | (if mouse_allowed { pointer_attacks } else { 0 })
+        buttons: held | (if attack_allowed { pointer_attacks | keyboard_attacks } else { 0 })
             | (std::mem::take(&mut local.latched) & !local.capture_attack_mask(controls.settings)),
         weapon_slot: std::mem::take(&mut local.pending_slot),
+        // An explicit console command is not a device edge. It can select
+        // while the console owns focus, but still travels through authority.
+        utility: if controls.enabled && !controls.buy_menu && console_utility != 0 {
+            console_utility
+        } else if attack_allowed { device_utility } else { 0 },
         buy: if local.pending_buys.is_empty() { Purchase::None } else { local.pending_buys.remove(0) },
         drop: std::mem::take(&mut local.pending_drop),
         ..Default::default()
@@ -621,6 +667,7 @@ pub fn tick(
         return;
     }
     local.was_alive = false;
+    local.clear_utility_requests();
     // Dead: keep watching someone alive.
     let valid = local.spectating.and_then(|s| world.0.player(s)).is_some_and(|p| p.alive);
     if !valid {
@@ -721,6 +768,165 @@ mod remote_input_tests {
         }));
         app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::KeyW);
         app
+    }
+
+    #[test]
+    fn persisted_weapon_selection_replaces_fixed_keys_and_preserves_short_taps() {
+        use crate::settings::{Settings, KEY_SELECTION_FIRST};
+        let mut settings = Settings::parse("volume=0.4\nbind13=KeyR\n");
+        assert_eq!(settings.binds[KEY_SELECTION_FIRST], Some(KeyCode::KeyQ));
+        assert_eq!(settings.binds[KEY_SELECTION_FIRST + 1], Some(KeyCode::Digit1));
+        settings.rebind(KEY_SELECTION_FIRST, KeyCode::KeyX);
+        settings.unbind_key(KeyCode::Digit1);
+        settings.rebind(KEY_SELECTION_FIRST + 1, KeyCode::KeyZ);
+        settings.rebind(KEY_SELECTION_FIRST + 6, KeyCode::KeyC);
+        settings.rebind(KEY_SELECTION_FIRST + 7, KeyCode::Digit2);
+        let settings = Settings::parse(&settings.encode());
+        assert_eq!(settings.binds[crate::settings::KEY_ATTACK], Some(KeyCode::KeyR));
+        assert_eq!(settings.volume, 0.4);
+        let mut app = capture_app();
+        app.insert_resource(settings.clone());
+        app.world_mut().query::<&mut CursorOptions>().single_mut(app.world_mut()).unwrap().grab_mode = CursorGrabMode::Locked;
+        for key in [KeyCode::KeyQ, KeyCode::Digit1] {
+            app.world_mut().resource_mut::<ButtonInput<KeyCode>>().reset_all();
+            app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(key);
+            app.update();
+            assert_eq!(app.world().resource::<Sampled>().0.weapon_slot, 0,
+                "old keys cannot fall through after unbinding or moving their actions");
+        }
+        for (key, slot) in [
+            (KeyCode::KeyX, sim::SLOT_LAST), (KeyCode::KeyZ, 1),
+            (KeyCode::KeyC, sim::SLOT_NEXT), (KeyCode::Digit2, sim::SLOT_PREVIOUS),
+            (KeyCode::Digit4, 4), (KeyCode::Digit5, 5),
+        ] {
+            app.world_mut().resource_mut::<ButtonInput<KeyCode>>().reset_all();
+            app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(key);
+            app.world_mut().run_system_cached(look).unwrap();
+            app.world_mut().resource_mut::<ButtonInput<KeyCode>>().release(key);
+            app.world_mut().resource_mut::<ButtonInput<KeyCode>>().clear();
+            app.world_mut().run_system_cached(sample_after_capture).unwrap();
+            assert_eq!(app.world().resource::<Sampled>().0.weapon_slot, slot);
+            app.world_mut().run_system_cached(sample_after_capture).unwrap();
+            assert_eq!(app.world().resource::<Sampled>().0.weapon_slot, 0, "one request per tap");
+        }
+        for (enabled, blocked, captured, buy_menu) in [
+            (false, false, true, false), (true, true, true, false),
+            (true, false, false, false), (true, false, true, true),
+        ] {
+            app.world_mut().resource_mut::<InputEnabled>().0 = enabled;
+            app.world_mut().resource_mut::<InputBlockFrames>().0 = if blocked { 2 } else { 0 };
+            app.world_mut().resource_mut::<crate::buymenu::BuyMenu>().open = buy_menu;
+            app.world_mut().query::<&mut CursorOptions>().single_mut(app.world_mut()).unwrap().grab_mode =
+                if captured { CursorGrabMode::Locked } else { CursorGrabMode::None };
+            app.world_mut().resource_mut::<ButtonInput<KeyCode>>().reset_all();
+            app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::Digit4);
+            app.world_mut().run_system_cached(look).unwrap();
+            app.world_mut().run_system_cached(sample_after_capture).unwrap();
+            assert_eq!(app.world().resource::<Sampled>().0.weapon_slot, 0,
+                "blocked device edge never enters the one-shot selection queue");
+        }
+    }
+
+    #[test]
+    fn named_grenade_key_tap_uses_catalog_identity_and_independent_capture_guards() {
+        let catalog = std::sync::Arc::new(weapons::Catalog::from_items_game(r#"
+            items_game { items {
+                7342 { name weapon_smokegrenade attributes { "primary default clip size" 1 } }
+                7343 { name weapon_flashbang attributes { "primary default clip size" 1 } }
+            } }"#).unwrap());
+        let mut simulation = sim::World::with_catalog(
+            std::sync::Arc::new(collision::CollisionWorld::new()), catalog.clone());
+        let id = simulation.add_player("Local", sim::Team::CounterTerrorist);
+        let player = simulation.player_mut(id).unwrap();
+        player.alive = true;
+        player.weapons = ["weapon_flashbang", "weapon_smokegrenade"].map(|name|
+            sim::weapon::WeaponState::new(std::sync::Arc::new(catalog.get(name).unwrap().clone()))).into();
+        player.active = 0;
+        let mut app = capture_app();
+        app.insert_resource(SimWorld(simulation));
+        let smoke = crate::settings::KEY_GRENADE_FIRST + 2;
+        let mut settings = crate::settings::Settings::default();
+        settings.rebind(smoke, KeyCode::KeyX);
+        settings.mouse_binds[0] = crate::settings::MouseAction::Action(smoke);
+        app.insert_resource(crate::settings::Settings::parse(&settings.encode()));
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Left);
+        app.update();
+        assert_eq!(app.world().resource::<Sampled>().0.utility, 0, "capture click must not select");
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().clear();
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::KeyX);
+        app.world_mut().run_system_cached(look).unwrap();
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().release(KeyCode::KeyX);
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().clear();
+        app.world_mut().run_system_cached(sample_after_capture).unwrap();
+        let input = app.world().resource::<Sampled>().0;
+        assert_eq!(input.utility, 7342, "catalog item index, not the stock smoke index");
+        let mut simulation = app.world_mut().resource_mut::<SimWorld>();
+        assert_eq!(simulation.0.player(id).unwrap().active, 0, "sampling cannot select directly");
+        simulation.0.step(&[(id, input)]);
+        assert_eq!(simulation.0.player(id).unwrap().active_weapon().unwrap().def.class_name, "weapon_smokegrenade");
+        drop(simulation);
+        app.world_mut().run_system_cached(sample_after_capture).unwrap();
+        assert_eq!(app.world().resource::<Sampled>().0.utility, 0, "short tap consumed exactly once");
+        let keys = ButtonInput::default();
+        let mouse = ButtonInput::default();
+        let settings = crate::settings::Settings::default();
+        let mut local = app.world_mut().resource_mut::<LocalPlayer>();
+        for (enabled, blocked, captured, buy_menu) in [
+            (false, false, true, false), (true, true, true, false),
+            (true, false, false, false), (true, false, true, true),
+        ] {
+            local.pending_utility = 7342;
+            assert_eq!(sample_tick_input(&mut local, &Controls {
+                keys: &keys, mouse: &mouse, settings: &settings, enabled, blocked, captured, buy_menu,
+            }).utility, 0);
+            assert_eq!(local.pending_utility, 0, "blocked device requests do not leak later");
+        }
+    }
+
+    #[test]
+    fn persisted_keyboard_attacks_keep_taps_independent_of_capture_mouse_and_ui_guards() {
+        use crate::settings::{Settings, KEY_ATTACK, KEY_ATTACK2};
+        let mut settings = Settings::parse("volume=0.4\nbind0=KeyW\n");
+        assert_eq!(settings.binds[KEY_ATTACK], None, "old configs keep mouse-only defaults");
+        settings.rebind(KEY_ATTACK, KeyCode::KeyX);
+        settings.rebind(KEY_ATTACK2, KeyCode::KeyC);
+        let settings = Settings::parse(&settings.encode());
+        let mut app = capture_app();
+        app.insert_resource(settings.clone());
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Left);
+        app.update(); // Mouse1 remains held but cannot shoot after capturing.
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().clear();
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::KeyX);
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::KeyC);
+        app.world_mut().run_system_cached(look).unwrap();
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().release(KeyCode::KeyX);
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().clear();
+        app.world_mut().run_system_cached(sample_after_capture).unwrap();
+        let attacks = buttons::ATTACK | buttons::ATTACK2;
+        assert_eq!(app.world().resource::<Sampled>().0.buttons & attacks, attacks);
+        app.world_mut().run_system_cached(sample_after_capture).unwrap();
+        assert_eq!(app.world().resource::<Sampled>().0.buttons & attacks, buttons::ATTACK2,
+            "the X tap is consumed once while held C continues secondary attack");
+
+        let keys = app.world().resource::<ButtonInput<KeyCode>>().clone();
+        let mouse = app.world().resource::<ButtonInput<MouseButton>>().clone();
+        for (enabled, blocked, captured, buy_menu) in [
+            (false, false, true, false), (true, true, true, false),
+            (true, false, false, false), (true, false, true, true),
+        ] {
+            let input = sample_tick_input(&mut app.world_mut().resource_mut::<LocalPlayer>(), &Controls {
+                keys: &keys, mouse: &mouse, settings: &settings,
+                enabled, blocked, captured, buy_menu,
+            });
+            assert_eq!(input.buttons & attacks, 0, "attack obeys ordinary gameplay/UI admission");
+        }
+        let mut settings = settings;
+        settings.unbind_key(KeyCode::KeyX);
+        settings.unbind_key(KeyCode::KeyC);
+        let restored = Settings::parse(&settings.encode());
+        assert_eq!(restored.binds[KEY_ATTACK..=KEY_ATTACK2], [None, None]);
+        assert_eq!(restored.mouse_binds, Settings::default().mouse_binds);
+        assert_eq!(restored.volume, 0.4);
     }
 
     #[test]

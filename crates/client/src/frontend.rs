@@ -1438,7 +1438,7 @@ pub(crate) fn update(
             if let Some(finish) = catalog
                 .finishes
                 .iter()
-                .find(|finish| finish.id == skin.paint && finish.weapon == skin.weapon)
+                .find(|finish| finish.id == skin.paint && finish.weapon == skin.weapon && crate::classic_cosmetics::finish_available(finish))
             {
                 let definition = data
                     .catalog
@@ -1464,10 +1464,11 @@ pub(crate) fn update(
             }
         }
         for (&definition, &count) in &inventory.cases {
-            if let Some(case) = catalog.cases.iter().find(|case| case.id == definition) {
+            if let Some(case) = catalog.cases.iter().find(|case| case.id == definition && crate::classic_cosmetics::case_available(case)) {
                 for copy in 0..count {
                     items.push(Item {
-                        id: format!("case:{definition}:{copy}"),
+                        // The movie embeds this opaque ID in an img:// inventory URL host.
+                        id: format!("case-{definition}-{copy}"),
                         name: case.name.clone(),
                         icon: case.icon.trim_end_matches(".png").to_string(),
                         definition,

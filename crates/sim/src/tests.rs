@@ -110,6 +110,59 @@ fn ray_box_hits_and_misses() {
     assert!(ray_box(Vec3::ZERO, Vec3::Y, Vec3::new(10.0, -1.0, -1.0), Vec3::new(12.0, 1.0, 1.0)).is_none());
 }
 
+#[test]
+fn authored_headshot_multiplier_affects_real_shots_but_not_body_damage() {
+    // Resolved installed Legacy 1.38.8.1 stats, not a new native hurt trace.
+    // Parse the metadata so the declaration survives the same catalog path.
+    let parsed = weapons::Catalog::from_items_game(r#"items_game {
+        prefabs { rifle { attributes {
+            "armor ratio" "1.4" "primary clip size" "30" "is full auto" "1"
+        } } }
+        items {
+            60 { name weapon_m4a1_silencer baseitem 1 prefab rifle attributes {
+                damage 38 "headshot multiplier" 3.475 "range modifier" .94 "primary clip size" 20
+            } }
+            7 { name weapon_ak47 baseitem 1 prefab rifle attributes {
+                damage 36 "armor ratio" 1.55 "range modifier" .98
+            } }
+        }
+    }"#).unwrap();
+    for (name, pitch, invalid, group, damage, health) in [
+        ("weapon_m4a1_silencer", 0., false, HitGroup::Head, 91, 9),
+        ("weapon_m4a1_silencer", 10., false, HitGroup::Chest, 26, 74),
+        ("weapon_ak47", 0., false, HitGroup::Head, 111, 0),
+        ("weapon_m4a1_silencer", 0., true, HitGroup::Head, 105, 0),
+    ] {
+        let mut world = world();
+        world.catalog = Arc::new(weapons::Catalog { weapons: parsed.weapons.clone() });
+        let attacker = world.add_player("shooter", Team::Terrorist);
+        let victim = world.add_player("helmeted target", Team::CounterTerrorist);
+        teleport(&mut world, attacker, Vec3::new(0., 0., 1.));
+        teleport(&mut world, victim, Vec3::new(100., 0., 1.));
+        let target = world.player_mut(victim).unwrap();
+        target.armor = 100;
+        target.helmet = true;
+        let mut definition = parsed.get(name).unwrap().clone();
+        if invalid { definition.attributes.insert("headshot multiplier".into(), "NaN".into()); }
+        let shooter = world.player_mut(attacker).unwrap();
+        shooter.weapons = vec![WeaponState::new(Arc::new(definition))];
+        shooter.active = 0;
+        world.step(&[(attacker, TickInput {
+            buttons: buttons::ATTACK, view_angles: Vec3::new(pitch, 0., 0.), ..Default::default()
+        })]);
+        let hits = world.events.iter().filter_map(|event| match event {
+            GameEvent::Damage { attacker: a, victim: v, health, group, .. }
+                if *a == attacker && *v == victim => Some((*group, *health)),
+            _ => None,
+        }).collect::<Vec<_>>();
+        assert_eq!(hits, vec![(group, damage)], "{name} pitch={pitch} invalid={invalid}");
+        assert_eq!(world.player(victim).unwrap().health, health);
+        assert_eq!(world.player(victim).unwrap().alive, health > 0);
+        assert_eq!(world.events.iter().filter(|event|
+            matches!(event, GameEvent::Fire { player, .. } if *player == attacker)).count(), 1);
+    }
+}
+
 fn def(name: &str, index: u32, class: WeaponClass, side: Side, price: i32, clip: i32) -> WeaponDefinition {
     WeaponDefinition {
         recoil_trajectory: None,
@@ -684,6 +737,50 @@ fn scope_cycles_on_presses_and_uses_scoped_stats() {
         assert_eq!((w.zoom_level, w.fov()), (level, fov));
     }
     assert_eq!(world.player(id).unwrap().active_weapon().unwrap().clip, 5);
+}
+
+#[test]
+fn scope_input_uses_authored_alt_recoil_without_resetting_the_existing_spray() {
+    let mut normal = world();
+    let id = normal.add_player("scoped recoil", Team::CounterTerrorist);
+    let mut aug = def("weapon_aug", 8, WeaponClass::Rifle, Side::CounterTerrorist, 3300, 5);
+    aug.recoil.magnitude = 30.;
+    for (key, value) in [("zoom levels", "2"), ("zoom fov 1", "45"), ("zoom fov 2", "20"),
+        ("recoil angle alt", "0"), ("recoil angle variance alt", "0"),
+        ("recoil magnitude alt", "0"), ("recoil magnitude variance alt", "0")] {
+        aug.attributes.insert(key.into(), value.into());
+    }
+    // This synthetic normal-only observation must not leak into the scoped mode.
+    aug.recoil_trajectory = Some(weapons::RecoilTrajectory {
+        reference: "unscoped-only-fixture".into(),
+        bullet_angles: vec![[0., 0.], [-2., 0.], [-4., 0.], [-6., 0.], [-8., 0.]],
+        response: None,
+    });
+    let p = normal.player_mut(id).unwrap();
+    p.weapons = vec![WeaponState::new(Arc::new(aug))];
+    p.active = 0;
+    p.weapons[0].recoil_index = 3.;
+    assert_ne!(p.weapons[0].aim_punch(), [0.; 2]); // Warm the normal derived cache.
+    let deadline = p.weapons[0].next_attack;
+    let mut scoped = normal.clone();
+    scoped.step(&[(id, TickInput { buttons: buttons::ATTACK2, ..Default::default() })]);
+    normal.step(&[(id, TickInput::default())]);
+    let w = scoped.player(id).unwrap().active_weapon().unwrap();
+    assert_eq!(w.zoom_level, 1);
+    assert_eq!(w.next_attack, deadline);
+    assert_eq!(w.recoil_index, normal.player(id).unwrap().active_weapon().unwrap().recoil_index);
+    assert!(w.recoil_index > 0., "scope preserves the ongoing spray rather than resetting it");
+    for candidate in [&mut normal, &mut scoped] {
+        candidate.step(&[(id, TickInput { buttons: buttons::ATTACK, ..Default::default() })]);
+        assert_eq!(candidate.events.iter().filter(|e| matches!(e, GameEvent::Fire { .. })).count(), 1);
+        assert_eq!(candidate.player(id).unwrap().active_weapon().unwrap().clip, 4);
+    }
+    let ray = |world: &World| world.events.iter().find_map(|e| match e {
+        GameEvent::Tracer { start, end, .. } => Some((*end - *start).normalize()), _ => None,
+    }).unwrap();
+    assert!(ray(&scoped).abs_diff_eq(Vec3::X, 0.00001),
+        "the real scoped shot uses the authored zero-alt recoil, not the warmed normal observation");
+    assert!(ray(&normal).z > 0.01, "the ordinary unscoped control retains its recoil");
 }
 
 #[test]
