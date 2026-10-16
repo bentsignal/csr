@@ -288,6 +288,8 @@ pub fn spawn(
                 // spatial admission. Never index the source VVD vector here.
                 authored_meshes += 1;
                 authored_vertices += colors.len();
+                debug!("Authored equal-group prop: instance={prop_index} mesh={mesh_index} vertices={} model={}",
+                    colors.len(), bsp.static_props.models[prop.model as usize]);
             }
             let (_, batch) = batches
                 .entry((material.id(), in_sky.is_some(), crate::world_mesh::spatial_cell(prop.origin)))
