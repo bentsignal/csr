@@ -12,6 +12,7 @@ pub mod frontend;
 mod frontend_display;
 mod frontend_inventory;
 mod frontend_game;
+mod frontend_loading;
 mod frontend_lobby;
 mod frontend_options;
 mod frontend_flow;
