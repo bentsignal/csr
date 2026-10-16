@@ -266,6 +266,9 @@ fn input(
             local.pointer_attacks = 0;
             local.keyboard_attacks = 0;
             local.pending_slot = 0;
+            // Device edges are blocked; an explicit `use` console command has
+            // a separate one-shot queue until an authoritative tick consumes it.
+            local.pending_utility = 0;
             local.pending_drop = false;
             local.pending_buys.clear();
         }
@@ -284,6 +287,7 @@ const COMMANDS: &[&str] = &[
     "bind",
     "unbind",
     "bindlist",
+    "use",
     "volume",
     "mat_vsync",
     "mat_antialias",
@@ -413,6 +417,24 @@ fn bind(
 fn has_pending(console: Res<DeveloperConsole>) -> bool {
     !console.pending.is_empty()
 }
+fn use_utility(world: &mut World, name: &str) -> Result<String, String> {
+    if world.get_resource::<State<crate::AppState>>().is_none_or(|s| *s.get() != crate::AppState::Match)
+        || world.get_resource::<crate::menu::Menu>().is_none_or(|m| !m.in_match || m.open())
+        || world.get_resource::<crate::buymenu::BuyMenu>().is_some_and(|m| m.open)
+        || world.get_resource::<crate::player::InputEnabled>().is_none_or(|e| !e.0)
+        || world.get_resource::<crate::remote::RemoteClient>()
+            .is_some_and(|r| r.status() != &netcode::remote_session::Status::Ready) {
+        return Err("Resume a ready match before selecting a grenade.".into());
+    }
+    let local = world.get_resource::<crate::player::LocalPlayer>()
+        .filter(|p| !p.noclip).ok_or("No active player to select a grenade.")?;
+    let simulation = world.get_resource::<crate::player::SimWorld>()
+        .ok_or("No active match to select a grenade.")?;
+    let definition = crate::player::carried_utility(&simulation.0, local.id, name)
+        .ok_or("That named grenade is not carried by the living player.")?;
+    world.resource_mut::<crate::player::LocalPlayer>().console_utility = definition;
+    Ok(format!("Requested {name} through player input."))
+}
 fn execute(world: &mut World) {
     let pending = std::mem::take(&mut world.resource_mut::<DeveloperConsole>().pending);
     for command in pending {
@@ -431,13 +453,14 @@ fn run(world: &mut World, line: &str) -> Result<String, String> {
     let args = &tokens[1..];
     match name.as_str() {
         "help" => Ok(format!(
-            "{}\nExamples: volume 0.5 | cl_showfps 1 | bind mwheeldown +jump | bind space +jump\nSettings save immediately. Up/Down recalls commands; Tab completes command names.\nconnect accepts an IP:port (default 27015). map uses the current offline mode/team/bot selection.\nThis console does not yet implement every Source command or arbitrary command binds.",
+            "{}\nExamples: volume 0.5 | cl_showfps 1 | bind mwheeldown +jump | bind space +jump | use weapon_smokegrenade\nSettings save immediately. Up/Down recalls commands; Tab completes command names.\nconnect accepts an IP:port (default 27015). map uses the current offline mode/team/bot selection.\nThis console does not yet implement every Source command or arbitrary command binds.",
             COMMANDS.join("  ")
         )),
         "clear" if args.is_empty() => {
             world.resource_mut::<DeveloperConsole>().output.clear();
             Ok(String::new())
         }
+        "use" if args.len() == 1 => use_utility(world, &args[0].to_ascii_lowercase()),
         "bind" | "unbind" => {
             let result = bind(
                 &mut world.resource_mut::<crate::settings::Settings>(),
@@ -650,6 +673,68 @@ fn draw(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn named_grenade_use_queues_authority_and_rejects_absent_or_lost_ownership() {
+        let catalog = std::sync::Arc::new(weapons::Catalog::from_items_game(r#"
+            items_game { items {
+                7342 { name weapon_smokegrenade attributes { "primary default clip size" 1 } }
+                7343 { name weapon_flashbang attributes { "primary default clip size" 1 } }
+            } }"#).unwrap());
+        let mut simulation = sim::World::with_catalog(
+            std::sync::Arc::new(collision::CollisionWorld::new()), catalog.clone());
+        let id = simulation.add_player("Local", sim::Team::CounterTerrorist);
+        let player = simulation.player_mut(id).unwrap();
+        player.alive = true;
+        player.weapons = ["weapon_flashbang", "weapon_smokegrenade"].map(|name|
+            sim::weapon::WeaponState::new(std::sync::Arc::new(catalog.get(name).unwrap().clone()))).into();
+        player.active = 0;
+        let mut app = App::new();
+        app.insert_resource(crate::player::SimWorld(simulation))
+            .insert_resource(crate::player::LocalPlayer::new(id, glam::Vec3::ZERO, 0.))
+            .insert_resource(crate::player::InputEnabled(true))
+            .insert_resource(State::new(crate::AppState::Match))
+            .init_resource::<crate::menu::Menu>();
+        let mut settings = crate::settings::Settings::parse("bind13=KeyC\nvolume=0.4\n");
+        let tokens = words("bind x \"use weapon_smokegrenade\"").unwrap();
+        bind(&mut settings, &tokens[1..], false).unwrap();
+        bind(&mut settings, &["mouse4".into(), "use weapon_flashbang".into()], false).unwrap();
+        assert_eq!(crate::settings::Settings::parse(&settings.encode()), settings);
+        assert_eq!(settings.binds[crate::settings::KEY_ATTACK], Some(KeyCode::KeyC));
+        assert_eq!(settings.binds[crate::settings::KEY_GRENADE_FIRST + 2], Some(KeyCode::KeyX));
+        assert!(run(app.world_mut(), "use weapon_hegrenade").is_err());
+        run(app.world_mut(), "use weapon_smokegrenade").unwrap();
+        assert_eq!(app.world().resource::<crate::player::SimWorld>().0.player(id).unwrap().active, 0);
+        let keys = ButtonInput::default();
+        let mouse = ButtonInput::default();
+        let controls = crate::player::Controls { keys: &keys, mouse: &mouse, settings: &settings,
+            enabled: true, blocked: true, captured: false, buy_menu: false };
+        let input = crate::player::sample_tick_input(
+            &mut app.world_mut().resource_mut::<crate::player::LocalPlayer>(), &controls);
+        assert_eq!(input.utility, 7342, "explicit console selection survives device capture blocking");
+        assert_eq!(input.buttons, 0);
+        assert_eq!(crate::player::sample_tick_input(
+            &mut app.world_mut().resource_mut::<crate::player::LocalPlayer>(), &controls).utility, 0);
+        app.world_mut().resource_mut::<crate::player::SimWorld>().0.step(&[(id, input)]);
+        assert_eq!(app.world().resource::<crate::player::SimWorld>().0.player(id).unwrap()
+            .active_weapon().unwrap().def.class_name, "weapon_smokegrenade");
+        run(app.world_mut(), "use weapon_flashbang").unwrap();
+        {
+            let mut simulation = app.world_mut().resource_mut::<crate::player::SimWorld>();
+            let player = simulation.0.player_mut(id).unwrap();
+            player.weapons.retain(|w| w.def.class_name != "weapon_flashbang");
+            player.active = 0;
+        }
+        let input = crate::player::sample_tick_input(
+            &mut app.world_mut().resource_mut::<crate::player::LocalPlayer>(), &controls);
+        app.world_mut().resource_mut::<crate::player::SimWorld>().0.step(&[(id, input)]);
+        assert_eq!(app.world().resource::<crate::player::SimWorld>().0.player(id).unwrap().weapons.len(), 1,
+            "authority cannot grant a grenade that was dropped after sampling");
+        app.world_mut().resource_mut::<crate::player::SimWorld>().0.player_mut(id).unwrap().alive = false;
+        assert!(run(app.world_mut(), "use weapon_smokegrenade").is_err());
+        app.world_mut().resource_mut::<crate::player::SimWorld>().0.player_mut(id).unwrap().alive = true;
+        app.insert_resource(State::new(crate::AppState::Loading));
+        assert!(run(app.world_mut(), "use weapon_smokegrenade").is_err());
+    }
     #[test]
     fn keyboard_unbind_survives_reload_and_removes_tick_input_without_removing_mouse_jump() {
         let mut settings = crate::settings::Settings::parse("bind0=KeyW\nbind4=Space\n");

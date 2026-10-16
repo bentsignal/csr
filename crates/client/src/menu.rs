@@ -336,6 +336,7 @@ pub(crate) fn input(
         local.keyboard_attacks = 0;
         local.pending_drop = false;
         local.pending_slot = 0;
+        local.clear_utility_requests();
         local.pending_buys.clear();
         if remote.is_some() { clock.unpause(); } else { clock.pause(); }
         cursor.grab_mode = CursorGrabMode::None;
