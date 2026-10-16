@@ -110,4 +110,9 @@ record preservation, filtered reward indices, preserved raw catalog indices,
 local loadout suppression of a preserved later knife, an admitted old knife,
 and custom identity pass-through. One ignored installed-catalog report checks
 the real parser's admitted 17 cases/nine families/177 pairs and valid raw indices.
-Runtime/required verification is pending the orchestrator's scheduled lease.
+The report and mixed-inventory checks passed in the [final combined
+verification](overnight-fidelity-verification.md), along with 1,000 durable
+Chroma openings through the existing transactional audit. The actual
+original Inventory image shows five Chroma labels, but its colon-ID thumbnail
+URL failure remains tracked in #181. No complete case-opening UI or historical
+rendering/progression claim follows from these data and transaction checks.
