@@ -216,6 +216,7 @@ pub fn drive(
     if paused {
         local.latched = 0;
         local.pointer_attacks = 0;
+        local.keyboard_attacks = 0;
         local.pending_slot = 0;
         local.pending_drop = false;
         local.pending_buys.clear();

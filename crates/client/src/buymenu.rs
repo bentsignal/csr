@@ -167,6 +167,7 @@ pub fn input(
             menu.category = None;
             local.latched = 0;
             local.pointer_attacks = 0;
+            local.keyboard_attacks = 0;
             local.pending_slot = 0;
             local.pending_drop = false;
         } else {
