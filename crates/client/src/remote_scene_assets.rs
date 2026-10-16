@@ -92,7 +92,7 @@ pub fn gather(world: &mut World) -> Result<SceneAssets, GatherError> {
         }
     }
     if let Some(models) = world.get_resource::<GroundModels>() {
-        for asset in models.planted.iter().chain(models.kit.iter()) {
+        for asset in models.planted.iter().chain(models.kit.iter()).chain(models.weapons.values()) {
             owners.model(asset)?;
         }
     }
@@ -182,6 +182,7 @@ mod tests {
         let entity_mesh = mesh(&mut meshes);
         let model_mesh = mesh(&mut meshes);
         let ground_mesh = mesh(&mut meshes);
+        let dropped_mesh = mesh(&mut meshes);
         // These images/meshes already existed before the scene; ownership,
         // rather than a fresh-ID difference, must include them.
         world.spawn((
@@ -205,15 +206,19 @@ mod tests {
             sun: None,
         });
         world.insert_resource(GroundModels {
-            planted: Some(model(ground_mesh.clone(), material)),
+            planted: Some(model(ground_mesh.clone(), material.clone())),
             kit: None,
+            weapons: HashMap::from([(
+                "mod_weapon_ground_fixture".parse().unwrap(),
+                model(dropped_mesh.clone(), material),
+            )]),
         });
         world.insert_resource(ViewModels::default());
         world.insert_resource(meshes);
         world.insert_resource(images);
         world.insert_resource(materials);
         let scene = gather(&mut world).unwrap();
-        let mut expected_meshes = vec![entity_mesh.id(), model_mesh.id(), ground_mesh.id()];
+        let mut expected_meshes = vec![entity_mesh.id(), model_mesh.id(), ground_mesh.id(), dropped_mesh.id()];
         expected_meshes.sort();
         let mut expected_images = handles.iter().map(Handle::id).collect::<Vec<_>>();
         expected_images.sort();
