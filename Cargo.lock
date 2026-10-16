@@ -3829,6 +3829,7 @@ dependencies = [
  "glam 0.32.1",
  "kv",
  "mdl",
+ "movement",
  "nav",
  "packs",
  "sha1",

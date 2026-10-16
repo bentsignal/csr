@@ -56,3 +56,10 @@ distinct profiles, verifies invalid explicit profiles fail closed, and runs a
 real authoritative bot world: Harmless moves without requesting attacks while
 the same Easy profile with shooting enabled actually fires. Compilation,
 installed-data and rendered picker verification remain pending root integration.
+
+The narrow ignored installed import check is
+`installed_all_six_bot_difficulty_choices_resolve_through_content_vfs`. It uses
+the ordinary mounted Legacy VFS, reports the actual mounted source hashes and
+all six resolved profiles, and requires distinct admitted skills plus matching
+Harmless/Easy profile values with different shooting settings. This guards
+against assuming that the synthetic pack witness proves installed parsing.

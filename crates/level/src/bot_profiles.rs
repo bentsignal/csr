@@ -89,6 +89,36 @@ mod tests {
     use glam::Vec3;
 
     #[test]
+    #[ignore = "requires the player's installed CS:GO Legacy; no GPU"]
+    fn installed_all_six_bot_difficulty_choices_resolve_through_content_vfs() {
+        use sha1::{Digest, Sha1};
+        let (game, fs) = crate::mount_game(None).expect("installed Legacy content");
+        println!("installed bot profile sources: game={} gamemodes_sha1={:x} botprofile_sha1={:x}",
+            game.display(), Sha1::digest(fs.read("gamemodes.txt").expect("game modes")),
+            Sha1::digest(fs.read("BotProfile.db").expect("bot personalities")));
+        let profiles = Profiles::load(&fs);
+        let mut admitted = Vec::new();
+        for choice in 0..=5 {
+            let profile = profiles.resolve(choice).unwrap_or_else(|error|
+                panic!("installed UI choice {choice} was not admitted: {error}"));
+            println!("installed bot profile: choice={choice} profile={profile:?}");
+            if let Some(profile) = profile {
+                sim::bots::Bots::with_profile(profile).expect("compatible authored values");
+            }
+            admitted.push(profile);
+        }
+        assert_eq!(admitted[0], None);
+        let harmless = admitted[1].unwrap();
+        let easy = admitted[2].unwrap();
+        assert!(!harmless.shooting && easy.shooting);
+        assert_eq!((harmless.skill, harmless.reaction_time), (easy.skill, easy.reaction_time));
+        let skills: std::collections::BTreeSet<_> = admitted[2..].iter()
+            .map(|profile| profile.unwrap().skill.to_bits()).collect();
+        assert_eq!(skills.len(), 4, "all four labels must construct distinct admitted skills");
+        assert!(admitted[2..].iter().all(|profile| profile.unwrap().shooting));
+    }
+
+    #[test]
     fn content_difficulties_construct_distinct_bots_and_harmless_navigates_without_attacks() {
         let modes = r#"GameModes.txt { botDifficulty {
             none { value 0 convars { bot_quota 0 } }
