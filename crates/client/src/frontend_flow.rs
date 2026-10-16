@@ -21,6 +21,7 @@ pub(crate) struct Flow {
     step: usize,
     tick: u64,
     options_roundtrip: bool,
+    video_options: bool,
     home_ready_ms: Option<f64>,
     pause_hover: bool,
     pause_hover_started: Option<Instant>,
@@ -34,7 +35,8 @@ impl Default for Flow {
             phase: 0,
             step: 0,
             tick: 0,
-            options_roundtrip: std::env::var("CSR_TEST_FLOW_OPTIONS").as_deref() == Ok("1"),
+            options_roundtrip: matches!(std::env::var("CSR_TEST_FLOW_OPTIONS").as_deref(), Ok("1" | "video")),
+            video_options: std::env::var("CSR_TEST_FLOW_OPTIONS").as_deref() == Ok("video"),
             home_ready_ms: None,
             pause_hover: std::env::var("CSR_TEST_PAUSE_HOVER").as_deref() == Ok("1"),
             pause_hover_started: None,
@@ -215,15 +217,18 @@ pub(crate) fn update(
                         if !flow.pause_hover { capture(&mut commands, &options, "flow-pause.png"); }
                         click(&front, &window, 650., 665.);
                     }
-                    1 => click(&front, &window, 650., 817.),
+                    1 => {
+                        capture(&mut commands, &options, "flow-pause-options-list.png");
+                        click(&front, &window, 650., if flow.video_options { 780. } else { 817. });
+                    }
                     2 => {
                         if !front.options_requested() || !front.movie_ready("OptionsMenu") { return; }
-                        capture(&mut commands, &options, "flow-pause-audio.png");
+                        capture(&mut commands, &options, if flow.video_options { "flow-pause-video.png" } else { "flow-pause-audio.png" });
                         click(&front, &window, 380., 970.);
                     }
                     _ => {
                         if front.options_requested() || !front.pause_surface_visible() { return; }
-                        info!("frontend flow: native Audio Back restored Pause");
+                        info!("frontend flow: native {} Back restored Pause", if flow.video_options { "Video" } else { "Audio" });
                         capture(&mut commands, &options, "flow-pause-options-returned.png");
                         flow.tick = world.as_ref().unwrap().0.tick;
                         click(&front, &window, 650., 530.);
