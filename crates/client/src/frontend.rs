@@ -1116,6 +1116,14 @@ impl Frontend {
     pub(crate) fn loading_painted(&self, serial: u64, frame: u32) -> bool {
         self.loading_presentation.ready(serial, frame)
     }
+    pub(crate) fn archive_loading_painted(&self, serial: Option<u64>, frame: u32) -> bool {
+        let Some(serial) = serial else { return false; };
+        if self.failed.is_some() || !self.loading_presentation.art_ready(serial, frame) { return false; }
+        let data = self.data.lock().unwrap();
+        data.state == AppState::Loading && data.loading_map.as_ref().is_some_and(|context|
+            context.selected.serial == serial && context.archive.is_some()
+                && context.initialized.lock().unwrap().is_some())
+    }
     /// Counts completed frame assignments to the Bevy image, not render loops.
     pub(crate) fn presented_serial(&self) -> u64 { self.presented_serial }
     pub(crate) fn observed_loading_image(&self) -> Option<(crate::session::LoadingMap, String)> {
@@ -1729,6 +1737,10 @@ pub(crate) fn update(
     } else if !loading {
         front.loading_text.clear();
     }
+    // The actual original archive raster now owns its loading status text.
+    // Keep the working mouse Cancel; only its duplicate status/background go.
+    let archive_status = loading && menu.status.is_empty()
+        && front.archive_loading_painted(loader.generation(), app_frame.0);
     let owned_lobby_notice = scene == AppState::Menu && front.lobby.lock().unwrap().active();
     if let Ok(mut node) = nodes.get_mut(front.notice) {
         // The installed lobby/picker owns its footer controls. The clear margin
@@ -1740,6 +1752,13 @@ pub(crate) fn update(
         } else {
             Display::None
         };
+    }
+    if let Ok(mut background) = backgrounds.get_mut(front.notice) {
+        background.0 = if archive_status { Color::NONE }
+            else { Color::srgba(0.04, 0.06, 0.08, 0.96) };
+    }
+    if let Ok(mut node) = nodes.get_mut(front.notice_text) {
+        node.display = if archive_status { Display::None } else { Display::Flex };
     }
     if let Ok(mut node) = nodes.get_mut(front.cancel) {
         node.display = if loading {

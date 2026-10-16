@@ -6,6 +6,7 @@ pub(crate) struct Presentation {
     serial: Option<u64>,
     revision: Option<u64>,
     assigned_frame: Option<u32>,
+    art_raster_assigned: bool,
 }
 impl Presentation {
     pub(crate) fn select(&mut self, serial: Option<u64>) {
@@ -25,6 +26,7 @@ impl Presentation {
     pub(crate) fn assigned(&mut self, revision: u64, frame: u32) -> bool {
         if self.revision == Some(revision) && self.assigned_frame.is_none() {
             self.assigned_frame = Some(frame);
+            self.art_raster_assigned = true;
             return true;
         }
         false
@@ -33,6 +35,10 @@ impl Presentation {
         if self.assigned_frame.is_none() {
             self.assigned_frame = Some(frame);
         }
+    }
+    /// Fallback readiness alone must never hide a functional progress notice.
+    pub(crate) fn art_ready(&self, serial: u64, frame: u32) -> bool {
+        self.art_raster_assigned && self.ready(serial, frame)
     }
     pub(crate) fn ready(&self, serial: u64, frame: u32) -> bool {
         self.serial == Some(serial)
@@ -69,6 +75,7 @@ mod tests {
         gate.assigned(41, 18);
         assert!(!gate.ready(9, 18));
         assert!(gate.ready(9, 19));
+        assert!(gate.art_ready(9, 19));
         assert!(!gate.ready(10, 19));
     }
     #[test]
@@ -86,6 +93,21 @@ mod tests {
         gate.request(5);
         gate.assigned(5, 13);
         assert!(gate.ready(2, 14));
+    }
+    #[test]
+    fn failure_after_request_does_not_claim_a_successful_art_raster() {
+        let mut gate = Presentation::default();
+        gate.select(Some(7));
+        gate.request(41);
+        gate.fallback(20);
+        assert!(gate.ready(7, 21));
+        assert!(!gate.art_ready(7, 21));
+        // A late reply cannot turn the admitted failure into a successful art
+        // outcome, even though it retains the formerly requested revision.
+        gate.assigned(41, 21);
+        assert!(!gate.art_ready(7, 22));
+        gate.select(Some(8));
+        assert!(!gate.art_ready(8, 23));
     }
     #[test]
     fn unsupported_art_fallback_still_gets_one_iteration_including_frame_wrap() {
