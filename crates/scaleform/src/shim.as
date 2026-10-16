@@ -575,6 +575,9 @@ MovieClipLoader.prototype.loadClip = function(url, target) {
         fit.path = rootPath;
         fit.loader = this;
         fit.onLoadInit = function(mc) {
+            if (this.traceUrl != undefined) {
+                csrEI.call("csr.LoadingArtInit", this.traceUrl, this.traceRequested, String(mc), mc._width, mc._height);
+            }
             this.loader.removeListener(this);
             if (_global.csrLoadingOverviews[this.path] != this.context ||
                 this.context.listener != this ||
@@ -587,7 +590,12 @@ MovieClipLoader.prototype.loadClip = function(url, target) {
             mc._x = this.context.x + (this.context.width - mc._width) / 2;
             mc._y = this.context.y + (this.context.height - mc._height) / 2;
         };
-        fit.onLoadError = function(mc, error) { this.loader.removeListener(this); };
+        fit.onLoadError = function(mc, error) {
+            if (this.traceUrl != undefined) {
+                csrEI.call("csr.LoadingArtError", this.traceUrl, this.traceRequested, String(mc), String(error));
+            }
+            this.loader.removeListener(this);
+        };
         context.loader = this;
         context.listener = fit;
         this.addListener(fit);
@@ -598,22 +606,33 @@ MovieClipLoader.prototype.loadClip = function(url, target) {
          String(url).indexOf("img://loading/") == 0 || String(url).indexOf("collection_icon_") >= 0)) {
         _global.csrDiagnostics.loadingTraceBudget -= 1;
         csrEI.call("csr.LoadingArtRequest", String(url), String(target));
-        var observer = new Object();
-        observer.loader = this;
-        observer.url = String(url);
-        observer.requested = String(target);
-        observer.onLoadComplete = function(mc) {
-            csrEI.call("csr.LoadingArtComplete", this.url, this.requested, String(mc), mc._width, mc._height);
-        };
-        observer.onLoadInit = function(mc) {
-            csrEI.call("csr.LoadingArtInit", this.url, this.requested, String(mc), mc._width, mc._height);
-            this.loader.removeListener(this);
-        };
-        observer.onLoadError = function(mc, error) {
-            csrEI.call("csr.LoadingArtError", this.url, this.requested, String(mc), String(error));
-            this.loader.removeListener(this);
-        };
-        this.addListener(observer);
+        if (fit != undefined) {
+            // The fit removes itself during Init. A second listener can be
+            // skipped when a broadcaster walks its live indexed listener list.
+            // Forward the real callbacks from that same listener instead.
+            fit.traceUrl = String(url);
+            fit.traceRequested = String(target);
+            fit.onLoadComplete = function(mc) {
+                csrEI.call("csr.LoadingArtComplete", this.traceUrl, this.traceRequested, String(mc), mc._width, mc._height);
+            };
+        } else {
+            var observer = new Object();
+            observer.loader = this;
+            observer.url = String(url);
+            observer.requested = String(target);
+            observer.onLoadComplete = function(mc) {
+                csrEI.call("csr.LoadingArtComplete", this.url, this.requested, String(mc), mc._width, mc._height);
+            };
+            observer.onLoadInit = function(mc) {
+                csrEI.call("csr.LoadingArtInit", this.url, this.requested, String(mc), mc._width, mc._height);
+                this.loader.removeListener(this);
+            };
+            observer.onLoadError = function(mc, error) {
+                csrEI.call("csr.LoadingArtError", this.url, this.requested, String(mc), String(error));
+                this.loader.removeListener(this);
+            };
+            this.addListener(observer);
+        }
     }
     if (String(url).indexOf("img://avatar_") == 0) {
         var shower = new Object();
