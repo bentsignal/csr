@@ -1,9 +1,15 @@
 //! Presents installed maps and implemented modes through the original data schema.
 use std::collections::HashSet;
 
-/// A pinned Source 1 compatibility archive, not the install's remade Dust II.
+/// Pinned pre-rework Source 1 archives, distinct from the installed remakes.
 pub(super) const CLASSIC_DUST2: &str = "de_dust2_2017";
+#[cfg(test)]
 const CLASSIC_GROUP: &str = "mg_de_dust2_2017";
+const CLASSIC_INFERNO: &str = "de_inferno_2016";
+
+pub(super) fn menu_archive(name: &str) -> bool {
+    matches!(name, CLASSIC_DUST2 | CLASSIC_INFERNO)
+}
 
 pub(super) fn load(fs: &vfs::Vfs, installed: &HashSet<String>) -> kv::Block {
     let Some(doc) = fs
@@ -17,8 +23,10 @@ pub(super) fn load(fs: &vfs::Vfs, installed: &HashSet<String>) -> kv::Block {
         .read("resource/flash/sharedlib.swf")
         .and_then(|bytes| scaleform::library_symbols(&bytes).ok())
         .unwrap_or_default();
-    if installed.contains(CLASSIC_DUST2) {
-        add_classic_dust2(&mut root);
+    for name in [CLASSIC_DUST2, CLASSIC_INFERNO] {
+        if installed.contains(name) {
+            add_classic_map(&mut root, workshop::find(name).expect("pinned classic map"));
+        }
     }
     filter(&mut root, installed, &symbols);
     root
@@ -26,48 +34,51 @@ pub(super) fn load(fs: &vfs::Vfs, installed: &HashSet<String>) -> kv::Block {
 
 /// Extend the installed data schema, retaining the original map card/art and
 /// controls. Callback text still resolves exclusively through this catalog.
-fn add_classic_dust2(root: &mut kv::Block) {
+fn add_classic_map(root: &mut kv::Block, archive: &workshop::OldMap) {
+    let base_group = format!("mg_{}", archive.base);
+    let classic_group = format!("mg_{}", archive.name);
     let Some(mut map) = root
         .block("maps")
-        .and_then(|maps| maps.block("de_dust2"))
+        .and_then(|maps| maps.block(archive.base))
         .cloned()
     else {
         return;
     };
     let Some(mut group) = root
         .block("mapgroups")
-        .and_then(|groups| groups.block("mg_de_dust2"))
+        .and_then(|groups| groups.block(&base_group))
         .cloned()
     else {
         return;
     };
-    let title = workshop::find(CLASSIC_DUST2)
-        .expect("pinned classic map")
-        .title;
-    map.set("name", kv::Value::Str(CLASSIC_DUST2.into()));
+    let title = archive.title;
+    map.set("name", kv::Value::Str(archive.name.into()));
     map.set("nameID", kv::Value::Str(title.into()));
-    group.set("name", kv::Value::Str(CLASSIC_GROUP.into()));
+    group.set("name", kv::Value::Str(classic_group.clone()));
     group.set("nameID", kv::Value::Str(title.into()));
     group.set(
         "tooltipID",
-        kv::Value::Str("Classic Dust II before the 2017 rework. Experimental archive.".into()),
+        kv::Value::Str(format!(
+            "{}. Experimental archive.",
+            archive.note.trim_end_matches('.')
+        )),
     );
     group.set(
         "maps",
         kv::Value::Block(kv::Block {
-            entries: vec![(CLASSIC_DUST2.into(), kv::Value::Str(String::new()))],
+            entries: vec![(archive.name.into(), kv::Value::Str(String::new()))],
         }),
     );
     root.get_mut("maps")
         .unwrap()
         .as_block_mut()
         .unwrap()
-        .set(CLASSIC_DUST2, kv::Value::Block(map));
+        .set(archive.name, kv::Value::Block(map));
     root.get_mut("mapgroups")
         .unwrap()
         .as_block_mut()
         .unwrap()
-        .set(CLASSIC_GROUP, kv::Value::Block(group));
+        .set(&classic_group, kv::Value::Block(group));
     if let Some(types) = root.get_mut("gameTypes").and_then(kv::Value::as_block_mut) {
         for (_, kind) in &mut types.entries {
             let Some(modes) = kind
@@ -85,15 +96,15 @@ fn add_classic_dust2(root: &mut kv::Block) {
                     let Some(groups) = mode.get_mut(field).and_then(kv::Value::as_block_mut) else {
                         continue;
                     };
-                    if groups.get(CLASSIC_GROUP).is_none() {
+                    if groups.get(&classic_group).is_none() {
                         if let Some(at) = groups
                             .entries
                             .iter()
-                            .position(|(name, _)| name == "mg_de_dust2")
+                            .position(|(name, _)| name == &base_group)
                         {
                             groups.entries.insert(
                                 at + 1,
-                                (CLASSIC_GROUP.into(), kv::Value::Str(String::new())),
+                                (classic_group.clone(), kv::Value::Str(String::new())),
                             );
                         }
                     }
@@ -362,7 +373,7 @@ mod tests {
             .as_block_mut()
             .unwrap()
             .set("imagename", kv::Value::Str("map-dust2-overall".into()));
-        add_classic_dust2(&mut root);
+        add_classic_map(&mut root, workshop::find(CLASSIC_DUST2).unwrap());
         filter(
             &mut root,
             &HashSet::from(["de_dust2".into(), CLASSIC_DUST2.into()]),
@@ -398,6 +409,102 @@ mod tests {
             .str(CLASSIC_GROUP),
             Some("1")
         );
+    }
+
+    #[test]
+    fn old_inferno_is_distinct_from_the_remake_and_preserves_mode_order() {
+        let mut root = installed_modes();
+        let original = root
+            .block("maps")
+            .unwrap()
+            .block("de_dust2")
+            .unwrap()
+            .clone();
+        root.get_mut("maps")
+            .unwrap()
+            .as_block_mut()
+            .unwrap()
+            .set("de_inferno", kv::Value::Block(original));
+        let mut group = root
+            .block("mapgroups")
+            .unwrap()
+            .block("mg_de_dust2")
+            .unwrap()
+            .clone();
+        group.set("imagename", kv::Value::Str("map-inferno-overall".into()));
+        group.set(
+            "maps",
+            kv::Value::Block(kv::Block {
+                entries: vec![("de_inferno".into(), kv::Value::Str(String::new()))],
+            }),
+        );
+        root.get_mut("mapgroups")
+            .unwrap()
+            .as_block_mut()
+            .unwrap()
+            .set("mg_de_inferno", kv::Value::Block(group));
+        for (kind, mode) in [("classic", "competitive"), ("gungame", "deathmatch")] {
+            root.get_mut("gameTypes")
+                .unwrap()
+                .as_block_mut()
+                .unwrap()
+                .get_mut(kind)
+                .unwrap()
+                .as_block_mut()
+                .unwrap()
+                .get_mut("gameModes")
+                .unwrap()
+                .as_block_mut()
+                .unwrap()
+                .get_mut(mode)
+                .unwrap()
+                .as_block_mut()
+                .unwrap()
+                .get_mut("mapgroupsSP")
+                .unwrap()
+                .as_block_mut()
+                .unwrap()
+                .set("mg_de_inferno", kv::Value::Str("1".into()));
+        }
+        add_classic_map(&mut root, workshop::find(CLASSIC_INFERNO).unwrap());
+        filter(
+            &mut root,
+            &HashSet::from(["de_inferno".into(), CLASSIC_INFERNO.into()]),
+            &HashSet::from(["map-inferno-overall".into()]),
+        );
+        let group = root
+            .block("mapgroups")
+            .unwrap()
+            .block("mg_de_inferno_2016")
+            .unwrap();
+        assert_eq!(group.str("nameID"), Some("Inferno (2016)"));
+        assert_eq!(group.str("imagename"), Some("map-inferno-overall"));
+        for (requested, expected) in [
+            ("mg_de_inferno", "de_inferno"),
+            ("mg_de_inferno_2016", CLASSIC_INFERNO),
+        ] {
+            let query = REQUEST.replace("mg_de_dust2", requested);
+            assert_eq!(offline_selection(&root, &query).unwrap().map, expected);
+        }
+        let groups = root
+            .path(&[
+                "gameTypes",
+                "classic",
+                "gameModes",
+                "competitive",
+                "mapgroupsSP",
+            ])
+            .unwrap()
+            .as_block()
+            .unwrap();
+        assert_eq!(groups.str("mg_de_inferno"), Some("0"));
+        assert_eq!(groups.str("mg_de_inferno_2016"), Some("1"));
+        assert!(
+            offline_selection(&root, &REQUEST.replace("mg_de_dust2", "mg_de_inferno_2020"))
+                .is_err()
+        );
+        assert!(menu_archive(CLASSIC_INFERNO));
+        assert!(!menu_archive("de_inferno_2020"));
     }
 
     #[test]

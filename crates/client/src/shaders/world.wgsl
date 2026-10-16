@@ -39,6 +39,7 @@ struct WorldParams {
     skin_details:vec4<f32>,
     skin_properties:vec4<f32>,
     skin_pattern_palette:vec4<f32>,
+    detail: vec4<f32>,
 };
 
 
@@ -55,6 +56,8 @@ const NORMAL2: u32 = 1024u;
 const SSBUMP: u32 = 2048u;
 const SSBUMP_MATHFIX: u32 = 4096u;
 const SHADOW_DIAGNOSTIC: u32 = 8192u;
+const TINT_BY_BASE_ALPHA: u32 = 131072u;
+const DETAIL: u32 = 262144u;
 // Orthonormal radiosity basis, in texture tangent space.
 const RNM0 = vec3<f32>(0.81649658, 0.0, 0.57735027);
 const RNM1 = vec3<f32>(-0.40824829, 0.70710678, 0.57735027);
@@ -93,6 +96,8 @@ fn ambient_light(n: vec3<f32>) -> vec3<f32> {
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(18) var skin_position: texture_2d<f32>;
 @group(#{MATERIAL_BIND_GROUP}) @binding(19) var skin_position_samp: sampler;
+@group(#{MATERIAL_BIND_GROUP}) @binding(20) var detail_tex: texture_2d<f32>;
+@group(#{MATERIAL_BIND_GROUP}) @binding(21) var detail_samp: sampler;
 fn paint_coords(uv:vec2<f32>)->vec2<f32>{
     let p=(uv-vec2<f32>(0.5))*params.skin_transform.xy;
     return vec2<f32>(p.x*params.skin.z-p.y*params.skin.w,p.x*params.skin.w+p.y*params.skin.z)+vec2<f32>(0.5)+params.skin_transform.zw;
@@ -147,6 +152,8 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let uv = vec2<f32>(0.0);
 #endif
     var albedo = textureSample(base_tex, base_samp, uv);
+    // Preserve the authored mask independently of opacity/cosmetic processing.
+    let tint_weight = select(1.0, albedo.a, (params.flags & TINT_BY_BASE_ALPHA) != 0u);
     if params.skin_details.w > 0.5 && params.skin_details.z > 0.0 {
         let grain=fract(sin(dot(floor(uv*512.0),vec2<f32>(12.9898,78.233)))*43758.5453);
         albedo.a*=smoothstep(params.skin_details.z-0.05,params.skin_details.z+0.1,grain);
@@ -229,7 +236,8 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
         albedo = mix(albedo, second, t);
     }
 
-    albedo = vec4<f32>(albedo.rgb * params.color.rgb, albedo.a * params.color.a);
+    var diffuse_tint = params.color.rgb;
+    albedo = vec4<f32>(albedo.rgb, albedo.a * params.color.a);
 
     if (params.flags & ALPHA_TEST) != 0u && albedo.a < params.alpha_ref {
         discard;
@@ -284,6 +292,12 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
         light = vcolor.rgb;
 #ifdef VERTEX_UVS_B
         if (params.flags & NORMAL) != 0u { light = prop_irradiance(n, i32(round(in.uv_b.x))); }
+        // Tint belongs to this placed prop, not its shared material or lighting.
+        // Other material users retain their existing one-texel identity default.
+        if textureDimensions(prop_light, 0).x >= 9u {
+            let tint = textureLoad(prop_light, vec2<i32>(8, i32(round(in.uv_b.x))), 0).rgb;
+            diffuse_tint *= tint;
+        }
 #endif
     } else if (params.flags & DYNAMIC_LIT) != 0u {
         let ndl=dot(n, params.sun_dir.xyz);
@@ -294,12 +308,23 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
         light = vec3<f32>(1.0);
     }
 
+    // Combine authored material and placed-instance tint before masking once.
+    // Alpha0 leaves the base RGB unchanged; alpha1 applies the complete tint.
+    albedo = vec4<f32>(albedo.rgb * mix(vec3<f32>(1.0), diffuse_tint, tint_weight), albedo.a);
     if params.skin_details.w>0.5 && params.skin_properties.z>0.5 {
         let eye=normalize(view.world_position.xyz-in.world_position.xyz);
         let mask=textureSample(mod_tex,mod_samp,uv);
         let angle=clamp(1.0-abs(dot(n,eye)),0.0,1.0);
         let spectrum=textureSample(base2_tex,base2_samp,vec2<f32>(fract(angle+mask.g),mask.b));
         albedo=vec4<f32>(mix(albedo.rgb,albedo.rgb*spectrum.rgb*2.0,mask.r),albedo.a);
+    }
+    // Ordinary authored detail covers lit world surfaces and static props.
+    // Dynamic/skinned character and weapon materials keep their fallback.
+    if (params.flags & DETAIL) != 0u && (params.flags & (LIGHTMAPPED | VERTEX_LIT)) != 0u && (params.flags & DYNAMIC_LIT) == 0u {
+        let grain = textureSample(detail_tex, detail_samp, uv * params.detail.xy).rgb;
+        // Ordinary detail uses a neutral midpoint. Sampling as data preserves
+        // 0.5 as identity; the authored factor controls the modulation strength.
+        albedo = vec4<f32>(albedo.rgb * mix(vec3<f32>(1.0), 2.0 * grain, params.detail.z), albedo.a);
     }
     var rgb = albedo.rgb * light;
     if (params.flags & DYNAMIC_LIT) != 0u && params.phong.y > 0.0 {

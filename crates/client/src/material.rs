@@ -65,6 +65,10 @@ pub mod flags {
     /// Projected BSP overlay; the following two bits hold its authored order.
     pub const OVERLAY: u32 = 1 << 14;
     pub const OVERLAY_ORDER_SHIFT: u32 = 15;
+    /// Use base-texture alpha to mask material/instance diffuse tint.
+    pub const TINT_BY_BASE_ALPHA: u32 = 1 << 17;
+    /// Ordinary authored detail modulation; opacity and lighting are separate.
+    pub const DETAIL: u32 = 1 << 18;
 }
 
 #[derive(Clone, Copy, Debug, ShaderType)]
@@ -99,6 +103,8 @@ pub struct WorldParams {
     pub skin_details:Vec4,
     pub skin_properties:Vec4,
     pub skin_pattern_palette:Vec4,
+    /// Detail UV scale xy and authored blend factor z.
+    pub detail: Vec4,
 }
 
 impl Default for WorldParams {
@@ -126,6 +132,7 @@ impl Default for WorldParams {
             skin_details:Vec4::ZERO,
             skin_properties:Vec4::ZERO,
             skin_pattern_palette:Vec4::new(1.,2.,3.,4.),
+            detail: Vec4::new(1.0, 1.0, 0.0, 0.0),
         }
     }
 }
@@ -162,7 +169,7 @@ pub struct WorldMaterial {
     #[texture(11)]
     #[sampler(12)]
     pub normal2: Handle<Image>,
-    /// Eight texels per static prop: ambient cube, sun direction, sun color.
+    /// Nine texels per static prop: ambient cube, sun direction/color, diffuse tint.
     #[texture(13)]
     pub prop_light: Handle<Image>,
     #[texture(14)]
@@ -174,6 +181,9 @@ pub struct WorldMaterial {
     #[texture(18)]
     #[sampler(19)]
     pub skin_position:Handle<Image>,
+    #[texture(20)]
+    #[sampler(21)]
+    pub detail: Handle<Image>,
     pub alpha_mode: AlphaMode,
     pub cull: bool,
 }

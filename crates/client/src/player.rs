@@ -245,7 +245,7 @@ pub fn look(
     }
     let me = world.0.player(local.id);
     let alive = me.is_some_and(|p| p.alive);
-    if alive && grabbed && settings.action_just_pressed(12, &keys, &mouse, blocked_mouse) {inspect.0=inspect.0.wrapping_add(1);}
+    if alive && grabbed && settings.action_just_pressed(12, &keys, &mouse, blocked_mouse) {inspect.start();}
 
     // Spectating: left click cycles through living teammates.
     if !alive && grabbed && mouse.just_pressed(MouseButton::Left) {
@@ -277,6 +277,9 @@ pub fn look(
     }
     if settings.action_just_pressed(8, &keys, &mouse, blocked_mouse) {
         b |= buttons::RELOAD;
+        if me.and_then(|p| p.active_weapon()).is_some_and(|w| w.def.class == weapons::WeaponClass::Knife) {
+            inspect.cancel();
+        }
     }
     // The shared sampler also guards held attacks after grab_cursor captures.
     if grabbed && alive && settings.mouse_just_pressed(crate::settings::MouseAction::Attack, &mouse, blocked_mouse) {

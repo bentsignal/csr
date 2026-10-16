@@ -21,6 +21,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 mod grenade_hold;
+mod inspection;
 mod look_motion;
 mod settling;
 
@@ -158,16 +159,18 @@ mod life_tests {
         assert_eq!((state.clip_index, state.shell_seen), (0, None));
     }
 
-    #[test]
-    #[ignore = "requires the player's installed CS:GO Legacy; no GPU required"]
-    fn installed_respawn_restarts_draw_through_the_production_system() {
+    fn installed_app(weapon_override: Option<&str>) -> (App, sim::PlayerId) {
         let level = level::Level::load("de_dust2", None).expect("installed Legacy Dust II");
         let mut world = sim::World::with_catalog(level.collision.clone(), level.catalog.clone());
         world.load_spawns(&level.bsp);
         let id = world.add_player("viewmodel regression", sim::Team::CounterTerrorist);
+        if let Some(name) = weapon_override {
+            let def = world.catalog.get(name).unwrap().clone();
+            let player = world.player_mut(id).unwrap();
+            player.weapons = vec![sim::weapon::WeaponState::new(Arc::new(def))];
+            player.active = 0;
+        }
         let player = world.player(id).unwrap();
-        let weapon = player.active_weapon().unwrap().def.class_name.clone();
-        assert_eq!(weapon, "weapon_m4a1_silencer");
         let local = LocalPlayer::new(id, player.eye(), 0.);
         let mut meshes = Assets::<Mesh>::default();
         let mut materials = Assets::<WorldMaterial>::default();
@@ -194,6 +197,15 @@ mod life_tests {
         app.world_mut().spawn((Window::default(), bevy::window::PrimaryWindow));
         app.update(); // create the cached instances
         app.update(); // sample the actual authored Draw clip
+        (app, id)
+    }
+
+    #[test]
+    #[ignore = "requires the player's installed CS:GO Legacy; no GPU required"]
+    fn installed_respawn_restarts_draw_through_the_production_system() {
+        let (mut app, id) = installed_app(None);
+        let weapon = app.world().resource::<SimWorld>().0.player(id).unwrap().active_weapon().unwrap().def.class_name.clone();
+        assert_eq!(weapon, "weapon_m4a1_silencer");
         let initial_pose = app.world().resource::<ViewModelState>().pose.clone();
         let initial_joints = app.world().resource::<ViewModelState>().weapon.as_ref().unwrap().1.joints.clone();
         let reload = app.world().resource::<ViewModels>().weapons[&weapon].clips["ACT_VM_RELOAD"][0].clone();
@@ -217,6 +229,47 @@ mod life_tests {
             "respawn resets playback without allocating replacement model instances");
         assert_eq!(state.life, Some(app.world().resource::<SimWorld>().0.player(id).unwrap().life_epoch));
     }
+
+    #[test]
+    #[ignore = "requires the player's installed CS:GO Legacy; no GPU required"]
+    fn installed_knife_inspect_and_cancel_preserve_the_actual_stab_deadline() {
+        let (mut app, id) = installed_app(Some("weapon_knife"));
+        let input = sim::TickInput { buttons: movement::buttons::ATTACK2, ..Default::default() };
+        let deadline = {
+            let mut world = app.world_mut().resource_mut::<SimWorld>();
+            world.0.step(&[(id, input.clone())]);
+            assert!(world.0.events.iter().any(|e| matches!(e, sim::GameEvent::Melee { secondary: true, .. })));
+            let deadline = world.0.player(id).unwrap().active_weapon().unwrap().next_attack;
+            assert!(deadline > world.0.time());
+            deadline
+        };
+        let stab = app.world().resource::<ViewModels>().weapons["weapon_knife"].clips["ACT_VM_MISSCENTER2"][0].clone();
+        {
+            let mut state = app.world_mut().resource_mut::<ViewModelState>();
+            stab.clip.sample_layered(0.2, &mut state.pose, |b| stab.weights.get(b).copied().unwrap_or(1.));
+            state.activity = "ACT_VM_MISSCENTER2".into();
+        }
+        let visible_stab = app.world().resource::<ViewModelState>().pose.clone();
+        app.world_mut().resource_mut::<crate::tracers::InspectRequest>().start();
+        app.update();
+        assert_eq!(app.world().resource::<ViewModelState>().activity, "INSPECT");
+        assert_eq!(app.world().resource::<ViewModelState>().pose, visible_stab);
+        app.world_mut().resource_mut::<Time>().advance_by(std::time::Duration::from_millis(100));
+        app.update();
+        let visible_inspect = app.world().resource::<ViewModelState>().pose.clone();
+        assert_ne!(visible_inspect, visible_stab);
+        app.world_mut().resource_mut::<crate::tracers::InspectRequest>().cancel();
+        app.update();
+        assert_eq!(app.world().resource::<ViewModelState>().activity, "INSPECT_CANCEL");
+        assert_eq!(app.world().resource::<ViewModelState>().pose, visible_inspect);
+        let mut world = app.world_mut().resource_mut::<SimWorld>();
+        assert_eq!(world.0.player(id).unwrap().active_weapon().unwrap().next_attack, deadline);
+        world.0.step(&[(id, input)]);
+        assert!(!world.0.events.iter().any(|e| matches!(e, sim::GameEvent::Melee { .. })));
+        let knife = world.0.player(id).unwrap().active_weapon().unwrap();
+        assert_eq!(knife.next_attack, deadline);
+        assert!(knife.reload_end.is_none());
+    }
 }
 
 /// Vertical FOV (radians) for a horizontal 4:3 FOV in degrees, as Source scales it.
@@ -229,6 +282,8 @@ pub fn vertical_fov(horizontal_4x3_deg: f32) -> f32 {
 struct SeqClip {
     clip: Arc<Clip>,
     weights: Arc<Vec<f32>>,
+    /// Authored sequence transition length; not the clip's playback duration.
+    fade_in: f32,
     left_muzzle: bool,
     /// Soundscript entries the sequence plays (`AE_CL_PLAYSOUND`), by cycle.
     sounds: Arc<Vec<(f32, String)>>,
@@ -325,6 +380,7 @@ pub struct ViewModelState {
     /// Persistent bone-local pose: sequences only overwrite the bones they
     /// animate (weighted), as the game layers masked viewmodel sequences.
     pose: Vec<(glam::Vec3, glam::Quat)>,
+    inspection: inspection::Inspection,
 }
 
 impl ViewModelState {
@@ -344,6 +400,7 @@ impl ViewModelState {
         self.suppressor_seen = None;
         self.light_timer = 0.0;
         self.look_motion.clear();
+        self.inspection = inspection::Inspection::default();
         // Masked clips deliberately preserve untouched bones within one life.
         // They must never inherit the reload/inspect pose of a previous life.
         self.pose = mdl::skeleton::rest_pose(bones);
@@ -420,6 +477,7 @@ pub fn load(
                         clips.entry(if seq.name == "lookat01" || seq.name == "inspect" {"INSPECT".into()}else{seq.activity.to_ascii_uppercase()}).or_default().push(SeqClip {
                             clip: Arc::new(clip),
                             weights: Arc::new(weights),
+                            fade_in: seq.fade_in,
                             left_muzzle: seq.name.to_ascii_lowercase().contains("left"),
                             sounds: Arc::new(seq.events.iter().filter_map(|e| Some((e.cycle, e.client_sound()?.to_string()))).collect()),
                         });
@@ -578,14 +636,14 @@ pub fn update(
             state.owner = Some(p.id);
             state.life = None;
             state.begin_life(p.life_epoch, &view.asset.model.bones, now,
-                effects.attack_serial, request.0);
+                effects.attack_serial, request.serial());
             if std::env::var_os("CSR_WEAPON_TRACE").is_some() { info!("weapon activity: {} ACT_VM_DRAW", active); }
         }
         return;
     }
     if let Some(view) = models.weapons.get(&active) {
         if state.begin_life(p.life_epoch, &view.asset.model.bones, now,
-            effects.attack_serial, request.0)
+            effects.attack_serial, request.serial())
             && std::env::var_os("CSR_WEAPON_TRACE").is_some() {
             info!("weapon activity: {} ACT_VM_DRAW life {}", active, p.life_epoch);
         }
@@ -640,7 +698,13 @@ pub fn update(
         state.suppressor_seen = suppressor;
     }
     if let Some(transition) = suppressor { state.activity = transition.activity().into(); }
-    let inspect_requested=state.inspect_seen!=request.0;state.inspect_seen=request.0;
+    let inspect_action = request.after(&mut state.inspect_seen);
+    let knife = w.is_some_and(|w| w.def.class == weapons::WeaponClass::Knife);
+    if knife && inspect_action == Some(crate::tracers::InspectAction::Cancel) && state.activity == "INSPECT" {
+        state.activity = "INSPECT_CANCEL".into();
+        state.started = now;
+        state.clip_index = 0;
+    }
     let reloading = w.is_some_and(|w| w.reload_end.is_some());
     // Consume reliable shot serials even while a newer suppressor transition
     // owns the pose. A delayed earlier shot must neither replace its clip nor
@@ -667,7 +731,7 @@ pub fn update(
         state.clip_index = (state.clip_index + 1) % 3;
         state.started = now;
     }
-    if suppressor.is_none() && attack.is_none() && !reloading && p.plant_start.is_none() && w.is_some_and(|w|w.zoom_level==0 && w.next_attack<=world.0.time()) && inspect_requested && view.clips.contains_key("INSPECT") {
+    if suppressor.is_none() && attack.is_none() && !reloading && p.plant_start.is_none() && w.is_some_and(|w|w.zoom_level==0 && (knife || w.next_attack<=world.0.time())) && inspect_action == Some(crate::tracers::InspectAction::Start) && view.clips.contains_key("INSPECT") {
         state.activity="INSPECT".into();state.started=now;state.clip_index=0;
     }
     if state.activity=="INSPECT" && w.is_some_and(|w|w.zoom_level>0) {state.activity="ACT_VM_IDLE".into();state.started=now;}
@@ -688,7 +752,9 @@ pub fn update(
         }
     }
     // The installed draw activities carry explicit first-frame SHOW/HIDE events.
-    let activity = if state.activity == "ACT_VM_DRAW" {
+    let activity = if state.activity == "INSPECT_CANCEL" {
+        "ACT_VM_IDLE"
+    } else if state.activity == "ACT_VM_DRAW" {
         w.map_or("ACT_VM_DRAW", |w| w.draw_activity())
     } else { state.activity.as_str() };
     let clips = view
@@ -743,7 +809,19 @@ pub fn update(
         state.pose = mdl::skeleton::rest_pose(&model.bones);
     }
     let weights = seq.weights.clone();
+    // Restart inspection from what was actually displayed, including an
+    // interrupted earlier inspect. Sampling against last frame repeatedly
+    // would turn the authored duration into a frame-rate-dependent filter.
+    let mut inspection = std::mem::take(&mut state.inspection);
+    inspection.begin(
+        matches!(state.activity.as_str(), "INSPECT" | "INSPECT_CANCEL").then_some(state.started),
+        seq.fade_in,
+        &state.pose,
+    );
+    inspection.sample_base(&mut state.pose);
     clip.sample_layered(t, &mut state.pose, |b| weights.get(b).copied().unwrap_or(1.0));
+    inspection.apply(now, &mut state.pose);
+    state.inspection = inspection;
     if let Some(hold) = &view.grenade_hold { hold.apply(grenade, &mut state.pose); }
     let pose = mdl::skeleton::model_space(&model.bones, &state.pose);
 

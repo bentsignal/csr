@@ -236,6 +236,16 @@ impl Level {
         let catalog_sha1=grenade_animations::import(&mut catalog,&fs,catalog_sha1,item_schema_sha1);
         let catalog_sha1=suppressor_animations::import(&mut catalog,&fs,catalog_sha1);
         let catalog_sha1=empty_trigger::import(&mut catalog,item_schema_sha1,catalog_sha1);
+        // Distinguish clients which interpreted this authored field from older
+        // parsers of the same raw schema. Keep item_schema_sha1 unmodified.
+        let catalog_sha1 = if catalog.weapons.iter().any(|w| !w.dropped_model.is_empty()) {
+            catalog_sha1.map(|previous| {
+                let mut hash = Sha1::new();
+                hash.update(b"csr-model-dropped-parser-v1\0");
+                hash.update(previous);
+                hash.finalize().into()
+            })
+        } else { catalog_sha1 };
         timings.push(("weapons", t.elapsed().as_secs_f32()));
         let t = Instant::now();
         let (character_profiles, catalog_sha1) = character_profiles::load(&fs, catalog_sha1)?;
