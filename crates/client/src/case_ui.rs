@@ -182,8 +182,10 @@ pub fn setup(
                 inventory.sticker_stock.insert(kit, 4);
             }
             inventory.skins.push(item.clone());
-            inventory.equip(1).unwrap();
-            if std::env::var("CSR_TEST_MENU").as_deref() == Ok("cases") {
+            if let Err(error) = inventory.equip(1) {
+                warn!("Cosmetic fixture unavailable: {error}");
+                ui.message = error;
+            } else if std::env::var("CSR_TEST_MENU").as_deref() == Ok("cases") {
                 ui.screen = Screen::Reveal(item);
             }
         }
