@@ -191,6 +191,9 @@ impl Presentation {
                     weapon.map_or(0, |w| w.clip).into(),
                     weapon.map_or(0, |w| w.reserve).into(),
                     (snapshot.alive && weapon.is_some_and(|w| w.uses_ammo)).into(),
+                    weapon
+                        .and_then(|w| w.burst_mode)
+                        .map_or(Value::Null, Value::Bool),
                 ]);
                 "ammo"
             };
@@ -366,6 +369,8 @@ pub(crate) struct Ammo {
     pub reserve: i32,
     pub capacity: i32,
     pub uses_ammo: bool,
+    /// Only a schema-admitted burst profile owns the original mode indicator.
+    pub burst_mode: Option<bool>,
 }
 
 impl Snapshot {
@@ -385,6 +390,7 @@ impl Snapshot {
                 reserve: weapon.reserve,
                 capacity: weapon.def.clip_size,
                 uses_ammo: weapon.uses_ammo(),
+                burst_mode: weapon.burst_profile().map(|_| weapon.burst_mode),
             }),
         }
     }
@@ -463,6 +469,78 @@ pub(crate) fn crop(frame: &scaleform::Frame, rect: Rect) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mode_only_changes_refresh_ammo_and_unsupported_weapons_clear_the_indicator() {
+        fn mode(batch: Vec<Command>) -> (Value, Value) {
+            batch
+                .into_iter()
+                .find_map(|command| match command {
+                    Command::Call { function, args, .. } if function == "ammo" => {
+                        Some((args[4].clone(), args[3].clone()))
+                    }
+                    _ => None,
+                })
+                .expect("an ammo update")
+        }
+        let mut presentation = Presentation::default();
+        presentation.enabled = true;
+        assert!(
+            presentation
+                .state
+                .receive("CombatHudReady", &["ammo".into()])
+        );
+        let mut snapshot = Snapshot {
+            player: 1,
+            life: 3,
+            alive: true,
+            health: 100,
+            armor: 0,
+            helmet: false,
+            weapon: Some(Ammo {
+                content: "test_burst".into(),
+                class_name: "test_burst".into(),
+                name_token: "test".into(),
+                clip: 20,
+                reserve: 120,
+                capacity: 20,
+                uses_ammo: true,
+                burst_mode: Some(false),
+            }),
+        };
+        assert_eq!(
+            mode(presentation.commands(Some(&snapshot), 11, false)),
+            (Value::Bool(false), Value::Bool(true))
+        );
+        assert!(presentation.commands(Some(&snapshot), 12, false).is_empty());
+        snapshot.weapon.as_mut().unwrap().burst_mode = Some(true);
+        assert_eq!(
+            mode(presentation.commands(Some(&snapshot), 13, false)),
+            (Value::Bool(true), Value::Bool(true))
+        );
+        assert!(!presentation.state.receive(
+            "CombatHudResult",
+            &["ammo".into(), "11".into(), true.into()]
+        ));
+        snapshot.weapon.as_mut().unwrap().burst_mode = None;
+        assert_eq!(
+            mode(presentation.commands(Some(&snapshot), 14, false)),
+            (Value::Null, Value::Bool(true))
+        );
+        snapshot.weapon.as_mut().unwrap().burst_mode = Some(true);
+        snapshot.alive = false;
+        assert_eq!(
+            mode(presentation.commands(Some(&snapshot), 15, false)),
+            (Value::Bool(true), Value::Bool(false))
+        );
+        snapshot.alive = true;
+        snapshot.life += 1;
+        snapshot.weapon = None;
+        assert_eq!(
+            mode(presentation.commands(Some(&snapshot), 16, false)),
+            (Value::Null, Value::Bool(false))
+        );
+    }
 
     #[test]
     fn a_new_component_retry_stays_active_until_its_own_settled_raster() {

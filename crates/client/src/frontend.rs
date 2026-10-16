@@ -70,6 +70,12 @@ impl PartialEq for LoadingContext {
 }
 impl Eq for LoadingContext {}
 impl LoadingContext {
+    fn fitted_radar(&self, serial: u64, archive_only: bool) -> bool {
+        self.selected.serial == serial && self.radar_only
+            && (!archive_only || self.archive.is_some())
+            && self.initialized.lock().unwrap().is_some()
+    }
+
     fn installed(selected: crate::session::LoadingMap, data: &Data) -> Option<Self> {
         let map = data.game_modes.block("maps")?.block(&selected.name)?;
         let title = map.str("nameID")?;
@@ -429,6 +435,13 @@ impl Engine for Bridge {
                         && target.as_deref() == Some(arg(2).as_str()) {
                         *context.initialized.lock().unwrap() = self.roots.get("LoadingScreen").cloned();
                         info!(map = context.selected.name, generation = context.selected.serial, "Loading overview fitted after actual Init");
+                        if std::env::var("CSR_TEST_FLOW_INSTALLED_LOADING").as_deref() == Ok("1")
+                            && context.archive.is_none() && context.radar_only {
+                            // This callback comes from the fit listener AFTER
+                            // its current context/target/serial admission.
+                            info!("frontend flow: actual owned loading image initialized map={} generation={} url=../overviews/{}_radar.dds",
+                                context.selected.name, context.selected.serial, context.selected.name);
+                        }
                     }
                 }
             }
@@ -748,7 +761,8 @@ impl Engine for Bridge {
                 if data.state == AppState::Loading {
                     calls.call(path, "setLoadingText", vec![data.loading.clone().into()]);
                     if let Some(context) = &data.loading_map {
-                        if std::env::var("CSR_TEST_FLOW_ARCHIVE_LOADING").as_deref() == Ok("1") {
+                        if std::env::var("CSR_TEST_FLOW_ARCHIVE_LOADING").as_deref() == Ok("1")
+                            || std::env::var("CSR_TEST_FLOW_INSTALLED_LOADING").as_deref() == Ok("1") {
                             calls.set("_global.csrDiagnostics", "loadingTraceBudget", 32.into());
                         }
                         calls.call("_global.csrBindings", "configureLoadingOverview", context.overview_arguments(path));
@@ -1141,12 +1155,14 @@ impl Frontend {
         self.loading_presentation.ready(serial, frame)
     }
     pub(crate) fn archive_loading_painted(&self, serial: Option<u64>, frame: u32) -> bool {
+        self.radar_loading_painted(serial, frame, true)
+    }
+    pub(crate) fn radar_loading_painted(&self, serial: Option<u64>, frame: u32, archive_only: bool) -> bool {
         let Some(serial) = serial else { return false; };
         if self.failed.is_some() || !self.loading_presentation.art_ready(serial, frame) { return false; }
         let data = self.data.lock().unwrap();
         data.state == AppState::Loading && data.loading_map.as_ref().is_some_and(|context|
-            context.selected.serial == serial && context.archive.is_some()
-                && context.initialized.lock().unwrap().is_some())
+            context.fitted_radar(serial, archive_only))
     }
     /// Counts completed frame assignments to the Bevy image, not render loops.
     pub(crate) fn presented_serial(&self) -> u64 { self.presented_serial }
@@ -1156,6 +1172,15 @@ impl Frontend {
         let context = data.loading_map.as_ref()?;
         let art = context.archive.as_ref()?;
         art.observed_init().then(|| (context.selected.clone(), art.url(context.selected.serial, crate::frontend_loading::Image::Radar)))
+    }
+    pub(crate) fn observed_installed_loading_image(&self) -> Option<(crate::session::LoadingMap, String)> {
+        let data = self.data.lock().ok()?;
+        if data.state != AppState::Loading { return None; }
+        let context = data.loading_map.as_ref()?;
+        // Production fit readiness follows the real same-listener Init. The
+        // installed proof cannot borrow the archive's opaque image admission.
+        (context.archive.is_none() && context.fitted_radar(context.selected.serial, false))
+            .then(|| (context.selected.clone(), format!("../overviews/{}_radar.dds", context.selected.name)))
     }
     /// Requested worker viewport and the last assigned raster, for opt-in diagnostics.
     pub(crate) fn raster_dimensions(&self, images: &Assets<Image>) -> Option<((u32, u32), (u32, u32))> {
@@ -1728,7 +1753,8 @@ pub(crate) fn update(
         front.loading_map = loading_map.clone();
         if front.movie_ready("LoadingScreen") {
             if let Some(context) = loading_map {
-                if std::env::var("CSR_TEST_FLOW_ARCHIVE_LOADING").as_deref() == Ok("1") {
+                if std::env::var("CSR_TEST_FLOW_ARCHIVE_LOADING").as_deref() == Ok("1")
+                    || std::env::var("CSR_TEST_FLOW_INSTALLED_LOADING").as_deref() == Ok("1") {
                     front.send(Input::Set { path: "_global.csrDiagnostics".into(), property: "loadingTraceBudget".into(), value: 32.into() });
                 }
                 front.send(Input::Call { path: "_global.csrBindings".into(), function: "configureLoadingOverview".into(), args: context.overview_arguments("_level1000") });
@@ -1762,10 +1788,10 @@ pub(crate) fn update(
     } else if !loading {
         front.loading_text.clear();
     }
-    // The actual original archive raster now owns its loading status text.
+    // Any actual current fitted radar raster owns its original loading text.
     // Keep the working mouse Cancel; only its duplicate status/background go.
-    let archive_status = loading && menu.status.is_empty()
-        && front.archive_loading_painted(loader.generation(), app_frame.0);
+    let radar_status = loading && menu.status.is_empty()
+        && front.radar_loading_painted(loader.generation(), app_frame.0, false);
     let owned_lobby_notice = scene == AppState::Menu && front.lobby.lock().unwrap().active();
     if let Ok(mut node) = nodes.get_mut(front.notice) {
         // The installed lobby/picker owns its footer controls. The clear margin
@@ -1779,11 +1805,11 @@ pub(crate) fn update(
         };
     }
     if let Ok(mut background) = backgrounds.get_mut(front.notice) {
-        background.0 = if archive_status { Color::NONE }
+        background.0 = if radar_status { Color::NONE }
             else { Color::srgba(0.04, 0.06, 0.08, 0.96) };
     }
     if let Ok(mut node) = nodes.get_mut(front.notice_text) {
-        node.display = if archive_status { Display::None } else { Display::Flex };
+        node.display = if radar_status { Display::None } else { Display::Flex };
     }
     if let Ok(mut node) = nodes.get_mut(front.cancel) {
         node.display = if loading {
@@ -2239,6 +2265,31 @@ pub(crate) fn capture_menu(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fitted_radar_status_accepts_current_installed_art_without_weakening_archive_proof() {
+        let mut context = LoadingContext {
+            selected: crate::session::LoadingMap { serial: 7, name: "de_nuke".into(), mode: None },
+            title: "Nuke".into(), mode: None, radar_only: true, archive: None,
+            initialized: Default::default(),
+        };
+        assert!(!context.fitted_radar(7, false));
+        *context.initialized.lock().unwrap() = Some("_level17".into());
+        assert!(context.fitted_radar(7, false));
+        assert!(!context.fitted_radar(7, true));
+        assert!(!context.fitted_radar(6, false));
+        context.selected.name = "de_dust2_2017".into();
+        context.archive = crate::frontend_loading::ArchiveArt::new(&context.selected.name).map(Arc::new);
+        assert!(context.fitted_radar(7, true));
+        assert!(!context.fitted_radar(6, true));
+        context.radar_only = false;
+        assert!(!context.fitted_radar(7, false));
+        assert!(!context.fitted_radar(7, true));
+        context.radar_only = true;
+        context.selected.serial = 8;
+        *context.initialized.lock().unwrap() = None;
+        assert!(!context.fitted_radar(8, false));
+    }
 
     #[test]
     fn cached_domain_actions_discard_parked_and_inflight_prior_epoch_calls() {
