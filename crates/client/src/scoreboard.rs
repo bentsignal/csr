@@ -86,13 +86,14 @@ pub fn draw(
     local: Res<LocalPlayer>,
     level: Res<LevelInfo>,
     keys: Res<ButtonInput<KeyCode>>,
+    mouse: Res<ButtonInput<MouseButton>>,
     settings: Res<crate::settings::Settings>,
     input: Res<InputEnabled>,
     menu: Res<BuyMenu>,
     art: Res<crate::ui_assets::UiAssets>,
 ) {
     let preview = !input.0 && std::env::var_os("CSR_SCOREBOARD").is_some();
-    let show = !menu.open && (preview || (input.0 && keys.pressed(settings.binds[11])) || (world.0.competitive() && world.0.round.phase == Phase::MatchOver));
+    let show = !menu.open && (preview || (input.0 && settings.action_pressed(11, &keys, &mouse, local.capture_mouse)) || (world.0.competitive() && world.0.round.phase == Phase::MatchOver));
     let next = show.then(|| board(&world.0, local.id, &level.name));
     if state.shown == next {
         return;

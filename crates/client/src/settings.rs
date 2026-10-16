@@ -16,6 +16,33 @@ pub const ACTIONS: [&str; 13] = [
     "Scoreboard",
     "Inspect weapon",
 ];
+pub const ACTION_COMMANDS: [&str; 13] = [
+    "+forward", "+back", "+moveleft", "+moveright", "+jump", "+duck", "+speed",
+    "+use", "+reload", "buymenu", "drop", "+showscores", "+lookatweapon",
+];
+pub const MOUSE_BUTTONS: [MouseButton; 5] = [
+    MouseButton::Left, MouseButton::Right, MouseButton::Middle, MouseButton::Back, MouseButton::Forward,
+];
+
+/// Supported gameplay commands only; console text is never executed by input.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MouseAction { None, Attack, Attack2, Action(usize), Previous, Next, Last }
+impl MouseAction {
+    pub fn command(self) -> &'static str {
+        match self {
+            Self::None => "", Self::Attack => "+attack", Self::Attack2 => "+attack2",
+            Self::Action(index) => ACTION_COMMANDS.get(index).copied().unwrap_or(""),
+            Self::Previous => "invprev", Self::Next => "invnext", Self::Last => "lastinv",
+        }
+    }
+    pub fn parse(command: &str) -> Option<Self> {
+        Some(match command {
+            "" => Self::None, "+attack" => Self::Attack, "+attack2" => Self::Attack2,
+            "invprev" => Self::Previous, "invnext" => Self::Next, "lastinv" => Self::Last,
+            other => Self::Action(ACTION_COMMANDS.iter().position(|value| *value == other)?),
+        })
+    }
+}
 pub const KEYS: [KeyCode; 40] = [
     KeyCode::KeyA,
     KeyCode::KeyB,
@@ -70,6 +97,7 @@ impl WheelAction {
 #[derive(Resource, Clone, Debug, PartialEq)]
 pub struct Settings {
     pub volume: f32,
+    pub audio_options: crate::audio_options::AudioOptions,
     pub show_fps: bool,
     pub wheel_up: WheelAction,
     pub wheel_down: WheelAction,
@@ -92,12 +120,14 @@ pub struct Settings {
     pub radar_rotate: bool,
     pub close_on_buy: bool,
     pub binds: [KeyCode; 13],
+    pub mouse_binds: [MouseAction; 5],
 }
 pub const RESOLUTIONS: [(u32, u32); 4] = [(1280, 720), (1600, 900), (1920, 1080), (2560, 1440)];
 impl Default for Settings {
     fn default() -> Self {
         Self {
             volume: 0.5,
+            audio_options: Default::default(),
             show_fps: false,
             wheel_up: WheelAction::Previous,
             wheel_down: WheelAction::Next,
@@ -136,6 +166,7 @@ impl Default for Settings {
                 KeyCode::Tab,
                 KeyCode::KeyF,
             ],
+            mouse_binds: [MouseAction::Attack, MouseAction::Attack2, MouseAction::None, MouseAction::None, MouseAction::None],
         }
     }
 }
@@ -159,6 +190,11 @@ impl Settings {
             let value = value.trim();
             let v = value.parse::<f32>().ok().filter(|x| x.is_finite());
             match key {
+                "mouse1" | "mouse2" | "mouse3" | "mouse4" | "mouse5" => {
+                    if let Some(action) = MouseAction::parse(value) {
+                        s.mouse_binds[key.as_bytes()[5] as usize - b'1' as usize] = action;
+                    }
+                }
                 "cl_showfps" => s.show_fps = value == "1",
                 "mwheelup" => { if let Some(action) = WheelAction::parse(value) { s.wheel_up = action; } }
                 "mwheeldown" => { if let Some(action) = WheelAction::parse(value) { s.wheel_down = action; } }
@@ -218,6 +254,7 @@ impl Settings {
                 "hitmarker" => s.hitmarker = value == "true",
                 "cross_dot" => s.cross_dot = value == "true",
                 _ => {
+                    s.audio_options.parse_entry(key, value);
                     if let Some(index) = key
                         .strip_prefix("bind")
                         .and_then(|i| i.parse::<usize>().ok())
@@ -252,12 +289,16 @@ impl Settings {
             self.cross_dot
         );
         text.push_str(&format!("cl_showfps={}\nmwheelup={}\nmwheeldown={}\n", u8::from(self.show_fps), self.wheel_up.command(), self.wheel_down.command()));
+        for (index, action) in self.mouse_binds.iter().enumerate() {
+            text.push_str(&format!("mouse{}={}\n", index + 1, action.command()));
+        }
         text.push_str(&format!("menu_blur={}\n", self.menu_blur));
         text.push_str(&format!("radar_scale={}\nradar_rotate={}\n", self.radar_scale, self.radar_rotate));
         text.push_str(&format!("closeonbuy={}\n", u8::from(self.close_on_buy)));
         for (i, key) in self.binds.iter().enumerate() {
             text.push_str(&format!("bind{i}={key:?}\n"));
         }
+        self.audio_options.encode_into(&mut text);
         text
     }
     pub fn save(&self) -> std::io::Result<()> {
@@ -276,6 +317,20 @@ impl Settings {
             self.binds[other] = old;
         }
         self.binds[index] = key;
+    }
+    pub fn mouse_pressed(&self, action: MouseAction, mouse: &ButtonInput<MouseButton>, blocked: u8) -> bool {
+        MOUSE_BUTTONS.iter().enumerate().any(|(index, button)|
+            blocked & (1 << index) == 0 && self.mouse_binds[index] == action && mouse.pressed(*button))
+    }
+    pub fn mouse_just_pressed(&self, action: MouseAction, mouse: &ButtonInput<MouseButton>, blocked: u8) -> bool {
+        MOUSE_BUTTONS.iter().enumerate().any(|(index, button)|
+            blocked & (1 << index) == 0 && self.mouse_binds[index] == action && mouse.just_pressed(*button))
+    }
+    pub fn action_pressed(&self, index: usize, keys: &ButtonInput<KeyCode>, mouse: &ButtonInput<MouseButton>, blocked: u8) -> bool {
+        keys.pressed(self.binds[index]) || self.mouse_pressed(MouseAction::Action(index), mouse, blocked)
+    }
+    pub fn action_just_pressed(&self, index: usize, keys: &ButtonInput<KeyCode>, mouse: &ButtonInput<MouseButton>, blocked: u8) -> bool {
+        keys.just_pressed(self.binds[index]) || self.mouse_just_pressed(MouseAction::Action(index), mouse, blocked)
     }
     pub fn crosshair_color(&self) -> Color {
         [
@@ -302,7 +357,7 @@ impl Settings {
             "cl_radar_scale" => self.radar_scale as f64,
             "cl_radar_rotate" => u8::from(self.radar_rotate) as f64,
             "closeonbuy" => u8::from(self.close_on_buy) as f64,
-            _ => return None,
+            _ => return self.audio_options.convar_number(name),
         })
     }
 
@@ -323,7 +378,7 @@ impl Settings {
             "cl_radar_scale" => self.radar_scale = number.clamp(0.4, 1.0) as f32,
             "cl_radar_rotate" if number == 0.0 || number == 1.0 => self.radar_rotate = number == 1.0,
             "closeonbuy" if number == 0.0 || number == 1.0 => self.close_on_buy = number == 1.0,
-            _ => return false,
+            _ => return self.audio_options.set_convar_number(name, number),
         }
         true
     }
@@ -348,6 +403,9 @@ mod tests {
         s.radar_scale = 0.8;
         s.radar_rotate = false;
         s.close_on_buy = true;
+        s.mouse_binds[0] = MouseAction::None;
+        s.mouse_binds[3] = MouseAction::Action(4);
+        s.mouse_binds[4] = MouseAction::Attack;
         assert_eq!(s.binds[1], KeyCode::KeyW);
         assert_eq!(Settings::parse(&s.encode()), s);
     }

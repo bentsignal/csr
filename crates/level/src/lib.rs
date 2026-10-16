@@ -32,6 +32,7 @@ pub struct Level {
     pack_archive_hash: Option<String>,
     bsp_sha1: [u8; 20],
     catalog_sha1: Option<[u8; 20]>,
+    item_schema_sha1: Option<[u8; 20]>,
     pub timings: Vec<(&'static str, f32)>,
 }
 
@@ -162,6 +163,8 @@ impl Level {
     /// and selected timing headers after the BSP pakfile mounts. Missing/malformed input uses the local default catalog
     /// and has no file identity suitable for matching network content.
     pub fn catalog_sha1(&self) -> Option<&[u8; 20]> { self.catalog_sha1.as_ref() }
+    /// Raw installed schema identity, before accumulated gameplay policy salts.
+    pub fn item_schema_sha1(&self) -> Option<&[u8; 20]> { self.item_schema_sha1.as_ref() }
 
     /// Loads a validated pack selection into a session-owned VFS. Asset maps
     /// can use an empty VFS without a Legacy install; recipes need a mounted
@@ -256,6 +259,7 @@ impl Level {
             pack_archive_hash: None,
             bsp_sha1,
             catalog_sha1,
+            item_schema_sha1,
             timings,
         })
     }

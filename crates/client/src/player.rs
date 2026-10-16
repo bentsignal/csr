@@ -34,6 +34,9 @@ pub struct LocalPlayer {
     pub render_angles: glam::Vec3,
     /// Buttons pressed since the last tick, so short taps are not lost.
     pub latched: u32,
+    /// Fresh pointer edges retain their own capture admission when two physical
+    /// buttons share an attack command.
+    pub(crate) pointer_attacks: u32,
     /// Inventory slot requested since the last tick (0 = none).
     pub pending_slot: u8,
     /// Purchases waiting to be sent, one per tick.
@@ -44,7 +47,7 @@ pub struct LocalPlayer {
     was_alive: bool,
     remote_life: u64,
     /// Mouse buttons held when entering pointer capture, until their release.
-    capture_attacks: u32,
+    pub(crate) capture_mouse: u8,
 }
 
 impl LocalPlayer {
@@ -61,13 +64,14 @@ impl LocalPlayer {
             render_eye: eye,
             render_angles: glam::Vec3::new(0.0, yaw, 0.0),
             latched: 0,
+            pointer_attacks: 0,
             pending_slot: 0,
             pending_buys: Vec::new(),
             pending_drop: false,
             spectating: None,
             was_alive: true,
             remote_life: 0,
-            capture_attacks: 0,
+            capture_mouse: 0,
         }
     }
 
@@ -83,18 +87,38 @@ impl LocalPlayer {
         self.was_alive = false;
         self.spectating = None;
         self.latched = 0;
+        self.pointer_attacks = 0;
         self.pending_slot = 0;
         self.pending_drop = false;
         self.pending_buys.clear();
-        self.capture_attacks = 0;
+        self.capture_mouse = 0;
     }
 
     fn release_capture_attacks(&mut self, mouse: &ButtonInput<MouseButton>) {
-        for (button, attack) in [(MouseButton::Left, buttons::ATTACK), (MouseButton::Right, buttons::ATTACK2)] {
-            if !mouse.pressed(button) || mouse.just_released(button) {
-                self.capture_attacks &= !attack;
+        for (index, button) in crate::settings::MOUSE_BUTTONS.iter().enumerate() {
+            if !mouse.pressed(*button) || mouse.just_released(*button) {
+                self.capture_mouse &= !(1 << index);
             }
         }
+    }
+    fn capture_attack_mask(&self, settings: &crate::settings::Settings) -> u32 {
+        settings.mouse_binds.iter().enumerate().filter(|(index, _)| self.capture_mouse & (1 << index) != 0)
+            .fold(0, |mask, (_, action)| mask | match action {
+                crate::settings::MouseAction::Attack => buttons::ATTACK,
+                crate::settings::MouseAction::Attack2 => buttons::ATTACK2,
+                _ => 0,
+            })
+    }
+    fn capture_tick_mask(&self, settings: &crate::settings::Settings) -> u32 {
+        settings.mouse_binds.iter().enumerate().filter(|(index, _)| self.capture_mouse & (1 << index) != 0)
+            .fold(self.capture_attack_mask(settings), |mask, (_, action)| mask | match action {
+                crate::settings::MouseAction::Action(4) => buttons::JUMP,
+                crate::settings::MouseAction::Action(5) => buttons::DUCK,
+                crate::settings::MouseAction::Action(6) => buttons::WALK,
+                crate::settings::MouseAction::Action(7) => buttons::USE,
+                crate::settings::MouseAction::Action(8) => buttons::RELOAD,
+                _ => 0,
+            })
     }
 
     /// Camera lifecycle comes from authority, including lost death snapshots.
@@ -147,6 +171,7 @@ pub fn grab_cursor(
     enabled: Res<InputEnabled>,
     menu: Res<crate::buymenu::BuyMenu>,
     front: Res<crate::menu::Menu>,
+    settings: Res<crate::settings::Settings>,
 ) {
     local.release_capture_attacks(&mouse);
     if !enabled.0 {
@@ -158,10 +183,11 @@ pub fn grab_cursor(
         return;
     }
     if (mouse.just_pressed(MouseButton::Left) || menu.just_closed) && cursor.grab_mode == CursorGrabMode::None {
-        for (button, attack) in [(MouseButton::Left, buttons::ATTACK), (MouseButton::Right, buttons::ATTACK2)] {
-            if mouse.pressed(button) { local.capture_attacks |= attack; }
+        for (index, button) in crate::settings::MOUSE_BUTTONS.iter().enumerate() {
+            if mouse.pressed(*button) { local.capture_mouse |= 1 << index; }
         }
-        local.latched &= !local.capture_attacks;
+        local.latched &= !local.capture_tick_mask(&settings);
+        local.pointer_attacks &= !local.capture_attack_mask(&settings);
         cursor.grab_mode = CursorGrabMode::Locked;
         cursor.visible = false;
     }
@@ -202,6 +228,7 @@ pub fn look(
         return;
     }
     let grabbed = captured(&cursor) && !menu.open;
+    let blocked_mouse = if grabbed { local.capture_mouse } else { u8::MAX };
     if grabbed {
         let d = motion.delta;
         let zoom = if local.noclip { 1.0 } else {
@@ -218,7 +245,7 @@ pub fn look(
     }
     let me = world.0.player(local.id);
     let alive = me.is_some_and(|p| p.alive);
-    if alive && grabbed && keys.just_pressed(settings.binds[12]) {inspect.0=inspect.0.wrapping_add(1);}
+    if alive && grabbed && settings.action_just_pressed(12, &keys, &mouse, blocked_mouse) {inspect.0=inspect.0.wrapping_add(1);}
 
     // Spectating: left click cycles through living teammates.
     if !alive && grabbed && mouse.just_pressed(MouseButton::Left) {
@@ -236,24 +263,27 @@ pub fn look(
     }
 
     let mut b = 0;
-    if keys.pressed(settings.binds[4]) {
+    if settings.action_just_pressed(4, &keys, &mouse, blocked_mouse) {
         b |= buttons::JUMP;
     }
-    if keys.pressed(settings.binds[5]) {
+    if settings.action_just_pressed(5, &keys, &mouse, blocked_mouse) {
         b |= buttons::DUCK;
     }
-    if keys.pressed(settings.binds[6]) {
+    if settings.action_just_pressed(6, &keys, &mouse, blocked_mouse) {
         b |= buttons::WALK;
     }
-    if keys.just_pressed(settings.binds[8]) {
+    if settings.action_just_pressed(7, &keys, &mouse, blocked_mouse) {
+        b |= buttons::USE;
+    }
+    if settings.action_just_pressed(8, &keys, &mouse, blocked_mouse) {
         b |= buttons::RELOAD;
     }
     // The shared sampler also guards held attacks after grab_cursor captures.
-    if grabbed && alive && mouse.just_pressed(MouseButton::Left) {
-        b |= buttons::ATTACK;
+    if grabbed && alive && settings.mouse_just_pressed(crate::settings::MouseAction::Attack, &mouse, blocked_mouse) {
+        local.pointer_attacks |= buttons::ATTACK;
     }
-    if grabbed && alive && mouse.just_pressed(MouseButton::Right) {
-        b |= buttons::ATTACK2;
+    if grabbed && alive && settings.mouse_just_pressed(crate::settings::MouseAction::Attack2, &mouse, blocked_mouse) {
+        local.pointer_attacks |= buttons::ATTACK2;
     }
     local.latched |= b;
 
@@ -271,8 +301,17 @@ pub fn look(
             }
         }
     }
-    if keys.just_pressed(settings.binds[10]) {
+    if settings.action_just_pressed(10, &keys, &mouse, blocked_mouse) {
         local.pending_drop = true;
+    }
+    if grabbed && alive {
+        for (action, slot) in [
+            (crate::settings::MouseAction::Previous, sim::SLOT_PREVIOUS),
+            (crate::settings::MouseAction::Next, sim::SLOT_NEXT),
+            (crate::settings::MouseAction::Last, sim::SLOT_LAST),
+        ] {
+            if settings.mouse_just_pressed(action, &mouse, blocked_mouse) { local.pending_slot = slot; }
+        }
     }
     if grabbed && scroll.delta.y != 0.0 {
         // Installed defaults bind MWHEELUP invprev and MWHEELDOWN invnext.
@@ -288,19 +327,19 @@ pub fn look(
     }
 }
 
-fn move_axes(keys: &ButtonInput<KeyCode>, settings: &crate::settings::Settings) -> (f32, f32) {
+fn move_axes(keys: &ButtonInput<KeyCode>, mouse: &ButtonInput<MouseButton>, settings: &crate::settings::Settings, blocked: u8) -> (f32, f32) {
     let mut forward = 0.0;
     let mut side = 0.0;
-    if keys.pressed(settings.binds[0]) {
+    if settings.action_pressed(0, keys, mouse, blocked) {
         forward += 450.0;
     }
-    if keys.pressed(settings.binds[1]) {
+    if settings.action_pressed(1, keys, mouse, blocked) {
         forward -= 450.0;
     }
-    if keys.pressed(settings.binds[3]) {
+    if settings.action_pressed(3, keys, mouse, blocked) {
         side += 450.0;
     }
-    if keys.pressed(settings.binds[2]) {
+    if settings.action_pressed(2, keys, mouse, blocked) {
         side -= 450.0;
     }
     (forward, side)
@@ -322,19 +361,23 @@ pub fn sample_tick_input(local: &mut LocalPlayer, controls: &Controls<'_>) -> Ti
     let keys = if controls.enabled && !controls.blocked && !controls.buy_menu {
         controls.keys
     } else { &empty };
-    let (forward_move, side_move) = move_axes(keys, controls.settings);
+    let mouse_allowed = controls.enabled && !controls.blocked && controls.captured && !controls.buy_menu;
+    let blocked_mouse = if mouse_allowed { local.capture_mouse } else { u8::MAX };
+    let (forward_move, side_move) = move_axes(keys, controls.mouse, controls.settings, blocked_mouse);
     let mut held = 0;
     for (binding, button) in [(4, buttons::JUMP), (5, buttons::DUCK), (6, buttons::WALK), (7, buttons::USE)] {
-        if keys.pressed(controls.settings.binds[binding]) { held |= button; }
+        if controls.settings.action_pressed(binding, keys, controls.mouse, blocked_mouse) { held |= button; }
     }
     if controls.enabled && !controls.blocked && controls.captured && !controls.buy_menu {
-        if controls.mouse.pressed(MouseButton::Left) { held |= buttons::ATTACK; }
-        if controls.mouse.pressed(MouseButton::Right) { held |= buttons::ATTACK2; }
+        if controls.settings.mouse_pressed(crate::settings::MouseAction::Attack, controls.mouse, blocked_mouse) { held |= buttons::ATTACK; }
+        if controls.settings.mouse_pressed(crate::settings::MouseAction::Attack2, controls.mouse, blocked_mouse) { held |= buttons::ATTACK2; }
     }
+    let pointer_attacks = std::mem::take(&mut local.pointer_attacks);
     TickInput {
         view_angles: glam::Vec3::new(local.pitch, local.yaw, 0.),
         forward_move, side_move,
-        buttons: (held | std::mem::take(&mut local.latched)) & !local.capture_attacks,
+        buttons: held | (if mouse_allowed { pointer_attacks } else { 0 })
+            | (std::mem::take(&mut local.latched) & !local.capture_attack_mask(controls.settings)),
         weapon_slot: std::mem::take(&mut local.pending_slot),
         buy: if local.pending_buys.is_empty() { Purchase::None } else { local.pending_buys.remove(0) },
         drop: std::mem::take(&mut local.pending_drop),
@@ -362,8 +405,6 @@ pub fn tick(
 ) {
     let _frame_scope = crate::input_latency::frame_scope("simulation");
     if remote.is_some() || front.open() {return;}
-    let no_keys = ButtonInput::<KeyCode>::default();
-    let keys: &ButtonInput<KeyCode> = if enabled.0 && !menu.open && block.0==0 { &real_keys } else { &no_keys };
     let mut input = sample_tick_input(&mut local, &Controls {
         keys: &real_keys, mouse: &mouse, settings: &settings, enabled: enabled.0,
         blocked: block.0 != 0, captured: captured(&cursor), buy_menu: menu.open,
@@ -459,6 +500,28 @@ pub fn tick(
                     }
                 }
             }
+        } else if std::env::var("CSR_TEST_SWITCH").as_deref() == Ok("viewmodel-settling") {
+            // Finite screenshot-only ordinary movement. Authority owns the
+            // real ground velocity; no pose or movement-state fabrication.
+            input.buttons = 0; input.side_move = 0.; input.forward_move = 0.;
+            local.pitch = 0.; local.yaw = 0.; input.view_angles = glam::Vec3::ZERO;
+            let case = std::env::var("CSR_VIEWMODEL_CASE").unwrap_or_default();
+            if case != "baseline" && (1.5..3.5).contains(&world.0.time()) {
+                input.forward_move = 450.;
+                if case == "walk" { input.buttons |= buttons::WALK; }
+            }
+        } else if std::env::var("CSR_TEST_SWITCH").as_deref() == Ok("viewmodel-look") {
+            // Finite screenshot fixture: ordinary TickInput and the same local
+            // camera angles, with no ammo/weapon/animation-state fabrication.
+            input.buttons = 0; input.forward_move = 0.; input.side_move = 0.;
+            let changed = (1.5..3.).contains(&world.0.time());
+            let angles = match std::env::var("CSR_VIEWMODEL_CASE").as_deref() {
+                Ok("yaw10") if changed => glam::Vec3::new(0., 10., 0.),
+                Ok("yaw5") if changed => glam::Vec3::new(0., 5., 0.),
+                Ok("pitch10") if changed => glam::Vec3::new(10., 0., 0.),
+                _ => glam::Vec3::ZERO,
+            };
+            local.pitch = angles.x; local.yaw = angles.y; input.view_angles = angles;
         } else if std::env::var("CSR_TEST_SWITCH").as_deref() == Ok("buy-close") {
             // Screenshot-only purchase through normal simulation validation.
             // Competitive spawn money, armor and buy-zone checks stay intact.
@@ -499,7 +562,7 @@ pub fn tick(
     if local.noclip {
         let dt = world.0.dt();
         let (f, r, _) = movement::angle_vectors(glam::Vec3::new(local.pitch, local.yaw, 0.0));
-        let speed = if keys.pressed(settings.binds[6]) { 1600.0 } else { 600.0 };
+        let speed = if input.buttons & buttons::WALK != 0 { 1600.0 } else { 600.0 };
         let wish = f * (input.forward_move / 450.0) + r * (input.side_move / 450.0);
         local.prev_eye = local.noclip_pos;
         local.noclip_pos += wish * speed * dt;
@@ -651,6 +714,73 @@ mod remote_input_tests {
         }));
         app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::KeyW);
         app
+    }
+
+    #[test]
+    fn fresh_shared_attack_button_is_independent_of_another_capture_held_button() {
+        let mut app = capture_app();
+        app.world_mut().resource_mut::<crate::settings::Settings>().mouse_binds[3] = crate::settings::MouseAction::Attack;
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Left);
+        app.update(); // Pointer capture suppresses this held left button.
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().clear();
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Back);
+        app.world_mut().run_system_cached(look).unwrap();
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().release(MouseButton::Back);
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().clear();
+        app.world_mut().run_system_cached(sample_after_capture).unwrap();
+        assert_ne!(app.world().resource::<Sampled>().0.buttons & buttons::ATTACK, 0,
+            "the fresh side-button tap must survive while capture-left remains held");
+        app.world_mut().run_system_cached(sample_after_capture).unwrap();
+        assert_eq!(app.world().resource::<Sampled>().0.buttons & buttons::ATTACK, 0);
+    }
+
+    #[test]
+    fn rebound_capture_click_does_not_jump_until_released_and_pressed_again() {
+        let mut app = capture_app();
+        app.world_mut().resource_mut::<crate::settings::Settings>().mouse_binds[0] = crate::settings::MouseAction::Action(4);
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Left);
+        app.update();
+        assert_eq!(app.world().resource::<Sampled>().0.buttons & (buttons::JUMP | buttons::ATTACK), 0);
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().clear();
+        app.update();
+        assert_eq!(app.world().resource::<Sampled>().0.buttons & buttons::JUMP, 0);
+        // A keyboard jump remains independent of a suppressed capture click.
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::Space);
+        app.update();
+        assert_ne!(app.world().resource::<Sampled>().0.buttons & buttons::JUMP, 0);
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().release(KeyCode::Space);
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().release(MouseButton::Left);
+        app.update();
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().clear();
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Left);
+        app.update();
+        assert_ne!(app.world().resource::<Sampled>().0.buttons & buttons::JUMP, 0);
+        assert_eq!(app.world().resource::<Sampled>().0.buttons & buttons::ATTACK, 0);
+    }
+
+    #[test]
+    fn rebound_side_buttons_keep_short_taps_and_held_secondary_attack_on_tick_input() {
+        let mut app = capture_app();
+        let mut settings = app.world_mut().resource_mut::<crate::settings::Settings>();
+        settings.mouse_binds[1] = crate::settings::MouseAction::None;
+        settings.mouse_binds[3] = crate::settings::MouseAction::Attack2;
+        settings.mouse_binds[4] = crate::settings::MouseAction::Action(4);
+        app.world_mut().query::<&mut CursorOptions>().single_mut(app.world_mut()).unwrap().grab_mode = CursorGrabMode::Locked;
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Back);
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Forward);
+        // Render input runs before the short jump button is released; the sim
+        // must retain that edge even if no fixed tick ran while it was down.
+        app.world_mut().run_system_cached(look).unwrap();
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().release(MouseButton::Forward);
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().clear();
+        app.world_mut().run_system_cached(sample_after_capture).unwrap();
+        assert_eq!(app.world().resource::<Sampled>().0.buttons & (buttons::JUMP | buttons::ATTACK2), buttons::JUMP | buttons::ATTACK2);
+        app.world_mut().run_system_cached(sample_after_capture).unwrap();
+        assert_eq!(app.world().resource::<Sampled>().0.buttons & (buttons::JUMP | buttons::ATTACK2), buttons::ATTACK2);
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().release(MouseButton::Back);
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Right);
+        app.world_mut().run_system_cached(sample_after_capture).unwrap();
+        assert_eq!(app.world().resource::<Sampled>().0.buttons & buttons::ATTACK2, 0);
     }
 
     #[test]

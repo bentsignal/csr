@@ -158,7 +158,7 @@ pub fn input(
         return;
     }
     let shop = can_shop(&world.0, local.id);
-    if keys.just_pressed(settings.binds[9]) {
+    if settings.action_just_pressed(9, &keys, &mouse, local.capture_mouse) {
         if menu.open {
             menu.open = false;
             menu.just_closed = true;
@@ -166,6 +166,7 @@ pub fn input(
             menu.open = true;
             menu.category = None;
             local.latched = 0;
+            local.pointer_attacks = 0;
             local.pending_slot = 0;
             local.pending_drop = false;
         } else {
@@ -354,6 +355,7 @@ mod tests {
             .insert_resource(InputEnabled(true))
             .init_resource::<ButtonInput<MouseButton>>()
             .init_resource::<crate::menu::Menu>()
+            .init_resource::<crate::settings::Settings>()
             .add_systems(Update, crate::player::grab_cursor);
         let cursor = app.world_mut().spawn((bevy::window::PrimaryWindow, CursorOptions {
             grab_mode: bevy::window::CursorGrabMode::None, visible: true, ..Default::default()

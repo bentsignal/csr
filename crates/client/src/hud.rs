@@ -106,7 +106,7 @@ impl BurstNotice {
 }
 
 fn text(commands: &mut Commands, kind: HudText, size: f32, color: Color, node: Node) -> Entity {
-    commands
+    let entity = commands
         .spawn((
             Text::new(""),
             TextFont {
@@ -117,7 +117,13 @@ fn text(commands: &mut Commands, kind: HudText, size: f32, color: Color, node: N
             node,
             kind,
         ))
-        .id()
+        .id();
+    match kind {
+        HudText::Health | HudText::Armor => { commands.entity(entity).insert(crate::combat_hud::Fallback::Health); }
+        HudText::Ammo => { commands.entity(entity).insert(crate::combat_hud::Fallback::Ammo); }
+        _ => (),
+    }
+    entity
 }
 
 fn centered_row(top: Val, bottom: Val) -> Node {

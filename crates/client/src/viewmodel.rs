@@ -21,6 +21,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 mod grenade_hold;
+mod look_motion;
+mod settling;
 
 pub const VIEWMODEL_LAYER: usize = 2;
 /// CS:GO `viewmodel_fov` default (horizontal degrees at 4:3).
@@ -319,6 +321,7 @@ pub struct ViewModelState {
     grenade_seen: Option<(u64, sim::utility::ThrowPhase)>,
     suppressor_seen: Option<sim::weapon::SuppressorTransition>,
     light_timer: f32,
+    look_motion: look_motion::LookMotion,
     /// Persistent bone-local pose: sequences only overwrite the bones they
     /// animate (weighted), as the game layers masked viewmodel sequences.
     pose: Vec<(glam::Vec3, glam::Quat)>,
@@ -340,6 +343,7 @@ impl ViewModelState {
         self.grenade_seen = None;
         self.suppressor_seen = None;
         self.light_timer = 0.0;
+        self.look_motion.clear();
         // Masked clips deliberately preserve untouched bones within one life.
         // They must never inherit the reload/inspect pose of a previous life.
         self.pose = mdl::skeleton::rest_pose(bones);
@@ -611,7 +615,7 @@ pub fn update(
             *v = if show && !clear_lens && !hide_suppressor { Visibility::Inherited } else { Visibility::Hidden };
         }
     }
-    if !p.alive || local.noclip { return; }
+    if !p.alive || local.noclip { state.look_motion.clear(); return; }
     let Some(view) = models.weapons.get(&name) else { return };
 
     // Pick the activity from the weapon state.
@@ -743,9 +747,8 @@ pub fn update(
     if let Some(hold) = &view.grenade_hold { hold.apply(grenade, &mut state.pose); }
     let pose = mdl::skeleton::model_space(&model.bones, &state.pose);
 
-    // Keep the model rigidly attached to this frame's camera when looking.
-    // The authored idle/fire/reload clips still animate their own bones;
-    // mouse motion must not introduce an additional lagging weapon transform.
+    // Preserve this frame's camera/aim. Local model presentation is separate
+    // from authored clips and never changes the simulated shot direction.
     let view_angles = local.render_angles;
     let rot = mdl::angles_to_mat3(view_angles);
     let eye = local.render_eye;
@@ -757,8 +760,29 @@ pub fn update(
         let rear = view.scope_rear.map_or(center, |(position, _)| position);
         offset = offset.lerp(glam::Vec3::new(8.0 - center.x, -rear.y, -rear.z), blend);
     }
-    let origin = eye + f * offset.x - r * offset.y + u * offset.z;
-    let world_from_model = Mat4::from_rotation_translation(rotation_to_bevy(rot), to_bevy(origin));
+    let look_translation = if show && p.id == local.id && local.spectating.is_none()
+        && w.is_some_and(|w| w.zoom_level == 0
+            && look_motion::observed_profile(level.0.item_schema_sha1(), &w.def)) {
+        // The admitted input is flat local look, not simulated recoil punch or
+        // a future tracked hand/head pose. Existing rendered punch stays current.
+        let look = movement::angle_vectors(glam::Vec3::new(local.pitch, local.yaw, 0.)).0;
+        state.look_motion.translation(now, look)
+    } else { state.look_motion.clear(); glam::Vec3::ZERO };
+    let settling = if show && p.id == local.id && local.spectating.is_none()
+        && p.tracked.is_none() && p.aim.is_none()
+        && w.is_some_and(|w| w.zoom_level == 0
+            && look_motion::observed_profile(level.0.item_schema_sha1(), &w.def)) {
+        settling::Settling::sample(p.movement.velocity,
+            movement::angle_vectors(glam::Vec3::new(0., local.yaw, 0.)).0,
+            p.movement.on_ground, p.movement.duck_amount)
+    } else { settling::Settling::default() };
+    let settled_offset = settling.offset(offset);
+    let origin = eye + f * settled_offset.x - r * settled_offset.y + u * settled_offset.z + look_translation;
+    if std::env::var_os("CSR_VIEWMODEL_MOTION_TRACE").is_some() {
+        info!("viewmodel motion: time={now:.6} angles={view_angles:?} eye={eye:?} look_translation={look_translation:?} settling_weight={} velocity={:?} on_ground={} settling_translation={:?}",
+            settling.weight, p.movement.velocity, p.movement.on_ground, settling.translation);
+    }
+    let world_from_model = Mat4::from_rotation_translation(rotation_to_bevy(rot * settling.rotation), to_bevy(origin));
     skinning::apply_pose(&gun, world_from_model, &pose, &mut transforms);
     wick.sample = held_wick(p, show, model, &pose, world_from_model);
     if show {if let Some(point)=crate::tracers::muzzle_position(model,&pose,seq.left_muzzle) {

@@ -332,6 +332,7 @@ pub(crate) fn input(
         buy.open = false;
         buy.just_closed = false;
         local.latched = 0;
+        local.pointer_attacks = 0;
         local.pending_drop = false;
         local.pending_slot = 0;
         local.pending_buys.clear();
@@ -1588,19 +1589,22 @@ pub(crate) fn apply(
     mut sinks: Query<(&crate::audio::SoundGain, &mut bevy::audio::AudioSink)>,
     mut spatial: Query<(&crate::audio::SoundGain, &mut bevy::audio::SpatialAudioSink)>,
 ) {
-    if !settings.is_changed() && !local.as_ref().is_some_and(|local| local.is_added()) {
+    let configuration_changed = settings.is_changed() || local.as_ref().is_some_and(|local| local.is_added());
+    let volume = settings.audio_options.effective_volume(settings.volume, window.focused);
+    if !configuration_changed && sounds.master_volume == volume {
         return;
     }
     if let Some(local) = local.as_mut() { local.sensitivity = settings.sensitivity; }
-    sounds.master_volume = settings.volume;
+    sounds.master_volume = volume;
     use bevy::audio::AudioSinkPlayback;
     for (gain, mut sink) in &mut sinks {
-        sink.set_volume(bevy::audio::Volume::Linear(settings.volume * gain.0));
+        sink.set_volume(bevy::audio::Volume::Linear(volume * gain.0));
     }
     for (gain, mut sink) in &mut spatial {
-        sink.set_volume(bevy::audio::Volume::Linear(settings.volume * gain.0));
+        sink.set_volume(bevy::audio::Volume::Linear(volume * gain.0));
     }
-    if opts.0.screenshot.is_some() {
+    // A focus-only change updates playback, not display/material settings.
+    if !configuration_changed || opts.0.screenshot.is_some() {
         return;
     }
     display.apply(&mut window, &settings, opts.0.size_explicit.then_some((opts.0.width, opts.0.height)));
