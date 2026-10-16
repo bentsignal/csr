@@ -30,6 +30,14 @@ impl Inspection {
         }
     }
 
+    /// Masked tracks must also sample from the fixed transition source;
+    /// otherwise fractional bone weights feed the last blended frame back in.
+    pub(super) fn sample_base(&self, target: &mut [(Vec3, Quat)]) {
+        if !self.from.is_empty() && self.from.len() == target.len() {
+            target.copy_from_slice(&self.from);
+        }
+    }
+
     pub(super) fn apply(&mut self, now: f32, target: &mut [(Vec3, Quat)]) {
         let Some(started) = self.started else { return };
         if self.from.len() != target.len() || self.duration <= 0. {
@@ -93,6 +101,13 @@ mod tests {
         dense.apply(0.15, &mut a);
         sparse.apply(0.15, &mut b);
         assert_eq!(a, b);
+        // The production sampler layers fractional masks over its input.
+        // Feeding it the previously blended output would depend on FPS even
+        // if the outer interpolation used absolute elapsed time.
+        dense.sample_base(&mut a);
+        sparse.sample_base(&mut b);
+        assert_eq!(a, pose(2.));
+        assert_eq!(b, pose(2.));
         dense.begin(None, 0.3, &a);
         let mut attack = pose(-5.);
         dense.apply(0.16, &mut attack);
