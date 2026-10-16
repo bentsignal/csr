@@ -4,6 +4,8 @@ use collision::contents;
 use glam::Vec3;
 use serde::{Deserialize, Serialize};
 
+const FIRE_DAMAGE_RADIUS: f32 = 140.0;
+
 mod throw_state;
 pub use throw_state::{ThrowMode,ThrowPhase,ThrowState};
 mod bot_lob;
@@ -108,15 +110,14 @@ impl World {
                 )
         })
     }
+    /// Current burn hazard at a prospective actor's feet/origin, not its eye
+    /// or chest. NAV centers/portals and tactical stand points use this space.
     pub fn fire_at(&self, point: Vec3) -> bool {
         self.utility_fields.iter().any(|f| {
             f.kind.fire()
                 && f.until > self.time()
-                && (point.z - f.pos.z).abs() < 65.0
-                && point.truncate().distance(f.pos.truncate()) < 130.0
-                // Match the existing burn-damage source/chest visibility ray.
-                // Bots must not avoid a field through a wall that blocks its damage.
-                && self.visible(f.pos + Vec3::Z * 12.0, point + Vec3::Z * 32.0)
+                && self.utility_reaches(f.pos + Vec3::Z * 12.0,
+                    point + Vec3::Z * 32.0, FIRE_DAMAGE_RADIUS).is_some()
         })
     }
     pub fn flash_amount(&self, id: PlayerId) -> f32 {
@@ -391,19 +392,24 @@ impl World {
         if self.tick % (13 * self.tick_rate as u64 / 64).max(1) == 0 {
             let fields = self.utility_fields.clone();
             for f in fields.iter().filter(|f| f.kind.fire()) {
-                self.blast_utility(f.owner, f.kind, f.pos + Vec3::Z * 12.0, 140.0, 8.0);
+                self.blast_utility(f.owner, f.kind, f.pos + Vec3::Z * 12.0, FIRE_DAMAGE_RADIUS, 8.0);
             }
         }
+    }
+    /// Return the existing radial damage distance only when the same source
+    /// can reach the target. Hazard queries and actual burns share this test.
+    fn utility_reaches(&self, pos: Vec3, point: Vec3, radius: f32) -> Option<f32> {
+        let dist = point.distance(pos);
+        if dist >= radius || !self.visible(pos, point) { return None; }
+        Some(dist)
     }
     fn blast_utility(&mut self, owner: PlayerId, kind: Kind, pos: Vec3, radius: f32, base: f32) {
         let attacker = self.players.iter().position(|p| p.id == owner);
         for i in 0..self.players.len() {
             let p = &self.players[i];
             let chest = p.movement.origin + Vec3::Z * 32.0;
-            let dist = chest.distance(pos);
-            if !p.alive || dist >= radius || !self.visible(pos, chest) {
-                continue;
-            }
+            if !p.alive { continue; }
+            let Some(dist) = self.utility_reaches(pos, chest, radius) else { continue; };
             let friendly = attacker.is_some_and(|a| a != i && self.players[a].team == p.team);
             let raw =
                 base * (if kind.fire() {
@@ -1039,6 +1045,12 @@ mod tests {
         let sheltered = w.add_player("sheltered", crate::Team::CounterTerrorist);
         let open_point = Vec3::new(-64., 0., 0.);
         let blocked_point = Vec3::new(64., 0., 0.);
+        let boundary = w.add_player("boundary", crate::Team::Terrorist);
+        let elevated = w.add_player("elevated", crate::Team::CounterTerrorist);
+        let boundary_point = Vec3::new(-135., 0., 0.);
+        let elevated_point = Vec3::new(-125., 0., 50.);
+        w.player_mut(boundary).unwrap().movement.origin = boundary_point;
+        w.player_mut(elevated).unwrap().movement.origin = elevated_point;
         w.player_mut(exposed).unwrap().movement.origin = open_point;
         w.player_mut(sheltered).unwrap().movement.origin = blocked_point;
         w.utility_fields.push(Field { id: 1, owner: crate::WORLD, kind: Kind::Molotov,
@@ -1046,9 +1058,15 @@ mod tests {
         // Equally near, at the same height; only the actual solid wall differs.
         assert!(w.fire_at(open_point));
         assert!(!w.fire_at(blocked_point));
+        // Old 130-horizontal/65-height hazard disagreed with actual damage:
+        // this ground origin burns, while the elevated origin is out of range.
+        assert!(w.fire_at(boundary_point));
+        assert!(!w.fire_at(elevated_point));
         w.step_utility();
         assert_eq!(w.player(exposed).unwrap().health, 92);
         assert_eq!(w.player(sheltered).unwrap().health, 100);
+        assert_eq!(w.player(boundary).unwrap().health, 92);
+        assert_eq!(w.player(elevated).unwrap().health, 100);
     }
 
     #[test]
