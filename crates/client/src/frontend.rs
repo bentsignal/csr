@@ -379,6 +379,7 @@ impl Engine for Bridge {
                 "BasePanelRunCommand" | "OnUpdateValue" | "SendUIEvent" | "OnButtonPress"
             )
             || method.starts_with("SetConvar")
+            || (object == "csr" && method.starts_with("LoadingArt"))
         {
             if std::env::var_os("CSR_UI_TRACE").is_some() {
                 info!("UI {object}.{method} {args:?}");
