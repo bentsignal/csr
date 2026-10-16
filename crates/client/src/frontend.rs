@@ -56,13 +56,15 @@ impl Data {
 struct LoadingContext {
     selected: crate::session::LoadingMap,
     title: String,
+    /// Installed localized type/mode names for this known local selection.
+    mode: Option<(String, String)>,
     radar_only: bool,
     archive: Option<Arc<crate::frontend_loading::ArchiveArt>>,
     initialized: Arc<Mutex<Option<String>>>,
 }
 impl PartialEq for LoadingContext {
     fn eq(&self, other: &Self) -> bool {
-        self.selected == other.selected && self.title == other.title
+        self.selected == other.selected && self.title == other.title && self.mode == other.mode
             && self.radar_only == other.radar_only && self.archive == other.archive
     }
 }
@@ -83,7 +85,25 @@ impl LoadingContext {
         };
         if !has_radar || !data.fs.exists(&format!("resource/flash/images/map_icons/collection_icon_{icon_map}.png")) { return None; }
         let radar_only = archive.is_some() || !data.fs.exists(&format!("maps/{}_loading.jpg", selected.name));
-        Some(Self { selected, title, radar_only, archive, initialized: Default::default() })
+        let mode = match selected.mode {
+            Some(sim::GameMode::Competitive) => Some(("classic", "competitive")),
+            Some(sim::GameMode::Deathmatch) => Some(("gungame", "deathmatch")),
+            _ => None,
+        }.and_then(|(kind, mode)| {
+            let kind = data.game_modes.path(&["gameTypes", kind])?.as_block()?;
+            let mode = kind.block("gameModes")?.block(mode)?;
+            mode.str("descID")?;
+            let localized_name = |block: &kv::Block| {
+                let text = data.localization.get(block.str("nameID")?)?;
+                (!text.starts_with('#')).then(|| text.to_owned())
+            };
+            // The installed Classic/GunGame type names intentionally resolve
+            // to "". Preserve that authored prefix; only the mode must be text.
+            let mode_name = localized_name(mode)?;
+            if mode_name.trim().is_empty() { return None; }
+            Some((localized_name(kind)?, mode_name))
+        });
+        Some(Self { selected, title, mode, radar_only, archive, initialized: Default::default() })
     }
 
     fn overview_arguments(&self, path: &str) -> Vec<Value> {
@@ -95,16 +115,20 @@ impl LoadingContext {
     }
 
     fn arguments(&self) -> Vec<Value> {
-        // Observed map/title positions. The other argument domains remain
-        // unknown; never label a remote game Competitive by default.
-        vec![self.selected.name.clone().into(), Value::Null, self.title.clone().into(), Value::Null, Value::Null, Value::Null]
+        // Actual ModeText rendering shows these positions take display strings,
+        // not catalog keys. Preserve installed localization and authored layout.
+        // Remote/unknown/sandbox metadata remains null, as does the still
+        // unobserved scenario domain. The authored movie owns its actual text.
+        let (kind, mode) = self.mode.as_ref().map_or((Value::Null, Value::Null),
+            |(kind, mode)| (kind.clone().into(), mode.clone().into()));
+        vec![self.selected.name.clone().into(), Value::Null, self.title.clone().into(), kind, mode, Value::Null]
     }
 }
 enum Action {
     Sound(String),
     Command(String),
     Convar(String, Value),
-    Launch(crate::frontend_game::Selection, bool),
+    Launch(crate::frontend_game::Selection, u8),
     Notice(String),
     Host(crate::frontend_lobby::Start, String),
     LobbyHome,
@@ -579,8 +603,8 @@ impl Engine for Bridge {
                             AppState::Menu | AppState::Browser
                         )
                     {
-                        if let Some((selection, no_bots)) = selection {
-                            self.push_action(Action::Launch(selection, no_bots));
+                        if let Some((selection, difficulty)) = selection {
+                            self.push_action(Action::Launch(selection, difficulty));
                         }
                     }
                     return None;
@@ -732,8 +756,8 @@ impl Engine for Bridge {
                         calls.call(path, "setHintText", vec!["".into()]);
                         calls.call(path, "showPanel", vec![]);
                         calls.call(path, "showLoadinginfo", vec![]);
-                        for label in ["ModeText", "ScenarioText"] {
-                            calls.set(&format!("{path}.Panel.MainText.{label}"), "_visible", false.into());
+                        for (label, visible) in [("ModeText", context.mode.is_some()), ("ScenarioText", false)] {
+                            calls.set(&format!("{path}.Panel.MainText.{label}"), "_visible", visible.into());
                         }
                     } else {
                         calls.call("_global.csrBindings", "configureLoadingOverview", vec![path.clone().into(), Value::Null]);
@@ -1115,6 +1139,14 @@ impl Frontend {
     pub(crate) fn lobby_phase(&self) -> crate::frontend_lobby::Phase { self.lobby.lock().unwrap().phase() }
     pub(crate) fn loading_painted(&self, serial: u64, frame: u32) -> bool {
         self.loading_presentation.ready(serial, frame)
+    }
+    pub(crate) fn archive_loading_painted(&self, serial: Option<u64>, frame: u32) -> bool {
+        let Some(serial) = serial else { return false; };
+        if self.failed.is_some() || !self.loading_presentation.art_ready(serial, frame) { return false; }
+        let data = self.data.lock().unwrap();
+        data.state == AppState::Loading && data.loading_map.as_ref().is_some_and(|context|
+            context.selected.serial == serial && context.archive.is_some()
+                && context.initialized.lock().unwrap().is_some())
     }
     /// Counts completed frame assignments to the Bevy image, not render loops.
     pub(crate) fn presented_serial(&self) -> u64 { self.presented_serial }
@@ -1709,8 +1741,8 @@ pub(crate) fn update(
                 ] {
                     front.send(Input::Call { path: "_level1000".into(), function: function.into(), args });
                 }
-                for label in ["ModeText", "ScenarioText"] {
-                    front.send(Input::Set { path: format!("_level1000.Panel.MainText.{label}"), property: "_visible".into(), value: false.into() });
+                for (label, visible) in [("ModeText", context.mode.is_some()), ("ScenarioText", false)] {
+                    front.send(Input::Set { path: format!("_level1000.Panel.MainText.{label}"), property: "_visible".into(), value: visible.into() });
                 }
             } else {
                 front.send(Input::Call { path: "_global.csrBindings".into(), function: "configureLoadingOverview".into(), args: vec!["_level1000".into(), Value::Null] });
@@ -1730,6 +1762,10 @@ pub(crate) fn update(
     } else if !loading {
         front.loading_text.clear();
     }
+    // The actual original archive raster now owns its loading status text.
+    // Keep the working mouse Cancel; only its duplicate status/background go.
+    let archive_status = loading && menu.status.is_empty()
+        && front.archive_loading_painted(loader.generation(), app_frame.0);
     let owned_lobby_notice = scene == AppState::Menu && front.lobby.lock().unwrap().active();
     if let Ok(mut node) = nodes.get_mut(front.notice) {
         // The installed lobby/picker owns its footer controls. The clear margin
@@ -1741,6 +1777,13 @@ pub(crate) fn update(
         } else {
             Display::None
         };
+    }
+    if let Ok(mut background) = backgrounds.get_mut(front.notice) {
+        background.0 = if archive_status { Color::NONE }
+            else { Color::srgba(0.04, 0.06, 0.08, 0.96) };
+    }
+    if let Ok(mut node) = nodes.get_mut(front.notice_text) {
+        node.display = if archive_status { Display::None } else { Display::Flex };
     }
     if let Ok(mut node) = nodes.get_mut(front.cancel) {
         node.display = if loading {
@@ -1871,13 +1914,17 @@ pub(crate) fn update(
                 *host_request.0.lock().unwrap() = None;
                 menu.status.clear(); next.set(AppState::Menu);
             }
-            Action::Launch(selection, no_bots) => {
+            Action::Launch(selection, difficulty) => {
                 if matches!(scene, AppState::Menu | AppState::Browser) {
                     let mut selected = options.0.clone();
                     selected.map = selection.map;
                     selected.deathmatch = selection.deathmatch;
-                    if no_bots {
-                        selected.bots = 0;
+                    selected.bot_difficulty = Some(difficulty);
+                    // No Bots is a session policy, not a destructive reset of
+                    // the configured count for the next difficulty selection.
+                    if difficulty != 0 && selected.bots == 0 {
+                        menu.status = "Bots are unavailable with the current bot count. Choose No Bots.".into();
+                        continue;
                     }
                     menu.status.clear();
                     *request.0.lock().unwrap() = Some(selected.into());

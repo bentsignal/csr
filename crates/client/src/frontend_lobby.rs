@@ -202,8 +202,8 @@ impl Scene {
         self.checked = None;
         self.pending = None;
         self.difficulty = match args {
-            [Value::Number(0.0)] => Some(0),
-            [Value::Number(3.0)] => Some(3),
+            [Value::Number(value)] if value.is_finite() && value.fract() == 0.0
+                && (0.0..=5.0).contains(value) => Some(*value as u8),
             _ => None,
         };
     }
@@ -218,16 +218,7 @@ impl Scene {
         }
         self.checked = None;
         self.pending = None;
-        let no_bots = match self.difficulty {
-            Some(0) => true,
-            Some(3) => false,
-            _ => {
-                return Err(
-                    "Choose No Bots or Medium Bots; other difficulties are not available yet."
-                        .into(),
-                );
-            }
-        };
+        let difficulty = self.difficulty.ok_or("Choose a supported bot difficulty.")?;
         let text = text.ok_or("Choose game settings again.")?;
         let selected = crate::frontend_game::offline_selection(root, text)?;
         let doc = kv::parse(text).map_err(|_| "Game settings could not be read.")?;
@@ -257,11 +248,12 @@ impl Scene {
             .cloned()
             .ok_or("Choose a map from the local catalog.")?;
         map.options.deathmatch = selected.deathmatch;
-        if no_bots {
+        map.options.bot_difficulty = Some(difficulty);
+        if difficulty == 0 {
             map.options.bots = 0;
         } else if map.options.bots == 0 {
             return Err(
-                "Medium Bots are unavailable with the current bot configuration. Choose No Bots."
+                "Bots are unavailable with the current bot count. Choose No Bots."
                     .into(),
             );
         }
@@ -588,7 +580,7 @@ mod tests {
         let mut scene = scene();
         let epoch = picker(&mut scene);
         assert!(scene.check(epoch, &modes(), Some(QUERY)).is_err());
-        scene.difficulty(epoch, &[5.0.into()]);
+        scene.difficulty(epoch, &[6.0.into()]);
         assert!(scene.check(epoch, &modes(), Some(QUERY)).is_err());
         scene.difficulty(epoch, &[0.0.into()]);
         assert!(
@@ -688,6 +680,7 @@ mod tests {
         assert_eq!(scene.staged_map().as_deref(), Some("de_dust2"));
         let start = scene.start(epoch, &[]).unwrap();
         assert_eq!(start.map.options.bots, 2);
+        assert_eq!(start.map.options.bot_difficulty, Some(3));
         assert!(scene.staged_map().is_none());
     }
     #[test]

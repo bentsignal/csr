@@ -82,6 +82,17 @@ fn load_requested_map(
     game_dir: &std::path::Path,
     progress: &LoadProgress,
 ) -> Result<level::Level, String> {
+    let level = load_requested_map_content(request, game_dir, progress)?;
+    // Validate explicit choices on the worker before entering Match/hosting.
+    level.configured_bots(request.options.bot_difficulty)?;
+    Ok(level)
+}
+
+fn load_requested_map_content(
+    request: &crate::menu::MapRequest,
+    game_dir: &std::path::Path,
+    progress: &LoadProgress,
+) -> Result<level::Level, String> {
     if progress.cancelled.load(Ordering::Relaxed) {
         return Err(workshop::CANCELLED.into());
     }
@@ -177,6 +188,9 @@ pub(crate) struct Loader {
 pub(crate) struct LoadingMap {
     pub serial: u64,
     pub name: String,
+    /// Known local rules only. Discovery does not advertise a mode, and the
+    /// grenade sandbox must not borrow an ordinary game-mode description.
+    pub mode: Option<sim::GameMode>,
 }
 
 impl Loader {
@@ -194,9 +208,17 @@ impl Loader {
             }
             _ => return None,
         };
+        let options = match selection {
+            Selection::Offline(request) => Some(&request.options),
+            Selection::Host(selected) => Some(&selected.map.options),
+            Selection::Remote(_) => None,
+        };
+        let mode = options.filter(|options| !options.grenade_practice).map(|options| {
+            if options.deathmatch { sim::GameMode::Deathmatch } else { sim::GameMode::Competitive }
+        });
         (!name.is_empty() && name.len() <= 128
             && content::sanitize(name) == *name)
-            .then(|| LoadingMap { serial: *serial, name: name.clone() })
+            .then(|| LoadingMap { serial: *serial, name: name.clone(), mode })
     }
 
     pub(crate) fn select_host(&mut self, selected: crate::hosting::HostSelection) {
@@ -264,8 +286,7 @@ impl Loader {
                             let map_world = crate::remote_map::map_world_for_level(&level);
                             let mut authority = map_world.clone();
                             authority.set_tick_rate(selected.tick_rate);
-                            authority.bots =
-                                sim::bots::Bots::with_skill(0.6).with_nav(level.nav.clone());
+                            authority.bots = level.configured_bots(selected.map.options.bot_difficulty)?;
                             if !selected.map.options.deathmatch {
                                 authority.set_mode(
                                     sim::GameMode::Competitive,
@@ -278,7 +299,7 @@ impl Loader {
                             } else {
                                 sim::Team::Terrorist
                             };
-                            let bots = selected.map.options.bots;
+                            let bots = if selected.map.options.bot_difficulty == Some(0) { 0 } else { selected.map.options.bots };
                             let names = |team| {
                                 if team == sim::Team::Terrorist {
                                     &crate::BOT_NAMES_T
@@ -647,6 +668,42 @@ pub(crate) fn clear_match(world: &mut World) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn loading_mode_belongs_to_the_current_known_selection_not_the_previous_map() {
+        let mut loader = Loader::default();
+        loader.wanted = Some((41, Selection::Offline(ClientOptions::default().into())));
+        let first = loader.loading_map().unwrap();
+        assert_eq!((first.serial, first.mode), (41, Some(sim::GameMode::Competitive)));
+        loader.wanted = Some((42, Selection::Host(crate::hosting::HostSelection {
+            map: ClientOptions { deathmatch: true, ..default() }.into(),
+            config: netcode::host::HostConfig::default(), tick_rate: 128,
+            name: "Host".into(), team: sim::Team::CounterTerrorist,
+        })));
+        let next = loader.loading_map().unwrap();
+        assert_eq!(next.name, first.name);
+        assert_eq!((next.serial, next.mode), (42, Some(sim::GameMode::Deathmatch)));
+        assert_ne!(first, next);
+        loader.wanted = Some((43, Selection::Offline(ClientOptions {
+            grenade_practice: true, ..default()
+        }.into())));
+        assert_eq!(loader.loading_map().unwrap().mode, None);
+        loader.wanted = Some((44, Selection::Remote(netcode::protocol::ServerInfo {
+            version: netcode::protocol::VERSION, players: 0, max_players: 4,
+            tick_rate: 128, snapshot_interval_ticks: 2, max_unlag_ticks: 128,
+            interpolation_allowance_ticks: 2,
+            content: netcode::protocol::ContentManifest {
+                map_id: "csgo_map_de_dust2".into(), map_name: "de_dust2".into(),
+                map_hash: "0".repeat(40), catalog_hash: "1".repeat(40),
+            },
+        })));
+        let remote = loader.loading_map().unwrap();
+        assert_eq!(remote.name, first.name);
+        assert_eq!((remote.serial, remote.mode), (44, None));
+        loader.invalidate();
+        assert!(loader.loading_map().is_none());
+    }
+
     fn loading_app(state: AppState) -> App {
         let mut app = App::new();
         let catalog = weapons::Catalog::from_items_game("\"items_game\" { \"items\" {} }").unwrap();

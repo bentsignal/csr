@@ -114,13 +114,25 @@ impl Brain {
     }
 }
 
+/// Authored configuration, independent of any original engine AI algorithm.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Profile {
+    pub skill: f32,
+    pub reaction_time: f32,
+    pub shooting: bool,
+}
+
 /// Brains are kept in id order so every copy of a world thinks in the same
 /// order (determinism).
 #[derive(Clone, Debug)]
 pub struct Bots {
     brains: BTreeMap<PlayerId, Brain>,
-    /// 0 (harmless) .. 1 (sharp).
+    /// 0 (least skilled) .. 1 (sharp).
     pub skill: f32,
+    /// Explicit admitted profile delay; None retains the existing default behavior.
+    pub reaction_time: Option<f32>,
+    /// Harmless bots still navigate and think, but cannot request an attack.
+    pub shooting: bool,
     /// If false, bots stand still and never shoot (target practice).
     pub aggressive: bool,
     pub nav: Option<Arc<NavMesh>>,
@@ -134,6 +146,8 @@ impl Default for Bots {
         Self {
             brains: BTreeMap::new(),
             skill: 0.5,
+            reaction_time: None,
+            shooting: true,
             aggressive: true,
             nav: None,
             site_areas: Vec::new(),
@@ -294,6 +308,15 @@ impl Bots {
             skill: skill.clamp(0.0, 1.0),
             ..Default::default()
         }
+    }
+
+    pub fn with_profile(profile: Profile) -> Result<Self, &'static str> {
+        if !profile.skill.is_finite() || !(0.0..=1.0).contains(&profile.skill)
+            || !profile.reaction_time.is_finite() || profile.reaction_time < 0.0 {
+            return Err("Invalid authored bot skill or reaction time.");
+        }
+        Ok(Self { skill: profile.skill, reaction_time: Some(profile.reaction_time),
+            shooting: profile.shooting, ..Default::default() })
     }
 
     pub fn with_nav(mut self, nav: Option<Arc<NavMesh>>) -> Self {
@@ -559,7 +582,7 @@ impl Bots {
                 brain.pitch = approach(brain.pitch, tp, turn_rate);
                 brain.yaw = approach(brain.yaw, ty, turn_rate);
                 let on_target = angle_diff(ty, brain.yaw).abs() < 2.5 && angle_diff(tp, brain.pitch).abs() < 2.5;
-                let reaction = 0.45 - 0.3 * self.skill;
+                let reaction = self.reaction_time.unwrap_or(0.45 - 0.3 * self.skill);
                 if on_target && brain.visible && time - brain.seen_at > reaction {
                     if brain.burst_left == 0 && time >= brain.next_burst {
                         brain.burst_left = if eye.distance(brain.target_pos)>1000.0 {2} else if eye.distance(brain.target_pos)<250.0 {7} else {3};
@@ -676,7 +699,7 @@ impl Bots {
             if !brain.visible && !matches!(task,Task::Plant(_)|Task::Defuse(_)) {
                 if let Some(w)=bot.active_weapon() {if w.can_reload() && w.clip<w.def.clip_size/2 && time-brain.last_seen>1.0 {input.buttons|=buttons::RELOAD;}}
             }
-            if brain.throw.is_none() && self.aggressive && !finishing && world.flash_amount(bot.id)<0.2
+            if self.shooting && brain.throw.is_none() && self.aggressive && !finishing && world.flash_amount(bot.id)<0.2
                 && time>=brain.next_utility && time>=self.team.utility_after.get(&bot.team).copied().unwrap_or(0.0)
                 && (world.tick+bot.id as u64)%interval(world, UTILITY_RATE)==0 && time-brain.hurt_at>1.5 && bot.plant_start.is_none()
                 && (!brain.visible || (eye.distance(brain.target_pos)>550.0 && bot.health>60
@@ -768,6 +791,7 @@ impl Bots {
                 }
             }
             input.view_angles = Vec3::new(brain.pitch.clamp(-89.0, 89.0), brain.yaw, 0.0);
+            if !self.shooting { input.buttons &= !(buttons::ATTACK | buttons::ATTACK2); }
             out.push((bot.id, input));
         }
         out

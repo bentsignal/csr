@@ -1,7 +1,7 @@
 //! Persistent local settings shared by menus, input, audio and HUD.
 use bevy::prelude::*;
 
-pub const ACTIONS: [&str; 21] = [
+pub const ACTIONS: [&str; 29] = [
     "Move forward",
     "Move backward",
     "Move left",
@@ -23,17 +23,28 @@ pub const ACTIONS: [&str; 21] = [
     "Select Molotov",
     "Select incendiary grenade",
     "Select decoy",
+    "Last weapon",
+    "Primary weapon",
+    "Pistol",
+    "Knife / Zeus",
+    "Grenades",
+    "Bomb",
+    "Next weapon",
+    "Previous weapon",
 ];
-pub const ACTION_COMMANDS: [&str; 21] = [
+pub const ACTION_COMMANDS: [&str; 29] = [
     "+forward", "+back", "+moveleft", "+moveright", "+jump", "+duck", "+speed",
     "+use", "+reload", "buymenu", "drop", "+showscores", "+lookatweapon",
     "+attack", "+attack2",
     "use weapon_hegrenade", "use weapon_flashbang", "use weapon_smokegrenade",
     "use weapon_molotov", "use weapon_incgrenade", "use weapon_decoy",
+    "lastinv", "slot1", "slot2", "slot3", "slot4", "slot5", "invnext", "invprev",
 ];
 pub const KEY_ATTACK: usize = 13;
 pub const KEY_ATTACK2: usize = 14;
 pub const KEY_GRENADE_FIRST: usize = 15;
+pub const KEY_SELECTION_FIRST: usize = 21;
+pub const SELECTION_SLOTS: [u8; 8] = [sim::SLOT_LAST, 1, 2, 3, 4, 5, sim::SLOT_NEXT, sim::SLOT_PREVIOUS];
 pub const GRENADE_NAMES: [&str; 6] = [
     "weapon_hegrenade", "weapon_flashbang", "weapon_smokegrenade",
     "weapon_molotov", "weapon_incgrenade", "weapon_decoy",
@@ -61,7 +72,7 @@ impl MouseAction {
         })
     }
 }
-pub const KEYS: [KeyCode; 40] = [
+pub const KEYS: [KeyCode; 46] = [
     KeyCode::KeyA,
     KeyCode::KeyB,
     KeyCode::KeyC,
@@ -78,6 +89,7 @@ pub const KEYS: [KeyCode; 40] = [
     KeyCode::KeyN,
     KeyCode::KeyO,
     KeyCode::KeyP,
+    KeyCode::KeyQ,
     KeyCode::KeyR,
     KeyCode::KeyS,
     KeyCode::KeyT,
@@ -102,6 +114,11 @@ pub const KEYS: [KeyCode; 40] = [
     KeyCode::PageUp,
     KeyCode::PageDown,
     KeyCode::CapsLock,
+    KeyCode::Digit1,
+    KeyCode::Digit2,
+    KeyCode::Digit3,
+    KeyCode::Digit4,
+    KeyCode::Digit5,
 ];
 
 /// A wheel detent is a one-shot request, never a held jump button.
@@ -137,7 +154,7 @@ pub struct Settings {
     pub radar_scale: f32,
     pub radar_rotate: bool,
     pub close_on_buy: bool,
-    pub binds: [Option<KeyCode>; 21],
+    pub binds: [Option<KeyCode>; 29],
     pub mouse_binds: [MouseAction; 5],
 }
 pub const RESOLUTIONS: [(u32, u32); 4] = [(1280, 720), (1600, 900), (1920, 1080), (2560, 1440)];
@@ -186,6 +203,10 @@ impl Default for Settings {
                 None, // Mouse attacks remain the defaults for existing configs.
                 None,
                 None, None, None, None, None, None, // Direct grenade selection is opt-in.
+                Some(KeyCode::KeyQ),
+                Some(KeyCode::Digit1), Some(KeyCode::Digit2), Some(KeyCode::Digit3),
+                Some(KeyCode::Digit4), Some(KeyCode::Digit5),
+                None, None, // Keyboard next/previous default to unbound.
             ],
             mouse_binds: [MouseAction::Attack, MouseAction::Attack2, MouseAction::None, MouseAction::None, MouseAction::None],
         }
@@ -421,6 +442,7 @@ impl Settings {
 pub fn key_name(key: KeyCode) -> String {
     format!("{key:?}")
         .trim_start_matches("Key")
+        .trim_start_matches("Digit")
         .replace("Left", " L")
         .replace("Right", " R")
 }

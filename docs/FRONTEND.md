@@ -45,10 +45,12 @@ They do not decode game function bodies.
 - The original GO dialog validates serialized offline settings, submits that
   exact query and commits through its native `OnOk`. Requests resolve only
   supported modes and filtered installed maps, then use the existing map worker.
-  A real pointer sequence launches Dust II in the same process. No Bots and
-  Medium Bots are accepted; other difficulty choices receive visible feedback
-  until implemented. The current bot AI has not been measured for original
-  difficulty parity.
+  A real pointer sequence launches Dust II in the same process. Difficulty
+  selections now carry through offline and hosted settings: No Bots, Harmless,
+  Easy, Medium, Hard and Expert resolve against active content metadata before
+  match admission. Missing compatible profiles report a load error. The
+  original dialog opacity/layout and native bot AI parity remain open; see
+  [the bounded configuration scope](research/offline-bot-difficulty.md).
 - Gameplay HUD nodes explicitly target the match's default UI camera. The
   higher-order menu camera can be inactive without hiding radar, health or ammo.
 - Audio and Keyboard/Mouse controls come from the installed settings scripts.
