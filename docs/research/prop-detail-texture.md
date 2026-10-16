@@ -76,7 +76,43 @@ The classic BSP contains 172 DUSTTILE03 face records; this is a source count,
 not an actual visible or rendered-face count.
 
 The correction admits the same authored ordinary operator for the visible
-LightmappedGeneric surfaces, preserving all unsupported fallbacks. The new
-candidate still requires compilation and a matched north/south comparison,
-with controls verified to have no authored detail. The initial negative is
-retained; neither candidate is claimed to have native or historical parity.
+LightmappedGeneric surfaces, preserving all unsupported fallbacks. The
+initial negative is retained and is not claimed as a fidelity pass.
+
+## Actual verification after the world-surface correction
+
+Code `46ea73d` passed CI run `38879847913`. The clean combined PLAY artifact
+`52ff900` contains byte-identical detail renderer/parser files. Parent's full
+workspace/DEV and focused PLAY checks, installed-model checks, launcher build
+and map probe/simulation checks passed. Classic Dust II's ten known probe
+faults remain byte-identical to the admitted baseline; its simulation passes.
+
+The corrected private packet `055001` rendered three fresh after images:
+classic tunnel north, tunnel south and the blue-barrel control. All three
+owned children exited successfully; no graphical process remained. Both the
+implementing agent and parent independently reviewed all actual images at
+1600×900. The retained native references use the same private classic BSP and
+acknowledged eye/angle poses; retained PLAY baselines use the same camera,
+resolution and exposure settings.
+
+The foreground DUSTTILE03 surfaces now visibly receive their authored detail
+grain. Selected north-panel RGB mean absolute errors against Legacy changed
+from 34.38 to 32.71 and 33.10 to 31.53; south panels changed from 13.35 to 12.29
+and 11.17 to 10.04. North first-difference errors improved; both south
+first-difference errors slightly worsened. These are raw, fixed-region
+comparisons with no registration, exposure, gamma or material-coefficient fit.
+
+The wall controls resolve to authored normalmapped PalaceWall01 materials
+without detail. The barrel/cap and its background wall likewise have no
+detail declaration. Those controls, crate 247 and the arch controls are
+pixel-identical before and after. Existing authored VHV admission remains
+173 meshes/95,965 vertices, nonwhite tint instances remain 104, and ordinary
+static-prop detail admission remains 52 meshes. The 172 DUSTTILE03 faces are
+a source-data count, not a measured visible/drawn count.
+
+This admits a bounded visible world-detail improvement. Exact detail transfer,
+fine-grain parity, the two-axis static-prop scale and the remaining classic
+lighting/arch differences stay open. The [final combined RELEASE checks](overnight-fidelity-verification.md)
+passed on `a9997ea`; there is no separate `46ea73d` RELEASE claim. The earlier four-image
+static-only zero-effect packet is preserved with its occlusion/target-identity
+explanation.

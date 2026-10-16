@@ -247,7 +247,9 @@ The private read-only metadata audit used the installed PCF SHA256
 `9ed53f823d5340cd35883674d5ef5e22c52cf434d59890f7d5e0f13e07d59c5d`
 and an independent format reader. Focused source checks cover Source box
 corners/center/sample bounds, upper-half placement and the disabled/unhandled
-compatibility paths. Compilation and actual before/after captures are pending.
+compatibility paths. Compilation and [combined RELEASE checks](overnight-fidelity-verification.md)
+passed. Four actual before/after images show higher dust placement and a
+broader late tail, with the seed/profile limitations below retained.
 The existing weapon trace now records actual HE emitter birth, seed and position.
 The emitter still seeds from the render-frame event-drain tick; paired captures
 can therefore differ in random seed and event age even with identical ordinary
