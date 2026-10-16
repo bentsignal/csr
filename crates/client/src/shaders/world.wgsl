@@ -318,9 +318,9 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
         let spectrum=textureSample(base2_tex,base2_samp,vec2<f32>(fract(angle+mask.g),mask.b));
         albedo=vec4<f32>(mix(albedo.rgb,albedo.rgb*spectrum.rgb*2.0,mask.r),albedo.a);
     }
-    // Initial authored-detail admission is for static props. Skinning replaces
-    // VERTEX_LIT with DYNAMIC_LIT; character/weapon materials keep their fallback.
-    if (params.flags & DETAIL) != 0u && (params.flags & VERTEX_LIT) != 0u {
+    // Ordinary authored detail covers lit world surfaces and static props.
+    // Dynamic/skinned character and weapon materials keep their fallback.
+    if (params.flags & DETAIL) != 0u && (params.flags & (LIGHTMAPPED | VERTEX_LIT)) != 0u && (params.flags & DYNAMIC_LIT) == 0u {
         let grain = textureSample(detail_tex, detail_samp, uv * params.detail.xy).rgb;
         // Ordinary detail uses a neutral midpoint. Sampling as data preserves
         // 0.5 as identity; the authored factor controls the modulation strength.
