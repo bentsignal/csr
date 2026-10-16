@@ -241,6 +241,7 @@ pub fn spawn(
     let mut light_data = vec![0u8; bsp.static_props.props.len().max(1) * PROP_TEXELS * 8];
     let mut authored_meshes = 0usize;
     let mut authored_vertices = 0usize;
+    let mut detail_meshes = 0usize;
     let mut tinted_instances = 0usize;
     for (prop_index, prop) in bsp.static_props.props.iter().enumerate() {
         let Some(Some((model, flips))) = models.get(&prop.model) else { continue };
@@ -293,6 +294,10 @@ pub fn spawn(
                     materials.add(material_from_vmt(vmt.as_ref(), fs, textures, images, shared, exposure, false))
                 })
                 .clone();
+            if let Some(m) = materials.get(&material).filter(|m| m.params.flags & crate::material::flags::DETAIL != 0) {
+                detail_meshes += 1;
+                debug!("Authored prop detail: instance={prop_index} mesh={mesh_index} flags={} scale={},{} factor={} model={}", m.params.flags, m.params.detail.x, m.params.detail.y, m.params.detail.z, bsp.static_props.models[prop.model as usize]);
+            }
             let authored_colors = materials.get(&material)
                 .filter(|m| m.params.flags & crate::material::flags::VERTEX_LIT != 0
                     && m.params.flags & crate::material::flags::NORMAL == 0)
@@ -361,5 +366,6 @@ pub fn spawn(
     }
     info!("Authored equal-group prop lighting: meshes={authored_meshes} vertices={authored_vertices}; unsupported meshes retain ambient/Sun fallback");
     info!("Authored static-prop diffuse tint: nonwhite_instances={tinted_instances}");
+    info!("Authored ordinary static-prop detail: meshes={detail_meshes}; unsupported layers retain base material");
     stats
 }

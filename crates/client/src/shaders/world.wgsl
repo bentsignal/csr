@@ -39,6 +39,7 @@ struct WorldParams {
     skin_details:vec4<f32>,
     skin_properties:vec4<f32>,
     skin_pattern_palette:vec4<f32>,
+    detail: vec4<f32>,
 };
 
 
@@ -56,6 +57,7 @@ const SSBUMP: u32 = 2048u;
 const SSBUMP_MATHFIX: u32 = 4096u;
 const SHADOW_DIAGNOSTIC: u32 = 8192u;
 const TINT_BY_BASE_ALPHA: u32 = 131072u;
+const DETAIL: u32 = 262144u;
 // Orthonormal radiosity basis, in texture tangent space.
 const RNM0 = vec3<f32>(0.81649658, 0.0, 0.57735027);
 const RNM1 = vec3<f32>(-0.40824829, 0.70710678, 0.57735027);
@@ -94,6 +96,8 @@ fn ambient_light(n: vec3<f32>) -> vec3<f32> {
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(18) var skin_position: texture_2d<f32>;
 @group(#{MATERIAL_BIND_GROUP}) @binding(19) var skin_position_samp: sampler;
+@group(#{MATERIAL_BIND_GROUP}) @binding(20) var detail_tex: texture_2d<f32>;
+@group(#{MATERIAL_BIND_GROUP}) @binding(21) var detail_samp: sampler;
 fn paint_coords(uv:vec2<f32>)->vec2<f32>{
     let p=(uv-vec2<f32>(0.5))*params.skin_transform.xy;
     return vec2<f32>(p.x*params.skin.z-p.y*params.skin.w,p.x*params.skin.w+p.y*params.skin.z)+vec2<f32>(0.5)+params.skin_transform.zw;
@@ -313,6 +317,14 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
         let angle=clamp(1.0-abs(dot(n,eye)),0.0,1.0);
         let spectrum=textureSample(base2_tex,base2_samp,vec2<f32>(fract(angle+mask.g),mask.b));
         albedo=vec4<f32>(mix(albedo.rgb,albedo.rgb*spectrum.rgb*2.0,mask.r),albedo.a);
+    }
+    // Ordinary authored detail covers lit world surfaces and static props.
+    // Dynamic/skinned character and weapon materials keep their fallback.
+    if (params.flags & DETAIL) != 0u && (params.flags & (LIGHTMAPPED | VERTEX_LIT)) != 0u && (params.flags & DYNAMIC_LIT) == 0u {
+        let grain = textureSample(detail_tex, detail_samp, uv * params.detail.xy).rgb;
+        // Ordinary detail uses a neutral midpoint. Sampling as data preserves
+        // 0.5 as identity; the authored factor controls the modulation strength.
+        albedo = vec4<f32>(albedo.rgb * mix(vec3<f32>(1.0), 2.0 * grain, params.detail.z), albedo.a);
     }
     var rgb = albedo.rgb * light;
     if (params.flags & DYNAMIC_LIT) != 0u && params.phong.y > 0.0 {

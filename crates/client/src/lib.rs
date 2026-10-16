@@ -29,6 +29,7 @@ pub mod tracers;
 pub mod inventory;
 pub mod cosmetics;
 pub mod cosmetic_catalog;
+mod classic_cosmetics;
 pub mod skin_finish;
 pub mod decorations;
 pub mod cosmetic_geometry;
@@ -735,7 +736,9 @@ fn smoke_test(
         && world.as_ref().is_some_and(|w|w.0.time()>=capture_time.unwrap()) { *probe_frame=Some(*frame); }
     let capture_frame = if probe.active()||capture_time.is_some() { probe_frame.unwrap_or(u32::MAX - 30) } else { opts.frames };
     if *frame > 120 && *frame <= capture_frame { frame_times.push(real.delta_secs() * 1000.0); }
-    if *frame == capture_frame.saturating_sub(90) && std::env::var_os("CSR_INSPECT").is_some(){inspect.0+=1;}
+    if *frame == capture_frame.saturating_sub(90) && std::env::var_os("CSR_INSPECT").is_some(){inspect.start();}
+    // This system has already required an actual screenshot request above.
+    if capture_frame.checked_sub(10) == Some(*frame) && std::env::var_os("CSR_INSPECT_CANCEL").is_some(){inspect.cancel();}
     // CSR_BUY_MENU=n: show the buy menu on category n (0 = none picked).
     if let Ok(cat) = std::env::var("CSR_BUY_MENU").map(|v| v.parse::<usize>().unwrap_or(0)) {
         // The close-on-buy proof must leave subsequent state to the real
@@ -806,6 +809,11 @@ fn smoke_test(
                 weapon.map(|g| g.burst_mode), weapon.and_then(|g| g.burst), weapon.map(|g| g.clip),
                 w.0.player(l.id).map(|p| p.shots));
             if std::env::var_os("CSR_WEAPON_TRACE").is_some() {
+                for bot in w.0.players.iter().filter(|p| p.is_bot) {
+                    info!("capture bot: id={} alive={} pos={:?} velocity={:?} on_ground={} {}",
+                        bot.id, bot.alive, bot.movement.origin, bot.movement.velocity,
+                        bot.movement.on_ground, w.0.bots.describe(&w.0, bot.id));
+                }
                 for projectile in &w.0.projectiles {
                     info!("capture projectile: id={} kind={:?} pos={:?} velocity={:?} settled={}",
                         projectile.id, projectile.kind, projectile.pos, projectile.velocity, projectile.settled);

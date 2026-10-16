@@ -264,7 +264,11 @@ fn input(
         if let Some(local) = local.as_mut() {
             local.latched = 0;
             local.pointer_attacks = 0;
+            local.keyboard_attacks = 0;
             local.pending_slot = 0;
+            // Device edges are blocked; an explicit `use` console command has
+            // a separate one-shot queue until an authoritative tick consumes it.
+            local.pending_utility = 0;
             local.pending_drop = false;
             local.pending_buys.clear();
         }
@@ -283,6 +287,7 @@ const COMMANDS: &[&str] = &[
     "bind",
     "unbind",
     "bindlist",
+    "use",
     "volume",
     "mat_vsync",
     "mat_antialias",
@@ -362,7 +367,7 @@ fn bind(
     unbind: bool,
 ) -> Result<String, String> {
     if args.is_empty() || args.len() > 2 || (unbind && args.len() != 1) {
-        return Err("Usage: bind <key|mouse1..5|mwheelup|mwheeldown> [command]; unbind <mouse|wheel>".into());
+        return Err("Usage: bind <key|mouse1..5|mwheelup|mwheeldown> [command]; unbind <key|mouse|wheel>".into());
     }
     let name = args[0].to_ascii_lowercase();
     if let Some(index) = ["mouse1", "mouse2", "mouse3", "mouse4", "mouse5"].iter().position(|value| *value == name) {
@@ -388,13 +393,10 @@ fn bind(
         }
         return Ok(format!("{name} = \"{}\"", action.command()));
     }
-    if unbind {
-        return Err(
-            "Keyboard unbind is not implemented; use bind to move an action to another key.".into(),
-        );
-    }
     let key=binding_key(&name).ok_or("Unsupported key. Use letters, space, ctrl, shift, tab or arrows; bindlist shows active bindings.")?;
-    if let Some(command) = args.get(1) {
+    if unbind || args.get(1).is_some_and(|command| command.is_empty()) {
+        settings.unbind_key(key);
+    } else if let Some(command) = args.get(1) {
         let command = command.to_ascii_lowercase();
         let action = ACTION_COMMANDS
             .iter()
@@ -407,13 +409,31 @@ fn bind(
         settings
             .binds
             .iter()
-            .position(|candidate| *candidate == key)
+            .position(|candidate| *candidate == Some(key))
             .map(|i| ACTION_COMMANDS[i])
             .unwrap_or("unbound")
     ))
 }
 fn has_pending(console: Res<DeveloperConsole>) -> bool {
     !console.pending.is_empty()
+}
+fn use_utility(world: &mut World, name: &str) -> Result<String, String> {
+    if world.get_resource::<State<crate::AppState>>().is_none_or(|s| *s.get() != crate::AppState::Match)
+        || world.get_resource::<crate::menu::Menu>().is_none_or(|m| !m.in_match || m.open())
+        || world.get_resource::<crate::buymenu::BuyMenu>().is_some_and(|m| m.open)
+        || world.get_resource::<crate::player::InputEnabled>().is_none_or(|e| !e.0)
+        || world.get_resource::<crate::remote::RemoteClient>()
+            .is_some_and(|r| r.status() != &netcode::remote_session::Status::Ready) {
+        return Err("Resume a ready match before selecting a grenade.".into());
+    }
+    let local = world.get_resource::<crate::player::LocalPlayer>()
+        .filter(|p| !p.noclip).ok_or("No active player to select a grenade.")?;
+    let simulation = world.get_resource::<crate::player::SimWorld>()
+        .ok_or("No active match to select a grenade.")?;
+    let definition = crate::player::carried_utility(&simulation.0, local.id, name)
+        .ok_or("That named grenade is not carried by the living player.")?;
+    world.resource_mut::<crate::player::LocalPlayer>().console_utility = definition;
+    Ok(format!("Requested {name} through player input."))
 }
 fn execute(world: &mut World) {
     let pending = std::mem::take(&mut world.resource_mut::<DeveloperConsole>().pending);
@@ -433,13 +453,14 @@ fn run(world: &mut World, line: &str) -> Result<String, String> {
     let args = &tokens[1..];
     match name.as_str() {
         "help" => Ok(format!(
-            "{}\nExamples: volume 0.5 | cl_showfps 1 | bind mwheeldown +jump | bind space +jump\nSettings save immediately. Up/Down recalls commands; Tab completes command names.\nconnect accepts an IP:port (default 27015). map uses the current offline mode/team/bot selection.\nThis console does not yet implement every Source command or arbitrary command binds.",
+            "{}\nExamples: volume 0.5 | cl_showfps 1 | bind mwheeldown +jump | bind space +jump | use weapon_smokegrenade\nSettings save immediately. Up/Down recalls commands; Tab completes command names.\nconnect accepts an IP:port (default 27015). map uses the current offline mode/team/bot selection.\nThis console does not yet implement every Source command or arbitrary command binds.",
             COMMANDS.join("  ")
         )),
         "clear" if args.is_empty() => {
             world.resource_mut::<DeveloperConsole>().output.clear();
             Ok(String::new())
         }
+        "use" if args.len() == 1 => use_utility(world, &args[0].to_ascii_lowercase()),
         "bind" | "unbind" => {
             let result = bind(
                 &mut world.resource_mut::<crate::settings::Settings>(),
@@ -462,7 +483,7 @@ fn run(world: &mut World, line: &str) -> Result<String, String> {
                     .enumerate()
                     .map(|(i, key)| format!(
                         "{} = {}",
-                        crate::settings::key_name(*key),
+                        key.map(crate::settings::key_name).unwrap_or_else(|| "unbound".into()),
                         ACTION_COMMANDS[i]
                     ))
                     .collect::<Vec<_>>()
@@ -653,6 +674,96 @@ fn draw(
 mod tests {
     use super::*;
     #[test]
+    fn named_grenade_use_queues_authority_and_rejects_absent_or_lost_ownership() {
+        let catalog = std::sync::Arc::new(weapons::Catalog::from_items_game(r#"
+            items_game { items {
+                7342 { name weapon_smokegrenade attributes { "primary default clip size" 1 } }
+                7343 { name weapon_flashbang attributes { "primary default clip size" 1 } }
+            } }"#).unwrap());
+        let mut simulation = sim::World::with_catalog(
+            std::sync::Arc::new(collision::CollisionWorld::new()), catalog.clone());
+        let id = simulation.add_player("Local", sim::Team::CounterTerrorist);
+        let player = simulation.player_mut(id).unwrap();
+        player.alive = true;
+        player.weapons = ["weapon_flashbang", "weapon_smokegrenade"].map(|name|
+            sim::weapon::WeaponState::new(std::sync::Arc::new(catalog.get(name).unwrap().clone()))).into();
+        player.active = 0;
+        let mut app = App::new();
+        app.insert_resource(crate::player::SimWorld(simulation))
+            .insert_resource(crate::player::LocalPlayer::new(id, glam::Vec3::ZERO, 0.))
+            .insert_resource(crate::player::InputEnabled(true))
+            .insert_resource(State::new(crate::AppState::Match))
+            .init_resource::<crate::menu::Menu>();
+        let mut settings = crate::settings::Settings::parse("bind13=KeyC\nvolume=0.4\n");
+        let tokens = words("bind x \"use weapon_smokegrenade\"").unwrap();
+        bind(&mut settings, &tokens[1..], false).unwrap();
+        bind(&mut settings, &["mouse4".into(), "use weapon_flashbang".into()], false).unwrap();
+        assert_eq!(crate::settings::Settings::parse(&settings.encode()), settings);
+        assert_eq!(settings.binds[crate::settings::KEY_ATTACK], Some(KeyCode::KeyC));
+        assert_eq!(settings.binds[crate::settings::KEY_GRENADE_FIRST + 2], Some(KeyCode::KeyX));
+        assert!(run(app.world_mut(), "use weapon_hegrenade").is_err());
+        run(app.world_mut(), "use weapon_smokegrenade").unwrap();
+        assert_eq!(app.world().resource::<crate::player::SimWorld>().0.player(id).unwrap().active, 0);
+        let keys = ButtonInput::default();
+        let mouse = ButtonInput::default();
+        let controls = crate::player::Controls { keys: &keys, mouse: &mouse, settings: &settings,
+            enabled: true, blocked: true, captured: false, buy_menu: false };
+        let input = crate::player::sample_tick_input(
+            &mut app.world_mut().resource_mut::<crate::player::LocalPlayer>(), &controls);
+        assert_eq!(input.utility, 7342, "explicit console selection survives device capture blocking");
+        assert_eq!(input.buttons, 0);
+        assert_eq!(crate::player::sample_tick_input(
+            &mut app.world_mut().resource_mut::<crate::player::LocalPlayer>(), &controls).utility, 0);
+        app.world_mut().resource_mut::<crate::player::SimWorld>().0.step(&[(id, input)]);
+        assert_eq!(app.world().resource::<crate::player::SimWorld>().0.player(id).unwrap()
+            .active_weapon().unwrap().def.class_name, "weapon_smokegrenade");
+        run(app.world_mut(), "use weapon_flashbang").unwrap();
+        {
+            let mut simulation = app.world_mut().resource_mut::<crate::player::SimWorld>();
+            let player = simulation.0.player_mut(id).unwrap();
+            player.weapons.retain(|w| w.def.class_name != "weapon_flashbang");
+            player.active = 0;
+        }
+        let input = crate::player::sample_tick_input(
+            &mut app.world_mut().resource_mut::<crate::player::LocalPlayer>(), &controls);
+        app.world_mut().resource_mut::<crate::player::SimWorld>().0.step(&[(id, input)]);
+        assert_eq!(app.world().resource::<crate::player::SimWorld>().0.player(id).unwrap().weapons.len(), 1,
+            "authority cannot grant a grenade that was dropped after sampling");
+        app.world_mut().resource_mut::<crate::player::SimWorld>().0.player_mut(id).unwrap().alive = false;
+        assert!(run(app.world_mut(), "use weapon_smokegrenade").is_err());
+        app.world_mut().resource_mut::<crate::player::SimWorld>().0.player_mut(id).unwrap().alive = true;
+        app.insert_resource(State::new(crate::AppState::Loading));
+        assert!(run(app.world_mut(), "use weapon_smokegrenade").is_err());
+    }
+    #[test]
+    fn keyboard_unbind_survives_reload_and_removes_tick_input_without_removing_mouse_jump() {
+        let mut settings = crate::settings::Settings::parse("bind0=KeyW\nbind4=Space\n");
+        bind(&mut settings, &["w".into()], true).unwrap();
+        bind(&mut settings, &["space".into(), "".into()], false).unwrap();
+        bind(&mut settings, &["mouse4".into(), "+jump".into()], false).unwrap();
+        let mut settings = crate::settings::Settings::parse(&settings.encode());
+        assert_eq!(bind(&mut settings, &["w".into()], false).unwrap(), "w = unbound");
+        let mut keys = ButtonInput::<KeyCode>::default();
+        keys.press(KeyCode::KeyW);
+        keys.press(KeyCode::Space);
+        let mut mouse = ButtonInput::<MouseButton>::default();
+        let mut local = crate::player::LocalPlayer::new(1, glam::Vec3::ZERO, 0.);
+        let sample = |settings: &crate::settings::Settings, mouse: &ButtonInput<MouseButton>, local: &mut crate::player::LocalPlayer| {
+            crate::player::sample_tick_input(local, &crate::player::Controls {
+                keys: &keys, mouse, settings, enabled: true, blocked: false, captured: true, buy_menu: false,
+            })
+        };
+        let input = sample(&settings, &mouse, &mut local);
+        assert_eq!(input.forward_move, 0.);
+        assert_eq!(input.buttons & movement::buttons::JUMP, 0);
+        mouse.press(MouseButton::Back);
+        assert_ne!(sample(&settings, &mouse, &mut local).buttons & movement::buttons::JUMP, 0);
+        bind(&mut settings, &["w".into(), "+forward".into()], false).unwrap();
+        let restored = crate::settings::Settings::parse(&settings.encode());
+        assert_eq!(sample(&restored, &mouse, &mut local).forward_move, 450.);
+        assert_eq!(restored.binds[4], None);
+    }
+    #[test]
     fn mouse_bind_replaces_only_its_button_and_round_trips_with_keyboard_and_wheel() {
         let mut settings = crate::settings::Settings::default();
         bind(&mut settings, &["mouse4".into(), "+jump".into()], false).unwrap();
@@ -661,7 +772,7 @@ mod tests {
         assert_eq!(settings.mouse_binds[3], crate::settings::MouseAction::Action(4));
         assert_eq!(settings.mouse_binds[4], crate::settings::MouseAction::Attack2);
         assert_eq!(settings.mouse_binds[1], crate::settings::MouseAction::None);
-        assert_eq!(settings.binds[4], KeyCode::Space);
+        assert_eq!(settings.binds[4], Some(KeyCode::Space));
         assert_eq!(settings.wheel_down, crate::settings::WheelAction::Next);
         assert_eq!(crate::settings::Settings::parse(&settings.encode()), settings);
         let before = settings.clone();
@@ -677,7 +788,7 @@ mod tests {
         let tokens = words("bind \"mwheeldown\" \"+jump\"").unwrap();
         bind(&mut settings, &tokens[1..], false).unwrap();
         assert_eq!(settings.wheel_down, crate::settings::WheelAction::Jump);
-        assert_eq!(settings.binds[4], KeyCode::Space);
+        assert_eq!(settings.binds[4], Some(KeyCode::Space));
         assert_eq!(
             crate::settings::Settings::parse(&settings.encode()),
             settings

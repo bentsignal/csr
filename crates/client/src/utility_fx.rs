@@ -68,6 +68,7 @@ pub fn setup(
         ],
         &mut mats,
         &mut images,
+        &["explosion_child_smoke07b"],
     );
     let fire = crate::utility_particles::load(
         fs,
@@ -80,6 +81,7 @@ pub fn setup(
         ],
         &mut mats,
         &mut images,
+        &[],
     );
     let he = crate::utility_particles::load(
         fs,
@@ -91,6 +93,7 @@ pub fn setup(
         ],
         &mut mats,
         &mut images,
+        &["explosion_child_core04b", "explosion_child_dust06a", "explosion_child_dust10a"],
     );
     let wick = crate::utility_particles::load(
         fs,
@@ -98,6 +101,7 @@ pub fn setup(
         &["weapon_molotov_fp_wick"],
         &mut mats,
         &mut images,
+        &[],
     );
     // Prewarm each material without a visible particle, so a first short HE
     // flash does not expire while its pipeline compiles.
@@ -270,6 +274,9 @@ pub fn update(
     }
     for (kind, pos) in effects.utility_detonations.drain(..) {
         if kind == Kind::He && explosions.len() < 16 {
+            if std::env::var_os("CSR_WEAPON_TRACE").is_some() {
+                info!("HE emitter: birth={time:.5} seed={} pos={pos:?} layers={}", w.tick as u32, he.len());
+            }
             explosions.push(crate::utility_particles::Emitter::spawn(
                 &mut commands,
                 &mut meshes,
