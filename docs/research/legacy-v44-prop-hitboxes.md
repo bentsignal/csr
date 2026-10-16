@@ -45,5 +45,10 @@ malformed names, bones, bounds, reserved data, and unsupported versions.
 An installed-data test imports complete MDL/VVD/VTX geometry for all six
 observed v44 props and checks that each authored AABB remains present.
 
-Verification is pending the scheduled focused and combined checks. This is
-a parser correction; no native pixel or collision-parity claim is made.
+All six installed complete imports passed in the combined full workspace.
+Classic Inferno probe and simulation now report zero failures in both PLAY and
+RELEASE; the prior unsupported-light_fixture01 failure is retained and also
+reproduced on the earlier RELEASE baseline. The ordinary authored-card
+lifecycle loads old Inferno with its geometry intact, and its actual image was
+independently reviewed. This is a narrow parser correction; no native pixel
+or collision-parity claim is made.

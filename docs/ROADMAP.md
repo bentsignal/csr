@@ -6,16 +6,19 @@ concurrently (one agent or worktree per track), and the dependencies between
 them are listed. Every item ends in a verified state (`cargo test`,
 `csr probe`, `csr sim`, and screenshots for anything visual; see AGENTS.md).
 
-## Where we are (assessed 2026-10-15)
+## Where we are (assessed 2026-10-16)
 
 Owner return-home playtest on 2026-10-14: all reported defects, required
 features, accepted improvements and priorities are retained in
 [PLAYTEST-2026-10-14.md](PLAYTEST-2026-10-14.md). Work continues without another
-test request until the owner asks. Immediate parallel tracks are grenade
-release/launch synchronization, measured walking viewmodel bob, and original
-combat HUD integration. Console and persistent wheel/key bindings have landed;
-menu coverage/performance, movement/surfing, additional weapon profiles and
-lighting remain open alongside those tracks.
+test request until the owner asks. The latest merged source includes grounded HE launch/button corrections,
+measured M4 recovery, original menu music and supported Video controls, authored
+prop tint, dropped weapon models and the pre-rework Inferno chooser. Full
+workspace, combined RELEASE and ordinary rendered frontend checks passed for
+that source. Current parallel tracks are authored grenade/material effects,
+knife inspection continuity and input, and persistent bot navigation stalls.
+Movement/surfing, remaining weapon states, UI coverage/performance and full
+lighting fidelity remain open; bounded improvements are not whole-game parity.
 
 The inherited code is a **real, playable single-player base**. Phase 0 and
 the installer/updater release are complete. Gameplay now lives in the fixed
@@ -209,6 +212,13 @@ byte-identical to 2018.
       normal map loading. Production-input stress and a five-bot movement,
       fire/reload, pause/resume run pass with inspected captures; this does not
       establish physical display latency or full fidelity. [MENU_PERFORMANCE.md](MENU_PERFORMANCE.md).
+- [x] Original main-menu music with its runtime track and saved/live gain;
+      actual sink lifecycle and combined RELEASE passed. Physical focus,
+      complete original mix and2015 historical defaults remain open. PR159.
+- [x] Connect original Video display/vsync controls to supported preferences;
+      ordinary authored vsync selection changes saved settings and live Window
+      policy, with reviewed1920x1080 images. Exclusive/triple modes, physical
+      latency and the remaining Video page remain open. PR161.
 - [ ] Complete the game API bridge for inventory/cases and the remaining
       classic panels. Original reset defaults still need verified evidence.
 - The fallback (a native Bevy layout built from the SWFs with the `swf`
@@ -275,6 +285,10 @@ thing is uncanny. Fidelity is measured, never eyeballed:
       other weapons' recovery and historical parity remain open.
       [PR #147](https://github.com/bentsignal/global-offensive/pull/147),
       [PR #151](https://github.com/bentsignal/global-offensive/pull/151).
+- [x] Separate independently measured M4A4 punch angle/velocity recovery;
+      actual128Hz held/restart rays and held/exhausted renders passed, together
+      with combined RELEASE/CI. Spray-phase selection stays unchanged;64Hz
+      native and historical parity remain open. PR164.
 - [x] Restore measured finite-history M4A4 look translation without changing
       the aim ray or weapon orientation. Actual rendered yaw/pitch cases have
       about one pixel of remaining rear-sight discrepancy; walking bob and
@@ -295,6 +309,10 @@ thing is uncanny. Fidelity is measured, never eyeballed:
       payload intervention, with a repeated control and unchanged installed
       data. A second marker supports hardware order for 16 selected records;
       general record-order and color-decoder admission remain open.
+- [x] Bounded selected-map authored lighting for flags0 unbumped static props
+      with equal-group records. Actual classic north/south renders admit173
+      meshes/95,965 vertices and preserve unsupported fallbacks; arches remain
+      overbright and complete record/color/lighting fidelity remains open. PR163.
 - [ ] Match jumping and **surfing** with native traces: supported input,
       ramp/crease/seam contact, speed retention and landing impact at recorded
       server settings and tick rates. Synthetic correctness tests and native
@@ -351,6 +369,11 @@ thing is uncanny. Fidelity is measured, never eyeballed:
 - [ ] Validate the map pool beyond Dust II (Mirage, Inferno, Nuke, Overpass,
       Train, Cache, Vertigo, Office, Italy, ...).
 - [ ] The inherited fidelity checklist below (M2–M4).
+
+- [x] Offer pre-rework Inferno (2016) beside the remake in the original map
+      chooser; distinct ContentIds, actual authored-card loading and combined
+      RELEASE lifecycle passed. The narrow v44 prop importer preserves original
+      geometry. Exact2015 content/card art remain open. PR167/170.
 
 ### Track E: Content packs and modding
 

@@ -92,9 +92,12 @@ headless `csr sim de_dust2` was observed after the last screenshot child exited.
 It was not an owned screenshot leak and was not stopped. Private posthoc
 admission keeps that distinction separate from the original receipt.
 
-Required RELEASE build/probe/simulation validation is pending the orchestrator's
-frozen combined integration build. No separate RELEASE pass for `ae57335` is
-claimed here. Captures establish material mapping, not an FPS improvement.
+Combined RELEASE validation passed before PR158 merged: frozen union3be64ff
+(cratesbf6d616ca5cce40ee38506ca53d11183b71dbf87) produced immutable76EAA58B,
+passed full workspace tests, installed DustII probe/simulation and1,425 sound
+decodes, and completed the actual frontend/match lifecycle. The matched wall
+comparison above is from the retained PLAY artifacts. This is combined source
+verification, not a separate RELEASE pass for ae57335 or an FPS measurement.
 
 This does not fix missing cascaded sun shadows, the unknown original owner
 screenshot pose, new-layer blend/border composition, general world lighting,

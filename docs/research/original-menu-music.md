@@ -46,6 +46,12 @@ reviewed all eight images or physically dragged the music slider. The general
 slider callback and persistence path is shared; exact interaction/focus playback
 and historical mixing still benefit from the owner's next manual playtest.
 
-Full workspace CI and a combined RELEASE build/probe/simulation/sound decode
-gate are required before merge. A working original track and slider do not
-establish complete 2015 audio fidelity.
+Full workspace CI and the combined RELEASE gate passed before PR159 merged.
+Frozen union3be64ff produced immutable76EAA58B and passed workspace tests,
+DustII probe/simulation and all1,425 sound decodes. Its actual eight-image
+Home/DustII/Pause/Audio/Back/Resume/Home/Inferno lifecycle exited0; root reviewed
+all eight images, superseding the earlier partial-review scope for that later
+packet only. Exactly2 track starts,2 actual sinks and2 stops before match loads
+were observed with owner configuration unchanged. The newer RELEASE9197101C
+Video roundtrip independently retains the same2/2/2 lifecycle. Neither packet
+proves physical Alt-Tab/slider behavior, PCM onset or complete2015 audio fidelity.
