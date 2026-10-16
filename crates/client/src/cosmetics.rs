@@ -108,11 +108,15 @@ impl Catalog {
             .iter()
             .find(|c| c.id.to_string() == q || c.key == q || c.name.to_lowercase() == q)
         {
+            if !crate::classic_cosmetics::case_available(c) {
+                return Err("This case is outside classic 2015 case availability.".into());
+            }
             return Ok(c);
         }
         let matches: Vec<_> = self
             .cases
             .iter()
+            .filter(|c| crate::classic_cosmetics::case_available(c))
             .filter(|c| c.name.to_lowercase().contains(&q) || c.key.contains(&q))
             .collect();
         match matches.as_slice() {
@@ -128,10 +132,14 @@ impl Catalog {
             )),
         }
     }
+    pub fn available_contents<'a>(&'a self, case: &'a Case) -> impl Iterator<Item = usize> + 'a {
+        case.contents.iter().copied().filter(|&i| self.finishes.get(i)
+            .is_some_and(|f| crate::classic_cosmetics::reward_available(case, f)))
+    }
     pub fn finish(&self, item: &OwnedSkin) -> Option<&Finish> {
         self.finishes
             .iter()
-            .find(|f| f.id == item.paint && f.weapon == item.weapon)
+            .find(|f| f.id == item.paint && f.weapon == item.weapon && crate::classic_cosmetics::finish_available(f))
     }
 }
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -393,6 +401,9 @@ impl Inventory {
         catalog: &Catalog,
         rng: &mut Random,
     ) -> Result<OwnedSkin, String> {
+        if !crate::classic_cosmetics::case_available(case) {
+            return Err("This case is outside classic 2015 case availability.".into());
+        }
         if self.cases.get(&case.id).copied().unwrap_or(0) == 0 {
             return Err("You do not own this case. Use give_case to add one.".into());
         }
@@ -425,13 +436,16 @@ impl Inventory {
             .iter()
             .find(|s| s.serial == serial)
             .ok_or("Skin no longer owned")?;
+        if !crate::classic_cosmetics::item_available(&i.weapon, i.paint) {
+            return Err("This knife is outside classic 2015 knife availability.".into());
+        }
         self.equipped
             .insert(equip_slot(&i.weapon).to_string(), serial);
         Ok(())
     }
     pub fn active(&self, weapon: &str) -> Option<&OwnedSkin> {
         let id = self.equipped.get(equip_slot(weapon))?;
-        self.skins.iter().find(|s| s.serial == *id)
+        self.skins.iter().find(|s| s.serial == *id && crate::classic_cosmetics::item_available(&s.weapon, s.paint))
     }
     pub fn apply_sticker(
         &mut self,
@@ -578,7 +592,7 @@ fn souvenir_stickers(
 /// Local rarity weights, including rare-special items, normalized per container.
 pub fn roll(case: &Case, catalog: &Catalog, rng: &mut Random) -> Option<usize> {
     let mut groups: BTreeMap<u8, Vec<usize>> = BTreeMap::new();
-    for &i in &case.contents {
+    for i in catalog.available_contents(case) {
         groups
             .entry(catalog.finishes[i].rarity)
             .or_default()
@@ -598,7 +612,7 @@ pub fn roll(case: &Case, catalog: &Catalog, rng: &mut Random) -> Option<usize> {
             return Some(items[(rng.unit() * items.len() as f32) as usize % items.len()]);
         }
     }
-    case.contents.last().copied()
+    groups.values().last().and_then(|items| items.last()).copied()
 }
 pub struct Random(pub u64);
 impl Random {
@@ -637,14 +651,14 @@ pub fn command(
             Ok(format!("Added {count} × {}",s.name))
         }
         "stickers"=>Ok(catalog.stickers.iter().filter(|(_,s)|s.name.to_lowercase().contains(&args.to_lowercase())).take(50).map(|(id,s)|format!("{id}: {}",s.name)).collect::<Vec<_>>().join("\n")),
-        "skins"=>Ok(catalog.finishes.iter().filter(|f|f.name.to_lowercase().contains(&args.to_lowercase())).take(50).map(|f|format!("{} {}: {}",f.weapon,f.id,f.name)).collect::<Vec<_>>().join("\n")),
+        "skins"=>Ok(catalog.finishes.iter().filter(|f|crate::classic_cosmetics::finish_available(f)).filter(|f|f.name.to_lowercase().contains(&args.to_lowercase())).take(50).map(|f|format!("{} {}: {}",f.weapon,f.id,f.name)).collect::<Vec<_>>().join("\n")),
         "give_skin"|"give-skin"=>{
             let p:Vec<_>=args.split_whitespace().collect();if p.len()<2{return Err("Usage: give_skin <weapon class> <paint ID> [normal|stattrak|souvenir]".into());}
             let paint=p[1].parse::<u32>().map_err(|_|"Invalid paint ID")?;
-            let f=catalog.finishes.iter().find(|f|f.weapon==p[0] && f.id==paint).ok_or("Weapon/paint combination not available")?;
+            let f=catalog.finishes.iter().find(|f|f.weapon==p[0] && f.id==paint && crate::classic_cosmetics::finish_available(f)).ok_or("Weapon/paint combination not available")?;
             let quality=p.get(2).copied().unwrap_or("normal");
             if !["normal","stattrak","souvenir"].contains(&quality) || (is_glove(&f.weapon)&&quality!="normal") || (is_rare_knife(&f.weapon)&&quality=="souvenir"){return Err("Invalid quality for this item".into());}
-            let containing=|souvenir:bool|catalog.cases.iter().filter(|c|c.souvenir==souvenir).find(|c|c.contents.iter().any(|&n|catalog.finishes[n].weapon==f.weapon&&catalog.finishes[n].id==f.id));
+            let containing=|souvenir:bool|catalog.cases.iter().filter(|c|crate::classic_cosmetics::case_available(c) && c.souvenir==souvenir).find(|c|c.contents.iter().any(|&n|catalog.finishes[n].weapon==f.weapon&&catalog.finishes[n].id==f.id));
             if quality=="stattrak" && containing(false).is_none(){return Err("This finish has no StatTrak case variant".into());}
             let event=if quality=="souvenir"{Some(containing(true).ok_or("This finish has no souvenir package variant")?.event)}else{None};
             inventory.transaction(path,|i|{
@@ -656,6 +670,7 @@ pub fn command(
         "cases" => Ok(catalog
             .cases
             .iter()
+            .filter(|c| crate::classic_cosmetics::case_available(c))
             .map(|c| format!("{}: {}", c.id, c.name))
             .collect::<Vec<_>>()
             .join("\n")),
@@ -681,6 +696,47 @@ pub fn command(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn classic_case_knife_boundaries_preserve_mixed_inventory_and_raw_catalog() {
+        let finish = |weapon: &str, id, rarity| Finish { weapon: weapon.into(), id, rarity, ..default() };
+        let catalog = Catalog {
+            finishes: vec![finish("weapon_ak47", 180, 6), finish("weapon_knife_butterfly", 38, 7),
+                finish("weapon_knife_butterfly", 415, 7), finish("weapon_knife_survival_bowie", 0, 7),
+                finish("custom_moon_knife", 90001, 7), finish("weapon_bayonet", 415, 7)],
+            cases: vec![Case { id: 4061, key: "crate_community_6".into(), contents: vec![0,1,2,3,4,5], ..default() },
+                Case { id: 4880, key: "crate_community_32".into(), contents: vec![0], ..default() },
+                Case { id: 4880, key: "custom_moon_case".into(), contents: vec![4], ..default() }],
+            ..default()
+        };
+        let mut inventory = Inventory::decode("CSR-COSMETICS 2\ncase 4880 3\nskin 1 weapon_knife_survival_bowie 0 7 0.1\nskin 2 weapon_knife_butterfly 38 11 0.2\nskin 3 custom_moon_knife 90001 4 0.3\nequip knife 1\n").unwrap();
+        let unchanged = inventory.encode();
+        let path = std::path::Path::new("never-written-classic-boundary-fixture.cfg");
+        assert!(command("give_case 4880", &catalog, &mut inventory, path).is_err());
+        assert!(inventory.open(&catalog.cases[1], &catalog, &mut Random(1)).is_err());
+        assert!(inventory.equip(1).is_err());
+        assert!(command("give_skin weapon_knife_butterfly 415", &catalog, &mut inventory, path).is_err());
+        assert!(!command("skins", &catalog, &mut inventory, path).unwrap().contains("weapon_knife_survival_bowie"));
+        assert!(inventory.active("knife").is_none());
+        let loadout = crate::skin_finish::local_loadout(&inventory, &crate::inventory::Inventory::default());
+        assert!(loadout.knife.is_none());
+        assert!(loadout.skins.is_empty());
+        assert_eq!(inventory.encode(), unchanged);
+        assert_eq!(Inventory::decode(&unchanged).unwrap(), inventory);
+        assert!(catalog.find_case("4061").is_ok());
+        assert!(catalog.find_case("custom_moon_case").is_ok());
+        assert_eq!(catalog.available_contents(&catalog.cases[0]).collect::<Vec<_>>(), vec![0,4,5]);
+        let mut rng = Random(20261016);
+        for _ in 0..32 { assert!([0,4,5].contains(&roll(&catalog.cases[0], &catalog, &mut rng).unwrap())); }
+        assert!(roll(&catalog.cases[1], &catalog, &mut rng).is_none());
+        inventory.equip(2).unwrap();
+        assert_eq!(crate::skin_finish::local_loadout(&inventory, &crate::inventory::Inventory::default()).knife.as_deref(), Some("weapon_knife_butterfly"));
+        inventory.equip(3).unwrap();
+        assert_eq!(inventory.active("knife").map(|s|s.weapon.as_str()), Some("weapon_knife_butterfly")); // custom slots retain their own names
+        assert_eq!(inventory.active("custom_moon_knife").unwrap().paint, 90001);
+        assert_eq!(catalog.finishes.len(), 6);
+        assert_eq!(catalog.cases[0].contents, vec![0,1,2,3,4,5]);
+    }
+
     #[test]
     fn qualities_stickers_and_shared_slots_survive_reload() {
         let mut i = Inventory::decode(

@@ -652,16 +652,18 @@ pub fn draw(
         Screen::Cases | Screen::Souvenirs | Screen::Skins | Screen::Contents(_) => {
             let screen = ui.screen.clone();
             let mut finish_indices = vec![];
+            let skin_indices: Vec<_> = inventory.skins.iter().enumerate().rev()
+                .filter(|(_, skin)| catalog.finish(skin).is_some()).map(|(i, _)| i).collect();
             let case_indices: Vec<_> = catalog
                 .cases
                 .iter()
                 .enumerate()
-                .filter(|(_, c)| c.souvenir == matches!(screen, Screen::Souvenirs))
+                .filter(|(_, c)| crate::classic_cosmetics::case_available(c) && c.souvenir == matches!(screen, Screen::Souvenirs))
                 .map(|(i, _)| i)
                 .collect();
             let count = match screen {
                 Screen::Cases | Screen::Souvenirs => case_indices.len(),
-                Screen::Skins => inventory.skins.len(),
+                Screen::Skins => skin_indices.len(),
                 Screen::Contents(i) => {
                     let case = &catalog.cases[i];
                     let header = panel(
@@ -702,7 +704,7 @@ pub fn draw(
                         14.,
                         Color::srgb(0.65, 0.70, 0.74),
                     );
-                    finish_indices = case.contents.clone();
+                    finish_indices = catalog.available_contents(case).collect();
                     finish_indices.len()
                 }
                 _ => 0,
@@ -729,7 +731,7 @@ pub fn draw(
                 text(
                     &mut commands,
                     grid,
-                    "Your collection is empty. Open the console and type: give_case Revolution 5",
+                    "Your collection is empty. Open the console and type: give_case Chroma 5",
                     21.,
                     Color::WHITE,
                 );
@@ -752,7 +754,7 @@ pub fn draw(
                         )
                     }
                     Screen::Skins => {
-                        let item = &inventory.skins[inventory.skins.len() - 1 - i];
+                        let item = &inventory.skins[skin_indices[i]];
                         let Some(f) = catalog.finish(item) else {
                             continue;
                         };
