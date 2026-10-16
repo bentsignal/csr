@@ -172,10 +172,28 @@ mod tests {
     #[test]
     #[ignore = "requires both pinned classic BSPs in CSR_DATA_DIR and CS:GO Legacy"]
     fn installed_archives_decode_their_actual_embedded_spectate_images() {
-        let mut fs = vfs::Vfs::new();
-        fs.mount_game_dir(&vfs::find_csgo_dir().expect("CS:GO Legacy"))
-            .unwrap();
+        // The frontend uses this exact mount path, including Store::current(),
+        // rather than the movie navigator's separate install-only filesystem.
+        let (_, fs) = level::mount_game(None).expect("frontend mount stack");
+        let installed = ["de_dust2", "de_inferno", "de_dust2_2017", "de_inferno_2016"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect();
+        let modes = crate::frontend_game::load(&fs, &installed);
         for pin in PINS {
+            assert!(
+                fs.exists(&format!("maps/{}.bsp", pin.name)),
+                "frontend BSP alias: {}",
+                pin.name
+            );
+            assert!(
+                modes
+                    .block("maps")
+                    .and_then(|maps| maps.block(pin.name))
+                    .is_some(),
+                "frontend card metadata alias: {}",
+                pin.name
+            );
             let art = ArchiveArt::new(pin.name).unwrap();
             let png = art
                 .image(&fs, Image::Radar)
