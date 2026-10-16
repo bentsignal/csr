@@ -1227,7 +1227,7 @@ pub fn draw(
                     if menu.capture == Some(i) {
                         "Press a key…".into()
                     } else {
-                        crate::settings::key_name(settings.binds[i])
+                        settings.binds[i].map(crate::settings::key_name).unwrap_or_else(|| "Unbound".into())
                     },
                     Action::Bind(i),
                     px(180.0),
