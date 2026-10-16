@@ -65,6 +65,8 @@ pub mod flags {
     /// Projected BSP overlay; the following two bits hold its authored order.
     pub const OVERLAY: u32 = 1 << 14;
     pub const OVERLAY_ORDER_SHIFT: u32 = 15;
+    /// Use base-texture alpha to mask material/instance diffuse tint.
+    pub const TINT_BY_BASE_ALPHA: u32 = 1 << 17;
 }
 
 #[derive(Clone, Copy, Debug, ShaderType)]

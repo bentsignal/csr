@@ -6,6 +6,19 @@ therefore retain the untinted texture even when its selected map specifies a
 strong blue modulation. This change exposes the selected map's raw RGBA bytes
 and carries supported opaque RGB into each instance's prop-data texture.
 
+Installed barrel material `dust_rusty_barrel` also enables
+`$blendtintbybasealpha`. The renderer now exposes that authored
+`VertexLitGeneric` parameter explicitly: combine material and instance diffuse
+tint, then interpolate from identity to that tint using the original base
+alpha. Alpha0 preserves base RGB; alpha1 applies the complete tint. Materials
+without the parameter retain uniform tint. This mask does not change opacity.
+Public [firsthand material-authoring guidance](https://steamcommunity.com/app/1840/discussions/0/3055111535922308396/)
+describes tint applying to opaque base-texture regions; a separate
+[firsthand Valve issue report](https://github.com/ValveSoftware/Source-1-Games/issues/5841)
+shows per-entity color masking in another Source1 title. These observations
+and the installed VMT motivate the candidate; the exact CS:GO result still
+requires the prospective native comparison.
+
 ## Public format basis and admitted layouts
 
 The independent [ValveBSP data-structure documentation](https://pysourcesdk.github.io/ValveBSP/datastructures/gamelumps/lump_prps.html)
