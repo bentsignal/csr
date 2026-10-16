@@ -29,6 +29,7 @@ pub mod tracers;
 pub mod inventory;
 pub mod cosmetics;
 pub mod cosmetic_catalog;
+mod classic_cosmetics;
 pub mod skin_finish;
 pub mod decorations;
 pub mod cosmetic_geometry;
@@ -124,6 +125,8 @@ pub struct ClientOptions {
     pub size_explicit: bool,
     /// Enemy bots; the local team gets one fewer so teams are even.
     pub bots: u32,
+    /// Original picker value (0..5), resolved from content; None preserves legacy defaults.
+    pub bot_difficulty: Option<u8>,
     /// Play as a Terrorist instead of a Counter-Terrorist.
     pub terrorist: bool,
     /// Deathmatch (respawns, fixed loadout) instead of competitive rounds.
@@ -145,6 +148,7 @@ impl Default for ClientOptions {
             height: 900,
             size_explicit: false,
             bots: 5,
+            bot_difficulty: None,
             terrorist: false,
             deathmatch: false,
             grenade_practice: false,
@@ -547,7 +551,7 @@ fn spawn_level(
     };
     let id = if remote { 0 } else { world.add_player("You", mine) };
     let names = |team: sim::Team| if team == sim::Team::Terrorist { &BOT_NAMES_T } else { &BOT_NAMES_CT };
-    let bot_count = if remote { 0 } else { opts.bots };
+    let bot_count = if remote || opts.bot_difficulty == Some(0) { 0 } else { opts.bots };
     for i in 0..bot_count {
         world.add_bot(names(theirs)[i as usize % 8], theirs);
     }
@@ -690,7 +694,8 @@ fn spawn_level(
         menu_blur::PostProcessSettings::default(),
     ));
     commands.insert_resource(local);
-    if !remote { world.bots = sim::bots::Bots::with_skill(0.6).with_nav(level.nav.clone()); }
+    if !remote { world.bots = level.configured_bots(opts.bot_difficulty)
+        .expect("offline bot settings validated by the immutable loaded level"); }
     if let Some(admission) = admission.take() {
         commands.insert_resource(admission);
     }
@@ -735,7 +740,9 @@ fn smoke_test(
         && world.as_ref().is_some_and(|w|w.0.time()>=capture_time.unwrap()) { *probe_frame=Some(*frame); }
     let capture_frame = if probe.active()||capture_time.is_some() { probe_frame.unwrap_or(u32::MAX - 30) } else { opts.frames };
     if *frame > 120 && *frame <= capture_frame { frame_times.push(real.delta_secs() * 1000.0); }
-    if *frame == capture_frame.saturating_sub(90) && std::env::var_os("CSR_INSPECT").is_some(){inspect.0+=1;}
+    if *frame == capture_frame.saturating_sub(90) && std::env::var_os("CSR_INSPECT").is_some(){inspect.start();}
+    // This system has already required an actual screenshot request above.
+    if capture_frame.checked_sub(10) == Some(*frame) && std::env::var_os("CSR_INSPECT_CANCEL").is_some(){inspect.cancel();}
     // CSR_BUY_MENU=n: show the buy menu on category n (0 = none picked).
     if let Ok(cat) = std::env::var("CSR_BUY_MENU").map(|v| v.parse::<usize>().unwrap_or(0)) {
         // The close-on-buy proof must leave subsequent state to the real
@@ -806,6 +813,11 @@ fn smoke_test(
                 weapon.map(|g| g.burst_mode), weapon.and_then(|g| g.burst), weapon.map(|g| g.clip),
                 w.0.player(l.id).map(|p| p.shots));
             if std::env::var_os("CSR_WEAPON_TRACE").is_some() {
+                for bot in w.0.players.iter().filter(|p| p.is_bot) {
+                    info!("capture bot: id={} alive={} pos={:?} velocity={:?} on_ground={} {}",
+                        bot.id, bot.alive, bot.movement.origin, bot.movement.velocity,
+                        bot.movement.on_ground, w.0.bots.describe(&w.0, bot.id));
+                }
                 for projectile in &w.0.projectiles {
                     info!("capture projectile: id={} kind={:?} pos={:?} velocity={:?} settled={}",
                         projectile.id, projectile.kind, projectile.pos, projectile.velocity, projectile.settled);

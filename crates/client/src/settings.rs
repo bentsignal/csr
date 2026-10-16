@@ -1,7 +1,7 @@
 //! Persistent local settings shared by menus, input, audio and HUD.
 use bevy::prelude::*;
 
-pub const ACTIONS: [&str; 13] = [
+pub const ACTIONS: [&str; 29] = [
     "Move forward",
     "Move backward",
     "Move left",
@@ -15,10 +15,39 @@ pub const ACTIONS: [&str; 13] = [
     "Drop weapon",
     "Scoreboard",
     "Inspect weapon",
+    "Primary attack",
+    "Secondary attack",
+    "Select HE grenade",
+    "Select flashbang",
+    "Select smoke grenade",
+    "Select Molotov",
+    "Select incendiary grenade",
+    "Select decoy",
+    "Last weapon",
+    "Primary weapon",
+    "Pistol",
+    "Knife / Zeus",
+    "Grenades",
+    "Bomb",
+    "Next weapon",
+    "Previous weapon",
 ];
-pub const ACTION_COMMANDS: [&str; 13] = [
+pub const ACTION_COMMANDS: [&str; 29] = [
     "+forward", "+back", "+moveleft", "+moveright", "+jump", "+duck", "+speed",
     "+use", "+reload", "buymenu", "drop", "+showscores", "+lookatweapon",
+    "+attack", "+attack2",
+    "use weapon_hegrenade", "use weapon_flashbang", "use weapon_smokegrenade",
+    "use weapon_molotov", "use weapon_incgrenade", "use weapon_decoy",
+    "lastinv", "slot1", "slot2", "slot3", "slot4", "slot5", "invnext", "invprev",
+];
+pub const KEY_ATTACK: usize = 13;
+pub const KEY_ATTACK2: usize = 14;
+pub const KEY_GRENADE_FIRST: usize = 15;
+pub const KEY_SELECTION_FIRST: usize = 21;
+pub const SELECTION_SLOTS: [u8; 8] = [sim::SLOT_LAST, 1, 2, 3, 4, 5, sim::SLOT_NEXT, sim::SLOT_PREVIOUS];
+pub const GRENADE_NAMES: [&str; 6] = [
+    "weapon_hegrenade", "weapon_flashbang", "weapon_smokegrenade",
+    "weapon_molotov", "weapon_incgrenade", "weapon_decoy",
 ];
 pub const MOUSE_BUTTONS: [MouseButton; 5] = [
     MouseButton::Left, MouseButton::Right, MouseButton::Middle, MouseButton::Back, MouseButton::Forward,
@@ -43,7 +72,7 @@ impl MouseAction {
         })
     }
 }
-pub const KEYS: [KeyCode; 40] = [
+pub const KEYS: [KeyCode; 46] = [
     KeyCode::KeyA,
     KeyCode::KeyB,
     KeyCode::KeyC,
@@ -60,6 +89,7 @@ pub const KEYS: [KeyCode; 40] = [
     KeyCode::KeyN,
     KeyCode::KeyO,
     KeyCode::KeyP,
+    KeyCode::KeyQ,
     KeyCode::KeyR,
     KeyCode::KeyS,
     KeyCode::KeyT,
@@ -84,6 +114,11 @@ pub const KEYS: [KeyCode; 40] = [
     KeyCode::PageUp,
     KeyCode::PageDown,
     KeyCode::CapsLock,
+    KeyCode::Digit1,
+    KeyCode::Digit2,
+    KeyCode::Digit3,
+    KeyCode::Digit4,
+    KeyCode::Digit5,
 ];
 
 /// A wheel detent is a one-shot request, never a held jump button.
@@ -119,7 +154,7 @@ pub struct Settings {
     pub radar_scale: f32,
     pub radar_rotate: bool,
     pub close_on_buy: bool,
-    pub binds: [KeyCode; 13],
+    pub binds: [Option<KeyCode>; 29],
     pub mouse_binds: [MouseAction; 5],
 }
 pub const RESOLUTIONS: [(u32, u32); 4] = [(1280, 720), (1600, 900), (1920, 1080), (2560, 1440)];
@@ -152,19 +187,26 @@ impl Default for Settings {
             // Preserve the existing stay-open behavior; native default unmeasured.
             close_on_buy: false,
             binds: [
-                KeyCode::KeyW,
-                KeyCode::KeyS,
-                KeyCode::KeyA,
-                KeyCode::KeyD,
-                KeyCode::Space,
-                KeyCode::ControlLeft,
-                KeyCode::ShiftLeft,
-                KeyCode::KeyE,
-                KeyCode::KeyR,
-                KeyCode::KeyB,
-                KeyCode::KeyG,
-                KeyCode::Tab,
-                KeyCode::KeyF,
+                Some(KeyCode::KeyW),
+                Some(KeyCode::KeyS),
+                Some(KeyCode::KeyA),
+                Some(KeyCode::KeyD),
+                Some(KeyCode::Space),
+                Some(KeyCode::ControlLeft),
+                Some(KeyCode::ShiftLeft),
+                Some(KeyCode::KeyE),
+                Some(KeyCode::KeyR),
+                Some(KeyCode::KeyB),
+                Some(KeyCode::KeyG),
+                Some(KeyCode::Tab),
+                Some(KeyCode::KeyF),
+                None, // Mouse attacks remain the defaults for existing configs.
+                None,
+                None, None, None, None, None, None, // Direct grenade selection is opt-in.
+                Some(KeyCode::KeyQ),
+                Some(KeyCode::Digit1), Some(KeyCode::Digit2), Some(KeyCode::Digit3),
+                Some(KeyCode::Digit4), Some(KeyCode::Digit5),
+                None, None, // Keyboard next/previous default to unbound.
             ],
             mouse_binds: [MouseAction::Attack, MouseAction::Attack2, MouseAction::None, MouseAction::None, MouseAction::None],
         }
@@ -258,9 +300,11 @@ impl Settings {
                     if let Some(index) = key
                         .strip_prefix("bind")
                         .and_then(|i| i.parse::<usize>().ok())
-                        .filter(|i| *i < 13)
+                        .filter(|i| *i < s.binds.len())
                     {
-                        if let Some(key) = KEYS.iter().find(|k| format!("{k:?}") == value) {
+                        if value.is_empty() {
+                            s.binds[index] = None;
+                        } else if let Some(key) = KEYS.iter().find(|k| format!("{k:?}") == value) {
                             s.rebind(index, *key);
                         }
                     }
@@ -296,7 +340,8 @@ impl Settings {
         text.push_str(&format!("radar_scale={}\nradar_rotate={}\n", self.radar_scale, self.radar_rotate));
         text.push_str(&format!("closeonbuy={}\n", u8::from(self.close_on_buy)));
         for (i, key) in self.binds.iter().enumerate() {
-            text.push_str(&format!("bind{i}={key:?}\n"));
+            let name = key.map(|key| format!("{key:?}")).unwrap_or_default();
+            text.push_str(&format!("bind{i}={name}\n"));
         }
         self.audio_options.encode_into(&mut text);
         text
@@ -313,10 +358,15 @@ impl Settings {
             return;
         }
         let old = self.binds[index];
-        if let Some(other) = self.binds.iter().position(|k| *k == key) {
+        if let Some(other) = self.binds.iter().position(|k| *k == Some(key)) {
             self.binds[other] = old;
         }
-        self.binds[index] = key;
+        self.binds[index] = Some(key);
+    }
+    pub fn unbind_key(&mut self, key: KeyCode) {
+        for binding in &mut self.binds {
+            if *binding == Some(key) { *binding = None; }
+        }
     }
     pub fn mouse_pressed(&self, action: MouseAction, mouse: &ButtonInput<MouseButton>, blocked: u8) -> bool {
         MOUSE_BUTTONS.iter().enumerate().any(|(index, button)|
@@ -327,10 +377,10 @@ impl Settings {
             blocked & (1 << index) == 0 && self.mouse_binds[index] == action && mouse.just_pressed(*button))
     }
     pub fn action_pressed(&self, index: usize, keys: &ButtonInput<KeyCode>, mouse: &ButtonInput<MouseButton>, blocked: u8) -> bool {
-        keys.pressed(self.binds[index]) || self.mouse_pressed(MouseAction::Action(index), mouse, blocked)
+        self.binds[index].is_some_and(|key| keys.pressed(key)) || self.mouse_pressed(MouseAction::Action(index), mouse, blocked)
     }
     pub fn action_just_pressed(&self, index: usize, keys: &ButtonInput<KeyCode>, mouse: &ButtonInput<MouseButton>, blocked: u8) -> bool {
-        keys.just_pressed(self.binds[index]) || self.mouse_just_pressed(MouseAction::Action(index), mouse, blocked)
+        self.binds[index].is_some_and(|key| keys.just_pressed(key)) || self.mouse_just_pressed(MouseAction::Action(index), mouse, blocked)
     }
     pub fn crosshair_color(&self) -> Color {
         [
@@ -392,6 +442,7 @@ impl Settings {
 pub fn key_name(key: KeyCode) -> String {
     format!("{key:?}")
         .trim_start_matches("Key")
+        .trim_start_matches("Digit")
         .replace("Left", " L")
         .replace("Right", " R")
 }
@@ -412,7 +463,7 @@ mod tests {
         s.mouse_binds[0] = MouseAction::None;
         s.mouse_binds[3] = MouseAction::Action(4);
         s.mouse_binds[4] = MouseAction::Attack;
-        assert_eq!(s.binds[1], KeyCode::KeyW);
+        assert_eq!(s.binds[1], Some(KeyCode::KeyW));
         assert_eq!(Settings::parse(&s.encode()), s);
     }
     #[test]

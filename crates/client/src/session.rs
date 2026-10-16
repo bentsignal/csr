@@ -82,6 +82,17 @@ fn load_requested_map(
     game_dir: &std::path::Path,
     progress: &LoadProgress,
 ) -> Result<level::Level, String> {
+    let level = load_requested_map_content(request, game_dir, progress)?;
+    // Validate explicit choices on the worker before entering Match/hosting.
+    level.configured_bots(request.options.bot_difficulty)?;
+    Ok(level)
+}
+
+fn load_requested_map_content(
+    request: &crate::menu::MapRequest,
+    game_dir: &std::path::Path,
+    progress: &LoadProgress,
+) -> Result<level::Level, String> {
     if progress.cancelled.load(Ordering::Relaxed) {
         return Err(workshop::CANCELLED.into());
     }
@@ -275,8 +286,7 @@ impl Loader {
                             let map_world = crate::remote_map::map_world_for_level(&level);
                             let mut authority = map_world.clone();
                             authority.set_tick_rate(selected.tick_rate);
-                            authority.bots =
-                                sim::bots::Bots::with_skill(0.6).with_nav(level.nav.clone());
+                            authority.bots = level.configured_bots(selected.map.options.bot_difficulty)?;
                             if !selected.map.options.deathmatch {
                                 authority.set_mode(
                                     sim::GameMode::Competitive,
@@ -289,7 +299,7 @@ impl Loader {
                             } else {
                                 sim::Team::Terrorist
                             };
-                            let bots = selected.map.options.bots;
+                            let bots = if selected.map.options.bot_difficulty == Some(0) { 0 } else { selected.map.options.bots };
                             let names = |team| {
                                 if team == sim::Team::Terrorist {
                                     &crate::BOT_NAMES_T

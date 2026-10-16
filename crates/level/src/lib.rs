@@ -1,6 +1,7 @@
 //! Map loading shared by the headless simulation and the renderer.
 
 pub mod maps;
+pub mod bot_profiles;
 mod character_profiles;
 mod empty_trigger;
 mod grenade_animations;
@@ -26,6 +27,7 @@ pub struct Level {
     /// Navigation mesh from `maps/<name>.nav`, if the map ships one.
     pub nav: Option<Arc<nav::NavMesh>>,
     pub character_profiles: Arc<sim::model_pose::Profiles>,
+    pub bot_profiles: bot_profiles::Profiles,
     /// Private asset-map metadata never falls back to an installed map with
     /// the same basename. Recipe and built-in maps retain their own source.
     metadata_pack: Option<String>,
@@ -246,6 +248,31 @@ impl Level {
                 hash.finalize().into()
             })
         } else { catalog_sha1 };
+        // Raw metadata was already retained by older builds, but those builds
+        // ignored nondefault headshot multipliers. Distinguish actual damage
+        // semantics without changing raw schema gates or gameplay wire fields.
+        let catalog_sha1 = if catalog.weapons.iter().any(|w|
+            w.declared_headshot_multiplier().is_some_and(|scale| scale != 4.)) {
+            catalog_sha1.map(|previous| {
+                let mut hash = Sha1::new();
+                hash.update(b"csr-authored-headshot-multiplier-v1\0");
+                hash.update(previous);
+                hash.finalize().into()
+            })
+        } else { catalog_sha1 };
+        // Scope-mode recoil interpretation affects authoritative rays without
+        // changing the raw schema or serialized weapon state.
+        let catalog_sha1 = if catalog.weapons.iter().any(|w|
+            w.attr_f32("zoom levels").is_some_and(|levels| levels > 0.)
+                && ["recoil angle alt", "recoil angle variance alt", "recoil magnitude alt", "recoil magnitude variance alt"]
+                    .iter().any(|key| w.attr_f32(key).is_some_and(f32::is_finite))) {
+            catalog_sha1.map(|previous| {
+                let mut hash = Sha1::new();
+                hash.update(b"csr-scoped-recoil-metadata-v1\0");
+                hash.update(previous);
+                hash.finalize().into()
+            })
+        } else { catalog_sha1 };
         timings.push(("weapons", t.elapsed().as_secs_f32()));
         let t = Instant::now();
         let (character_profiles, catalog_sha1) = character_profiles::load(&fs, catalog_sha1)?;
@@ -255,6 +282,7 @@ impl Level {
             .and_then(|bytes| nav::NavMesh::parse(&bytes).ok())
             .map(Arc::new);
 
+        let bot_profiles = bot_profiles::Profiles::load(&fs);
         Ok(Level {
             id,
             name: name.to_string(),
@@ -265,6 +293,7 @@ impl Level {
             catalog: Arc::new(catalog),
             nav,
             character_profiles,
+            bot_profiles,
             metadata_pack,
             pack_archive_hash: None,
             bsp_sha1,
@@ -272,6 +301,18 @@ impl Level {
             item_schema_sha1,
             timings,
         })
+    }
+
+    /// Server-owned bot settings. Unspecified sessions retain their old defaults.
+    pub fn configured_bots(&self, choice: Option<u8>) -> Result<sim::bots::Bots, String> {
+        let bots = match choice {
+            None => sim::bots::Bots::with_skill(0.6),
+            Some(value) => match self.bot_profiles.resolve(value)? {
+                None => sim::bots::Bots::with_skill(0.6),
+                Some(profile) => sim::bots::Bots::with_profile(profile).map_err(str::to_owned)?,
+            },
+        };
+        Ok(bots.with_nav(self.nav.clone()))
     }
 
     /// The map's radar overview description (`resource/overviews/<map>.txt`),
