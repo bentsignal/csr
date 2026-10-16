@@ -19,6 +19,8 @@ must admit or reject the correspondence along with the color interpretation.
 Only raw flags2, three identical four-byte groups per record, and zero fourth
 bytes qualify. One unsupported record rejects that complete mesh. Only the
 renderer's non-normal-mapped `VERTEX_LIT` material path uses these colors.
+Only static-prop instances with common flags0 qualify; other flag combinations
+have not received matched native admission and retain the existing fallback.
 Missing, unsupported, directional, nonzero-control or mismatched data preserves
 the previous ambient-cube/Sun calculation. The MDL library retains its opaque
 payload API; the restricted interpretation lives in the renderer.
@@ -71,8 +73,14 @@ were retained. This establishes map selection through the acknowledged mount
 contract, not an absolute native filesystem-open trace. Native preferences,
 installed configuration and map bytes were unchanged after cleanup.
 
-Actual candidate logs admitted 577 meshes / 224,398 vertices on this classic
-map, including both 1,203-vertex arch meshes and the 576-vertex crate247 mesh.
+The captured `00da221` candidate logs admitted 577 meshes / 224,398 vertices on
+this classic map, including both 1,203-vertex arch meshes and the 576-vertex
+crate247 mesh. The subsequent flags0 containment gate narrows this scope;
+those earlier aggregate counts must not be presented as post-gate counts.
+All three measured target instances have flags0 and remain eligible.
+Filtering the retained pre-gate per-instance log against actual BSP flags
+predicts 173 meshes / 95,965 vertices after containment; this is a data/log
+prediction pending the next rendered run, not a new runtime count.
 The result is local: previously near-black arch/crate surfaces recover visible
 stone/wood details, while the sampled world-wall controls are byte-identical
 before and after. The crates are close to the native reference; the arches
@@ -122,8 +130,8 @@ largely erases that distinction. This supports retaining hardware order. It
 does not prove every record's native spatial correspondence or resolve the
 arch's brightness error. No fitted per-model correction was added.
 
-Other classic prop flag combinations have not been visually admitted. The
-current candidate does not interpret those flags. Directional payloads,
+Other classic prop flag combinations have not been visually admitted and are
+now explicitly rejected before VHV loading. Directional payloads,
 nonzero fourth bytes and normal-mapped materials retain the previous fallback.
 
 ## Verification and retained negatives
@@ -143,7 +151,9 @@ of them and is not an appropriate lighting fix. The missing material belongs
 to one tiny nonzero-area triangle on a separate millwall prop. Neither finding
 accounts for the visible tunnel arches. No map bytes were changed.
 
-Combined RELEASE verification remains pending for this source. No standalone
+The flags0 containment change still needs root's next combined build and
+rendered aggregate-count check. Combined RELEASE verification remains pending
+for this source. No standalone
 RELEASE pass or complete native/historical parity is claimed. The earlier UV
 transform PR158 was merged after root's separate combined RELEASE verification;
 its reworked-map wall correction is distinct from this classic-map candidate.
@@ -159,7 +169,9 @@ Private packets retain the original safe failures as well as admitted images:
 - `csr-classic-vhv-pairs-20261016-015753`: all four owned captures exit0,
   no capture failure and no owned process remaining.
 - `classic-vhv-local-comparison.json`: all six input image hashes and local
-  surface metrics; `classic-vhv-hardware-vvd-order-audit.json`: order audit.
+  surface metrics; `classic-vhv-hardware-vvd-order-audit.json`: order audit;
+  `classic-prop-mode-material-audit-private.json`: mode/material audit and
+  the explicitly predicted post-containment count.
 
 The separate reworked-map cascade interventions remain negative observations:
 existing entity Enable/Disable acknowledgements did not remove hard shadows,

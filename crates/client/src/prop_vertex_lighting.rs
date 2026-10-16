@@ -15,6 +15,11 @@ pub(super) fn load(
     ordinal: usize,
     model: &mdl::Model,
 ) -> Option<Vec<Option<Vec<glam::Vec3>>>> {
+    // Matched native observations cover only zero-flag instances. Other prop
+    // lighting modes remain unsupported and must retain the existing fallback.
+    if level.bsp.static_props.props.get(ordinal)?.flags != 0 {
+        return None;
+    }
     let key = InstanceKey::new(
         level.id.clone(),
         *level.bsp_sha1(),
