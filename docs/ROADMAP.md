@@ -192,6 +192,9 @@ byte-identical to 2018.
       the process. Bounded loading/cancellation, native offline GO, pause
       Resume/Exit and a rendered Dust II → home → Inferno lifecycle proof.
       [PR #10](https://github.com/bentsignal/global-offensive/pull/10).
+- [ ] Display the current known local mode through the original Loading movie;
+      source candidate retains unknown/remote/sandbox fallback, with actual
+      rendered-label admission pending. [Scope](research/loading-selected-mode.md).
 - [x] Connect the local server browser and rendered network joins to that
       state machine, with render preparation, neutral pause, Home cancellation
       and clean offline reload. Native browser sizing/fidelity remains unmeasured.
