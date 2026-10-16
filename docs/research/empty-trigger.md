@@ -1,8 +1,8 @@
 # Fully depleted trigger feedback
 
-The current rewrite silently ignores primary fire with an empty magazine and
-no reserve. This work restores the installed game's dry-trigger feedback
-through authoritative simulation events and runtime soundscript lookup.
+The rewrite originally ignored primary fire with an empty magazine and no
+reserve. Observed content policies restore depleted-trigger feedback through
+authoritative simulation events and runtime soundscript lookup.
 An empty magazine with reserve is a separate reload case, covered by the
 automatic-fire lifecycle work; it must not inherit an extra invented click.
 
@@ -70,3 +70,62 @@ process. The root reviewer independently viewed the loaded/depleted AK and
 held-case before/after images, including the dynamic empty-wave overlay.
 Physical mouse input was not disabled. Native evidence is private; only the
 derived observations above are committed.
+
+
+## Independently observed M4A4 depletion
+
+A separate owned Legacy 1.38.8.1 session identified the actual M4A4 model and
+30/90 HUD, consumed exactly 120 local M4A4 near-shot waves, and showed the
+same weapon at 0/0 before dry input. Depletion used acknowledged timescale 4
+with finite ordinary attack/release inputs and normal released-trigger
+reloads. Timescale was restored and positively reported as 1 before both
+empty-trigger cases. Accelerated depletion is not dry-cadence evidence.
+
+A short press held for 0.1916 console-receipt seconds emitted one dynamic
+`weapons/clipempty_rifle.wav` cue. A held press lasting 1.6585 receipt seconds
+emitted nine cues with engine sound-time gaps 0.204, 0.203, 0.205, 0.192,
+0.206, 0.203, 0.205 and 0.204 seconds (mean 0.20275). Neither case emitted
+a local live-shot wave. Actual before/after images retained M4A4 at 0/0.
+The 0.2-second policy is inferred from this aggregate; it is not an exact
+native attack deadline or independently established 2015 behavior.
+
+Only the matching installed schema and canonical M4A4 identity/statistics
+opt in. Explicit pack policies are preserved. AK policy identity and its
+existing simulation/audio behavior are retained; the accumulated catalog
+digest includes each independently attached observation. No new protocol
+event or guessed dry-fire animation is introduced.
+
+The same session attempted an M4A1-S afterward. Ordinary `give`/`use` did
+not replace the depleted M4A4: its actual model/HUD remained M4A4 at 0/0,
+and no M4A1-S near-shot wave was observed. That case is rejected, not evidence
+for another weapon. The original failing receipt and all raw captures stay
+private. All 12 native preference entries restored exactly and no native
+process remained. Rust and rendered verification of this addition is pending.
+
+
+## Independent M4A1-S retry
+
+A fresh CT session started with a free primary slot and positively admitted
+the M4A1-S model/HUD at 20/80, then 0/0 after exactly 100 local suppressed
+near-shot waves. The same accelerated-depletion/normal-speed-dry boundary
+was acknowledged. Attached short input emitted one empty cue during a
+0.1909-second receipt interval. Attached held input emitted nine during
+1.6947 seconds, with a mean engine sound-time gap 0.202375 seconds.
+
+A secondary press began removing the suppressor. The capture three seconds
+later still showed that animation in progress; the immediately following
+0.1982-second short primary press emitted no empty cue. That negative is
+retained as a readiness boundary, not claimed as a ready detached tap.
+The later detached held case emitted eight rifle-empty cues during 1.5197
+receipt seconds, mean sound-time gap 0.202857 seconds. Its final actual
+image shows the bare muzzle and 0/0. No dry case emitted a local live-shot
+wave. Existing suppressor-transition and attack-readiness guards remain.
+
+The independent rifle policy uses the observed 0.2-second aggregate in
+both suppressor states without changing shot/recoil behavior or inventing
+an exact transition duration. All 12 preference entries restored exactly;
+the owned game exited and no native game remained. A prior retry safely
+failed preflight on a TIME_WAIT NetCon port before launching anything;
+that receipt is preserved separately from this successful new-port run.
+Other guns, rapid re-press behavior, detached ready taps and historical
+2015 parity remain unestablished. Runtime rewrite checks remain pending.
