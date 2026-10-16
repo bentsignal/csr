@@ -284,6 +284,8 @@ const COMMANDS: &[&str] = &[
     "unbind",
     "bindlist",
     "volume",
+    "snd_mute_losefocus",
+    "snd_menumusic_volume",
     "sensitivity",
     "m_pitch",
     "cl_showfps",
