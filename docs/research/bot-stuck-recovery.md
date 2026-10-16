@@ -14,6 +14,8 @@ crossing while preserving tactical area costs; another route may still enter
 the same destination. If no alternate path exists, the existing wander
 fallback remains available. Expiry permits retrying temporary obstructions;
 round reset, death and respawn discard the old brain or its failed crossings.
+Navigation interruptions, such as combat, reset the progress baseline rather
+than treating the time spent elsewhere as failed crossing attempts.
 
 Progress toward the same portal requires approaching it by the existing
 48-unit threshold, rather than sideways displacement. Advancing a route area
