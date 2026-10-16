@@ -232,7 +232,9 @@ pub fn spawn(
     let mut material_cache: HashMap<String, Handle<WorldMaterial>> = HashMap::new();
     let mut batches: HashMap<(AssetId<WorldMaterial>, bool, [i32; 3]), (Handle<WorldMaterial>, Batch)> = HashMap::new();
 
-    let mut light_data = vec![0u8; bsp.static_props.props.len().max(1) * 8 * 8];
+    // Six ambient faces, Sun direction/color, then per-instance diffuse tint.
+    const PROP_TEXELS: usize = 9;
+    let mut light_data = vec![0u8; bsp.static_props.props.len().max(1) * PROP_TEXELS * 8];
     for (prop_index, prop) in bsp.static_props.props.iter().enumerate() {
         let Some(Some((model, flips))) = models.get(&prop.model) else { continue };
         let rot = mdl::angles_to_mat3(prop.angles);
@@ -241,9 +243,15 @@ pub fn spawn(
         let radius = (model.hull_max - model.hull_min).length() * 0.5 * scale;
         let light = prop_light(bsp, collision, sun, center, prop.origin, radius);
         let cube = [0, 1, 4, 5, 3, 2].map(|i| light.cube[i].extend(1.0));
-        for (i, v) in cube.into_iter().chain([to_bevy(light.to_sun).extend(1.0), light.sun.extend(1.0)]).enumerate() {
+        // Opacity changes need separate native admission and material modes.
+        // Unsupported layouts/alpha retain the previous identity modulation.
+        let tint = match prop.diffuse_modulation {
+            Some([r, g, b, 255]) => glam::Vec3::new(r as f32, g as f32, b as f32) / 255.0,
+            _ => glam::Vec3::ONE,
+        };
+        for (i, v) in cube.into_iter().chain([to_bevy(light.to_sun).extend(1.0), light.sun.extend(1.0), tint.extend(1.0)]).enumerate() {
             for (c, value) in v.to_array().into_iter().enumerate() {
-                let offset = (prop_index * 8 + i) * 8 + c * 2;
+                let offset = (prop_index * PROP_TEXELS + i) * 8 + c * 2;
                 light_data[offset..offset + 2].copy_from_slice(&crate::textures::f32_to_f16(value).to_le_bytes());
             }
         }
@@ -301,7 +309,7 @@ pub fn spawn(
 
     use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
     let lighting = images.add(Image::new(
-        Extent3d { width: 8, height: bsp.static_props.props.len().max(1) as u32, depth_or_array_layers: 1 },
+        Extent3d { width: PROP_TEXELS as u32, height: bsp.static_props.props.len().max(1) as u32, depth_or_array_layers: 1 },
         TextureDimension::D2, light_data, TextureFormat::Rgba16Float, RenderAssetUsages::RENDER_WORLD,
     ));
     for handle in material_cache.values() {

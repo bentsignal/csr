@@ -162,7 +162,7 @@ pub struct WorldMaterial {
     #[texture(11)]
     #[sampler(12)]
     pub normal2: Handle<Image>,
-    /// Eight texels per static prop: ambient cube, sun direction, sun color.
+    /// Nine texels per static prop: ambient cube, sun direction/color, diffuse tint.
     #[texture(13)]
     pub prop_light: Handle<Image>,
     #[texture(14)]

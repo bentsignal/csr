@@ -284,6 +284,12 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
         light = vcolor.rgb;
 #ifdef VERTEX_UVS_B
         if (params.flags & NORMAL) != 0u { light = prop_irradiance(n, i32(round(in.uv_b.x))); }
+        // Tint belongs to this placed prop, not its shared material or lighting.
+        // Other material users retain their existing one-texel identity default.
+        if textureDimensions(prop_light, 0).x >= 9u {
+            let tint = textureLoad(prop_light, vec2<i32>(8, i32(round(in.uv_b.x))), 0).rgb;
+            albedo = vec4<f32>(albedo.rgb * tint, albedo.a);
+        }
 #endif
     } else if (params.flags & DYNAMIC_LIT) != 0u {
         let ndl=dot(n, params.sun_dir.xyz);

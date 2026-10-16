@@ -5,7 +5,8 @@
 //! record per prop. The record size grows with the lump version, so the
 //! stride is derived from the remaining byte count and only the leading
 //! fields shared by every version are decoded (plus uniform scale when the
-//! record is large enough to carry it).
+//! record is large enough to carry it). Diffuse modulation is exposed only
+//! for the exact version/stride pairs observed in CS:GO Legacy maps.
 
 use crate::lump::{self, Rec};
 use glam::Vec3;
@@ -25,6 +26,9 @@ pub struct StaticProp {
     pub fade_min: f32,
     pub fade_max: f32,
     pub scale: f32,
+    /// Authored RGBA bytes, without inferring a transfer function. Unsupported
+    /// record layouts retain `None` rather than guessing from their length.
+    pub diffuse_modulation: Option<[u8; 4]>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -45,7 +49,9 @@ pub fn parse(file: &[u8], game_lump: &[u8]) -> io::Result<StaticProps> {
     let count = i32::from_le_bytes(game_lump[0..4].try_into().unwrap()).max(0) as usize;
     for i in 0..count {
         let o = 4 + i * 16;
-        let Some(entry) = game_lump.get(o..o + 16) else { break };
+        let Some(entry) = game_lump.get(o..o + 16) else {
+            break;
+        };
         let r = Rec(entry);
         if r.i32(0) != SPRP {
             continue;
@@ -79,7 +85,9 @@ fn parse_sprp(d: &[u8], version: u16) -> io::Result<StaticProps> {
     let dict = read_i32(&mut p)?;
     let mut models = Vec::with_capacity(dict);
     for _ in 0..dict {
-        let name = d.get(p..p + 128).ok_or_else(|| invalid("truncated sprp dict"))?;
+        let name = d
+            .get(p..p + 128)
+            .ok_or_else(|| invalid("truncated sprp dict"))?;
         let end = name.iter().position(|&b| b == 0).unwrap_or(128);
         models.push(String::from_utf8_lossy(&name[..end]).into_owned());
         p += 128;
@@ -94,6 +102,8 @@ fn parse_sprp(d: &[u8], version: u16) -> io::Result<StaticProps> {
         if stride < 60 {
             return Err(invalid(format!("sprp record too small ({stride} bytes)")));
         }
+        let has_modulation =
+            rest.len() % n == 0 && matches!((version, stride), (10, 76) | (11, 80));
         for chunk in rest.chunks_exact(stride).take(n) {
             let r = Rec(chunk);
             props.push(StaticProp {
@@ -105,7 +115,12 @@ fn parse_sprp(d: &[u8], version: u16) -> io::Result<StaticProps> {
                 skin: r.i32(32),
                 fade_min: r.f32(36),
                 fade_max: r.f32(40),
-                scale: if version >= 11 && stride >= 80 { r.f32(76) } else { 1.0 },
+                scale: if version >= 11 && stride >= 80 {
+                    r.f32(76)
+                } else {
+                    1.0
+                },
+                diffuse_modulation: has_modulation.then(|| chunk[64..68].try_into().unwrap()),
             });
         }
     }
@@ -114,4 +129,53 @@ fn parse_sprp(d: &[u8], version: u16) -> io::Result<StaticProps> {
         models,
         props,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_sprp;
+
+    // Synthetic records contain no game data. The dictionary/leaf arrays are
+    // empty so that the records begin immediately after the three counts.
+    fn fixture(records: &[Vec<u8>]) -> Vec<u8> {
+        let mut bytes = vec![0; 8];
+        bytes.extend_from_slice(&(records.len() as u32).to_le_bytes());
+        for record in records {
+            bytes.extend_from_slice(record);
+        }
+        bytes
+    }
+
+    #[test]
+    fn observed_layouts_preserve_independent_instance_rgba() {
+        for (version, stride) in [(10, 76), (11, 80)] {
+            let mut blue = vec![0; stride];
+            blue[64..68].copy_from_slice(&[0, 85, 255, 255]);
+            let mut warm = vec![0; stride];
+            warm[64..68].copy_from_slice(&[170, 1, 34, 129]);
+            let props = parse_sprp(&fixture(&[blue, warm]), version).unwrap();
+            assert_eq!(props.props.len(), 2);
+            assert_eq!(props.props[0].diffuse_modulation, Some([0, 85, 255, 255]));
+            assert_eq!(
+                props.props[1].diffuse_modulation,
+                Some([170, 1, 34, 129])
+            );
+        }
+    }
+
+    #[test]
+    fn unobserved_or_ambiguous_layouts_do_not_invent_a_tint() {
+        for (version, stride) in [(9, 72), (10, 80), (11, 76), (12, 80)] {
+            let record = vec![255; stride];
+            let props = parse_sprp(&fixture(&[record]), version).unwrap();
+            assert_eq!(props.props[0].diffuse_modulation, None);
+        }
+        let mut ambiguous = fixture(&[vec![255; 76], vec![255; 76]]);
+        ambiguous.push(0);
+        let props = parse_sprp(&ambiguous, 10).unwrap();
+        assert!(props
+            .props
+            .iter()
+            .all(|prop| prop.diffuse_modulation.is_none()));
+    }
 }
