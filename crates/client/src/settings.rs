@@ -1,7 +1,7 @@
 //! Persistent local settings shared by menus, input, audio and HUD.
 use bevy::prelude::*;
 
-pub const ACTIONS: [&str; 15] = [
+pub const ACTIONS: [&str; 21] = [
     "Move forward",
     "Move backward",
     "Move left",
@@ -17,14 +17,27 @@ pub const ACTIONS: [&str; 15] = [
     "Inspect weapon",
     "Primary attack",
     "Secondary attack",
+    "Select HE grenade",
+    "Select flashbang",
+    "Select smoke grenade",
+    "Select Molotov",
+    "Select incendiary grenade",
+    "Select decoy",
 ];
-pub const ACTION_COMMANDS: [&str; 15] = [
+pub const ACTION_COMMANDS: [&str; 21] = [
     "+forward", "+back", "+moveleft", "+moveright", "+jump", "+duck", "+speed",
     "+use", "+reload", "buymenu", "drop", "+showscores", "+lookatweapon",
     "+attack", "+attack2",
+    "use weapon_hegrenade", "use weapon_flashbang", "use weapon_smokegrenade",
+    "use weapon_molotov", "use weapon_incgrenade", "use weapon_decoy",
 ];
 pub const KEY_ATTACK: usize = 13;
 pub const KEY_ATTACK2: usize = 14;
+pub const KEY_GRENADE_FIRST: usize = 15;
+pub const GRENADE_NAMES: [&str; 6] = [
+    "weapon_hegrenade", "weapon_flashbang", "weapon_smokegrenade",
+    "weapon_molotov", "weapon_incgrenade", "weapon_decoy",
+];
 pub const MOUSE_BUTTONS: [MouseButton; 5] = [
     MouseButton::Left, MouseButton::Right, MouseButton::Middle, MouseButton::Back, MouseButton::Forward,
 ];
@@ -124,7 +137,7 @@ pub struct Settings {
     pub radar_scale: f32,
     pub radar_rotate: bool,
     pub close_on_buy: bool,
-    pub binds: [Option<KeyCode>; 15],
+    pub binds: [Option<KeyCode>; 21],
     pub mouse_binds: [MouseAction; 5],
 }
 pub const RESOLUTIONS: [(u32, u32); 4] = [(1280, 720), (1600, 900), (1920, 1080), (2560, 1440)];
@@ -172,6 +185,7 @@ impl Default for Settings {
                 Some(KeyCode::KeyF),
                 None, // Mouse attacks remain the defaults for existing configs.
                 None,
+                None, None, None, None, None, None, // Direct grenade selection is opt-in.
             ],
             mouse_binds: [MouseAction::Attack, MouseAction::Attack2, MouseAction::None, MouseAction::None, MouseAction::None],
         }
