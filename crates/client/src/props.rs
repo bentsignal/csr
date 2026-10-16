@@ -2,8 +2,9 @@
 //!
 //! Static props never move, so every instance is transformed into world
 //! space at load time and merged into one mesh per material (per sky/world
-//! layer). Per-instance lighting (map ambient cube + sun visibility) is baked
-//! into vertex colours. A few hundred draws replace thousands of entities.
+//! layer). Eligible authored VHV lighting or the existing ambient-cube/Sun
+//! fallback is baked into vertex colours. A few hundred draws replace thousands
+//! of entities.
 
 use crate::coords::{rotation_to_bevy, to_bevy};
 use crate::material::WorldMaterial;
@@ -14,6 +15,9 @@ use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
 use collision::{contents, CollisionWorld};
 use std::collections::HashMap;
+
+#[path = "prop_vertex_lighting.rs"]
+mod vertex_lighting;
 
 /// The map's sun, from `light_environment`.
 #[derive(Clone, Copy, Debug)]
@@ -233,8 +237,11 @@ pub fn spawn(
     let mut batches: HashMap<(AssetId<WorldMaterial>, bool, [i32; 3]), (Handle<WorldMaterial>, Batch)> = HashMap::new();
 
     let mut light_data = vec![0u8; bsp.static_props.props.len().max(1) * 8 * 8];
+    let mut authored_meshes = 0usize;
+    let mut authored_vertices = 0usize;
     for (prop_index, prop) in bsp.static_props.props.iter().enumerate() {
         let Some(Some((model, flips))) = models.get(&prop.model) else { continue };
+        let authored = vertex_lighting::load(level, prop_index, model);
         let rot = mdl::angles_to_mat3(prop.angles);
         let scale = if prop.scale > 0.0 { prop.scale } else { 1.0 };
         let center = prop.origin + rot * ((model.hull_min + model.hull_max) * 0.5 * scale);
@@ -271,6 +278,16 @@ pub fn spawn(
                     materials.add(material_from_vmt(vmt.as_ref(), fs, textures, images, shared, exposure, false))
                 })
                 .clone();
+            let authored_colors = materials.get(&material)
+                .filter(|m| m.params.flags & crate::material::flags::VERTEX_LIT != 0
+                    && m.params.flags & crate::material::flags::NORMAL == 0)
+                .and_then(|_| authored.as_ref()?.get(mesh_index)?.as_deref());
+            if let Some(colors) = authored_colors {
+                // The scoped candidate has already checked this hardware mesh's
+                // count and traversal. Do not index the source VVD vector here.
+                authored_meshes += 1;
+                authored_vertices += colors.len();
+            }
             let (_, batch) = batches
                 .entry((material.id(), in_sky.is_some(), crate::world_mesh::spatial_cell(prop.origin)))
                 .or_insert_with(|| (material.clone(), Batch::default()));
@@ -280,7 +297,7 @@ pub fn spawn(
                 let tangent = tangent_cache.get(&(prop.model, mesh_index)).and_then(|t| t.get(vertex_index)).copied().unwrap_or([1.0,0.0,0.0,1.0]);
                 let t = to_bevy(rot * glam::Vec3::new(tangent[0], tangent[1], tangent[2]));
                 batch.tangents.push([t.x,t.y,t.z,tangent[3]]);
-                let lit = light.eval(n_source);
+                let lit = authored_colors.map_or_else(|| light.eval(n_source), |colors| colors[vertex_index]);
                 batch.positions.push(affine.transform_point3(to_bevy(v.position)).to_array());
                 batch.normals.push(to_bevy(n_source).to_array());
                 batch.uvs.push(v.uv.to_array());
@@ -324,5 +341,6 @@ pub fn spawn(
         } else { e.insert(clusters); }
         stats.draws += 1;
     }
+    info!("Authored equal-group prop lighting: meshes={authored_meshes} vertices={authored_vertices}; unsupported meshes retain ambient/Sun fallback");
     stats
 }
