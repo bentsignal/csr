@@ -135,6 +135,16 @@ pub struct GrenadeLaunch {
     /// Grounded primary throws only; vertical and airborne response remain
     /// unchanged until separately observed. Applied to the horizontal vector.
     pub grounded_overhand_horizontal_inheritance: f32,
+    /// Independently observed stationary response. Absent profiles retain the
+    /// existing raw-aim launch vector; this does not calibrate spawn position.
+    pub grounded_overhand_velocity: Option<GrenadeLaunchVelocity>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct GrenadeLaunchVelocity {
+    pub speed: f32,
+    /// Upward angular bias at level aim, linearly reducing toward vertical.
+    pub upward_pitch_bias_degrees: f32,
 }
 
 /// Authored viewmodel transition metadata; gameplay lockout follows the clip

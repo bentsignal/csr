@@ -343,3 +343,68 @@ Source validation checks opposite-direction native velocity differences, content
 identity admission, unchanged airborne/vertical/unmeasured-mode behavior and the
 installed profile. Compilation, full checks and actual rendered integration are
 pending at this checkpoint.
+
+### Grounded primary HE speed and pitch model
+
+The retained raw-aim speed750 misses independently observed stationary HE
+velocities. A new owned Train packet collected five pre-contact numeric captures
+at each of three actual pitches, 0, +45 and -45 degrees, from the same standing
+world-ground pose and zero actual player velocity. The first two captures in
+each case share a native state; four distinct moving states remain. Every
+before/after player bracket preserves origin, eye offset, ground, zero punch and
+the actual requested angle. Fresh ordinary public lookup identifies the actual
+non-weapon projectile independently in each case, including reused entity
+indices with a newly observed class. All cases retain constant horizontal
+velocity and gravity320-consistent network positions; maximum endpoint residuals
+are below0.023 horizontal and0.017 vertical units. No bounce occurs in the
+admitted frames, including the downward45-degree case. All39 images and exact
+12-preference restoration are retained privately; no native process remains.
+
+The actual horizontal velocities are 664.745239, 517.080017 and 433.881653
+units/second respectively. A bounded empirical candidate uses constant speed
+and an upward pitch bias that reduces linearly toward vertical:
+
+`effective_pitch = pitch - bias * (1 - abs(pitch) / 90)`.
+
+Fitting only the 0/+45 horizontal observations gives speed675.000011 and
+bias10.0000025 degrees. Rounded675/10 predicts the separately observed -45 and
+earlier15-degree observations within0.00006 units/second. This functional family
+is not uniquely established by finite horizontal samples. Actual received
+vertical signs distinguish upward level/-45 launches from the downward+45
+launch; the downward magnitude would need over1.4 seconds of gravity to arise
+from a positive initial value, unlike the observed roughly0.156 scaled-wall
+command-to-capture interval. The candidate's initial vertical values exceed
+the three actual first receive-time velocities by about15 units/second. That
+is consistent with gravity but is not an admission of a shared creation tick
+or an exactly measured initial vertical velocity. Console timing is not a
+substitute for an authoritative native creation timestamp.
+
+A genuinely prospective negative30-degree holdout was then preregistered with
+unchanged675/10, predicting horizontal velocity541.4331551 and zero sideways
+velocity, with a0.002-units/second tolerance. A separate owned session reports
+actual pitch-30/yaw0, the same standing ground/eye/origin, zero player movement
+and punch, and a fresh actual projectile. Its five captures retain horizontal
+velocity541.433167, residual0.0000119; four distinct states show upward vertical
+velocity388.082062 to380.582062 with gravity-consistent network positions.
+Maximum position residuals are below0.023 units in either axis. No parameter
+or timing was refit to the holdout. All15 images, original unadmitted raw flags,
+separate posthoc numeric admission and exact12-preference restoration remain
+private under the 20261016-005336 packet; no native process remains.
+
+The exact schema/HE-header-bound grounded primary profile now uses this
+observational speed/pitch model for release velocity, alongside the separately
+measured horizontal movement inheritance. The spawn origin and its raw-aim
+collision trace remain unchanged. Airborne throws, other button modes and other
+content retain their previous complete launch vectors. Vertical movement
+inheritance remains0.5. Yaw rotation is the existing vector construction;
+independent sideways throws, extreme angles, native64Hz, VR and historical2015
+equivalence remain unmeasured. Projectile integration, fuse, collision, hand
+playback and the bot's preexisting approximate lob planning are unchanged.
+This improves the measured ground throw arc; it does not establish complete
+trajectory parity or exact native initial vertical values. The catalog policy
+generation advances again; the wire schema is unchanged.
+
+Focused source regressions compare actual native horizontal values, the
+prospective holdout, conservative received-vertical bounds, unchanged spawn
+origin and unchanged unobserved launch scopes. Compilation and integration
+verification are pending at this source checkpoint.

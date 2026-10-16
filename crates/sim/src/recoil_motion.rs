@@ -150,8 +150,8 @@ mod tests {
             held_tolerance_degrees: 0.2,
             phase_recovery: None,
         };
-        // Readable public values from three release-only observations, not
-        // restart rays used to tune a family. Relative update counts align
+        // Readable public AK and independent M4A4 release-only observations,
+        // not restart rays used to tune a family. Relative update counts align
         // the separately displayed velocity envelope; captured receive-time
         // bounds do not identify an exact server tick or absolute phase.
         let curves: &[([f32; 2], [f32; 2], f32, &[(u32, [f32; 2])])] = &[
@@ -207,6 +207,26 @@ mod tests {
                     (62, [-0.0625, 0.]),
                     (94, [0., 0.]),
                     (128, [0., 0.]),
+                ],
+            ),
+            (
+                // Independent M4A4 full-magazine release, not an AK rescale.
+                // Relative updates follow its separately displayed velocity;
+                // both endpoints have the original 1/32-degree quantization.
+                [-4.75, 0.34375],
+                [-60.71875, -4.15625],
+                2. / 32.,
+                &[
+                    (1, [-4.78125, 0.28125]),
+                    (5, [-4.75, 0.09375]),
+                    (9, [-4.53125, 0.]),
+                    (11, [-4.375, -0.03125]),
+                    (17, [-3.78125, -0.09375]),
+                    (24, [-2.9375, -0.125]),
+                    (38, [-1.375, -0.0625]),
+                    (63, [-0.03125, 0.]),
+                    (95, [0., 0.]),
+                    (127, [0., 0.]),
                 ],
             ),
         ];
