@@ -246,6 +246,19 @@ impl Level {
                 hash.finalize().into()
             })
         } else { catalog_sha1 };
+        // Scope-mode recoil interpretation affects authoritative rays without
+        // changing the raw schema or serialized weapon state.
+        let catalog_sha1 = if catalog.weapons.iter().any(|w|
+            w.attr_f32("zoom levels").is_some_and(|levels| levels > 0.)
+                && ["recoil angle alt", "recoil angle variance alt", "recoil magnitude alt", "recoil magnitude variance alt"]
+                    .iter().any(|key| w.attr_f32(key).is_some_and(f32::is_finite))) {
+            catalog_sha1.map(|previous| {
+                let mut hash = Sha1::new();
+                hash.update(b"csr-scoped-recoil-metadata-v1\0");
+                hash.update(previous);
+                hash.finalize().into()
+            })
+        } else { catalog_sha1 };
         timings.push(("weapons", t.elapsed().as_secs_f32()));
         let t = Instant::now();
         let (character_profiles, catalog_sha1) = character_profiles::load(&fs, catalog_sha1)?;
