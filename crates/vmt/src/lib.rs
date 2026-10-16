@@ -13,6 +13,9 @@
 
 use kv::{Block, Value};
 
+pub mod texture_transform;
+pub use texture_transform::{AxisAlignedTextureTransform, TextureTransformError};
+
 /// Resolved material.
 #[derive(Clone, Debug, Default)]
 pub struct Material {
