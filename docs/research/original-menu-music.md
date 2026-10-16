@@ -28,8 +28,24 @@ Complete music operators, DSP, dashboard gain, historical default volume,
 loop boundaries and transition fades require independent observation. Round,
 MVP and objective music controls remain hidden until they have real backends.
 
-Verification is pending. Parser gates and a real sink regression cover content
-selection and live/pending gain changes. Actual installed decoding, rendered
-Audio widgets, persistence, focus, single-player lifetime and match transitions
-must pass before this is offered as a playable change. A working original
-track and slider will not establish complete 2015 audio fidelity.
+Frozen `e3227d6` passed the client suite, including parser gates and the real
+rodio-sink regression for live/pending gain, music-only muting, master muting
+and settings round-trip. The PLAY launcher and real-data probe/simulation passed
+with zero reported failures. Its immutable executable then completed the actual
+Home/match/Pause/Audio/Back/Resume/Home/Inferno lifecycle, exiting successfully
+without errors or changes to the owner's prior configuration. Logs show exactly
+two original-track starts, two real sink creations and two stops before loading
+matches. These are actual installed decoding/lifecycle observations, not a PCM
+onset or final-mix measurement.
+
+The coordinating agent independently viewed the Audio, returned-Home and
+Inferno captures. Audio has three readable original rows: Master Volume,
+background audio and Main Menu Volume, with the last value1. There is no stray
+controller panel. This is partial three-image review, not a claim to have
+reviewed all eight images or physically dragged the music slider. The general
+slider callback and persistence path is shared; exact interaction/focus playback
+and historical mixing still benefit from the owner's next manual playtest.
+
+Full workspace CI and a combined RELEASE build/probe/simulation/sound decode
+gate are required before merge. A working original track and slider do not
+establish complete 2015 audio fidelity.
