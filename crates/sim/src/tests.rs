@@ -143,6 +143,7 @@ fn def(name: &str, index: u32, class: WeaponClass, side: Side, price: i32, clip:
         recoil: Default::default(),
         view_model: String::new(),
         world_model: String::new(),
+        dropped_model: String::new(),
         unsuppressed_fire_sound: String::new(),
         fire_sound: String::new(),
         empty_trigger: None,

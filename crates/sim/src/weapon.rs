@@ -833,6 +833,7 @@ mod tests {
             },
             view_model: String::new(),
             world_model: String::new(),
+            dropped_model: String::new(),
             unsuppressed_fire_sound: String::new(),
             fire_sound: String::new(),
             empty_trigger: None,
