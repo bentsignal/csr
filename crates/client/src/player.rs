@@ -116,6 +116,13 @@ impl LocalPlayer {
             }
         }
     }
+    fn capture_held_mouse(&mut self, mouse: &ButtonInput<MouseButton>, settings: &crate::settings::Settings) {
+        for (index, button) in crate::settings::MOUSE_BUTTONS.iter().enumerate() {
+            if mouse.pressed(*button) { self.capture_mouse |= 1 << index; }
+        }
+        self.latched &= !self.capture_tick_mask(settings);
+        self.pointer_attacks &= !self.capture_attack_mask(settings);
+    }
     fn capture_attack_mask(&self, settings: &crate::settings::Settings) -> u32 {
         settings.mouse_binds.iter().enumerate().filter(|(index, _)| self.capture_mouse & (1 << index) != 0)
             .fold(0, |mask, (_, action)| mask | match action {
@@ -210,11 +217,7 @@ pub fn grab_cursor(
         return;
     }
     if (mouse.just_pressed(MouseButton::Left) || menu.just_closed) && cursor.grab_mode == CursorGrabMode::None {
-        for (index, button) in crate::settings::MOUSE_BUTTONS.iter().enumerate() {
-            if mouse.pressed(*button) { local.capture_mouse |= 1 << index; }
-        }
-        local.latched &= !local.capture_tick_mask(&settings);
-        local.pointer_attacks &= !local.capture_attack_mask(&settings);
+        local.capture_held_mouse(&mouse, &settings);
         cursor.grab_mode = CursorGrabMode::Locked;
         cursor.visible = false;
     }
@@ -250,7 +253,16 @@ pub fn look(
     local.release_capture_attacks(&mouse);
     if front.open() {return;}
     if remote.as_ref().is_some_and(|r| r.status() != &netcode::remote_session::Status::Ready) { return; }
-    if block.0 > 0 { if !mouse.pressed(MouseButton::Left) && !mouse.pressed(MouseButton::Right) {block.0=0;} return; }
+    if block.0 > 0 {
+        // Resume/console close may have already locked the cursor. Move held
+        // UI presses into the existing release-to-rearm guard even in that
+        // path, then expire this finite transition block independently of them.
+        local.capture_held_mouse(&mouse, &settings);
+        block.0 = if !mouse.pressed(MouseButton::Left) && !mouse.pressed(MouseButton::Right) {
+            0
+        } else { block.0 - 1 };
+        return;
+    }
     if !enabled.0 {
         return;
     }
@@ -742,11 +754,12 @@ mod remote_input_tests {
         mouse: Res<ButtonInput<MouseButton>>,
         settings: Res<crate::settings::Settings>,
         cursor: Single<&CursorOptions, With<PrimaryWindow>>,
+        block: Res<InputBlockFrames>,
         mut result: ResMut<Sampled>,
     ) {
         result.0 = sample_tick_input(&mut local, &Controls {
             keys: &keys, mouse: &mouse, settings: &settings, enabled: true,
-            blocked: false, captured: captured(&cursor), buy_menu: false,
+            blocked: block.0 != 0, captured: captured(&cursor), buy_menu: false,
         });
     }
 
@@ -1019,10 +1032,32 @@ mod remote_input_tests {
     #[test]
     fn capture_guards_each_already_held_button_until_its_own_release() {
         let mut app = capture_app();
+        // Pause and console close have already locked the pointer before look.
+        app.world_mut().query::<&mut CursorOptions>().single_mut(app.world_mut()).unwrap().grab_mode = CursorGrabMode::Locked;
+        app.world_mut().resource_mut::<InputBlockFrames>().0 = 2;
         for button in [MouseButton::Left, MouseButton::Right] {
             app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(button);
         }
-        app.update();
+        {
+            let mut local = app.world_mut().resource_mut::<LocalPlayer>();
+            local.latched = buttons::ATTACK | buttons::ATTACK2;
+            local.pointer_attacks = buttons::ATTACK | buttons::ATTACK2;
+        }
+        for remaining in [1, 0] {
+            app.world_mut().resource_mut::<AccumulatedMouseMotion>().delta = Vec2::new(20., 10.);
+            app.update();
+            assert_eq!(app.world().resource::<InputBlockFrames>().0, remaining,
+                "a held UI click cannot extend the finite transition block");
+            assert_eq!(app.world().resource::<Sampled>().0.buttons & (buttons::ATTACK | buttons::ATTACK2), 0);
+            assert_eq!(app.world().resource::<Sampled>().0.forward_move, if remaining == 0 {450.} else {0.});
+            assert_eq!(app.world().resource::<LocalPlayer>().yaw, 0.);
+            app.world_mut().resource_mut::<ButtonInput<MouseButton>>().clear();
+        }
+        app.update(); // Both mouse buttons are still held, with fresh frame motion.
+        let local = app.world().resource::<LocalPlayer>();
+        assert!((local.yaw - 359.12).abs() < 0.0001);
+        assert!((local.pitch - 0.44).abs() < 0.0001);
+        assert_eq!(app.world().resource::<Sampled>().0.forward_move, 450.);
         assert_eq!(app.world().resource::<Sampled>().0.buttons & (buttons::ATTACK | buttons::ATTACK2), 0);
         app.world_mut().resource_mut::<ButtonInput<MouseButton>>().clear();
         app.world_mut().resource_mut::<ButtonInput<MouseButton>>().release(MouseButton::Right);
@@ -1034,6 +1069,12 @@ mod remote_input_tests {
         app.world_mut().resource_mut::<ButtonInput<MouseButton>>().clear();
         app.update();
         assert_eq!(app.world().resource::<Sampled>().0.buttons & buttons::ATTACK, 0);
+        assert_ne!(app.world().resource::<Sampled>().0.buttons & buttons::ATTACK2, 0);
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().clear();
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().release(MouseButton::Left);
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Left);
+        app.update();
+        assert_ne!(app.world().resource::<Sampled>().0.buttons & buttons::ATTACK, 0);
         assert_ne!(app.world().resource::<Sampled>().0.buttons & buttons::ATTACK2, 0);
     }
 
