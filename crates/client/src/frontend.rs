@@ -95,9 +95,13 @@ impl LoadingContext {
             mode.str("descID")?;
             let localized_name = |block: &kv::Block| {
                 let text = data.localization.get(block.str("nameID")?)?;
-                (!text.trim().is_empty() && !text.starts_with('#')).then(|| text.to_owned())
+                (!text.starts_with('#')).then(|| text.to_owned())
             };
-            Some((localized_name(kind)?, localized_name(mode)?))
+            // The installed Classic/GunGame type names intentionally resolve
+            // to "". Preserve that authored prefix; only the mode must be text.
+            let mode_name = localized_name(mode)?;
+            if mode_name.trim().is_empty() { return None; }
+            Some((localized_name(kind)?, mode_name))
         });
         Some(Self { selected, title, mode, radar_only, archive, initialized: Default::default() })
     }
