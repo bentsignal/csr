@@ -1,7 +1,7 @@
 //! Persistent local settings shared by menus, input, audio and HUD.
 use bevy::prelude::*;
 
-pub const ACTIONS: [&str; 13] = [
+pub const ACTIONS: [&str; 15] = [
     "Move forward",
     "Move backward",
     "Move left",
@@ -15,11 +15,16 @@ pub const ACTIONS: [&str; 13] = [
     "Drop weapon",
     "Scoreboard",
     "Inspect weapon",
+    "Primary attack",
+    "Secondary attack",
 ];
-pub const ACTION_COMMANDS: [&str; 13] = [
+pub const ACTION_COMMANDS: [&str; 15] = [
     "+forward", "+back", "+moveleft", "+moveright", "+jump", "+duck", "+speed",
     "+use", "+reload", "buymenu", "drop", "+showscores", "+lookatweapon",
+    "+attack", "+attack2",
 ];
+pub const KEY_ATTACK: usize = 13;
+pub const KEY_ATTACK2: usize = 14;
 pub const MOUSE_BUTTONS: [MouseButton; 5] = [
     MouseButton::Left, MouseButton::Right, MouseButton::Middle, MouseButton::Back, MouseButton::Forward,
 ];
@@ -119,7 +124,7 @@ pub struct Settings {
     pub radar_scale: f32,
     pub radar_rotate: bool,
     pub close_on_buy: bool,
-    pub binds: [Option<KeyCode>; 13],
+    pub binds: [Option<KeyCode>; 15],
     pub mouse_binds: [MouseAction; 5],
 }
 pub const RESOLUTIONS: [(u32, u32); 4] = [(1280, 720), (1600, 900), (1920, 1080), (2560, 1440)];
@@ -152,20 +157,22 @@ impl Default for Settings {
             // Preserve the existing stay-open behavior; native default unmeasured.
             close_on_buy: false,
             binds: [
-                KeyCode::KeyW,
-                KeyCode::KeyS,
-                KeyCode::KeyA,
-                KeyCode::KeyD,
-                KeyCode::Space,
-                KeyCode::ControlLeft,
-                KeyCode::ShiftLeft,
-                KeyCode::KeyE,
-                KeyCode::KeyR,
-                KeyCode::KeyB,
-                KeyCode::KeyG,
-                KeyCode::Tab,
-                KeyCode::KeyF,
-            ].map(Some),
+                Some(KeyCode::KeyW),
+                Some(KeyCode::KeyS),
+                Some(KeyCode::KeyA),
+                Some(KeyCode::KeyD),
+                Some(KeyCode::Space),
+                Some(KeyCode::ControlLeft),
+                Some(KeyCode::ShiftLeft),
+                Some(KeyCode::KeyE),
+                Some(KeyCode::KeyR),
+                Some(KeyCode::KeyB),
+                Some(KeyCode::KeyG),
+                Some(KeyCode::Tab),
+                Some(KeyCode::KeyF),
+                None, // Mouse attacks remain the defaults for existing configs.
+                None,
+            ],
             mouse_binds: [MouseAction::Attack, MouseAction::Attack2, MouseAction::None, MouseAction::None, MouseAction::None],
         }
     }
@@ -258,7 +265,7 @@ impl Settings {
                     if let Some(index) = key
                         .strip_prefix("bind")
                         .and_then(|i| i.parse::<usize>().ok())
-                        .filter(|i| *i < 13)
+                        .filter(|i| *i < s.binds.len())
                     {
                         if value.is_empty() {
                             s.binds[index] = None;

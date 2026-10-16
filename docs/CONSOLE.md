@@ -47,6 +47,8 @@ bind mwheelup +jump
 bind space +jump
 bind mouse4 +jump
 bind mouse5 lastinv
+bind x +attack
+bind c +attack2
 bindlist
 ```
 
@@ -64,14 +66,14 @@ bind mwheeldown invnext
 or `bind space ""` removes that keyboard binding without removing mouse or wheel
 bindings for the same action. Unbound keys stay unbound after relaunch;
 `bind space +jump` restores keyboard jump. Keyboard binds
-support the existing 13 configurable actions shown by `bindlist`: movement,
-jump, crouch, walk, use, reload, buy, drop, scoreboard and inspect. For example,
+support the existing 15 configurable actions shown by `bindlist`: movement,
+jump, crouch, walk, use, reload, buy, drop, scoreboard, inspect and primary/secondary attack. For example,
 `bind f +use` uses the existing key-swapping behavior: if F already belongs to
 inspect, inspect takes Use's former key. Letters and the existing modifier,
 space, tab, arrow/navigation keys are supported.
 
 `mouse1` through `mouse5` mean left, right, middle, back and forward buttons.
-Each accepts any of those 13 actions, `+attack`, `+attack2`, `invprev`, `invnext`
+Each accepts any of those actions, `+attack`, `+attack2`, `invprev`, `invnext`
 or `lastinv`. A bind replaces only that button's action; other buttons and
 keyboard bindings remain available. For example, `bind mouse5 +attack2` and
 `unbind mouse2` move secondary fire to the forward side button. `bind mouse1
@@ -80,8 +82,12 @@ or `bind mouse4 ""` clears that button. These bindings save and load with the
 other settings. Pointer-capture clicks remain suppressed until release,
 including when the click has been rebound to jump.
 
-Keyboard attack bindings, arbitrary command binds and slot/Q/console rebinding remain
-open. The classic keyboard settings page
+Keyboard attacks default to unbound, preserving ordinary mouse attacks in old
+configs. Both held keys and short taps use the same TickInput attack path as
+mouse attacks. A capture-suppressed mouse button does not suppress a keyboard
+attack bound to the same command. `unbind x` or `bind x ""` persists the cleared
+key without removing mouse attack bindings. Arbitrary command binds and
+slot/Q/console rebinding remain open. The classic keyboard settings page
 currently exposes only its connected sensitivity/inversion controls; the
 console makes these action bindings reachable from the classic frontend.
 
