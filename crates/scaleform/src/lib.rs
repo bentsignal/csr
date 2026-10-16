@@ -20,6 +20,12 @@ mod loading_image;
 mod messagebox_font;
 mod rewrite;
 
+/// Decode an owned archive's radar with the same bounds as installed loading art.
+/// The caller owns the content identity and keeps the original data private.
+pub fn loading_radar_png(bytes: &[u8]) -> Option<Vec<u8>> {
+    loading_image::radar_png(bytes)
+}
+
 /// Reads public export/import names without interpreting movie instructions.
 /// The frontend uses these names to offer cards present in the installed UI.
 pub fn library_symbols(data: &[u8]) -> Result<std::collections::HashSet<String>, String> {

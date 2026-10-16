@@ -525,7 +525,7 @@ Stage.addProperty("visibleRect", function() {
 // not the unrelated modern full-screen photo, in the authored overview box.
 // The frontend owns the generation and clears it on Home/cancellation.
 _global.csrLoadingOverviews = new Object();
-_global.csrBindings.configureLoadingOverview = function(path, map, serial, radarOnly) {
+_global.csrBindings.configureLoadingOverview = function(path, map, serial, radarOnly, ownedRadarUrl, ownedIconUrl) {
     var previous = _global.csrLoadingOverviews[path];
     if (previous != undefined && previous.map == map && previous.serial == serial) { return true; }
     delete _global.csrLoadingOverviews[path];
@@ -539,18 +539,32 @@ _global.csrBindings.configureLoadingOverview = function(path, map, serial, radar
     if (box == undefined || box._width <= 0 || box._height <= 0 ||
         box._width > 4096 || box._height > 4096) { return false; }
     _global.csrLoadingOverviews[path] = {map: map, serial: serial,
-        target: root.Panel.Overview, x: box._x, y: box._y, width: box._width, height: box._height};
+        target: root.Panel.Overview, x: box._x, y: box._y, width: box._width, height: box._height,
+        ownedRadarUrl: ownedRadarUrl, ownedIconUrl: ownedIconUrl};
     return true;
 };
 var csrLoadClip = MovieClipLoader.prototype.loadClip;
 MovieClipLoader.prototype.loadClip = function(url, target) {
+    // A selected archive owns opaque engine images. Only this root's exact
+    // authored collection-icon URL is redirected; there is no general alias.
+    for (var ownerPath in _global.csrLoadingOverviews) {
+        var owner = _global.csrLoadingOverviews[ownerPath];
+        if (typeof owner.ownedIconUrl == "string" &&
+            String(target).indexOf(ownerPath + ".") == 0 &&
+            String(url) == "images/map_icons/collection_icon_" + owner.map + ".png") {
+            url = owner.ownedIconUrl;
+            arguments[0] = url;
+            break;
+        }
+    }
     var rootPath = String(target).split(".Panel.Overview")[0];
     var context = _global.csrLoadingOverviews[rootPath];
     if (context != undefined && String(target) == rootPath + ".Panel.Overview" &&
         String(url) == "../../maps/" + context.map + "_loading.jpg") {
-        // The normal radar is an observed installed resource. No synthetic
-        // success or invented authored error callback is needed.
-        url = "../overviews/" + context.map + "_radar.dds";
+        // The owned archive route supplies its verified embedded older radar.
+        // Ordinary installed maps keep the previous normal-radar compatibility.
+        url = typeof context.ownedRadarUrl == "string" ? context.ownedRadarUrl :
+            "../overviews/" + context.map + "_radar.dds";
         arguments[0] = url;
         if (context.loader != undefined) {
             context.loader.removeListener(context.listener);
@@ -561,6 +575,9 @@ MovieClipLoader.prototype.loadClip = function(url, target) {
         fit.path = rootPath;
         fit.loader = this;
         fit.onLoadInit = function(mc) {
+            if (this.traceUrl != undefined) {
+                csrEI.call("csr.LoadingArtInit", this.traceUrl, this.traceRequested, String(mc), mc._width, mc._height);
+            }
             this.loader.removeListener(this);
             if (_global.csrLoadingOverviews[this.path] != this.context ||
                 this.context.listener != this ||
@@ -573,32 +590,49 @@ MovieClipLoader.prototype.loadClip = function(url, target) {
             mc._x = this.context.x + (this.context.width - mc._width) / 2;
             mc._y = this.context.y + (this.context.height - mc._height) / 2;
         };
-        fit.onLoadError = function(mc, error) { this.loader.removeListener(this); };
+        fit.onLoadError = function(mc, error) {
+            if (this.traceUrl != undefined) {
+                csrEI.call("csr.LoadingArtError", this.traceUrl, this.traceRequested, String(mc), String(error));
+            }
+            this.loader.removeListener(this);
+        };
         context.loader = this;
         context.listener = fit;
         this.addListener(fit);
     }
     // Opt-in public loader observation for the existing menu probe only.
     if (_global.csrDiagnostics.loadingTraceBudget > 0 &&
-        (String(url).indexOf("_loading.jpg") >= 0 || String(url).indexOf("_radar") >= 0)) {
+        (String(url).indexOf("_loading.jpg") >= 0 || String(url).indexOf("_radar") >= 0 ||
+         String(url).indexOf("img://loading/") == 0 || String(url).indexOf("collection_icon_") >= 0)) {
         _global.csrDiagnostics.loadingTraceBudget -= 1;
         csrEI.call("csr.LoadingArtRequest", String(url), String(target));
-        var observer = new Object();
-        observer.loader = this;
-        observer.url = String(url);
-        observer.requested = String(target);
-        observer.onLoadComplete = function(mc) {
-            csrEI.call("csr.LoadingArtComplete", this.url, this.requested, String(mc), mc._width, mc._height);
-        };
-        observer.onLoadInit = function(mc) {
-            csrEI.call("csr.LoadingArtInit", this.url, this.requested, String(mc), mc._width, mc._height);
-            this.loader.removeListener(this);
-        };
-        observer.onLoadError = function(mc, error) {
-            csrEI.call("csr.LoadingArtError", this.url, this.requested, String(mc), String(error));
-            this.loader.removeListener(this);
-        };
-        this.addListener(observer);
+        if (fit != undefined) {
+            // The fit removes itself during Init. A second listener can be
+            // skipped when a broadcaster walks its live indexed listener list.
+            // Forward the real callbacks from that same listener instead.
+            fit.traceUrl = String(url);
+            fit.traceRequested = String(target);
+            fit.onLoadComplete = function(mc) {
+                csrEI.call("csr.LoadingArtComplete", this.traceUrl, this.traceRequested, String(mc), mc._width, mc._height);
+            };
+        } else {
+            var observer = new Object();
+            observer.loader = this;
+            observer.url = String(url);
+            observer.requested = String(target);
+            observer.onLoadComplete = function(mc) {
+                csrEI.call("csr.LoadingArtComplete", this.url, this.requested, String(mc), mc._width, mc._height);
+            };
+            observer.onLoadInit = function(mc) {
+                csrEI.call("csr.LoadingArtInit", this.url, this.requested, String(mc), mc._width, mc._height);
+                this.loader.removeListener(this);
+            };
+            observer.onLoadError = function(mc, error) {
+                csrEI.call("csr.LoadingArtError", this.url, this.requested, String(mc), String(error));
+                this.loader.removeListener(this);
+            };
+            this.addListener(observer);
+        }
     }
     if (String(url).indexOf("img://avatar_") == 0) {
         var shower = new Object();
