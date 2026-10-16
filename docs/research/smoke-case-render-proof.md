@@ -12,11 +12,11 @@ Both ordinary captures used the same immutable PLAY integration:
 - Crates tree: `60b40b673dfa1fbcba73e4baba607ad8f95d7d6b`.
 - Executable SHA256: `d62c6ae33984a9e27fe9e92551f1ddf5f15f861204766cabd4160a66fc7f6cd5`.
 
-The shared focused DEV/PLAY client, archive and selected-map checks passed.
+The shared integration passed the complete locked DEV workspace tests, installed
+grenade/archive checks, and focused PLAY client/archive/selected-map checks.
 The classic Dust II probe retains its separately qualified ten baseline faults;
 it is not reported as zero failures. Both PRs' CI jobs passed. This checkpoint
-does not claim that this next integration received a fresh full workspace or
-RELEASE verification. Each graphical child had a separate 120-second deadline,
+does not claim that this next integration received fresh RELEASE verification. Each graphical child had a separate 120-second deadline,
 12 GiB memory floor, private userdata and exact source/executable pins. Both
 exited zero naturally and left no owned graphical process or mutex held.
 
