@@ -67,6 +67,8 @@ pub mod flags {
     pub const OVERLAY_ORDER_SHIFT: u32 = 15;
     /// Use base-texture alpha to mask material/instance diffuse tint.
     pub const TINT_BY_BASE_ALPHA: u32 = 1 << 17;
+    /// Ordinary authored detail modulation; opacity and lighting are separate.
+    pub const DETAIL: u32 = 1 << 18;
 }
 
 #[derive(Clone, Copy, Debug, ShaderType)]
@@ -101,6 +103,8 @@ pub struct WorldParams {
     pub skin_details:Vec4,
     pub skin_properties:Vec4,
     pub skin_pattern_palette:Vec4,
+    /// Detail UV scale xy and authored blend factor z.
+    pub detail: Vec4,
 }
 
 impl Default for WorldParams {
@@ -128,6 +132,7 @@ impl Default for WorldParams {
             skin_details:Vec4::ZERO,
             skin_properties:Vec4::ZERO,
             skin_pattern_palette:Vec4::new(1.,2.,3.,4.),
+            detail: Vec4::new(1.0, 1.0, 0.0, 0.0),
         }
     }
 }
@@ -176,6 +181,9 @@ pub struct WorldMaterial {
     #[texture(18)]
     #[sampler(19)]
     pub skin_position:Handle<Image>,
+    #[texture(20)]
+    #[sampler(21)]
+    pub detail: Handle<Image>,
     pub alpha_mode: AlphaMode,
     pub cull: bool,
 }

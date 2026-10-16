@@ -246,6 +246,18 @@ impl Level {
                 hash.finalize().into()
             })
         } else { catalog_sha1 };
+        // Raw metadata was already retained by older builds, but those builds
+        // ignored nondefault headshot multipliers. Distinguish actual damage
+        // semantics without changing raw schema gates or gameplay wire fields.
+        let catalog_sha1 = if catalog.weapons.iter().any(|w|
+            w.declared_headshot_multiplier().is_some_and(|scale| scale != 4.)) {
+            catalog_sha1.map(|previous| {
+                let mut hash = Sha1::new();
+                hash.update(b"csr-authored-headshot-multiplier-v1\0");
+                hash.update(previous);
+                hash.finalize().into()
+            })
+        } else { catalog_sha1 };
         timings.push(("weapons", t.elapsed().as_secs_f32()));
         let t = Instant::now();
         let (character_profiles, catalog_sha1) = character_profiles::load(&fs, catalog_sha1)?;
