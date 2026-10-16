@@ -30,3 +30,6 @@ actual bot-motion rendering are pending. This is bounded recovery policy for
 this implementation, not a measurement or claim of original CS:GO bot AI
 parity. The reported B-window case and any independent airborne animation or
 interpolation defect remain unverified until actual rendered checks.
+The existing `CSR_WEAPON_TRACE` capture log includes each bot's position,
+velocity, grounded state and navigation description with failed crossings;
+this observes actual simulation state without changing bot commands or poses.

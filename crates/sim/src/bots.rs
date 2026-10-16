@@ -302,13 +302,14 @@ impl Bots {
     pub fn describe(&self, world: &World, id: PlayerId) -> String {
         let (Some(b), Some(p)) = (self.brains.get(&id), world.player(id)) else { return String::new() };
         format!(
-            "task {:?} target {:?} path {}/{} goal {:?} site {:?} role {:?} economy {:?}",
+            "task {:?} target {:?} path {}/{} goal {:?} site {:?} role {:?} economy {:?} failed_edges {:?}",
             Self::task(world, p),
             b.target,
             b.path_index,
             b.path.len(),
             b.goal_area,
-            b.site_area, self.team.role(p), self.team.plans.get(&p.team).map(|p|p.economy)
+            b.site_area, self.team.role(p), self.team.plans.get(&p.team).map(|p|p.economy),
+            b.failed_transitions,
         )
     }
 
@@ -1179,7 +1180,7 @@ mod tests {
                 let p = world.player_mut(id).unwrap();
                 // Motion is large enough to defeat displacement-only recovery,
                 // but it never gets closer to the blocked eastern crossing.
-                p.movement.origin.y = if tick % rate as u64 < rate as u64 / 2 { 56. } else { -56. };
+                p.movement.origin.y = if tick % (rate as u64) < rate as u64 / 2 { 56. } else { -56. };
                 p.movement.origin.z = if tick % (rate as u64 / 2) < rate as u64 / 4 { 56. } else { 0. };
                 p.movement.on_ground = p.movement.origin.z == 0.;
                 follow_path(&mesh, &world, world.player(id).unwrap(), &mut brain,
