@@ -85,7 +85,8 @@ impl PropLight {
     }
 }
 
-/// Map ambient cube at the prop, plus the sun if a ray towards it reaches the sky.
+/// Map ambient cube at the authored lighting origin when available, otherwise
+/// at the prop, plus the existing geometric sun visibility test.
 fn prop_light(
     bsp: &bsp::Bsp,
     collision: &CollisionWorld,
@@ -93,9 +94,13 @@ fn prop_light(
     center: glam::Vec3,
     origin: glam::Vec3,
     radius: f32,
+    lighting_origin: Option<glam::Vec3>,
 ) -> PropLight {
-    let cube = bsp
-        .ambient_cube(center + glam::Vec3::Z * 4.0)
+    // The optional point is already in Source world coordinates. Do not add
+    // the fallback offsets or change geometric Sun visibility or VHV selection.
+    let cube = lighting_origin
+        .and_then(|point| bsp.ambient_cube(point))
+        .or_else(|| bsp.ambient_cube(center + glam::Vec3::Z * 4.0))
         .or_else(|| bsp.ambient_cube(origin + glam::Vec3::Z * 16.0))
         .unwrap_or([[0.3; 3]; 6])
         .map(glam::Vec3::from);
@@ -250,7 +255,7 @@ pub fn spawn(
         let scale = if prop.scale > 0.0 { prop.scale } else { 1.0 };
         let center = prop.origin + rot * ((model.hull_min + model.hull_max) * 0.5 * scale);
         let radius = (model.hull_max - model.hull_min).length() * 0.5 * scale;
-        let light = prop_light(bsp, collision, sun, center, prop.origin, radius);
+        let light = prop_light(bsp, collision, sun, center, prop.origin, radius, prop.lighting_origin);
         let cube = [0, 1, 4, 5, 3, 2].map(|i| light.cube[i].extend(1.0));
         // Opacity changes need separate native admission and material modes.
         // Unsupported layouts/alpha retain the previous identity modulation.

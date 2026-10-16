@@ -295,6 +295,24 @@ thing is uncanny. Fidelity is measured, never eyeballed:
       payload intervention, with a repeated control and unchanged installed
       data. A second marker supports hardware order for 16 selected records;
       general record-order and color-decoder admission remain open.
+- [x] Bounded selected-map authored lighting for flags0 unbumped static props
+      with equal-group records. Actual classic north/south renders admit173
+      meshes/95,965 vertices and preserve unsupported fallbacks; arches remain
+      overbright and complete record/color/lighting fidelity remains open. PR163.
+- [ ] Honor explicit static-prop lighting origins on the ambient fallback path;
+      narrow source candidate prepared, installed/rendered validation pending.
+      [Scope](research/prop-lighting-origin.md).
+- [x] Render ordinary authored detail on the supported world/static-prop subset.
+      Actual visible wall grain and selected broad color errors improve; controls
+      remain unchanged. Mixed fine-detail metrics, unsupported modes and global
+      lighting remain open; the occluded static-only zero-effect packet is retained.
+      [Evidence](research/prop-detail-texture.md), PR171.
+- [x] Preserve displayed inspection poses through incoming authored fades and
+      cosmetic knife stab/inspect/rebound-reload cancellation, while the real
+      attack deadline stays unchanged. Installed production checks and actual
+      knife/AK images pass; native easing, repeated-input timing, rare selection
+      and continuous Karambit loops remain open. [Transitions](research/inspection-transitions.md),
+      [input](research/knife-inspect-input.md), PR173/174.
 - [ ] Match jumping and **surfing** with native traces: supported input,
       ramp/crease/seam contact, speed retention and landing impact at recorded
       server settings and tick rates. Synthetic correctness tests and native

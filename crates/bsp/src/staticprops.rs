@@ -6,7 +6,8 @@
 //! stride is derived from the remaining byte count and only the leading
 //! fields shared by every version are decoded (plus uniform scale when the
 //! record is large enough to carry it). Diffuse modulation is exposed only
-//! for the exact version/stride pairs observed in CS:GO Legacy maps.
+//! for the exact version/stride pairs observed in CS:GO Legacy maps, as is
+//! the optional authored lighting origin.
 
 use crate::lump::{self, Rec};
 use glam::Vec3;
@@ -26,6 +27,10 @@ pub struct StaticProp {
     pub fade_min: f32,
     pub fade_max: f32,
     pub scale: f32,
+    /// Explicit world-space non-vertex lighting sample point, only when flag
+    /// 0x02 is set in a supported layout and all three coordinates are finite.
+    /// This point is not transformed by the prop's origin, angles or scale.
+    pub lighting_origin: Option<Vec3>,
     /// Authored RGBA bytes, without inferring a transfer function. Unsupported
     /// record layouts retain `None` rather than guessing from their length.
     pub diffuse_modulation: Option<[u8; 4]>,
@@ -102,7 +107,7 @@ fn parse_sprp(d: &[u8], version: u16) -> io::Result<StaticProps> {
         if stride < 60 {
             return Err(invalid(format!("sprp record too small ({stride} bytes)")));
         }
-        let has_modulation =
+        let has_instance_fields =
             rest.len() % n == 0 && matches!((version, stride), (10, 76) | (11, 80));
         for chunk in rest.chunks_exact(stride).take(n) {
             let r = Rec(chunk);
@@ -120,7 +125,13 @@ fn parse_sprp(d: &[u8], version: u16) -> io::Result<StaticProps> {
                 } else {
                     1.0
                 },
-                diffuse_modulation: has_modulation.then(|| chunk[64..68].try_into().unwrap()),
+                lighting_origin: if has_instance_fields && r.u8(31) & 0x02 != 0 {
+                    let point = r.vec3(44);
+                    point.is_finite().then_some(point)
+                } else {
+                    None
+                },
+                diffuse_modulation: has_instance_fields.then(|| chunk[64..68].try_into().unwrap()),
             });
         }
     }
@@ -174,5 +185,62 @@ mod tests {
             .props
             .iter()
             .all(|prop| prop.diffuse_modulation.is_none()));
+    }
+
+    #[test]
+    fn lighting_origin_is_flagged_finite_world_space_data_not_a_prop_transform() {
+        for (version, stride) in [(10, 76), (11, 80)] {
+            let mut record = vec![0; stride];
+            // A translated, rotated and scaled prop samples the authored world
+            // point directly, including a legitimate zero coordinate.
+            for (offset, value) in [
+                (0, 400.0_f32),
+                (16, 90.0),
+                (44, -32.5),
+                (48, 0.0),
+                (52, 228.25),
+            ] {
+                record[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+            }
+            if stride == 80 {
+                record[76..80].copy_from_slice(&2.0_f32.to_le_bytes());
+            }
+            record[31] = 0x02 | 0x01;
+            let parsed = parse_sprp(&fixture(&[record.clone()]), version).unwrap();
+            assert_eq!(
+                parsed.props[0].lighting_origin,
+                Some(glam::Vec3::new(-32.5, 0.0, 228.25))
+            );
+
+            record[31] = 0x01;
+            assert!(parse_sprp(&fixture(&[record.clone()]), version)
+                .unwrap()
+                .props[0]
+                .lighting_origin
+                .is_none());
+            record[31] = 0x02;
+            for invalid in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+                record[48..52].copy_from_slice(&invalid.to_le_bytes());
+                assert!(parse_sprp(&fixture(&[record.clone()]), version)
+                    .unwrap()
+                    .props[0]
+                    .lighting_origin
+                    .is_none());
+            }
+        }
+        for (version, stride) in [(9, 72), (10, 80), (11, 76), (12, 80)] {
+            let mut record = vec![0; stride];
+            record[31] = 0x02;
+            assert!(parse_sprp(&fixture(&[record]), version).unwrap().props[0]
+                .lighting_origin
+                .is_none());
+        }
+        let mut ambiguous = fixture(&[vec![0x02; 76], vec![0x02; 76]]);
+        ambiguous.push(0);
+        assert!(parse_sprp(&ambiguous, 10)
+            .unwrap()
+            .props
+            .iter()
+            .all(|p| p.lighting_origin.is_none()));
     }
 }
