@@ -21,6 +21,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 mod grenade_hold;
+mod inspection;
 mod look_motion;
 mod settling;
 
@@ -229,6 +230,8 @@ pub fn vertical_fov(horizontal_4x3_deg: f32) -> f32 {
 struct SeqClip {
     clip: Arc<Clip>,
     weights: Arc<Vec<f32>>,
+    /// Authored sequence transition length; not the clip's playback duration.
+    fade_in: f32,
     left_muzzle: bool,
     /// Soundscript entries the sequence plays (`AE_CL_PLAYSOUND`), by cycle.
     sounds: Arc<Vec<(f32, String)>>,
@@ -325,6 +328,7 @@ pub struct ViewModelState {
     /// Persistent bone-local pose: sequences only overwrite the bones they
     /// animate (weighted), as the game layers masked viewmodel sequences.
     pose: Vec<(glam::Vec3, glam::Quat)>,
+    inspection: inspection::Inspection,
 }
 
 impl ViewModelState {
@@ -344,6 +348,7 @@ impl ViewModelState {
         self.suppressor_seen = None;
         self.light_timer = 0.0;
         self.look_motion.clear();
+        self.inspection = inspection::Inspection::default();
         // Masked clips deliberately preserve untouched bones within one life.
         // They must never inherit the reload/inspect pose of a previous life.
         self.pose = mdl::skeleton::rest_pose(bones);
@@ -420,6 +425,7 @@ pub fn load(
                         clips.entry(if seq.name == "lookat01" || seq.name == "inspect" {"INSPECT".into()}else{seq.activity.to_ascii_uppercase()}).or_default().push(SeqClip {
                             clip: Arc::new(clip),
                             weights: Arc::new(weights),
+                            fade_in: seq.fade_in,
                             left_muzzle: seq.name.to_ascii_lowercase().contains("left"),
                             sounds: Arc::new(seq.events.iter().filter_map(|e| Some((e.cycle, e.client_sound()?.to_string()))).collect()),
                         });
@@ -743,7 +749,19 @@ pub fn update(
         state.pose = mdl::skeleton::rest_pose(&model.bones);
     }
     let weights = seq.weights.clone();
+    // Restart inspection from what was actually displayed, including an
+    // interrupted earlier inspect. Sampling against last frame repeatedly
+    // would turn the authored duration into a frame-rate-dependent filter.
+    let mut inspection = std::mem::take(&mut state.inspection);
+    inspection.begin(
+        (state.activity == "INSPECT").then_some(state.started),
+        seq.fade_in,
+        &state.pose,
+    );
+    inspection.sample_base(&mut state.pose);
     clip.sample_layered(t, &mut state.pose, |b| weights.get(b).copied().unwrap_or(1.0));
+    inspection.apply(now, &mut state.pose);
+    state.inspection = inspection;
     if let Some(hold) = &view.grenade_hold { hold.apply(grenade, &mut state.pose); }
     let pose = mdl::skeleton::model_space(&model.bones, &state.pose);
 
