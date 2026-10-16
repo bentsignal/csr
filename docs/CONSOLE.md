@@ -7,7 +7,13 @@ open. The match continues, so already committed gameplay actions may finish.
 Closing clears queued local controls and recaptures the cursor when appropriate.
 
 Enter runs one command. Up/Down recall history; Left/Right/Home/End edit the
-line; Tab completes command names. Quoted arguments are accepted. `help` lists
+line; Tab completes command names. PageUp/PageDown scroll output by a page;
+the mouse wheel scrolls output while the console has focus. The console retains
+up to 200 output lines. A scrolled view stays anchored as new output arrives,
+subject to that limit; Enter on a new command and `clear` return to the latest
+output. Resizing clamps the viewport to the retained lines. Home/End still edit
+the command line, and Up/Down still recall command history.
+Quoted arguments are accepted. `help` lists
 the implemented commands. Unsupported Source commands report an error rather
 than pretending to change anything. This first version does not implement
 aliases, command chaining, exec scripts, clipboard paste or every Source cvar.
