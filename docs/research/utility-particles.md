@@ -277,3 +277,27 @@ unchanged. Ground propagation, cell timing/spacing, spread around obstacles
 and authoritative render control points remain GR08 work; this correction
 does not complete spread or establish native fire parity. Runtime verification
 is pending the orchestrator's next integration cohort.
+
+## Late smoke preserves its authored upper hemisphere
+
+The loaded `explosion_child_smoke07b` definition in the player's installed
+Legacy `particles/explosions_fx.pcf` explicitly sets its sphere initializer's
+`distance_bias_absolute_value` to Source `[0,0,1]`, with a 90-unit maximum
+distance and a subsequent Source-Z offset of 20 to 50 units. Its continuous
+emission starts at 10 seconds. Ignoring that flag scattered initial positions
+below the intended hemisphere as well as above it.
+
+This layer now opts into the existing exact Source-Z absolute-axis initializer
+used by HE dust. Only its initial height is folded before the authored offset;
+horizontal placement, random draws, velocity and other smoke layers are
+unchanged. The loader now takes an explicit layer allowlist, preserving the
+existing three HE opt-ins while keeping fire and held-wick positions unchanged.
+ContentIds and VFS/content-pack resolution remain the existing runtime paths.
+
+This does not change the simplified authoritative 18-second field, obscuration,
+late particle truncation, expansion, materials or dual-sequence rendering.
+Installed 2023 metadata is not historical/native appearance parity. Existing
+initializer tests cover axis preservation, offset-independent geometry and
+unopted compatibility; compilation and an ordinary late-smoke render remain
+pending for this separate next-cohort change. The independent installed-format
+audit is private; no third-party assets are committed.

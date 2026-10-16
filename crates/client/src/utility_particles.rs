@@ -95,8 +95,8 @@ fn vector(e: Option<&Element>, name: &str, fallback: Vec3) -> Vec3 {
     })
 }
 
-/// Only the HE load opts into this newly supported geometry subset. Other
-/// effects retain their existing interpretation until separately rendered.
+/// Only explicitly selected layers opt into this supported geometry subset.
+/// Other layers retain their existing interpretation until separately reviewed.
 fn position_geometry(initializers: &[&Element], enabled: bool) -> (Option<[Vec3; 2]>, bool) {
     if !enabled {
         return (None, false);
@@ -133,7 +133,7 @@ pub fn load(
     names: &[&str],
     materials: &mut Assets<ParticleMaterial>,
     images: &mut Assets<Image>,
-    authored_positions: bool,
+    authored_positions: &[&str],
 ) -> Vec<Layer> {
     let Some(elements) = fs.read(path).and_then(|data| particle_data::pcf(&data)) else {
         warn!("Cannot read particle definitions {path}");
@@ -226,7 +226,7 @@ pub fn load(
         let emit = op(&emitters, "emit_continuously");
         let burst = op(&emitters, "emit_instantaneously");
         let position = op(&init, "Position Within Sphere Random");
-        let (box_position, absolute_source_z) = position_geometry(&init, authored_positions);
+        let (box_position, absolute_source_z) = position_geometry(&init, authored_positions.contains(name));
         let ring = op(&init, "Position Along Ring");
         let offset = op(&init, "Position Modify Offset Random");
         let radius = e.number("radius", 1.0);
