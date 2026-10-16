@@ -23,4 +23,5 @@ packs.workspace = true
 sha1.workspace = true
 
 [dev-dependencies]
+movement.workspace = true
 zip.workspace = true
