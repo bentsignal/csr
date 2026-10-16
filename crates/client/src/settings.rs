@@ -119,7 +119,7 @@ pub struct Settings {
     pub radar_scale: f32,
     pub radar_rotate: bool,
     pub close_on_buy: bool,
-    pub binds: [KeyCode; 13],
+    pub binds: [Option<KeyCode>; 13],
     pub mouse_binds: [MouseAction; 5],
 }
 pub const RESOLUTIONS: [(u32, u32); 4] = [(1280, 720), (1600, 900), (1920, 1080), (2560, 1440)];
@@ -165,7 +165,7 @@ impl Default for Settings {
                 KeyCode::KeyG,
                 KeyCode::Tab,
                 KeyCode::KeyF,
-            ],
+            ].map(Some),
             mouse_binds: [MouseAction::Attack, MouseAction::Attack2, MouseAction::None, MouseAction::None, MouseAction::None],
         }
     }
@@ -260,7 +260,9 @@ impl Settings {
                         .and_then(|i| i.parse::<usize>().ok())
                         .filter(|i| *i < 13)
                     {
-                        if let Some(key) = KEYS.iter().find(|k| format!("{k:?}") == value) {
+                        if value.is_empty() {
+                            s.binds[index] = None;
+                        } else if let Some(key) = KEYS.iter().find(|k| format!("{k:?}") == value) {
                             s.rebind(index, *key);
                         }
                     }
@@ -296,7 +298,8 @@ impl Settings {
         text.push_str(&format!("radar_scale={}\nradar_rotate={}\n", self.radar_scale, self.radar_rotate));
         text.push_str(&format!("closeonbuy={}\n", u8::from(self.close_on_buy)));
         for (i, key) in self.binds.iter().enumerate() {
-            text.push_str(&format!("bind{i}={key:?}\n"));
+            let name = key.map(|key| format!("{key:?}")).unwrap_or_default();
+            text.push_str(&format!("bind{i}={name}\n"));
         }
         self.audio_options.encode_into(&mut text);
         text
@@ -313,10 +316,15 @@ impl Settings {
             return;
         }
         let old = self.binds[index];
-        if let Some(other) = self.binds.iter().position(|k| *k == key) {
+        if let Some(other) = self.binds.iter().position(|k| *k == Some(key)) {
             self.binds[other] = old;
         }
-        self.binds[index] = key;
+        self.binds[index] = Some(key);
+    }
+    pub fn unbind_key(&mut self, key: KeyCode) {
+        for binding in &mut self.binds {
+            if *binding == Some(key) { *binding = None; }
+        }
     }
     pub fn mouse_pressed(&self, action: MouseAction, mouse: &ButtonInput<MouseButton>, blocked: u8) -> bool {
         MOUSE_BUTTONS.iter().enumerate().any(|(index, button)|
@@ -327,10 +335,10 @@ impl Settings {
             blocked & (1 << index) == 0 && self.mouse_binds[index] == action && mouse.just_pressed(*button))
     }
     pub fn action_pressed(&self, index: usize, keys: &ButtonInput<KeyCode>, mouse: &ButtonInput<MouseButton>, blocked: u8) -> bool {
-        keys.pressed(self.binds[index]) || self.mouse_pressed(MouseAction::Action(index), mouse, blocked)
+        self.binds[index].is_some_and(|key| keys.pressed(key)) || self.mouse_pressed(MouseAction::Action(index), mouse, blocked)
     }
     pub fn action_just_pressed(&self, index: usize, keys: &ButtonInput<KeyCode>, mouse: &ButtonInput<MouseButton>, blocked: u8) -> bool {
-        keys.just_pressed(self.binds[index]) || self.mouse_just_pressed(MouseAction::Action(index), mouse, blocked)
+        self.binds[index].is_some_and(|key| keys.just_pressed(key)) || self.mouse_just_pressed(MouseAction::Action(index), mouse, blocked)
     }
     pub fn crosshair_color(&self) -> Color {
         [
@@ -412,7 +420,7 @@ mod tests {
         s.mouse_binds[0] = MouseAction::None;
         s.mouse_binds[3] = MouseAction::Action(4);
         s.mouse_binds[4] = MouseAction::Attack;
-        assert_eq!(s.binds[1], KeyCode::KeyW);
+        assert_eq!(s.binds[1], Some(KeyCode::KeyW));
         assert_eq!(Settings::parse(&s.encode()), s);
     }
     #[test]

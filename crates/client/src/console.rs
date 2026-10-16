@@ -362,7 +362,7 @@ fn bind(
     unbind: bool,
 ) -> Result<String, String> {
     if args.is_empty() || args.len() > 2 || (unbind && args.len() != 1) {
-        return Err("Usage: bind <key|mouse1..5|mwheelup|mwheeldown> [command]; unbind <mouse|wheel>".into());
+        return Err("Usage: bind <key|mouse1..5|mwheelup|mwheeldown> [command]; unbind <key|mouse|wheel>".into());
     }
     let name = args[0].to_ascii_lowercase();
     if let Some(index) = ["mouse1", "mouse2", "mouse3", "mouse4", "mouse5"].iter().position(|value| *value == name) {
@@ -388,13 +388,10 @@ fn bind(
         }
         return Ok(format!("{name} = \"{}\"", action.command()));
     }
-    if unbind {
-        return Err(
-            "Keyboard unbind is not implemented; use bind to move an action to another key.".into(),
-        );
-    }
     let key=binding_key(&name).ok_or("Unsupported key. Use letters, space, ctrl, shift, tab or arrows; bindlist shows active bindings.")?;
-    if let Some(command) = args.get(1) {
+    if unbind || args.get(1).is_some_and(|command| command.is_empty()) {
+        settings.unbind_key(key);
+    } else if let Some(command) = args.get(1) {
         let command = command.to_ascii_lowercase();
         let action = ACTION_COMMANDS
             .iter()
@@ -407,7 +404,7 @@ fn bind(
         settings
             .binds
             .iter()
-            .position(|candidate| *candidate == key)
+            .position(|candidate| *candidate == Some(key))
             .map(|i| ACTION_COMMANDS[i])
             .unwrap_or("unbound")
     ))
@@ -462,7 +459,7 @@ fn run(world: &mut World, line: &str) -> Result<String, String> {
                     .enumerate()
                     .map(|(i, key)| format!(
                         "{} = {}",
-                        crate::settings::key_name(*key),
+                        key.map(crate::settings::key_name).unwrap_or_else(|| "unbound".into()),
                         ACTION_COMMANDS[i]
                     ))
                     .collect::<Vec<_>>()
@@ -653,6 +650,34 @@ fn draw(
 mod tests {
     use super::*;
     #[test]
+    fn keyboard_unbind_survives_reload_and_removes_tick_input_without_removing_mouse_jump() {
+        let mut settings = crate::settings::Settings::parse("bind0=KeyW\nbind4=Space\n");
+        bind(&mut settings, &["w".into()], true).unwrap();
+        bind(&mut settings, &["space".into(), "".into()], false).unwrap();
+        bind(&mut settings, &["mouse4".into(), "+jump".into()], false).unwrap();
+        let mut settings = crate::settings::Settings::parse(&settings.encode());
+        assert_eq!(bind(&mut settings, &["w".into()], false).unwrap(), "w = unbound");
+        let mut keys = ButtonInput::<KeyCode>::default();
+        keys.press(KeyCode::KeyW);
+        keys.press(KeyCode::Space);
+        let mut mouse = ButtonInput::<MouseButton>::default();
+        let mut local = crate::player::LocalPlayer::new(1, glam::Vec3::ZERO, 0.);
+        let sample = |settings: &crate::settings::Settings, mouse: &ButtonInput<MouseButton>, local: &mut crate::player::LocalPlayer| {
+            crate::player::sample_tick_input(local, &crate::player::Controls {
+                keys: &keys, mouse, settings, enabled: true, blocked: false, captured: true, buy_menu: false,
+            })
+        };
+        let input = sample(&settings, &mouse, &mut local);
+        assert_eq!(input.forward_move, 0.);
+        assert_eq!(input.buttons & movement::buttons::JUMP, 0);
+        mouse.press(MouseButton::Back);
+        assert_ne!(sample(&settings, &mouse, &mut local).buttons & movement::buttons::JUMP, 0);
+        bind(&mut settings, &["w".into(), "+forward".into()], false).unwrap();
+        let restored = crate::settings::Settings::parse(&settings.encode());
+        assert_eq!(sample(&restored, &mouse, &mut local).forward_move, 450.);
+        assert_eq!(restored.binds[4], None);
+    }
+    #[test]
     fn mouse_bind_replaces_only_its_button_and_round_trips_with_keyboard_and_wheel() {
         let mut settings = crate::settings::Settings::default();
         bind(&mut settings, &["mouse4".into(), "+jump".into()], false).unwrap();
@@ -661,7 +686,7 @@ mod tests {
         assert_eq!(settings.mouse_binds[3], crate::settings::MouseAction::Action(4));
         assert_eq!(settings.mouse_binds[4], crate::settings::MouseAction::Attack2);
         assert_eq!(settings.mouse_binds[1], crate::settings::MouseAction::None);
-        assert_eq!(settings.binds[4], KeyCode::Space);
+        assert_eq!(settings.binds[4], Some(KeyCode::Space));
         assert_eq!(settings.wheel_down, crate::settings::WheelAction::Next);
         assert_eq!(crate::settings::Settings::parse(&settings.encode()), settings);
         let before = settings.clone();
@@ -677,7 +702,7 @@ mod tests {
         let tokens = words("bind \"mwheeldown\" \"+jump\"").unwrap();
         bind(&mut settings, &tokens[1..], false).unwrap();
         assert_eq!(settings.wheel_down, crate::settings::WheelAction::Jump);
-        assert_eq!(settings.binds[4], KeyCode::Space);
+        assert_eq!(settings.binds[4], Some(KeyCode::Space));
         assert_eq!(
             crate::settings::Settings::parse(&settings.encode()),
             settings
