@@ -113,6 +113,9 @@ impl World {
                 && f.until > self.time()
                 && (point.z - f.pos.z).abs() < 65.0
                 && point.truncate().distance(f.pos.truncate()) < 130.0
+                // Match the existing burn-damage source/chest visibility ray.
+                // Bots must not avoid a field through a wall that blocks its damage.
+                && self.visible(f.pos + Vec3::Z * 12.0, point + Vec3::Z * 32.0)
         })
     }
     pub fn flash_amount(&self, id: PlayerId) -> f32 {
@@ -926,6 +929,38 @@ mod tests {
         assert!(w.player(a).unwrap().flash_until > w.player(b).unwrap().flash_until + 2.0);
         assert_eq!(w.projectiles.len(), 0);
     }
+    #[test]
+    fn fire_hazard_and_actual_burn_damage_respect_the_same_solid_wall() {
+        use collision::{CollisionWorld, Convex, Plane};
+        let mut collision = CollisionWorld::new();
+        let mins = Vec3::new(16., -128., 0.);
+        let maxs = Vec3::new(24., 128., 128.);
+        assert!(collision.add_convex(Convex {
+            mins, maxs,
+            planes: [(Vec3::X, maxs.x), (-Vec3::X, -mins.x),
+                (Vec3::Y, maxs.y), (-Vec3::Y, -mins.y),
+                (Vec3::Z, maxs.z), (-Vec3::Z, -mins.z)].into_iter()
+                .map(|(normal, dist)| Plane { normal, dist }).collect(),
+            contents: contents::SOLID, surface: 0,
+        }));
+        collision.finalize();
+        let mut w = World::new(std::sync::Arc::new(collision));
+        let exposed = w.add_player("exposed", crate::Team::Terrorist);
+        let sheltered = w.add_player("sheltered", crate::Team::CounterTerrorist);
+        let open_point = Vec3::new(-64., 0., 0.);
+        let blocked_point = Vec3::new(64., 0., 0.);
+        w.player_mut(exposed).unwrap().movement.origin = open_point;
+        w.player_mut(sheltered).unwrap().movement.origin = blocked_point;
+        w.utility_fields.push(Field { id: 1, owner: crate::WORLD, kind: Kind::Molotov,
+            pos: Vec3::ZERO, born: 0., until: 7., decoy_weapon: None });
+        // Equally near, at the same height; only the actual solid wall differs.
+        assert!(w.fire_at(open_point));
+        assert!(!w.fire_at(blocked_point));
+        w.step_utility();
+        assert_eq!(w.player(exposed).unwrap().health, 92);
+        assert_eq!(w.player(sheltered).unwrap().health, 100);
+    }
+
     #[test]
     fn smoke_extinguishes_fire_expires_and_does_not_block_bullet_geometry() {
         let mut w = arena();

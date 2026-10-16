@@ -255,3 +255,25 @@ throw inputs. They establish functioning/visible geometry, not a pixel-error
 measurement or native appearance parity.
 The ignored nonlinear radius-scale bias/timing, tint blending, drag, missing
 HE children and `$mod2x` composition still prevent a complete native effect.
+
+## Obstacle-aware bot fire hazards
+
+The authoritative `World::fire_at` query previously treated every nearby point
+inside its fixed field disc as burning, even across a solid wall. Bots use it
+to reject paths and hold outside a choke. Burn damage already checks a
+collision visibility ray from the field center plus 12 to the player's chest
+plus 32, so bots could refuse a safe path where that same fire could not hurt
+them.
+
+The hazard query now uses that existing damage visibility criterion, in
+addition to its unchanged distance/height/expiry tests. One regression places
+an exposed and sheltered player equally near a live field with a real convex
+solid wall between only one of them and the fire. The exposed point remains
+a hazard and takes the existing 8 damage; the sheltered point is safe and its
+health stays unchanged. No new spread, timing, radius or damage constants,
+render-frame gameplay, serialized state or protocol changes are introduced.
+The existing 130-unit hazard disc and 140-unit damage sphere remain otherwise
+unchanged. Ground propagation, cell timing/spacing, spread around obstacles
+and authoritative render control points remain GR08 work; this correction
+does not complete spread or establish native fire parity. Runtime verification
+is pending the orchestrator's next integration cohort.
