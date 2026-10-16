@@ -6,8 +6,30 @@ use crate::{
 use bevy::prelude::*;
 use std::collections::HashMap;
 
+#[derive(Clone, Copy, Default, PartialEq)]
+pub enum InspectAction {
+    #[default]
+    Start,
+    Cancel,
+}
+
+/// Local presentation requests; cancellation never changes weapon cooldowns.
 #[derive(Resource, Default)]
-pub struct InspectRequest(pub u64);
+pub struct InspectRequest {
+    serial: u64,
+    action: InspectAction,
+}
+
+impl InspectRequest {
+    pub fn start(&mut self) { self.serial = self.serial.wrapping_add(1); self.action = InspectAction::Start; }
+    pub fn cancel(&mut self) { self.serial = self.serial.wrapping_add(1); self.action = InspectAction::Cancel; }
+    pub fn serial(&self) -> u64 { self.serial }
+    pub fn after(&self, seen: &mut u64) -> Option<InspectAction> {
+        let changed = *seen != self.serial;
+        *seen = self.serial;
+        changed.then_some(self.action)
+    }
+}
 #[derive(Resource, Default)]
 pub struct Muzzles {
     pub first: Option<(sim::PlayerId, Vec3)>,
