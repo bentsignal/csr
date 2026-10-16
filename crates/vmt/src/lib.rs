@@ -14,6 +14,8 @@
 use kv::{Block, Value};
 
 pub mod texture_transform;
+pub mod detail;
+pub use detail::{DetailError, DetailLayer};
 pub use texture_transform::{AxisAlignedTextureTransform, TextureTransformError};
 
 /// Resolved material.
