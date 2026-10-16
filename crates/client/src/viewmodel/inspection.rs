@@ -44,6 +44,12 @@ impl Inspection {
             return;
         }
         let weight = ((now - started) / self.duration).clamp(0., 1.);
+        if weight <= 0. {
+            // Slerp's arithmetic can round its nominal zero-weight endpoint.
+            // An accepted restart must retain the exact displayed pose.
+            target.copy_from_slice(&self.from);
+            return;
+        }
         if weight >= 1. {
             self.from.clear();
             return;
