@@ -472,3 +472,70 @@ historical2015 equivalence are unmeasured. The catalog policy generation
 advances; wire state does not change. Source regressions compare measured
 endpoints and preserve those unchanged scopes. Build and integration checks
 are pending at this candidate checkpoint.
+
+### Nonprimary HE horizontal movement inheritance
+
+Stationary button velocities do not establish movement inheritance. A separate
+three-case packet preregistered a primary stationary control, forward underhand
+and backward combined throw, comparing the existing0.5 response against1.25.
+The predictions use the independently admitted stationary mode vectors and
+actual measured player release velocity, rather than assuming that movement
+buttons imply the target speed. All release brackets retain the expected
+standing eye/world ground, zero vertical/sideways network movement and punch,
+and actual pitch/yaw0. Actual held strengths/buttons and weapon/viewmodel
+ownership are independently checked for each fresh current projectile.
+
+The primary control remains664.745239 units/second. Forward underhand reports
+actual player network velocity[245,0,0] and projectile[505.673584,0,20.163757]
+at the first received state. Subtracting the independent stationary underhand
+horizontal199.423584 gives306.25, exactly1.25 times the actual player speed.
+The0.5 competitor misses183.75 units/second. The five projectile captures have
+four distinct pre-contact states, constant horizontal velocity and
+gravity320-consistent network positions, with residuals below0.02328 horizontal
+and0.00970 vertical units. All six actual player pose images and actual held
+mode/ownership fields were personally reviewed. The observed network movement
+field is used; the separate interpolated absolute-velocity field is excluded.
+
+The combined case also reports a1.25 velocity difference, but fails its strict
+initial-position admission: actual settled before-hold x74.153938 differs from
+requested70 by4.153938, exceeding the preregistered0.01 tolerance. Its actual
+moving release brackets are retained as qualified evidence, not relabeled as
+an untouched all-gates pass. The separate admission preserves that negative.
+An independent combined-only confirmation must admit actual initial x70,
+zero movement and world ground before any hold/runup, after ordinary movement
+has stopped and settled before the final teleport.
+
+That independent confirmation, private20261016-030238, passes the strict actual
+initial image gate at exactly[70,-875,-319.96875], world-ground and zero movement
+before holding or runup. There is no later teleport. All five release brackets
+report network velocity[-245,0,0], unchanged standing eye/floor, zero punch and
+pitch/yaw0. Actual pulled pin, both held buttons, strength0.5 and current owned
+HE/viewmodel handles agree. Fresh projectile lookup and all five numeric images
+report horizontal125.834351, with four distinct pre-contact states and
+gravity320-consistent vertical progression. Position residuals are below0.01951
+horizontal and0.02880 vertical units. Subtracting independent stationary
+combined432.084351 yields-306.25, exactly1.25 times the actual player velocity;
+the0.5 competitor misses-183.75. Both hypotheses and numeric tolerances remained
+unchanged. All six player numeric images and actual mode/ownership fields were
+personally reviewed. The owned packet completed18 captures and exact restoration
+of all12 preferences, with no native process remaining. The earlier strict
+negative remains separate and is not overwritten by this clean confirmation.
+
+The private20261016-024633 packet retains48 raw images and separate posthoc
+admission; all18 player and15 projectile numeric crops were personally reviewed.
+All12 preferences were restored exactly and no native process remains. The
+preceding024321 preflight negative launched nothing and touched no preferences:
+its process receipt positively identifies a headless CI `sim de_dust2`. The
+reviewed retry permits only that exact known CI executable with an anchored
+`probe de_dust2` or `sim de_dust2` command; every Legacy or unknown process
+still blocks, and no unowned process is stopped. The successful retry observed
+no other game, so live exercise of the headless exception is not claimed.
+
+Optional mode-specific horizontal inheritance fields permit independent
+admission. The content-bound underhand and combined profiles now use1.25; absent fields
+retain the previous0.5 response. Vertical inheritance, air, spawn traces and
+other content remain unchanged. Independent reverse-direction underhands,
+perpendicular movement, crouch, native64Hz and historical2015 equivalence remain
+unmeasured. Independent forward combined throws also remain unmeasured.
+Compilation and integration checks are pending for this separate
+source checkpoint.

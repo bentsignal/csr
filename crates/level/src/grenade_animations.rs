@@ -67,8 +67,10 @@ const OBSERVED_LAUNCH_SCHEMA: [u8; 20] = [
 fn observed_launch(name: &str, schema: Option<[u8; 20]>, header: &str) -> Option<weapons::GrenadeLaunch> {
     (name == "weapon_hegrenade" && schema == Some(OBSERVED_LAUNCH_SCHEMA)
         && header == OBSERVED_HEADERS[0].1).then(|| weapons::GrenadeLaunch {
-            reference: "legacy-1.38.8.1-he-ground-button-vectors-128hz".into(),
+            reference: "legacy-1.38.8.1-he-ground-button-inheritance-128hz".into(),
             grounded_overhand_horizontal_inheritance: 1.25,
+            grounded_underhand_horizontal_inheritance: Some(1.25),
+            grounded_combined_horizontal_inheritance: Some(1.25),
             grounded_overhand_velocity: Some(weapons::GrenadeLaunchVelocity {
                 speed: 675.,
                 upward_pitch_bias_degrees: 10.,
@@ -92,7 +94,7 @@ pub(super) fn import(
 ) -> Option<[u8; 20]> {
     let mut digest = Sha1::new();
     digest.update(previous_hash?);
-    digest.update(b"grenade-animation-timing-v8-he-ground-button-vectors");
+    digest.update(b"grenade-animation-timing-v9-he-ground-button-inheritance");
     let mut definitions: Vec<_> = catalog
         .weapons
         .iter_mut()
@@ -165,6 +167,8 @@ mod tests {
         let launch = level.catalog.get("weapon_hegrenade").unwrap().grenade_launch.as_ref().unwrap();
         assert!(launch.grounded_underhand_velocity.is_some());
         assert!(launch.grounded_combined_velocity.is_some());
+        assert_eq!(launch.grounded_underhand_horizontal_inheritance, Some(1.25));
+        assert_eq!(launch.grounded_combined_horizontal_inheritance, Some(1.25));
         for name in [
             "weapon_hegrenade",
             "weapon_flashbang",
