@@ -235,6 +235,7 @@ pub fn spawn(
     // Six ambient faces, Sun direction/color, then per-instance diffuse tint.
     const PROP_TEXELS: usize = 9;
     let mut light_data = vec![0u8; bsp.static_props.props.len().max(1) * PROP_TEXELS * 8];
+    let mut tinted_instances = 0usize;
     for (prop_index, prop) in bsp.static_props.props.iter().enumerate() {
         let Some(Some((model, flips))) = models.get(&prop.model) else { continue };
         let rot = mdl::angles_to_mat3(prop.angles);
@@ -246,7 +247,13 @@ pub fn spawn(
         // Opacity changes need separate native admission and material modes.
         // Unsupported layouts/alpha retain the previous identity modulation.
         let tint = match prop.diffuse_modulation {
-            Some([r, g, b, 255]) => glam::Vec3::new(r as f32, g as f32, b as f32) / 255.0,
+            Some([r, g, b, 255]) => {
+                if [r, g, b] != [255; 3] {
+                    tinted_instances += 1;
+                    debug!("Authored prop diffuse tint: instance={prop_index} rgb_bytes={r},{g},{b} alpha=255");
+                }
+                glam::Vec3::new(r as f32, g as f32, b as f32) / 255.0
+            }
             _ => glam::Vec3::ONE,
         };
         for (i, v) in cube.into_iter().chain([to_bevy(light.to_sun).extend(1.0), light.sun.extend(1.0), tint.extend(1.0)]).enumerate() {
@@ -332,5 +339,6 @@ pub fn spawn(
         } else { e.insert(clusters); }
         stats.draws += 1;
     }
+    info!("Authored static-prop diffuse tint: nonwhite_instances={tinted_instances}");
     stats
 }
