@@ -138,6 +138,10 @@ pub struct GrenadeLaunch {
     /// Independently observed stationary response. Absent profiles retain the
     /// existing raw-aim launch vector; this does not calibrate spawn position.
     pub grounded_overhand_velocity: Option<GrenadeLaunchVelocity>,
+    /// Separately admitted stationary button endpoints. Their movement
+    /// inheritance remains independent of the primary-only observation.
+    pub grounded_underhand_velocity: Option<GrenadeLaunchVelocity>,
+    pub grounded_combined_velocity: Option<GrenadeLaunchVelocity>,
 }
 
 #[derive(Clone, Debug, PartialEq)]

@@ -408,3 +408,52 @@ Focused source regressions compare actual native horizontal values, the
 prospective holdout, conservative received-vertical bounds, unchanged spawn
 origin and unchanged unobserved launch scopes. Compilation and integration
 verification are pending at this source checkpoint.
+
+### Grounded HE button endpoint velocities
+
+A separate owned Train packet preregistered three level, stationary cases:
+primary control, secondary-only underhand and both-button combined. Requested
+buttons alone were not accepted as mode proof. Fresh public entity lookup and
+prediction lists identified the unique current HE and viewmodel for every
+case. Actual held player buttons, active weapon handle, weapon owner, viewmodel
+owner/weapon handle, pulled-pin state and throw strength independently agree:
+primary has strength1, secondary has strength0 and combined has strength0.5.
+The player remains on the same world ground at origin[-450,-875,-319.96875],
+eye offset[0,0,64.062561], pitch/yaw0, zero movement and zero punch in all six
+pose brackets per case. Infinite ammunition preserves this same owned weapon;
+each projectile is freshly looked up and verified by its current class.
+
+The untouched horizontal predictions were primary664.745239, secondary
+199.4235717 and combined432.08440535 units/second, using ratios1,0.3,0.65.
+Actual projectile velocity is respectively664.745239,199.423584,432.084351.
+Secondary and combined residuals are +0.0000123 and -0.00005435, both inside
+the preregistered0.002 tolerance. All three have zero sideways velocity. Five
+captures per case include a duplicated initial state and four distinct
+pre-contact states with constant horizontal velocity and gravity320-consistent
+positions; maximum position residual is below0.027 units horizontally and
+0.021 vertically. Actual first received vertical velocities are102.212517,
+20.163757 and61.188133. They are later than construction and do not establish
+exact initial vertical velocity or a native spawn timestamp.
+
+The successful private20261016-014903 packet retains48 captures, separate
+posthoc mode/ownership/pose/vector admission and exact restoration of all12
+preferences. No native process remains. A preceding preflight failed the
+existing-process guard before any session or case; that negative receipt is
+retained. The successful retry used the same approved helper and guards.
+Raw unadmitted numeric flags remain unchanged. All18 pose and15 projectile
+numeric images and the actual held ownership/mode fields were personally
+reviewed; this is not a claim that every world screenshot was reviewed.
+
+The separate candidate profile uses secondary speed202.5 and combined438.75,
+with the primary profile's10-degree pitch bias, yielding the observed level
+endpoints. Level observations alone do not prove that these modes share the
+primary pitch law at other angles; a further prospective angled holdout is
+still required. Their horizontal and vertical movement inheritance stays0.5;
+the measured primary horizontal1.25 response is not generalized to them.
+Airborne vectors, raw-aim spawn traces, other content, animation timing and
+projectile integration remain unchanged. Continuous strength transitions,
+moving or crouched secondary/combined releases, other angles, native64Hz and
+historical2015 equivalence are unmeasured. The catalog policy generation
+advances; wire state does not change. Source regressions compare measured
+endpoints and preserve those unchanged scopes. Build and integration checks
+are pending at this candidate checkpoint.
