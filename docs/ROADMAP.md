@@ -11,7 +11,10 @@ them are listed. Every item ends in a verified state (`cargo test`,
 Owner return-home playtest on 2026-10-14: all reported defects, required
 features, accepted improvements and priorities are retained in
 [PLAYTEST-2026-10-14.md](PLAYTEST-2026-10-14.md). Work continues without another
-test request until the owner asks. The latest merged source includes grounded HE launch/button corrections,
+test request until the owner asks. The owner has now requested a broad test
+around 5 p.m. Eastern on October 16; its verified candidate is frozen, with
+fifteen numbered desktop tests and carried settings/map caches. The latest
+merged source includes grounded HE launch/button corrections,
 measured M4 recovery, original menu music and supported Video controls, authored
 prop tint, dropped weapon models and the pre-rework Inferno chooser. The next
 merged batch adds ordinary world/static-prop detail, authored HE dust placement,
@@ -20,7 +23,15 @@ knife availability, and additional bot recovery. Full workspace, combined
 RELEASE and ordinary rendered frontend checks passed for the exact combined
 source; [evidence and retained limits](research/overnight-fidelity-verification.md)
 distinguish those checks from complete native or 2015 parity. Loading-screen
-rendering and original Inventory thumbnails remain candidate/follow-up work.
+rendering and original Inventory thumbnails now have merged bounded fixes and
+inspected actual captures. Persistent weapon bindings, console scrollback,
+content-backed bot difficulty, grenade pickup capacity and measured grounded
+Smoke/Molotov inheritance have also merged. PR #208 additionally prevents
+pre-readiness GPU captures from being cached as settled health/ammo HUD pixels;
+its workspace, GPU, release and actual console/Home checks pass. The current
+[playtest checkpoint](PLAYTEST-2026-10-14.md#owner-requested-playtest-checkpoint-2026-10-16)
+records the exact candidate and limitations. All-map loading proportions and
+complete original Inventory/UI fidelity remain open.
 Movement/surfing, remaining weapon states, UI coverage/performance and full
 lighting fidelity remain open; bounded improvements are not whole-game parity.
 
