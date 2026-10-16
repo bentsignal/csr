@@ -38,7 +38,7 @@ pub fn local_loadout(skins: &Inventory, practice: &crate::inventory::Inventory) 
         if slot == "gloves" {
             continue;
         }
-        if let Some(skin) = skins.skins.iter().find(|s| s.serial == *serial) {
+        if let Some(skin) = skins.skins.iter().find(|s| s.serial == *serial && crate::classic_cosmetics::item_available(&s.weapon, s.paint)) {
             loadout.skins.insert(
                 skin.weapon.clone(),
                 sim::weapon::Cosmetic {

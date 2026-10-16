@@ -234,3 +234,49 @@ unchanged. Ground propagation, cell timing/spacing, spread around obstacles
 and authoritative render control points remain GR08 work; this correction
 does not complete spread or establish native fire parity. Runtime verification
 is pending the orchestrator's next integration cohort.
+
+## HE authored initial placement
+
+The loaded HE dust layers contain two explicit positional initializers that
+were previously discarded. In installed Legacy `explosions_fx.pcf`,
+`explosion_child_dust10a` uses `Position Within Box Random` with Source bounds
+[-20,-20,-80] to [20,20,100]. The existing sphere-only loader instead placed
+all of that layer's particles at the same origin before their authored motion.
+The bounded reader now retains those box endpoints, converts their coordinate
+axes and samples each axis independently. Signed endpoint order after the
+Source-to-Bevy axis conversion is preserved; it still describes the same box.
+
+`explosion_child_dust06a` uses a 200-unit sphere with explicit
+`distance_bias_absolute_value` [0,0,1]. Its position now folds the Source-Z
+component above the origin before applying the existing authored offset,
+rather than distributing half the dust below the blast. The author of a
+[particle-editor example](https://moddota.com/assets/particles/falling-cherry-blossom-petal-for-spring-mood-particle)
+describes this field as selecting the sphere's upper half. This is supporting
+format interpretation, not a matched native HE appearance claim. Only the
+observed exact [0,0,1] flag pattern is admitted; fractional and other axis
+patterns remain unsupported. Radial velocity interpretation is unchanged.
+
+The new position subset is explicitly enabled only by the HE layer load.
+The loaded smoke and fire also contain absolute-axis declarations, but their
+behavior stays unchanged pending their own rendered checks; held wick XY
+flags are not generalized. Box/sphere combinations with uncertain initializer
+ordering retain the existing sphere interpretation. The same three random
+draws supply the corrected position, preserving subsequent tint/fade/rotation
+draws. Existing layer ContentIds, runtime VFS/pack reads, emission limits,
+textures, material composition, lifetime, gravity and authoritative grenade
+state are unchanged. No game assets are included in the repository.
+
+The private read-only metadata audit used the installed PCF SHA256
+`9ed53f823d5340cd35883674d5ef5e22c52cf434d59890f7d5e0f13e07d59c5d`
+and an independent format reader. Focused source checks cover Source box
+corners/center/sample bounds, upper-half placement and the disabled/unhandled
+compatibility paths. Compilation and [combined RELEASE checks](overnight-fidelity-verification.md)
+passed. Four actual before/after images show higher dust placement and a
+broader late tail, with the seed/profile limitations below retained.
+The existing weapon trace now records actual HE emitter birth, seed and position.
+The emitter still seeds from the render-frame event-drain tick; paired captures
+can therefore differ in random seed and event age even with identical ordinary
+throw inputs. They establish functioning/visible geometry, not a pixel-error
+measurement or native appearance parity.
+The ignored nonlinear radius-scale bias/timing, tint blending, drag, missing
+HE children and `$mod2x` composition still prevent a complete native effect.
