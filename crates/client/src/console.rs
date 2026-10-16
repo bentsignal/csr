@@ -358,6 +358,7 @@ fn binding_key(name: &str) -> Option<KeyCode> {
         _ => crate::settings::KEYS.iter().copied().find(|key| {
             let debug = format!("{key:?}").to_ascii_lowercase();
             debug == name || debug.strip_prefix("key") == Some(name.as_str())
+                || debug.strip_prefix("digit") == Some(name.as_str())
         }),
     }
 }
@@ -393,7 +394,7 @@ fn bind(
         }
         return Ok(format!("{name} = \"{}\"", action.command()));
     }
-    let key=binding_key(&name).ok_or("Unsupported key. Use letters, space, ctrl, shift, tab or arrows; bindlist shows active bindings.")?;
+    let key=binding_key(&name).ok_or("Unsupported key. Use letters, 1..5, space, ctrl, shift, tab or arrows; bindlist shows active bindings.")?;
     if unbind || args.get(1).is_some_and(|command| command.is_empty()) {
         settings.unbind_key(key);
     } else if let Some(command) = args.get(1) {
@@ -476,7 +477,7 @@ fn run(world: &mut World, line: &str) -> Result<String, String> {
         "bindlist" if args.is_empty() => {
             let settings = world.resource::<crate::settings::Settings>();
             Ok(format!(
-                "{}\n{}\nmwheelup = {}\nmwheeldown = {}\nKeyboard binds swap an occupied key's previous action. Mouse binds replace that button's action; keyboard binds remain available. Number slots, Q and ` remain fixed.",
+                "{}\n{}\nmwheelup = {}\nmwheeldown = {}\nKeyboard binds swap an occupied key's previous action. Mouse binds replace that button's action; keyboard binds remain available. The console key remains fixed.",
                 settings
                     .binds
                     .iter()
@@ -798,6 +799,9 @@ mod tests {
     }
     #[test]
     fn binding_history_and_addresses_reject_unsupported_commands() {
+        assert_eq!(binding_key("q"), Some(KeyCode::KeyQ));
+        assert_eq!(binding_key("1"), Some(KeyCode::Digit1));
+        assert_eq!(binding_key("digit5"), Some(KeyCode::Digit5));
         let mut settings = crate::settings::Settings::default();
         let before = settings.clone();
         assert!(bind(&mut settings, &["mwheelup".into(), "quit".into()], false).is_err());

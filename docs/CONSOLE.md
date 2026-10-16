@@ -49,6 +49,10 @@ bind mouse4 +jump
 bind mouse5 lastinv
 bind x +attack
 bind c +attack2
+bind x lastinv
+bind 1 slot1
+bind z invnext
+bind y invprev
 bindlist
 ```
 
@@ -87,9 +91,20 @@ configs. Both held keys and short taps use the same TickInput attack path as
 mouse attacks. A capture-suppressed mouse button does not suppress a keyboard
 attack bound to the same command. `unbind x` or `bind x ""` persists the cleared
 key without removing mouse attack bindings. Arbitrary command binds and
-slot/Q/console rebinding remain open. The classic keyboard settings page
+rebinding the console key remain open. The classic keyboard settings page
 currently exposes only its connected sensitivity/inversion controls; the
 console makes these action bindings reachable from the classic frontend.
+
+Weapon selection is also configurable: `lastinv`, `slot1` through `slot5`,
+`invnext` and `invprev` use the existing one-shot player input path. Old
+configs retain Q for the previous weapon and1–5 for the primary, pistol,
+knife/Zeus, grenade cycle and bomb slots. These defaults now appear in
+`bindlist` instead of bypassing bindings. `unbind q` or `bind q ""` really
+removes Q's action; `bind x lastinv` moves it to X and persists that choice.
+`bind q lastinv` restores Q. The same applies to number keys, for example
+`unbind 1` and `bind 1 slot1`. Selection accepts short taps, obeys normal
+gameplay/menu/capture guards, and does not repeat while a key stays held.
+Mouse and wheel weapon-selection bindings remain independent.
 
 ## Direct grenade selection
 
