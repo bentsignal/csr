@@ -310,6 +310,54 @@ fn grenade_practice_survives_snapshot_and_respawn_without_changing_competitive()
 }
 
 #[test]
+fn grenade_pickups_share_buy_capacity_and_preserve_reachability() {
+    for rate in [64, 128] {
+        for (carried, incoming, blocked, own_delay, expected) in [
+            (vec![43], 44, false, false, true),
+            (vec![43], 43, false, false, true),
+            (vec![43, 43], 43, false, false, false),
+            (vec![43, 44], 44, false, false, false),
+            (vec![43, 43, 44, 45], 47, false, false, false),
+            (vec![46], 48, false, false, false),
+            (vec![48], 46, false, false, false),
+            (vec![43], 48, false, false, true),
+            (vec![43], 44, true, false, false),
+            (vec![43], 44, false, true, false),
+        ] {
+            let mut w = world();
+            w.set_tick_rate(rate);
+            let id = w.add_player("collector", Team::Terrorist);
+            let mut catalog = catalog();
+            for (name, index) in [("weapon_flashbang",43), ("weapon_hegrenade",44),
+                ("weapon_smokegrenade",45), ("weapon_molotov",46),
+                ("weapon_decoy",47), ("weapon_incgrenade",48)] {
+                catalog.weapons.push(def(name, index, WeaponClass::Grenade, Side::Both, 200, 1));
+            }
+            w.catalog = Arc::new(catalog);
+            for index in carried {
+                let def = w.catalog.weapons.iter().find(|d| d.def_index == index).unwrap().clone();
+                w.players[0].give(WeaponState::new(Arc::new(def)));
+            }
+            teleport(&mut w, id, Vec3::new(0., 0., 1.));
+            let incoming_def = w.catalog.weapons.iter().find(|d| d.def_index == incoming).unwrap().clone();
+            let class = incoming_def.class_name.clone();
+            let before = w.players[0].weapons.len();
+            let selected = w.players[0].active_weapon().unwrap().def.class_name.clone();
+            w.new_item(GroundKind::Weapon(WeaponState::new(Arc::new(incoming_def))),
+                Vec3::new(30., 0., 1.), 0., if own_delay { id } else { WORLD }, 1.);
+            if blocked { wall_at(&mut w, 15.); }
+            w.step(&[(id, TickInput::default())]);
+            assert_eq!(w.players[0].weapons.len(), before + usize::from(expected),
+                "rate={rate} incoming={incoming} blocked={blocked} own_delay={own_delay}");
+            assert_eq!(w.items.is_empty(), expected);
+            assert_eq!(w.events.iter().filter(|event|
+                matches!(event, GameEvent::Pickup { player, item } if *player == id && item == &class)).count(), usize::from(expected));
+            assert_eq!(w.players[0].active_weapon().unwrap().def.class_name, selected);
+        }
+    }
+}
+
+#[test]
 fn grenade_buy_limits_and_team_economy() {
     let (mut w,t,_)=duel();
     w.step(&[]);
