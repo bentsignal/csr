@@ -71,6 +71,7 @@ struct Brain {
     path_index: usize,
     progress_pos: Vec3,
     progress_time: f32,
+    last_navigation_tick: Option<u64>,
     failed_transitions: Vec<FailedTransition>,
     /// Round the bot finished buying in, and failed attempts this round.
     bought_round: u32,
@@ -832,6 +833,13 @@ fn follow_path(
 ) -> bool {
     let pos = bot.movement.origin;
     brain.failed_transitions.retain(|edge| time < edge.retry_at);
+    // A cached route may pause during combat. Time spent not following it
+    // must not turn the first resumed command into a failed crossing.
+    if brain.last_navigation_tick.is_some_and(|tick| world.tick.saturating_sub(tick) > 1) {
+        brain.progress_time = time;
+        brain.progress_pos = pos;
+    }
+    brain.last_navigation_tick = Some(world.tick);
     if goal != brain.goal_area {
         brain.goal_area = goal;
         brain.path.clear();
@@ -1199,10 +1207,24 @@ mod tests {
         for rate in [64, 128] {
             let (mesh, mut world, id, mut brain) = blocked_shortcut_fixture(false);
             world.set_tick_rate(rate);
-            world.tick = world.ticks(2.01);
             let mut rng = Rng::from_parts(&[17]);
+            world.tick = 1;
             follow_path(&mesh, &world, world.player(id).unwrap(), &mut brain,
                 &mut TickInput::default(), &mut rng, world.time(), 4., Some(4), None);
+            // Combat can suspend an existing route: that pause is not an
+            // actual attempt to cross its next portal.
+            world.tick = world.ticks(3.0);
+            follow_path(&mesh, &world, world.player(id).unwrap(), &mut brain,
+                &mut TickInput::default(), &mut rng, world.time(), 4., Some(4), None);
+            assert!(brain.failed_transitions.is_empty());
+            assert_eq!(brain.path, [1, 2, 4]);
+            let end = world.tick + world.ticks(2.1);
+            for tick in world.tick + 1..=end {
+                world.tick = tick;
+                follow_path(&mesh, &world, world.player(id).unwrap(), &mut brain,
+                    &mut TickInput::default(), &mut rng, world.time(), 4., Some(4), None);
+                if !brain.failed_transitions.is_empty() { break; }
+            }
             let retry_at = brain.failed_transitions[0].retry_at;
             world.tick += 1;
             let mut input = TickInput::default();
