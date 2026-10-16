@@ -733,6 +733,11 @@ mod tests {
         inventory.equip(3).unwrap();
         assert_eq!(inventory.active("knife").map(|s|s.weapon.as_str()), Some("weapon_knife_butterfly")); // custom slots retain their own names
         assert_eq!(inventory.active("custom_moon_knife").unwrap().paint, 90001);
+        inventory.grant(4061, 1).unwrap();
+        let award = inventory.open(&catalog.cases[0], &catalog, &mut rng).unwrap();
+        assert!(crate::classic_cosmetics::item_available(&award.weapon, award.paint));
+        assert_eq!(inventory.cases[&4061], 0);
+        assert_eq!(inventory.cases[&4880], 3);
         assert_eq!(catalog.finishes.len(), 6);
         assert_eq!(catalog.cases[0].contents, vec![0,1,2,3,4,5]);
     }
