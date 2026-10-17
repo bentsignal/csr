@@ -2,15 +2,42 @@
 //! Counts describe retained CPU assets/entities, not GPU memory or draw calls.
 use bevy::{
     camera::visibility::NoFrustumCulling, mesh::skinning::SkinnedMesh, prelude::*,
-    window::PrimaryWindow,
+    window::{PresentMode, PrimaryWindow},
 };
-use std::time::Instant;
+use std::{num::NonZeroU32, time::Instant};
 
 const MAX_SAMPLES: usize = 8192;
 
 #[derive(Resource, Default)]
 pub(super) struct ReportInterval {
     pub due: bool,
+}
+
+/// Copy-only observations: no per-frame strings, mesh scans or extra locks.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct FrameContext {
+    state: crate::session::AppState,
+    page: Option<crate::menu::Page>,
+    in_match: bool,
+    window: Option<WindowContext>,
+    screenshot: bool,
+    input_enabled: bool,
+    local: Option<LocalContext>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct WindowContext {
+    size: (u32, u32),
+    focused: bool,
+    present_requested: PresentMode,
+    frame_latency_hint: Option<NonZeroU32>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct LocalContext {
+    id: sim::PlayerId,
+    spectating: Option<sim::PlayerId>,
+    noclip: bool,
 }
 
 #[derive(Default)]
@@ -20,9 +47,21 @@ pub(super) struct FrameWindow {
     rejected: u64,
     total: f64,
     maximum: f64,
+    previous_context: Option<FrameContext>,
+    context_changes: u64,
 }
 
 impl FrameWindow {
+    fn observe_context(&mut self, context: FrameContext, map_changed: bool) {
+        if self
+            .previous_context
+            .is_some_and(|previous| previous != context || map_changed)
+        {
+            self.context_changes = self.context_changes.saturating_add(1);
+        }
+        self.previous_context = Some(context);
+    }
+
     fn record(&mut self, ms: f64) {
         if !ms.is_finite() || ms <= 0. {
             self.rejected += 1;
@@ -55,6 +94,8 @@ impl FrameWindow {
         self.rejected = 0;
         self.total = 0.;
         self.maximum = 0.;
+        self.context_changes = 0;
+        // Retain the endpoint: the next Time<Real> delta crosses this boundary.
     }
 }
 
@@ -98,6 +139,29 @@ pub(super) fn report(
     characters: Res<crate::characters::Characters>,
 ) {
     interval.due = false;
+    samples.observe_context(
+        FrameContext {
+            state: *state.get(),
+            page: menu.page,
+            in_match: menu.in_match,
+            window: windows.single().ok().map(|window| WindowContext {
+                size: (window.physical_width(), window.physical_height()),
+                focused: window.focused,
+                present_requested: window.present_mode,
+                frame_latency_hint: window.desired_maximum_frame_latency,
+            }),
+            screenshot: options.0.screenshot.is_some(),
+            input_enabled: input.0,
+            local: local.as_ref().map(|player| LocalContext {
+                id: player.id,
+                spectating: player.spectating,
+                noclip: player.noclip,
+            }),
+        },
+        // Resource change detection also catches map replacement with the same
+        // name, without cloning/hashing the map string on every frame.
+        level_name.is_changed(),
+    );
     let now = Instant::now();
     let Some(previous) = *since else {
         *since = Some(now);
@@ -112,9 +176,12 @@ pub(super) fn report(
     interval.due = true;
     let _scope = super::frame_scope("diagnostic.report");
     let quantiles = samples.quantiles();
+    let context_changes = samples.context_changes;
+    let mixed_context = context_changes != 0;
     info!(
-        "perf interval: elapsed={:.3}s window={seconds:.3}s frames={} mean_ms={:.4} p50_p95_p99_ms={quantiles:?} max_ms={:.4} overflow={} rejected={}",
+        "perf interval: elapsed_real_s={:.3} report_wall_s={seconds:.3} sampled_real_s={:.6} frames={} mean_ms={:.4} p50_p95_p99_ms={quantiles:?} max_ms={:.4} overflow={} rejected={} mixed_context={mixed_context} context_changes={context_changes}",
         real.elapsed_secs_f64(),
+        samples.total / 1000.,
         samples.count,
         samples.total / samples.count.max(1) as f64,
         samples.maximum,
@@ -122,23 +189,11 @@ pub(super) fn report(
         samples.rejected,
     );
     samples.clear();
-    if let Ok(window) = windows.single() {
-        info!(
-            "perf context: map={} state={:?} page={:?} size={}x{} focused={} present_requested={:?} frame_latency_hint={:?} screenshot={} input_enabled={} noclip={} spectating={}",
-            level_name.name,
-            state.get(),
-            menu.page,
-            window.physical_width(),
-            window.physical_height(),
-            window.focused,
-            window.present_mode,
-            window.desired_maximum_frame_latency,
-            options.0.screenshot.is_some(),
-            input.0,
-            local.as_ref().is_some_and(|p| p.noclip),
-            local.as_ref().is_some_and(|p| p.spectating.is_some()),
-        );
-    }
+    info!(
+        "perf context: endpoint_only=true map={} mixed_context={mixed_context} observed={:?}",
+        level_name.name,
+        samples.previous_context,
+    );
     if let Some(world) = sim {
         let world = &world.0;
         info!(
@@ -193,6 +248,88 @@ pub(super) fn report(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn match_context() -> FrameContext {
+        FrameContext {
+            state: crate::session::AppState::Match,
+            page: None,
+            in_match: true,
+            window: Some(WindowContext {
+                size: (1920, 1080),
+                focused: true,
+                present_requested: PresentMode::Immediate,
+                frame_latency_hint: NonZeroU32::new(1),
+            }),
+            screenshot: false,
+            input_enabled: true,
+            local: Some(LocalContext {
+                id: 1,
+                spectating: Some(2),
+                noclip: false,
+            }),
+        }
+    }
+
+    #[test]
+    fn loading_pause_focus_and_spectator_changes_cannot_look_like_stable_match() {
+        let endpoint = match_context();
+        let mut loading = endpoint;
+        loading.state = crate::session::AppState::Loading;
+        let mut paused = endpoint;
+        paused.page = Some(crate::menu::Page::Pause);
+        let mut unfocused = endpoint;
+        unfocused.window.as_mut().unwrap().focused = false;
+        let mut other_target = endpoint;
+        other_target.local.as_mut().unwrap().spectating = Some(3);
+        for earlier in [loading, paused, unfocused, other_target] {
+            let mut window = FrameWindow::default();
+            window.observe_context(earlier, false);
+            window.record(900.);
+            window.observe_context(endpoint, false);
+            window.record(10.);
+            assert_eq!(window.previous_context, Some(endpoint));
+            assert_eq!(
+                window.context_changes, 1,
+                "the endpoint cannot relabel earlier frames"
+            );
+            assert_eq!(window.count, 2);
+            assert_eq!(window.total, 910.);
+            assert_eq!(window.quantiles(), Some([10., 900., 900.]));
+        }
+    }
+
+    #[test]
+    fn returning_to_same_context_and_cross_report_boundaries_remain_observable() {
+        let context = match_context();
+        let mut window = FrameWindow::default();
+        window.observe_context(context, true); // initial resource observation
+        assert_eq!(window.context_changes, 0);
+        let mut paused = context;
+        paused.page = Some(crate::menu::Page::Audio);
+        window.observe_context(paused, false);
+        window.observe_context(context, false);
+        assert_eq!(
+            window.context_changes, 2,
+            "returning to Match does not erase mixed history"
+        );
+        window.clear();
+        window.observe_context(context, false);
+        assert_eq!(window.context_changes, 0);
+        window.clear();
+        window.observe_context(paused, false);
+        assert_eq!(
+            window.context_changes, 1,
+            "first delta after a report crosses its endpoint"
+        );
+        window.clear();
+        window.observe_context(paused, true); // same-name map resource replacement
+        assert_eq!(window.context_changes, 1);
+        window.clear();
+        let mut missing_window = paused;
+        missing_window.window = None;
+        window.observe_context(missing_window, false);
+        assert_eq!(window.context_changes, 1);
+    }
 
     #[test]
     fn interval_quantiles_use_all_valid_samples_and_reset() {

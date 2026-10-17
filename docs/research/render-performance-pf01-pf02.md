@@ -111,7 +111,8 @@ Every interval of at least one wall second reports:
   rejected values and overflow. At most 8,192 `f64` samples are retained, storage
   is reused, and overflow suppresses quantiles rather than hiding later spikes.
 - Context: map, app/menu state, physical size, focus, requested present mode,
-  latency hint, screenshot/input/noclip/spectator flags; simulation tick/rate/time,
+  latency hint, screenshot/input/noclip flags and local/spectator target IDs;
+  simulation tick/rate/time,
   round/mode and actual players/bots/alive/items/projectiles/fields.
 - Main-world entities, mesh entities, locally hidden meshes, meshes visible to
   any view, no-frustum meshes, skinned meshes, UI nodes, audio players, impact
@@ -122,10 +123,41 @@ Every interval of at least one wall second reports:
 The census scans mesh visibility once per reporting interval. Pure entity
 counts use Bevy 0.19.1 `Query::count` (matched archetype/table counts), avoiding
 `Entities::count_spawned`'s scan over every allocated index. Asset counts use
-`Assets::len`. `diagnostic.report` exposes census/sort/log cost. Reporting and
-GPU queries perturb timing; compare an external presentation trace with logging
-off too. A periodic report spike is not automatically a gameplay regression.
+`Assets::len`. `diagnostic.report` exposes quantile sorting, census and logging
+inside `frame_report::report` after its deadline check. It excludes per-frame
+context observation/sample collection, the later `report_stages` drain and its
+stage/GPU-history log lines, timing-scope clock/lock costs elsewhere, GPU query
+overhead and asynchronous log/worker work. It is **not total diagnostic
+overhead**. Reporting and GPU queries perturb timing; compare the same external
+presentation trace with both `CSR_PERF_REPORT` and `CSR_FRAME_LOG` unset too.
+A periodic report spike is not automatically a gameplay regression.
 `main` is the existing First-to-Last scope, not a sum of every CPU thread.
+
+`report_wall_s` is the Instant-to-Instant reporting deadline interval, at least
+one wall second. `sampled_real_s` is the sum of accepted `Time<Real>` frame
+deltas; their First-schedule boundaries differ from Last-schedule report calls.
+`elapsed_real_s` is Bevy real elapsed time at the endpoint. Cadence mean uses
+the accepted delta total divided by accepted frame count; quantiles/max also
+use those deltas. Do not divide the count by `report_wall_s` as if these were
+identical windows, or use simulation time as a cadence denominator. Rejected
+deltas contribute to neither count nor sampled duration. Sample overflow still
+retains the complete accepted count/total/max.
+
+Every frame compares a small Copy-only context (no formatted strings, map-name
+clones, hashes or extra locks). App state, menu page/in-match flag, window
+size/focus/requested present/latency hint, screenshot/input flags, and local
+player/noclip/spectator target changes increment `context_changes`. Bevy resource
+change detection also marks map replacements, including the same map name.
+Any observed change sets `mixed_context=true` for that whole report. The context
+line is explicitly `endpoint_only=true`, even for mixed windows; it never labels
+all earlier Loading/paused/unfocused/other-target samples as Match. Returning
+to the same endpoint does not erase intervening changes. The endpoint survives
+report reset so the first delta of the next report can also mark a boundary.
+Use only unmixed windows for a fixed-context comparison; retain mixed windows
+for transition analysis. Observations happen once per report-system invocation:
+unobserved transitions within a frame and every gameplay-state mutation are
+not tracked. Census values remain endpoint snapshots. This does not alter
+simulation, rendering/input policy or default-off diagnostic behavior.
 
 Counts are snapshots, not peaks; `hidden_local` is local `Visibility`, and
 `view_visible_any` can include sky/viewmodel/other cameras. They are not occlusion,
@@ -208,9 +240,16 @@ this track. Retain raw captures/account data/runtime assets privately.
 
 New `FrameWindow` regressions cover quantile ordering, invalid samples, reset,
 the singleton case and bounded overflow retaining later maximum/total while
-suppressing incomplete quantiles. They are **not run** under this track's resource
-restriction. Bevy APIs were read in installed 0.19.1 source before use; the new
-module was parsed/formatted by standalone Rustfmt and `git diff --check` passed.
-Compilation, the two regressions, full workspace/release/installed-data checks,
+suppressing incomplete quantiles. Added context regressions cover Loading to
+Match, Pause, focus loss, spectator-target switches, returning to the same
+endpoint, report-boundary retention, same-name map changes and a missing window.
+All are **not run** under this track's resource
+restriction. Bevy APIs were read in installed 0.19.1 source before use. The
+original candidate module was parsed/formatted by standalone Rustfmt; the R1
+context follow-up used only `git diff --check` and an independent small context/
+denominator model. It has not been parsed or compiled. Root must run focused
+`cargo test -p client input_latency::frame_report::tests` as well as the existing
+`cargo test -p client input_latency::tests` presentation-policy regressions.
+Compilation, the frame-report regressions, full workspace/release/installed-data checks,
 instrumentation overhead, actual screenshots and the paired sustained runs
 remain required. PF01/PF02 stay open; no FPS or fidelity acceptance is claimed.

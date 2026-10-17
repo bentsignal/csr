@@ -196,6 +196,8 @@ fn report_stages(
     interval: Res<frame_report::ReportInterval>,
     diagnostics: Res<bevy::diagnostic::DiagnosticsStore>,
 ) {
+    // This drain/log and GPU-history reporting happen after diagnostic.report
+    // has ended. That scope is only part of opt-in diagnostic overhead.
     if !interval.due {
         return;
     }
