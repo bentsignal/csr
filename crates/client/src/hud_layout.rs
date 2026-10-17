@@ -2,6 +2,8 @@
 //! scaled once by the recorded HUD setting, independently of desktop DPI.
 use bevy::prelude::*;
 
+// Retained candidate allocations, not measured avatar ink. DM and competitive
+// geometry both remain open pending actual image-contain/render comparisons.
 pub(crate) const PLAYER_WIDTH: f32 = 36.0;
 pub(crate) const PLAYER_HEIGHT: f32 = 40.0;
 pub(crate) const PLAYER_GAP: f32 = 1.5;
@@ -15,6 +17,7 @@ pub(crate) const INVENTORY_PITCH: f32 = 64.0;
 pub(crate) const INVENTORY_BOTTOM: f32 = 40.0;
 pub(crate) const INVENTORY_ICON_HEIGHT: f32 = 32.0;
 pub(crate) const INVENTORY_ICON_WIDTH: f32 = 128.0;
+pub(crate) const INVENTORY_HINT_TOP: f32 = -16.0;
 
 pub(crate) const fn unit(value: f32) -> Val {
     Val::Vh(value * scaleform::HUD_SCALING as f32 * 100.0 / 720.0)

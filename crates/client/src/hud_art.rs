@@ -1,5 +1,6 @@
 //! HUD images and the installed map overview. Never exposes unspotted enemies.
 use bevy::prelude::*;
+use bevy::text::LineBreak;
 use crate::{ui_assets::UiAssets, player::{LocalPlayer, SimWorld}};
 use crate::hud_layout::{self as layout, unit as hu, font as hf};
 
@@ -19,6 +20,8 @@ pub struct Inventory { signature: String, root: Option<Entity> }
 struct InventorySlot(u8);
 #[derive(Component)]
 struct SelectionHint(u8);
+#[derive(Component)]
+struct ActiveWeaponName;
 
 fn icon(commands: &mut Commands, handle: Handle<Image>, node: Node) -> Entity {
     commands.spawn((ImageNode::new(handle), node)).id()
@@ -175,10 +178,15 @@ pub fn update(mut commands: Commands, art: Res<UiAssets>, world: Res<SimWorld>, 
                                 }
                             }
                         });
-                        row.spawn((SelectionHint(slot as u8 + 1), Text::new(slot_labels[slot].clone()), TextColor(Color::WHITE), TextFont { font_size: hf(12.0), ..default() }, Node { position_type: PositionType::Absolute, right: hu(-18.0), top: hu(-16.0), ..default() }));
+                        row.spawn((SelectionHint(slot as u8 + 1), Text::new(slot_labels[slot].clone()), TextLayout::new(Justify::Right, LineBreak::NoWrap), TextColor(Color::WHITE), TextFont { font_size: hf(12.0), ..default() }, Node { position_type: PositionType::Absolute, right: hu(-18.0), top: hu(layout::INVENTORY_HINT_TOP), ..default() }));
                         if indices.contains(&p.active) {
                             let weapon = &p.weapons[p.active];
-                            row.spawn((Text::new(loc.weapon_name(&weapon.def)), TextColor(Color::WHITE), TextFont { font_size: hf(12.0), ..default() }, Node { position_type: PositionType::Absolute, right: hu(0.0), top: hu(layout::INVENTORY_ICON_HEIGHT + 4.0), ..default() }));
+                            // Only descendants inherit overflow clipping. Keep
+                            // the full name on one line, extending left, inside
+                            // the vertical band before the next selection hint.
+                            row.spawn((ActiveWeaponName, Node { position_type: PositionType::Absolute, right: hu(0.0), top: hu(layout::INVENTORY_ICON_HEIGHT), width: hu(layout::INVENTORY_ICON_WIDTH), height: hu(layout::INVENTORY_PITCH + layout::INVENTORY_HINT_TOP - layout::INVENTORY_ICON_HEIGHT), overflow: Overflow::clip_y(), ..default() })).with_children(|name| {
+                                name.spawn((Text::new(loc.weapon_name(&weapon.def)), TextLayout::new(Justify::Right, LineBreak::NoWrap), TextColor(Color::WHITE), TextFont { font_size: hf(12.0), ..default() }, Node { position_type: PositionType::Absolute, right: hu(0.0), top: hu(0.0), ..default() }));
+                            });
                         }
                     });
                 }
@@ -211,8 +219,8 @@ mod tests {
     }
 
     #[test]
-    fn real_inventory_system_refreshes_effective_hints_without_changing_slot_geometry() {
-        use crate::settings::{Settings, KEY_SELECTION_FIRST};
+    fn real_inventory_system_preserves_hint_policy_and_player_props() {
+        use crate::settings::{MouseAction, Settings, KEY_SELECTION_FIRST};
         use std::sync::Arc;
         let catalog = weapons::Catalog::from_items_game(r#"items_game { items {
             9101 { name weapon_glock baseitem 1 }
@@ -222,6 +230,7 @@ mod tests {
         } }"#).unwrap();
         let mut world = sim::World::new(Arc::new(collision::CollisionWorld::new()));
         let id = world.add_player("local fixture", sim::Team::CounterTerrorist);
+        world.add_player("other fixture", sim::Team::Terrorist);
         world.players[0].alive = true;
         world.players[0].weapons = ["weapon_glock", "weapon_knife", "weapon_hegrenade", "weapon_flashbang"]
             .map(|name| sim::weapon::WeaponState::new(Arc::new(catalog.get(name).unwrap().clone()))).to_vec();
@@ -232,6 +241,7 @@ mod tests {
             .insert_resource(UiAssets { regular: default(), bold: default(), images: [
                 ("glock".into(), default()), ("knife".into(), default()),
                 ("hegrenade".into(), default()), ("flashbang".into(), default()),
+                ("avatar".into(), default()),
             ].into() })
             .init_resource::<Radar>()
             .init_resource::<Inventory>()
@@ -245,9 +255,31 @@ mod tests {
             let mut rows = world.query::<(&InventorySlot, &Node)>();
             let mut geometry: Vec<_> = rows.iter(world).map(|(slot, node)| (slot.0, node.width, node.height)).collect();
             geometry.sort_by_key(|row| row.0);
-            let mut hints = world.query::<(&SelectionHint, &Text)>();
-            let mut labels: Vec<_> = hints.iter(world).map(|(slot, text)| (slot.0, text.0.clone())).collect();
+            // Policy regression only: MinimalPlugins does not shape glyphs,
+            // compute UI bounds or prove font fit. Root's render gate does.
+            let mut hints = world.query::<(&SelectionHint, &Text, &TextLayout, &Node)>();
+            let mut labels: Vec<_> = hints.iter(world).map(|(slot, text, text_layout, node)| {
+                assert_eq!(text_layout.linebreak, LineBreak::NoWrap);
+                assert_eq!(text_layout.justify, Justify::Right);
+                assert_eq!((node.left, node.width), (Val::Auto, Val::Auto));
+                assert_eq!((node.right, node.top), (hu(-18.0), hu(layout::INVENTORY_HINT_TOP)));
+                (slot.0, text.0.clone())
+            }).collect();
             labels.sort_by_key(|row| row.0);
+            let mut names = world.query_filtered::<(&Node, &Children), With<ActiveWeaponName>>();
+            assert_eq!(names.iter(world).count(), 1);
+            for (band, children) in names.iter(world) {
+                assert_eq!(band.overflow, Overflow::clip_y());
+                assert_eq!(band.top, hu(layout::INVENTORY_ICON_HEIGHT));
+                assert_eq!(band.height, hu(layout::INVENTORY_PITCH + layout::INVENTORY_HINT_TOP - layout::INVENTORY_ICON_HEIGHT));
+                assert_eq!(children.len(), 1);
+                for &child in children.iter() {
+                    let text_layout = world.get::<TextLayout>(child).unwrap();
+                    assert_eq!(text_layout.linebreak, LineBreak::NoWrap);
+                    assert_eq!(text_layout.justify, Justify::Right);
+                    assert_eq!(world.get::<Text>(child).unwrap().0, "GLOCK");
+                }
+            }
             (geometry, labels)
         };
         app.update();
@@ -264,9 +296,49 @@ mod tests {
         app.update();
         let (rebound_geometry, labels) = inspect(&mut app);
         assert_eq!(labels[0], (2, String::from("K / Mouse 4")));
-        assert_eq!(rebound_geometry, geometry, "long labels cannot resize the icon/slot plane");
+        assert_eq!(rebound_geometry, geometry, "rebinding must retain authored slot allocations");
+        {
+            let mut settings = app.world_mut().resource_mut::<Settings>();
+            settings.rebind(KEY_SELECTION_FIRST + 2, KeyCode::ControlRight);
+            settings.mouse_binds.fill(MouseAction::Action(KEY_SELECTION_FIRST + 2));
+        }
+        // Exercise the persisted model too, retaining every accepted alternative.
+        let saved = Settings::parse(&app.world().resource::<Settings>().encode());
+        app.insert_resource(saved);
+        app.update();
+        let (long_geometry, labels) = inspect(&mut app);
+        assert_eq!(labels[0], (2, String::from("Control R / Mouse 1 / Mouse 2 / Mouse 3 / Mouse 4 / Mouse 5")));
+        assert_eq!(long_geometry, geometry);
         app.world_mut().resource_mut::<Settings>().clear_action_binding(KEY_SELECTION_FIRST + 2);
         app.update();
         assert_eq!(inspect(&mut app).1[0], (2, String::new()));
+
+        // Preserve production team/death properties in both modes while their
+        // avatar ink/allocation geometry remains an explicit visual gate.
+        for mode in [sim::GameMode::Deathmatch, sim::GameMode::Competitive] {
+            {
+                let mut world = app.world_mut().resource_mut::<SimWorld>();
+                world.0.mode = mode;
+                world.0.players[1].team = sim::Team::Terrorist;
+                world.0.players[1].alive = false;
+            }
+            app.update();
+            let mut tiles = app.world_mut().query::<(&ImageNode, &BackgroundColor)>();
+            let tiles: Vec<_> = tiles.iter(app.world()).map(|(image, background)| (image.color, background.0)).collect();
+            assert_eq!(tiles.len(), 2);
+            assert!(tiles.contains(&(Color::WHITE, Color::srgb(0.23,0.36,0.48))));
+            assert!(tiles.contains(&(Color::srgba(0.3,0.3,0.3,0.5), Color::srgb(0.46,0.39,0.24))));
+            let previous_root = app.world().resource::<Inventory>().root;
+            {
+                let mut world = app.world_mut().resource_mut::<SimWorld>();
+                world.0.players[1].team = sim::Team::CounterTerrorist;
+                world.0.players[1].alive = true;
+            }
+            app.update();
+            assert_ne!(app.world().resource::<Inventory>().root, previous_root);
+            let mut tiles = app.world_mut().query::<(&ImageNode, &BackgroundColor)>();
+            assert_eq!(tiles.iter(app.world()).count(), 2);
+            assert!(tiles.iter(app.world()).all(|(image, background)| image.color == Color::WHITE && background.0 == Color::srgb(0.23,0.36,0.48)));
+        }
     }
 }

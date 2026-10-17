@@ -54,11 +54,14 @@ their exact integer physical crop dimensions even at odd window sizes.
 
 The common layout includes:
 
-- Independent persisted `radar_hud_size` / `cl_hud_radar_scale`, default1.24,
-  chosen from the recorded larger classic radar setting in response to the
-  owner's small-radar complaint. Existing map zoom, rotation and saved input
-  settings remain independent. At1080 the viewport is about310px at x15/y61;
-  markers share its transform, and money/buy indication flow below it.
+- Independent persisted `radar_hud_size` / `cl_hud_radar_scale`, with a neutral
+  fallback of1.0 for new settings and files missing that field. R2 established
+  that the1.24 reference is an unmatched edited scene, so it cannot justify an
+  ordinary default. At1080 the revised fallback predicts249.9px, near the
+  retained ordinary reference's250px circle; this is not a native-default or
+  1:1 claim. Explicit saved values, including1.24, are retained. Existing map
+  zoom, rotation and saved input settings remain independent. Markers share
+  the viewport transform, and money/buy indication flow below it.
 - Weapon selection grouped by real simulation selection slots. Utility gets
   one horizontal row and one effective binding label. Stable icon planes and
   approximately82px row pitch replace variable-width icon+label flex rows and
@@ -66,12 +69,21 @@ The common layout includes:
   y784/866/947 at1080, near the original260s observations y782/862/950.
   Weapon images fit uniformly in a128x32 authored-unit plane; wide and narrow
   silhouettes retain their aspect ratio. Active localized weapon names return.
-  Full accepted keyboard/mouse alternative labels still refresh the signature;
-  their separate line cannot move icons when label length changes.
-- One common top strip: approximately46x51px player tiles, a narrow central
+  Full accepted keyboard/mouse alternative labels still refresh the signature.
+  R3 explicitly disables soft wrapping and anchors their auto width at the
+  fixed right edge, so long hints extend left. The active full weapon name is
+  also nonwrapping, inside a descendant-clipping vertical band from authored
+  y32 to48, ending at the next row's hint anchor. Actual font fit remains a
+  render gate; stored Node dimensions do not prove disjoint glyph bounds.
+- One common top strip: approximately46x51px player allocations, a narrow central
   timer above the two scores, and teams anchored immediately beside it. Team
   changes now invalidate the tree. This corrects the earlier large central gap
   and horizontal score/timer/score arrangement. Tile art remains approximate.
+  R2 identified that the nominal260s DM tile is about43x28px, unlike these
+  allocated46x51px boxes. ImageNode::Auto contains the avatar within its box;
+  allocation is not image ink. No mode-specific replacement is justified yet.
+  DM geometry and competitive height remain separately unverified, and R3
+  leaves these allocations open for root's actual mode/contain comparisons.
 - Death notices start below that strip at approximately66px1080, rather than
   the isolated movie's25px anchor. Native row scale/pitch and installed weapon
   and headshot exports remain. The compatibility background is fitted to the
@@ -93,14 +105,19 @@ render-frame gameplay or public game assets were introduced.
   placement and nonuniform TextPanel-to-row conversion. The three existing
   background/highlight clips must agree through changing spans/repeated fit.
 - `hud_art` runs the actual ECS inventory update through ordinary keyboard
-  rebinding, Mouse4 alternative, unbind and unchanged-frame caching. It checks
-  displayed labels and stable slot geometry, with two utility items sharing
-  one row. A separate grouping regression covers all five slots.
+  rebinding, Mouse4, a persisted Control R plus all five mouse alternatives,
+  unbind and unchanged-frame caching. It checks full strings, explicit NoWrap
+  and right anchors, unchanged authored slot allocations and the name's
+  descendant-clipping policy. Team/death appearance properties refresh in DM
+  and competitive. MinimalPlugins does not run text shaping, UI layout or image
+  extraction: these assertions do not prove glyph fit, clipping pixels or
+  native tile geometry. A separate grouping regression covers all five slots.
 - `combat_hud` runs the actual display system with cropped regions at normal
   and odd physical sizes, non-unit DPI and UiScale. Every coordinate/extent
   must resolve back to its exact physical source rectangle.
 - `hud_layout` checks Bevy's viewport-unit resolution and raster pixel mapping;
-  `settings` covers radar-size persistence independently of zoom/input settings.
+  `settings` covers the1.0 new/missing-field fallback and explicit saved sizes
+  (including1.24), independently of zoom, rotation and input settings.
 
 `git diff --check` passed. Cargo, rustc, rustfmt, tests, builds, interpreters,
 native/UI/GPU operation and CI were not run. Root must execute source checks,

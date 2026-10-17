@@ -231,7 +231,9 @@ impl Default for Settings {
             cross_dot: false,
             // Installed game_options sliderhome and ordinary rotating radar.
             radar_scale: 0.5,
-            radar_hud_size: 1.24,
+            // Neutral migration fallback; the larger retained reference uses
+            // unmatched settings and does not establish an ordinary default.
+            radar_hud_size: 1.0,
             radar_rotate: true,
             // Preserve the existing stay-open behavior; native default unmeasured.
             close_on_buy: false,
@@ -681,8 +683,17 @@ mod tests {
     }
     #[test]
     fn radar_display_size_is_persisted_independently_of_map_zoom() {
+        assert_eq!(Settings::default().radar_hud_size, 1.0);
         let mut s = Settings::parse("radar_scale=0.7\nradar_rotate=false\nsensitivity=2.25\n");
-        assert_eq!(s.radar_hud_size, 1.24);
+        assert_eq!(s.radar_hud_size, 1.0);
+        for size in [0.8, 1.0, 1.1, 1.24, 1.3] {
+            let stored = Settings::parse(&format!("radar_hud_size={size}\nradar_scale=0.7\nradar_rotate=false\nsensitivity=2.25\n"));
+            assert_eq!(stored.radar_hud_size, size, "explicit stored size must survive the default change");
+            assert_eq!(Settings::parse(&stored.encode()), stored);
+            assert_eq!(stored.radar_scale, s.radar_scale);
+            assert_eq!(stored.radar_rotate, s.radar_rotate);
+            assert_eq!(stored.sensitivity, s.sensitivity);
+        }
         assert!(s.set_convar_number("cl_hud_radar_scale", 1.1));
         assert_eq!(s.radar_scale, 0.7);
         assert!(!s.radar_rotate);
