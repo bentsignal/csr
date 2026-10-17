@@ -23,6 +23,7 @@ use std::sync::Arc;
 mod grenade_hold;
 mod inspection;
 mod look_motion;
+mod sequence_pose;
 mod settling;
 
 pub const VIEWMODEL_LAYER: usize = 2;
@@ -207,6 +208,86 @@ mod life_tests {
         for mesh in gun.meshes.iter().chain(arms.iter().flat_map(|a| &a.meshes)) {
             assert_eq!(app.world().get::<Visibility>(*mesh), Some(&expected));
         }
+    }
+
+    #[test]
+    #[ignore = "requires the player's installed CS:GO Legacy; no GPU required"]
+    fn installed_absolute_sequences_cover_guns_knives_and_all_six_grenades_without_pose_debt() {
+        let (app, _) = installed_app(None);
+        let models = app.world().resource::<ViewModels>();
+        for name in [
+            "ak47", "aug", "awp", "bizon", "cz75a", "deagle", "elite", "famas",
+            "fiveseven", "g3sg1", "galilar", "glock", "hkp2000", "m249", "m4a1",
+            "m4a1_silencer", "mac10", "mag7", "mp5sd", "mp7", "mp9", "negev",
+            "nova", "p250", "p90", "revolver", "sawedoff", "scar20", "sg556",
+            "ssg08", "tec9", "ump45", "usp_silencer", "xm1014", "knife", "taser",
+            "hegrenade", "flashbang", "smokegrenade", "decoy", "molotov", "incgrenade",
+        ] {
+            let weapon = format!("weapon_{name}");
+            let view = models.weapons.get(&weapon).unwrap_or_else(|| panic!("missing installed {weapon}"));
+            assert!(view.clips.contains_key("ACT_VM_IDLE"), "{weapon} has no idle");
+            let mut checked = 0;
+            for (activity, clips) in &view.clips {
+                for seq in clips.iter().filter(|seq| !seq.clip.delta) {
+                    for time in [0., seq.clip.duration() / 3., seq.clip.duration()] {
+                        let mut expected = mdl::skeleton::rest_pose(&view.asset.model.bones);
+                        seq.clip.sample(time, &mut expected);
+                        let mut previous = vec![(glam::Vec3::splat(90.),
+                            glam::Quat::from_rotation_y(1.)); expected.len()];
+                        sequence_pose::sample(&seq.clip, time, &mut previous,
+                            |bone| seq.weights.get(bone).copied().unwrap_or(1.));
+                        for (bone, (actual, expected)) in previous.iter().zip(&expected).enumerate() {
+                            if seq.weights.get(bone).copied().unwrap_or(1.) >= 0.999 {
+                                assert_eq!(actual, expected, "{weapon} {activity} bone {bone} time {time}");
+                            }
+                        }
+                    }
+                    checked += 1;
+                }
+            }
+            assert!(checked > 0, "{weapon} has no admitted absolute clips");
+        }
+    }
+
+    #[test]
+    #[ignore = "requires the player's installed CS:GO Legacy; no GPU required"]
+    fn installed_galil_idle_and_fire_clear_compressed_tracks_after_interrupted_reload() {
+        let (mut app, id) = installed_app(Some("weapon_galilar"));
+        {
+            let view = &app.world().resource::<ViewModels>().weapons["weapon_galilar"];
+            let hand = view.asset.model.bone_index("v_weapon.Bip01_R_Hand").unwrap();
+            let idle = &view.clips["ACT_VM_IDLE"][0];
+            assert!(!idle.clip.animated[hand], "fixture must exercise compressed-out tracks");
+            assert_eq!(idle.weights[hand], 1.);
+        }
+        let reload = app.world().resource::<ViewModels>().weapons["weapon_galilar"]
+            .clips["ACT_VM_RELOAD"][0].clone();
+        let authoritative = app.world().resource::<SimWorld>().0.state();
+        for (activity, index) in [("ACT_VM_IDLE", 0), ("ACT_VM_PRIMARYATTACK", 0),
+            ("ACT_VM_PRIMARYATTACK", 1), ("ACT_VM_PRIMARYATTACK", 2)] {
+            let expected = {
+                let view = &app.world().resource::<ViewModels>().weapons["weapon_galilar"];
+                let seq = &view.clips[activity][index];
+                assert!(seq.weights.iter().all(|weight| *weight == 1.));
+                let mut expected = mdl::skeleton::rest_pose(&view.asset.model.bones);
+                seq.clip.sample(0., &mut expected);
+                expected
+            };
+            {
+                let mut state = app.world_mut().resource_mut::<ViewModelState>();
+                state.activity = activity.into();
+                state.clip_index = index;
+                state.reloading = false;
+                sequence_pose::sample(&reload.clip, reload.clip.duration() * 0.5, &mut state.pose,
+                    |bone| reload.weights.get(bone).copied().unwrap_or(1.));
+                assert_ne!(state.pose, expected, "fixture must interrupt an actual changed reload pose");
+            }
+            app.update();
+            let state = app.world().resource::<ViewModelState>();
+            assert_eq!(state.pose, expected, "{activity} variant {index} retains no previous pose");
+            assert_eq!(state.owner, Some(id));
+        }
+        assert_eq!(app.world().resource::<SimWorld>().0.state(), authoritative);
     }
 
     #[test]
@@ -470,8 +551,8 @@ pub struct ViewModelState {
     suppressor_seen: Option<sim::weapon::SuppressorTransition>,
     light_timer: f32,
     look_motion: look_motion::LookMotion,
-    /// Persistent bone-local pose: sequences only overwrite the bones they
-    /// animate (weighted), as the game layers masked viewmodel sequences.
+    /// Persistent bone-local pose for authored sequence masks. Absolute clips
+    /// also restore decoded rest values for tracks omitted by compression.
     pose: Vec<(glam::Vec3, glam::Quat)>,
     inspection: inspection::Inspection,
 }
@@ -509,7 +590,7 @@ impl ViewModelState {
         self.light_timer = 0.0;
         self.look_motion.clear();
         self.inspection = inspection::Inspection::default();
-        // Masked clips deliberately preserve untouched bones within one life.
+        // Masked clips deliberately preserve zero-weight bones within one life.
         // They must never inherit the reload/inspect pose of a previous life.
         self.pose = mdl::skeleton::rest_pose(bones);
         true
@@ -605,7 +686,7 @@ pub fn load(
         let scope_center = if def.attr_f32("zoom levels").unwrap_or(0.0) > 0.0 && def.class == weapons::WeaponClass::Rifle {
             let mut idle = mdl::skeleton::rest_pose(&model.bones);
             if let Some(seq) = clips.get("ACT_VM_IDLE").and_then(|c| c.first()) {
-                seq.clip.sample_layered(0.0, &mut idle, |b| seq.weights.get(b).copied().unwrap_or(1.0));
+                sequence_pose::sample(&seq.clip, 0.0, &mut idle, |b| seq.weights.get(b).copied().unwrap_or(1.0));
             }
             let pose = mdl::skeleton::model_space(&model.bones, &idle);
             let mut center = glam::Vec3::ZERO;
@@ -942,7 +1023,7 @@ pub fn update(
         &state.pose,
     );
     inspection.sample_base(&mut state.pose);
-    clip.sample_layered(t, &mut state.pose, |b| weights.get(b).copied().unwrap_or(1.0));
+    sequence_pose::sample(&clip, t, &mut state.pose, |b| weights.get(b).copied().unwrap_or(1.0));
     inspection.apply(now, &mut state.pose);
     state.inspection = inspection;
     if let Some(hold) = &view.grenade_hold { hold.apply(grenade, &mut state.pose); }
