@@ -21,6 +21,8 @@ Set `CSR_TEST_FLOW=1` and select exactly one `CSR_TEST_FLOW_CASE`:
 | `controls` | Home's authored Keyboard / Mouse route -> actual Bevy panel at 1920x1080 -> capture first binding -> F11 -> Clear -> recapture -> Escape cancel -> mouse button and wheel choice buttons -> wheel scroll -> End -> bottom row -> resize through public Window state to 1280x720 -> End -> bottom row -> Home key -> top row -> Restore -> Apply -> disk reload comparison -> Back -> authored route reopens panel with saved defaults. |
 
 Omitting `CSR_TEST_FLOW_CASE` runs the existing `frontend_flow.rs` unchanged.
+The installed Pause menu's observed caption is `HELP & OPTIONS`; this differs
+from Home's `OPTIONS` topbar caption. Both use their actual visible text target.
 These cases do not change production navigation, settings, geometry or cadence.
 In particular, no production fix is made for the invalid zero-bot launch fixture.
 

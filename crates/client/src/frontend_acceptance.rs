@@ -335,7 +335,7 @@ fn update(mut proof: ResMut<Proof>, front: Res<Frontend>, options: Res<crate::Op
         ("home-options", 7) => ("MainMenu", "OFFLINE WITH BOTS"),
         ("home-options", 8) => ("StartSinglePlayer", ""),
         ("controls", 1 | 19) => ("MainMenu", "KEYBOARD / MOUSE"),
-        ("match-options", 1 | 8 | 13) => ("PauseMenu", "OPTIONS"),
+        ("match-options", 1 | 8 | 13) => ("PauseMenu", "HELP & OPTIONS"),
         ("match-options", 2 | 9 | 14) => ("PauseMenu", "AUDIO SETTINGS"),
         ("match-options", 15) => ("OptionsMenu", "BACK"),
         _ => ("MainMenu", ""),
