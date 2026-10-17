@@ -104,6 +104,8 @@ pub fn process(
     props: Res<crate::surfaces::SurfaceProps>,
     settings: Res<crate::settings::Settings>,
     mut buy_menu: ResMut<crate::buymenu::BuyMenu>,
+    views: Res<crate::viewmodel::ViewModels>,
+    mut foley: ResMut<crate::foley::Foley>,
 ) {
     let now = time.elapsed_secs();
     // Own sounds play at the listener; everyone else's in the world.
@@ -121,6 +123,14 @@ pub fn process(
             GameEvent::Fire { player, weapon, origin, suppressed } => {
                 shot_modes.insert(player, (weapon.clone(), suppressed));
                 effects.attack(player, weapon.clone(), "ACT_VM_PRIMARYATTACK", now);
+                // The installed AWP firing sequence contains authored bolt
+                // sounds, not a second gunshot. Schedule those declarations
+                // from the same confirmed shot that starts its viewmodel.
+                if weapon == "weapon_awp" {
+                    if let Some((duration, events)) = views.activity_sounds(&weapon, "ACT_VM_PRIMARYATTACK") {
+                        foley.primary_attack(player, &weapon, world.0.time(), duration, &events);
+                    }
+                }
                 let sound = world.0.catalog.get(&weapon).map(|d| sounds.weapon_shot_mode_entry(d, suppressed).to_string()).unwrap_or_default();
                 if !sound.is_empty() {
                     sounds.play_with(&mut commands, fs, &mut sources, &sound, emit(player, origin));

@@ -264,7 +264,7 @@ impl Plugin for CsgoPlugin {
             .add_systems(
                 Update,
                 (
-                    (skin_finish::record, skin_finish::sync_loadout.run_if(remote_join::offline), effects::process).chain(),
+                    (skin_finish::record, skin_finish::sync_loadout.run_if(remote_join::offline), effects::process.after(foley::update)).chain(),
                     (feedback::update, utility_fx::update).chain(),
                     sky::follow_camera,
                     visibility::update,
