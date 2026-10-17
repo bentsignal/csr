@@ -1,11 +1,9 @@
-//! Desktop rendering policy: present the current input frame without CPU pipelining.
+//! Desktop rendering policy: overlap simulation and rendering, with a shallow surface queue.
 #[path = "frame_report.rs"]
 mod frame_report;
 
 use bevy::window::PresentMode;
-use bevy::{
-    app::PluginGroupBuilder, prelude::*, render::pipelined_rendering::PipelinedRenderingPlugin,
-};
+use bevy::{app::PluginGroupBuilder, prelude::*};
 use std::num::NonZeroU32;
 use std::{
     collections::BTreeMap,
@@ -237,10 +235,11 @@ fn report_stages(
 }
 
 pub(crate) fn desktop_plugins() -> PluginGroupBuilder {
-    // Bevy's pipeline renders frame N while the main app advances N + 1.
-    // Local look already uses this frame's mouse input; keep that pose in the
-    // frame we render instead of allowing an extra CPU frame to run ahead.
-    DefaultPlugins.build().disable::<PipelinedRenderingPlugin>()
+    // Keep Bevy's render thread: rendering extracted frame N can overlap the
+    // main world's N + 1 instead of adding both CPU costs to every frame.
+    // Extraction still synchronizes the worlds; gameplay stays in TickInput.
+    // The surface queue hint below is independent of this CPU overlap.
+    DefaultPlugins.build()
 }
 
 pub(crate) fn surface_frame_latency() -> Option<NonZeroU32> {
@@ -274,10 +273,12 @@ mod tests {
     }
 
     #[test]
-    fn desktop_retains_renderer_without_running_a_cpu_frame_ahead() {
+    fn desktop_overlaps_rendering_without_disabling_input_or_surface_hint() {
         let plugins = desktop_plugins();
         assert!(plugins.enabled::<bevy::render::RenderPlugin>());
-        assert!(!plugins.enabled::<PipelinedRenderingPlugin>());
+        assert!(plugins.enabled::<bevy::render::pipelined_rendering::PipelinedRenderingPlugin>());
+        assert!(plugins.enabled::<bevy::input::InputPlugin>());
+        assert!(plugins.enabled::<bevy::window::WindowPlugin>());
         assert_eq!(surface_frame_latency().unwrap().get(), 1);
     }
 }

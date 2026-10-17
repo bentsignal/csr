@@ -1,5 +1,14 @@
 # Roadmap
 
+October 17 rendering progress: restore Bevy's render thread so simulation and
+rendering overlap. A private same-binary PLAY comparison at 2560x1440 with ten
+participants sampled about 97 FPS serial versus 143 FPS pipelined in one fixed
+Dust II view. This is a bounded diagnostic result, not sustained/all-map
+acceptance; actor life states varied and the collector reported clock-alignment
+warnings. Physical input latency is unmeasured. The 300–500 FPS goal remains
+open. Surface latency hint, saved graphics settings and simulation rules stay
+unchanged.
+
 > **Current owner direction — 2026-10-17:** Work resumed. Consolidated
 > [owner priorities](OWNER-PRIORITIES.md) supersede old work-order statements
 > below. Focus on broad playability: performance across supported maps with

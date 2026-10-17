@@ -94,6 +94,9 @@ real regression. All-surface decals and moving-scope blur remain separate scope.
 Inspect current implementation before declaring features missing. Deduplicate
 before scheduling. Verification alone is not a new feature ticket. Keep checks
 proportional and deliver improvements instead of proliferating diagnostic tasks.
+The owner's follow-up requires a better balance: finish concrete implementation
+and use existing, focused checks; do not let verification infrastructure consume
+the work or repeatedly ask the owner to test unchanged behavior.
 
 ## Historical input and player data
 
