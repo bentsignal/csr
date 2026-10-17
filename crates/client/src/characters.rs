@@ -44,12 +44,20 @@ struct Character {
     body: SkinnedInstance,
     materials: Vec<Handle<WorldMaterial>>,
     anim: AnimState,
-    weapon: Option<(String, SkinnedInstance, Vec<Handle<WorldMaterial>>)>,
+    weapon: Option<HeldWeapon>,
     light_timer: f32,
     light_target: Option<([Vec4;6],Vec4,Vec4)>,
     light_current: Option<([Vec4;6],Vec4,Vec4)>,
     last_pose: Vec<glam::Mat4>,
     pose_life: u64,
+}
+
+struct HeldWeapon {
+    name: String,
+    instance: SkinnedInstance,
+    materials: Vec<Handle<WorldMaterial>>,
+    merge: skinning::PreparedBoneMerge,
+    pose: Vec<glam::Mat4>,
 }
 
 #[derive(Resource, Default)]
@@ -228,8 +236,8 @@ pub fn sync(
     for id in gone {
         if let Some(c) = chars.0.remove(&id) {
             despawn_instance(&mut commands, &c.body);
-            if let Some((_, w, _)) = &c.weapon {
-                despawn_instance(&mut commands, w);
+            if let Some(w) = &c.weapon {
+                despawn_instance(&mut commands, &w.instance);
             }
         }
     }
@@ -244,8 +252,8 @@ pub fn sync(
         if !chars.0.contains_key(&p.id) || chars.0[&p.id].team != p.team {
             if let Some(old) = chars.0.remove(&p.id) {
                 despawn_instance(&mut commands, &old.body);
-                if let Some((_, weapon, _)) = old.weapon {
-                    despawn_instance(&mut commands, &weapon);
+                if let Some(weapon) = old.weapon {
+                    despawn_instance(&mut commands, &weapon.instance);
                 }
             }
             let body = skinning::spawn(&mut commands, &team_model.asset, None, Some(&mut materials));
@@ -278,7 +286,7 @@ pub fn sync(
         // fidelity captures match the real game's noclip view.
         let own_hidden = p.id == local.id && std::env::var_os("CSR_NO_SELF").is_some();
         let visible = p.alive && !own_hidden && (p.id != local.view_target() || local.noclip);
-        for (index,e) in c.body.meshes.iter().chain(c.weapon.iter().flat_map(|w| w.1.meshes.iter())).enumerate() {
+        for (index,e) in c.body.meshes.iter().chain(c.weapon.iter().flat_map(|w| w.instance.meshes.iter())).enumerate() {
             let default_glove=p.id==local.id && inventory.active("gloves").is_some() && team_model.asset.model.meshes.get(index).is_some_and(|m|team_model.asset.model.textures[team_model.asset.model.skin_texture(0,m.material)].contains("glove"));
             if let Ok(mut v) = visibility.get_mut(*e) {
                 *v = if visible && !default_glove { Visibility::Inherited } else { Visibility::Hidden };
@@ -290,26 +298,35 @@ pub fn sync(
 
         // Weapon in hand follows the active weapon.
         let active = p.active_weapon().map(|w| w.def.class_name.clone()).unwrap_or_default();
-        if c.weapon.as_ref().map(|w| w.0.as_str()) != Some(active.as_str()) {
-            if let Some((_, w, _)) = c.weapon.take() {
-                despawn_instance(&mut commands, &w);
+        if c.weapon.as_ref().map(|w| w.name.as_str()) != Some(active.as_str()) {
+            if let Some(w) = c.weapon.take() {
+                despawn_instance(&mut commands, &w.instance);
             }
             if let Some(asset) = models.weapons.get(&active) {
                 let inst = skinning::spawn(&mut commands, asset, None, Some(&mut materials));
                 crate::skin_finish::tag(&mut commands,&inst,crate::skin_finish::Target::Held(p.id));
                 crate::decorations::tag(&mut commands,asset,&inst,crate::skin_finish::Target::Held(p.id),0);
-                c.weapon = Some((active.clone(), inst, Vec::new()));
+                // This instance and its merge share one child/parent pair.
+                // Weapon changes drop both; team changes recreate Character;
+                // clear_match drops Characters together with CharacterModels.
+                c.weapon = Some(HeldWeapon {
+                    name: active.clone(),
+                    instance: inst,
+                    materials: Vec::new(),
+                    merge: skinning::PreparedBoneMerge::new(&asset.model.bones, team_model.anims.bones()),
+                    pose: Vec::with_capacity(asset.model.bones.len()),
+                });
             }
         }
-        if let Some((_, inst, mats)) = &mut c.weapon {
-            if mats.is_empty() {
-                *mats = own_materials(inst, &mat_query);
+        if let Some(w) = &mut c.weapon {
+            if w.materials.is_empty() {
+                w.materials = own_materials(&w.instance, &mat_query);
             }
         }
 
-        if let Some((name, instance, _)) = &c.weapon {
-            if let Some(asset) = models.weapons.get(name) {
-                for (index, entity) in instance.meshes.iter().enumerate() {
+        if let Some(w) = &c.weapon {
+            if let Some(asset) = models.weapons.get(&w.name) {
+                for (index, entity) in w.instance.meshes.iter().enumerate() {
                     if let Ok(mut value) = visibility.get_mut(*entity) {
                         *value = if skinning::suppressor_mesh_hidden(&asset.model, index,
                             p.active_weapon().is_some_and(|w| w.suppressor_attached)) {
@@ -338,11 +355,11 @@ pub fn sync(
             to_bevy(render.origin),
         );
         skinning::apply_pose(&c.body, world_from_model, &pose, &mut transforms);
-        if let Some((name, inst, _)) = &c.weapon {
-            if let Some(asset) = weapon_assets.get(name) {
-                let wpose = skinning::bone_merge(&asset.model.bones, anims.bones(), &pose);
-                skinning::apply_pose(inst, world_from_model, &wpose, &mut transforms);
-                if let Some(point)=crate::tracers::muzzle_position(&asset.model,&wpose,false) {
+        if let Some(w) = &mut c.weapon {
+            if let Some(asset) = weapon_assets.get(&w.name) {
+                w.merge.evaluate_into(&pose, &mut w.pose);
+                skinning::apply_pose(&w.instance, world_from_model, &w.pose, &mut transforms);
+                if let Some(point)=crate::tracers::muzzle_position(&asset.model,&w.pose,false) {
                     muzzles.world.insert(p.id,world_from_model.transform_point3(to_bevy(point)));
                 }
             }
@@ -361,7 +378,7 @@ pub fn sync(
             for i in 0..6 {cube[i]=cube[i].lerp(target[i],blend);}
             sun_dir=sun_dir.lerp(dir,blend);sun_color=sun_color.lerp(color,blend);
             c.light_current=Some((cube,sun_dir,sun_color));
-            let weapon_mats = c.weapon.iter().flat_map(|w| w.2.iter());
+            let weapon_mats = c.weapon.iter().flat_map(|w| w.materials.iter());
             for h in c.materials.iter().chain(weapon_mats) {
                 // Preserve stable bindings when interpolation produces the
                 // same light. Check before obtaining mutable asset access.
