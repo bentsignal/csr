@@ -160,6 +160,14 @@ mod life_tests {
     }
 
     fn installed_app(weapon_override: Option<&str>) -> (App, sim::PlayerId) {
+        let (mut app, id) = installed_unposed_app(weapon_override);
+        app.update(); // create the cached instances
+        assert_mesh_visibility(&app, Visibility::Hidden);
+        app.update(); // sample the actual authored Draw clip
+        (app, id)
+    }
+
+    fn installed_unposed_app(weapon_override: Option<&str>) -> (App, sim::PlayerId) {
         let level = level::Level::load("de_dust2", None).expect("installed Legacy Dust II");
         let mut world = sim::World::with_catalog(level.collision.clone(), level.catalog.clone());
         world.load_spawns(&level.bsp);
@@ -195,9 +203,138 @@ mod life_tests {
             .insert_resource(Time::<()>::default()).insert_resource(Time::<Fixed>::from_hz(128.))
             .add_systems(Update, update);
         app.world_mut().spawn((Window::default(), bevy::window::PrimaryWindow));
-        app.update(); // create the cached instances
-        app.update(); // sample the actual authored Draw clip
         (app, id)
+    }
+
+    fn assert_mesh_visibility(app: &App, expected: Visibility) {
+        let (_, gun, arms, _) = app.world().resource::<ViewModelState>().weapon.as_ref().unwrap();
+        assert!(!gun.meshes.is_empty());
+        for mesh in gun.meshes.iter().chain(arms.iter().flat_map(|a| &a.meshes)) {
+            assert_eq!(app.world().get::<Visibility>(*mesh), Some(&expected));
+        }
+    }
+
+    fn joint_transforms(app: &App) -> Vec<Transform> {
+        let (_, gun, arms, _) = app.world().resource::<ViewModelState>().weapon.as_ref().unwrap();
+        assert!(!gun.joints.is_empty());
+        gun.joints.iter().chain(arms.iter().flat_map(|a| &a.joints))
+            .map(|joint| *app.world().get::<Transform>(*joint).unwrap()).collect()
+    }
+
+    // UNRUN: source-only implementation; root owns Cargo and installed-data checks.
+    #[test]
+    #[ignore = "requires the player's installed CS:GO Legacy; no GPU required"]
+    fn installed_view_target_visibility_preserves_playback_and_authoritative_state() {
+        for weapon in ["weapon_m4a1", "weapon_awp", "weapon_smokegrenade"] {
+            let (mut app, id) = installed_unposed_app(Some(weapon));
+            let authoritative = app.world().resource::<SimWorld>().0.state();
+            app.update();
+            assert_mesh_visibility(&app, Visibility::Hidden);
+            let unposed = joint_transforms(&app);
+            assert!(unposed.iter().all(|t| *t == Transform::IDENTITY));
+            app.update();
+            assert_mesh_visibility(&app, Visibility::Inherited);
+            let posed = joint_transforms(&app);
+            assert_ne!(posed, unposed, "{weapon} must pose its joints before reveal");
+            let state = app.world().resource::<ViewModelState>();
+            let playback = (state.life, state.activity.clone(), state.started, state.pose.clone());
+            let joints = state.weapon.as_ref().unwrap().1.joints.clone();
+            app.world_mut().resource_mut::<LocalPlayer>().spectating = Some(u32::MAX);
+            app.update();
+            assert_mesh_visibility(&app, Visibility::Hidden);
+            let state = app.world().resource::<ViewModelState>();
+            assert_eq!((state.life, state.activity.clone(), state.started, state.pose.clone()), playback,
+                "a temporarily missing target must not hard-reset playback or bones");
+            assert_eq!(joint_transforms(&app), posed);
+            app.world_mut().resource_mut::<LocalPlayer>().spectating = None;
+            app.update();
+            assert_mesh_visibility(&app, Visibility::Inherited);
+            let state = app.world().resource::<ViewModelState>();
+            assert_eq!((state.life, state.activity.clone(), state.started),
+                (playback.0, playback.1, playback.2));
+            assert_eq!(app.world().resource::<ViewModelState>().weapon.as_ref().unwrap().1.joints, joints);
+            assert_eq!(app.world().resource::<SimWorld>().0.state(), authoritative);
+            app.world_mut().resource_mut::<LocalPlayer>().noclip = true;
+            app.update();
+            assert_mesh_visibility(&app, Visibility::Hidden);
+            app.world_mut().resource_mut::<LocalPlayer>().noclip = false;
+            app.update();
+            assert_mesh_visibility(&app, Visibility::Inherited);
+
+            // Same weapon/team, different owner: old hands must not flash while
+            // the replacement instance still has deferred identity joints.
+            let other = {
+                let mut world = app.world_mut().resource_mut::<SimWorld>();
+                let weapons = world.0.player(id).unwrap().weapons.clone();
+                let other = world.0.add_player("view target fixture", sim::Team::CounterTerrorist);
+                let player = world.0.player_mut(other).unwrap();
+                player.weapons = weapons;
+                player.active = 0;
+                other
+            };
+            app.world_mut().resource_mut::<LocalPlayer>().spectating = Some(other);
+            app.update();
+            assert_mesh_visibility(&app, Visibility::Hidden);
+            assert!(joint_transforms(&app).iter().all(|t| *t == Transform::IDENTITY));
+            app.update();
+            assert_mesh_visibility(&app, Visibility::Inherited);
+            assert_eq!(app.world().resource::<ViewModelState>().owner, Some(other));
+            let joints = app.world().resource::<ViewModelState>().weapon.as_ref().unwrap().1.joints.clone();
+            app.world_mut().resource_mut::<SimWorld>().0.damage_environment(other, 1000, "fixture");
+            app.update();
+            assert_mesh_visibility(&app, Visibility::Hidden);
+            let authoritative = {
+                let mut world = app.world_mut().resource_mut::<SimWorld>();
+                world.0.respawn(other);
+                // Keep this fixture's selected gun/grenade across respawn so
+                // it exercises life changes with the same cached instance.
+                let weapons = world.0.player(id).unwrap().weapons.clone();
+                let player = world.0.player_mut(other).unwrap();
+                player.weapons = weapons;
+                player.active = 0;
+                world.0.state()
+            };
+            app.update();
+            assert_mesh_visibility(&app, Visibility::Inherited);
+            let state = app.world().resource::<ViewModelState>();
+            assert_eq!(state.activity, "ACT_VM_DRAW");
+            assert_eq!(state.weapon.as_ref().unwrap().1.joints, joints);
+            assert_eq!(app.world().resource::<SimWorld>().0.state(), authoritative);
+        }
+    }
+
+    // UNRUN: source-only implementation; root owns Cargo and installed-data checks.
+    #[test]
+    #[ignore = "requires the player's installed CS:GO Legacy; no GPU required"]
+    fn installed_unavailable_clips_cannot_reveal_unposed_or_cached_hands() {
+        let (mut app, _) = installed_unposed_app(Some("weapon_m4a1"));
+        let original = std::mem::take(&mut app.world_mut().resource_mut::<ViewModels>()
+            .weapons.get_mut("weapon_m4a1").unwrap().clips);
+        app.update();
+        assert_mesh_visibility(&app, Visibility::Hidden);
+        let unposed = joint_transforms(&app);
+        for clips in [HashMap::new(), HashMap::from([("ACT_VM_IDLE".into(), Vec::new())])] {
+            app.world_mut().resource_mut::<ViewModels>().weapons.get_mut("weapon_m4a1").unwrap().clips = clips;
+            app.update();
+            assert_mesh_visibility(&app, Visibility::Hidden);
+            assert_eq!(joint_transforms(&app), unposed);
+        }
+        let mut empty = original["ACT_VM_IDLE"][0].clone();
+        Arc::make_mut(&mut empty.clip).frames.clear();
+        app.world_mut().resource_mut::<ViewModels>().weapons.get_mut("weapon_m4a1")
+            .unwrap().clips.insert("ACT_VM_IDLE".into(), vec![empty]);
+        app.update();
+        assert_mesh_visibility(&app, Visibility::Hidden);
+        assert_eq!(joint_transforms(&app), unposed);
+        app.world_mut().resource_mut::<ViewModels>().weapons.get_mut("weapon_m4a1").unwrap().clips = original;
+        app.update();
+        assert_mesh_visibility(&app, Visibility::Inherited);
+        let posed = joint_transforms(&app);
+        assert_ne!(posed, unposed);
+        app.world_mut().resource_mut::<ViewModels>().weapons.get_mut("weapon_m4a1").unwrap().clips.clear();
+        app.update();
+        assert_mesh_visibility(&app, Visibility::Hidden);
+        assert_eq!(joint_transforms(&app), posed);
     }
 
     #[test]
@@ -644,9 +781,19 @@ pub fn update(
     muzzles.first=None;
     // Clear before every early return, including death, noclip and switching.
     wick.sample = None;
+    // Cached meshes belong to a successfully sampled view target. Every early
+    // return must leave them hidden; reveal only after gun and arms are posed.
+    if let Some((_, gun, arms, _)) = &state.weapon {
+        for mesh in gun.meshes.iter().chain(arms.iter().flat_map(|a| &a.meshes)) {
+            if let Ok(mut visible) = visibility.get_mut(*mesh) { *visible = Visibility::Hidden; }
+        }
+    }
     let now = time.elapsed_secs();
     let dt = time.delta_secs();
-    let Some(p) = world.0.player(local.view_target()) else { return };
+    let Some(p) = world.0.player(local.view_target()) else {
+        state.look_motion.clear();
+        return;
+    };
     let show = p.alive && !local.noclip && !p.active_weapon().is_some_and(|w| w.hides_viewmodel());
     let active = p.active_weapon().map(|w| w.def.class_name.clone()).unwrap_or_default();
 
@@ -670,6 +817,11 @@ pub fn update(
             });
             // Knives and some weapons carry their own hands; others get arms.
             let arms = arms_asset.map(|a| skinning::spawn(&mut commands, a, Some(layer()), Some(&mut *materials)));
+            // Deferred joints cannot be queried until the next update. Their
+            // identity transforms must never be presented as a weapon pose.
+            for mesh in gun.meshes.iter().chain(arms.iter().flat_map(|a| &a.meshes)) {
+                commands.entity(*mesh).insert(Visibility::Hidden);
+            }
             if !glove.is_empty(){if let Some(a)=&arms{crate::skin_finish::tag(&mut commands,a,crate::skin_finish::Target::Gloves);}}
             state.glove=glove.into();
             state.weapon = Some((active.clone(), gun, arms, Vec::new()));
@@ -700,20 +852,6 @@ pub fn update(
     }
     let (name, gun, arms) = (name.clone(), gun.clone(), arms.clone());
     let entities: Vec<Entity> = gun.meshes.iter().chain(arms.iter().flat_map(|a| a.meshes.iter())).copied().collect();
-    for (index, e) in entities.iter().enumerate() {
-        let clear_lens = p.active_weapon().is_some_and(|w| w.zoom_level > 0 && w.def.class == weapons::WeaponClass::Rifle)
-            && models.weapons.get(&name).and_then(|view| view.asset.model.meshes.get(index).map(|mesh| {
-                let model = &view.asset.model;
-                let material = model.skins.first().and_then(|s| s.get(mesh.material)).copied().unwrap_or(mesh.material);
-                model.textures.get(material).is_some_and(|m| m.starts_with("scope_") || m.contains("scope_glass"))
-            })).unwrap_or(false);
-        let hide_suppressor = index < gun.meshes.len() && models.weapons.get(&name).is_some_and(|view|
-            skinning::suppressor_mesh_hidden(&view.asset.model, index, p.active_weapon().is_some_and(|w|
-                w.suppressor_visible(world.0.time() + fixed.overstep_fraction() * world.0.dt(), world.0.dt()))));
-        if let Ok(mut v) = visibility.get_mut(*e) {
-            *v = if show && !clear_lens && !hide_suppressor { Visibility::Inherited } else { Visibility::Hidden };
-        }
-    }
     if !p.alive || local.noclip { state.look_motion.clear(); return; }
     let Some(view) = models.weapons.get(&name) else { return };
 
@@ -810,12 +948,12 @@ pub fn update(
         .or_else(|| {
             // Some knife variants name only the miss activities.
             match state.activity.as_str() {
-                "ACT_VM_HITCENTER2" => view.clips.get("ACT_VM_MISSCENTER2"),
-                "ACT_VM_HITCENTER" => view.clips.get("ACT_VM_MISSCENTER"),
+                "ACT_VM_HITCENTER2" => view.clips.get("ACT_VM_MISSCENTER2").filter(|c| !c.is_empty()),
+                "ACT_VM_HITCENTER" => view.clips.get("ACT_VM_MISSCENTER").filter(|c| !c.is_empty()),
                 _ => None,
             }
         })
-        .or_else(|| view.clips.get("ACT_VM_IDLE"));
+        .or_else(|| view.clips.get("ACT_VM_IDLE").filter(|c| !c.is_empty()));
     let Some(clips) = clips else { return };
     let mut seq = clips[state.clip_index % clips.len()].clone();
     let mut clip = seq.clip.clone();
@@ -847,6 +985,7 @@ pub fn update(
         }
     }
 
+    if clip.frames.is_empty() { return; }
     if state.started == now && std::env::var_os("CSR_WEAPON_TRACE").is_some() {
         info!("weapon activity: {} {}", name, state.activity);
     }
@@ -923,6 +1062,21 @@ pub fn update(
         if let Some(a) = arms_model {
             let arms_pose = skinning::bone_merge(&a.model.bones, &model.bones, &pose);
             skinning::apply_pose(arms, world_from_model, &arms_pose, &mut transforms);
+        }
+    }
+
+    for (index, e) in entities.iter().enumerate() {
+        let clear_lens = p.active_weapon().is_some_and(|w| w.zoom_level > 0 && w.def.class == weapons::WeaponClass::Rifle)
+            && models.weapons.get(&name).and_then(|view| view.asset.model.meshes.get(index).map(|mesh| {
+                let model = &view.asset.model;
+                let material = model.skins.first().and_then(|s| s.get(mesh.material)).copied().unwrap_or(mesh.material);
+                model.textures.get(material).is_some_and(|m| m.starts_with("scope_") || m.contains("scope_glass"))
+            })).unwrap_or(false);
+        let hide_suppressor = index < gun.meshes.len() && models.weapons.get(&name).is_some_and(|view|
+            skinning::suppressor_mesh_hidden(&view.asset.model, index, p.active_weapon().is_some_and(|w|
+                w.suppressor_visible(world.0.time() + fixed.overstep_fraction() * world.0.dt(), world.0.dt()))));
+        if let Ok(mut v) = visibility.get_mut(*e) {
+            *v = if show && !clear_lens && !hide_suppressor { Visibility::Inherited } else { Visibility::Hidden };
         }
     }
 
