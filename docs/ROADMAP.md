@@ -24,9 +24,9 @@ evidence and performance acceptance remain open.
 
 A narrow [world skinned-culling source candidate](SKINNED-WORLD-CULLING.md)
 uses Bevy's built-in joint bounds with explicit world-only eligibility and
-same-frame fallback. Synthetic CPU/schedule tests are authored but unexecuted;
-compilation, rendered edge/shadow admission and paired performance evidence
-remain root-owned prerequisites. No gain is established.
+same-frame fallback. Its eight CPU/schedule regressions, workspace suite,
+release build and Dust II probe/simulation checks pass. Rendered edge/shadow
+admission and paired performance evidence remain open. No gain is established.
 
 Owner return-home playtest on 2026-10-14: all reported defects, required
 features, accepted improvements and priorities are retained in
