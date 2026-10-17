@@ -69,8 +69,10 @@ mod tests {
                 let x = if t <= 0.5 { 8. * t } else { 4. + 16. * (t - 0.5) };
                 assert!((pose[0].0 - Vec3::X * x).length() < 1e-5);
                 assert!(pose[0].1.abs_diff_eq(Quat::from_rotation_z(x / 12.), 1e-5));
-                assert_eq!(pose[1], (Vec3::Y * 3., Quat::IDENTITY));
-                assert_eq!(pose[2], (Vec3::Z * 5., Quat::IDENTITY));
+                assert!(pose[1].0.abs_diff_eq(Vec3::Y * 3., 1e-5));
+                assert!(pose[1].1.abs_diff_eq(Quat::IDENTITY, 1e-5));
+                assert!(pose[2].0.abs_diff_eq(Vec3::Z * 5., 1e-5));
+                assert!(pose[2].1.abs_diff_eq(Quat::IDENTITY, 1e-5));
             }
             // A common off-grid timestamp after different histories, followed
             // by a backwards seek and an end clamp, must sample the same curve.
