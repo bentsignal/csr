@@ -105,6 +105,7 @@ pub enum Action {
     Bots(i32),
     Adjust(u8, f32),
     Bind(usize),
+    ClearBind(usize),
     Save,
     Defaults,
 }
@@ -268,6 +269,9 @@ pub(crate) fn input(
                     menu.status =
                         "Press a keyboard key. Esc cancels. Existing bindings swap.".into();
                 }
+                Action::ClearBind(i) => {
+                    if let Some(binding) = settings.binds.get_mut(i) { *binding = None; }
+                }
                 Action::Defaults => {
                     *settings = Settings::default();
                     menu.status = "Defaults restored. Apply to save.".into();
@@ -323,6 +327,8 @@ pub(crate) fn input(
                     }
                     14 => settings.cross_dot = !settings.cross_dot,
                     24 => settings.menu_blur=!settings.menu_blur,
+                    25..=29 => settings.cycle_mouse_binding((id - 25) as usize, delta.signum() as i32),
+                    30..=31 => settings.cycle_wheel_binding(id == 30, delta.signum() as i32),
                     _ => {}
                 },
             }
@@ -603,7 +609,7 @@ pub fn draw(
             ("GAME", Page::Settings),
             ("VIDEO", Page::Graphics),
             ("AUDIO", Page::Audio),
-            ("CONTROLS", Page::Controls),
+            ("KEYBOARD / MOUSE", Page::Controls),
             ("CROSSHAIR", Page::Crosshair),
         ] {
             button(&mut commands, tabs, name, Action::Page(p), Val::Auto);
@@ -1187,11 +1193,14 @@ pub fn draw(
             );
         }
         Page::Controls => {
+            if !settings.controls_source.is_empty() {
+                label(&mut commands, body, &settings.controls_source, 16.0, Color::srgb(0.7, 0.76, 0.8));
+            }
             row(
                 &mut commands,
                 body,
                 "Mouse sensitivity",
-                format!("{:.1}", settings.sensitivity),
+                format!("{:.3}", settings.sensitivity),
                 1,
                 0.1,
             );
@@ -1203,6 +1212,12 @@ pub fn draw(
                 9,
                 1.0,
             );
+            for (index, action) in settings.mouse_binds.iter().enumerate() {
+                row(&mut commands, body, &format!("Mouse button {}", index + 1), action.label().into(), 25 + index as u8, 1.0);
+            }
+            row(&mut commands, body, "Mouse wheel up", settings.wheel_up.label().into(), 30, 1.0);
+            row(&mut commands, body, "Mouse wheel down", settings.wheel_down.label().into(), 31, 1.0);
+            label(&mut commands, body, "Keyboard bindings", 18.0, Color::srgb(0.8, 0.85, 0.89));
             for (i, name) in ACTIONS.iter().enumerate() {
                 let r = column(
                     &mut commands,
@@ -1242,6 +1257,7 @@ pub fn draw(
                     align_items: AlignItems::Center,
                     ..default()
                 });
+                button(&mut commands, r, "Clear", Action::ClearBind(i), px(74.0));
             }
         }
         Page::Crosshair => {

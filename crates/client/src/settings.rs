@@ -1,7 +1,7 @@
 //! Persistent local settings shared by menus, input, audio and HUD.
 use bevy::prelude::*;
 
-pub const ACTIONS: [&str; 29] = [
+pub const ACTIONS: [&str; 30] = [
     "Move forward",
     "Move backward",
     "Move left",
@@ -31,15 +31,18 @@ pub const ACTIONS: [&str; 29] = [
     "Bomb",
     "Next weapon",
     "Previous weapon",
+    "Select fire grenade",
 ];
-pub const ACTION_COMMANDS: [&str; 29] = [
+pub const ACTION_COMMANDS: [&str; 30] = [
     "+forward", "+back", "+moveleft", "+moveright", "+jump", "+duck", "+speed",
     "+use", "+reload", "buymenu", "drop", "+showscores", "+lookatweapon",
     "+attack", "+attack2",
     "use weapon_hegrenade", "use weapon_flashbang", "use weapon_smokegrenade",
     "use weapon_molotov", "use weapon_incgrenade", "use weapon_decoy",
     "lastinv", "slot1", "slot2", "slot3", "slot4", "slot5", "invnext", "invprev",
+    "slot10",
 ];
+pub const KEY_FIRE_GRENADE: usize = 29;
 pub const KEY_ATTACK: usize = 13;
 pub const KEY_ATTACK2: usize = 14;
 pub const KEY_GRENADE_FIRST: usize = 15;
@@ -57,6 +60,13 @@ pub const MOUSE_BUTTONS: [MouseButton; 5] = [
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MouseAction { None, Attack, Attack2, Action(usize), Previous, Next, Last }
 impl MouseAction {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::None => "Unbound", Self::Attack => "Primary attack", Self::Attack2 => "Secondary attack",
+            Self::Action(index) => ACTIONS.get(index).copied().unwrap_or("Unbound"),
+            Self::Previous => "Previous weapon", Self::Next => "Next weapon", Self::Last => "Last weapon",
+        }
+    }
     pub fn command(self) -> &'static str {
         match self {
             Self::None => "", Self::Attack => "+attack", Self::Attack2 => "+attack2",
@@ -72,7 +82,7 @@ impl MouseAction {
         })
     }
 }
-pub const KEYS: [KeyCode; 46] = [
+pub const KEYS: &[KeyCode] = &[
     KeyCode::KeyA,
     KeyCode::KeyB,
     KeyCode::KeyC,
@@ -94,6 +104,7 @@ pub const KEYS: [KeyCode; 46] = [
     KeyCode::KeyS,
     KeyCode::KeyT,
     KeyCode::KeyU,
+    KeyCode::KeyV,
     KeyCode::KeyW,
     KeyCode::KeyX,
     KeyCode::KeyY,
@@ -119,18 +130,49 @@ pub const KEYS: [KeyCode; 46] = [
     KeyCode::Digit3,
     KeyCode::Digit4,
     KeyCode::Digit5,
+    KeyCode::Digit0, KeyCode::Digit6, KeyCode::Digit7, KeyCode::Digit8, KeyCode::Digit9,
+    KeyCode::ShiftRight, KeyCode::ControlRight, KeyCode::AltRight, KeyCode::Enter,
+    KeyCode::Backslash, KeyCode::BracketLeft, KeyCode::BracketRight,
+    KeyCode::Comma, KeyCode::Period, KeyCode::Quote, KeyCode::Semicolon,
+    KeyCode::Slash, KeyCode::Minus, KeyCode::Equal,
+    KeyCode::F1, KeyCode::F2, KeyCode::F3, KeyCode::F4, KeyCode::F5, KeyCode::F6,
+    KeyCode::F7, KeyCode::F8, KeyCode::F9, KeyCode::F10, KeyCode::F11, KeyCode::F12,
 ];
+
+/// Physical key names used by Source configs and the console. Escape and the
+/// console key remain reserved for navigation rather than gameplay bindings.
+pub fn source_key(name: &str) -> Option<KeyCode> {
+    let name = name.to_ascii_lowercase();
+    let alias = match name.as_str() {
+        "ctrl" => "controlleft", "rctrl" => "controlright",
+        "shift" => "shiftleft", "rshift" => "shiftright",
+        "alt" => "altleft", "ralt" => "altright",
+        "uparrow" => "arrowup", "downarrow" => "arrowdown",
+        "leftarrow" => "arrowleft", "rightarrow" => "arrowright",
+        "ins" => "insert", "del" => "delete", "pgup" => "pageup", "pgdn" => "pagedown",
+        "capslock" => "capslock", "\\" => "backslash", "[" => "bracketleft", "]" => "bracketright",
+        "," => "comma", "." => "period", "'" => "quote", ";" => "semicolon",
+        "/" => "slash", "-" => "minus", "=" => "equal", other => other,
+    };
+    KEYS.iter().copied().find(|key| {
+        let debug = format!("{key:?}").to_ascii_lowercase();
+        debug == alias || debug.strip_prefix("key") == Some(alias) || debug.strip_prefix("digit") == Some(alias)
+    })
+}
 
 /// A wheel detent is a one-shot request, never a held jump button.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WheelAction { None, Jump, Previous, Next }
 impl WheelAction {
+    pub fn label(self) -> &'static str { match self { Self::None => "Unbound", Self::Jump => "Jump", Self::Previous => "Previous weapon", Self::Next => "Next weapon" } }
     pub fn command(self) -> &'static str { match self { Self::None => "", Self::Jump => "+jump", Self::Previous => "invprev", Self::Next => "invnext" } }
     pub fn parse(value: &str) -> Option<Self> { Some(match value { "" => Self::None, "+jump" => Self::Jump, "invprev" => Self::Previous, "invnext" => Self::Next, _ => return None }) }
 }
 
 #[derive(Resource, Clone, Debug, PartialEq)]
 pub struct Settings {
+    /// Human-readable first-run control provenance, retained across saves.
+    pub controls_source: String,
     pub volume: f32,
     pub audio_options: crate::audio_options::AudioOptions,
     pub show_fps: bool,
@@ -154,20 +196,21 @@ pub struct Settings {
     pub radar_scale: f32,
     pub radar_rotate: bool,
     pub close_on_buy: bool,
-    pub binds: [Option<KeyCode>; 29],
+    pub binds: [Option<KeyCode>; 30],
     pub mouse_binds: [MouseAction; 5],
 }
 pub const RESOLUTIONS: [(u32, u32); 4] = [(1280, 720), (1600, 900), (1920, 1080), (2560, 1440)];
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            controls_source: String::new(),
             volume: 0.5,
             audio_options: Default::default(),
             show_fps: false,
             wheel_up: WheelAction::Previous,
             wheel_down: WheelAction::Next,
             menu_blur: true,
-            sensitivity: 2.0,
+            sensitivity: 1.0,
             invert_y: false,
             exposure: 2.0,
             vsync: false,
@@ -207,6 +250,7 @@ impl Default for Settings {
                 Some(KeyCode::Digit1), Some(KeyCode::Digit2), Some(KeyCode::Digit3),
                 Some(KeyCode::Digit4), Some(KeyCode::Digit5),
                 None, None, // Keyboard next/previous default to unbound.
+                None, // Either team's fire grenade (CS2 slot10).
             ],
             mouse_binds: [MouseAction::Attack, MouseAction::Attack2, MouseAction::None, MouseAction::None, MouseAction::None],
         }
@@ -232,6 +276,7 @@ impl Settings {
             let value = value.trim();
             let v = value.parse::<f32>().ok().filter(|x| x.is_finite());
             match key {
+                "controls_source" => s.controls_source = value.into(),
                 "mouse1" | "mouse2" | "mouse3" | "mouse4" | "mouse5" => {
                     if let Some(action) = MouseAction::parse(value) {
                         s.mouse_binds[key.as_bytes()[5] as usize - b'1' as usize] = action;
@@ -337,6 +382,7 @@ impl Settings {
             text.push_str(&format!("mouse{}={}\n", index + 1, action.command()));
         }
         text.push_str(&format!("menu_blur={}\n", self.menu_blur));
+        text.push_str(&format!("controls_source={}\n", self.controls_source.replace(['\r', '\n'], " ")));
         text.push_str(&format!("radar_scale={}\nradar_rotate={}\n", self.radar_scale, self.radar_rotate));
         text.push_str(&format!("closeonbuy={}\n", u8::from(self.close_on_buy)));
         for (i, key) in self.binds.iter().enumerate() {
@@ -367,6 +413,20 @@ impl Settings {
         for binding in &mut self.binds {
             if *binding == Some(key) { *binding = None; }
         }
+    }
+    /// The settings page offers only commands the input sampler implements.
+    pub fn cycle_mouse_binding(&mut self, index: usize, direction: i32) {
+        let Some(binding) = self.mouse_binds.get_mut(index) else { return };
+        let actions: Vec<_> = std::iter::once(MouseAction::None)
+            .chain(ACTION_COMMANDS.iter().filter_map(|command| MouseAction::parse(command))).collect();
+        let current = actions.iter().position(|action| action == binding).unwrap_or(0);
+        *binding = actions[(current as i32 + direction.signum()).rem_euclid(actions.len() as i32) as usize];
+    }
+    pub fn cycle_wheel_binding(&mut self, up: bool, direction: i32) {
+        let actions = [WheelAction::None, WheelAction::Jump, WheelAction::Previous, WheelAction::Next];
+        let binding = if up { &mut self.wheel_up } else { &mut self.wheel_down };
+        let current = actions.iter().position(|action| action == binding).unwrap_or(0);
+        *binding = actions[(current as i32 + direction.signum()).rem_euclid(actions.len() as i32) as usize];
     }
     pub fn mouse_pressed(&self, action: MouseAction, mouse: &ButtonInput<MouseButton>, blocked: u8) -> bool {
         MOUSE_BUTTONS.iter().enumerate().any(|(index, button)|
@@ -460,11 +520,42 @@ mod tests {
         s.radar_scale = 0.8;
         s.radar_rotate = false;
         s.close_on_buy = true;
+        s.controls_source = "CS2 controls imported; details: config/cs2-import.txt".into();
+        s.sensitivity = 1.375;
         s.mouse_binds[0] = MouseAction::None;
         s.mouse_binds[3] = MouseAction::Action(4);
         s.mouse_binds[4] = MouseAction::Attack;
         assert_eq!(s.binds[1], Some(KeyCode::KeyW));
         assert_eq!(Settings::parse(&s.encode()), s);
+    }
+    #[test]
+    fn new_controls_default_to_one_and_saved_sensitivity_remains_exact() {
+        assert_eq!(Settings::default().sensitivity, 1.);
+        assert_eq!(Settings::parse("volume=0.5\n").sensitivity, 1.);
+        assert_eq!(Settings::parse("sensitivity=2.71828\n").sensitivity, 2.71828);
+        for key in ["v", "0", "9", "rctrl", "leftarrow", "F12", "["] {
+            let key = source_key(key).unwrap();
+            let mut settings = Settings::default();
+            settings.rebind(KEY_FIRE_GRENADE, key);
+            assert_eq!(Settings::parse(&settings.encode()).binds[KEY_FIRE_GRENADE], Some(key));
+        }
+    }
+    #[test]
+    fn pointer_settings_cycle_only_supported_commands_and_round_trip() {
+        let mut settings = Settings::default();
+        let initial = settings.mouse_binds[0];
+        for _ in 0..=ACTION_COMMANDS.len() {
+            settings.cycle_mouse_binding(0, 1);
+            let binding = settings.mouse_binds[0];
+            assert_eq!(MouseAction::parse(binding.command()), Some(binding));
+            assert_eq!(Settings::parse(&settings.encode()).mouse_binds[0], binding);
+        }
+        assert_eq!(settings.mouse_binds[0], initial);
+        for up in [true, false] {
+            let initial = if up { settings.wheel_up } else { settings.wheel_down };
+            for _ in 0..4 { settings.cycle_wheel_binding(up, -1); }
+            assert_eq!(if up { settings.wheel_up } else { settings.wheel_down }, initial);
+        }
     }
     #[test]
     fn classic_color_ids_and_radar_choices_are_independent_of_mouse_inversion() {

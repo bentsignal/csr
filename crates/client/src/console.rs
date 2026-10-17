@@ -432,17 +432,7 @@ fn words(line: &str) -> Result<Vec<String>, String> {
     Ok(words)
 }
 fn binding_key(name: &str) -> Option<KeyCode> {
-    let name = name.to_ascii_lowercase();
-    match name.as_str() {
-        "ctrl" => Some(KeyCode::ControlLeft),
-        "shift" => Some(KeyCode::ShiftLeft),
-        "alt" => Some(KeyCode::AltLeft),
-        _ => crate::settings::KEYS.iter().copied().find(|key| {
-            let debug = format!("{key:?}").to_ascii_lowercase();
-            debug == name || debug.strip_prefix("key") == Some(name.as_str())
-                || debug.strip_prefix("digit") == Some(name.as_str())
-        }),
-    }
+    crate::settings::source_key(name)
 }
 fn bind(
     settings: &mut crate::settings::Settings,
