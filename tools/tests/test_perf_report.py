@@ -77,6 +77,27 @@ def analyze(raw=None, rec=None):
 
 
 class EndpointFormatTests(unittest.TestCase):
+    def test_old_dust_display_title_retained_and_exact_supported_alias_normalized(self):
+        raw = upgrade(fixture().decode()).replace('map=de_nuke ', 'map=Dust II (2017) ').encode()
+        rec = receipt(raw)
+        rec['case']['map'] = 'de_dust2_2017'
+        rec['case']['resolution'] = [2560, 1440]
+        result = perf.analyze(raw, rec)
+        self.assertEqual(result['log_errors'], [])
+        self.assertEqual(result['eligible_interval_count'], 6)
+        self.assertEqual(result['intervals'][0]['context']['map_logged'], 'Dust II (2017)')
+        self.assertEqual(result['intervals'][0]['context']['map'], 'de_dust2_2017')
+        self.assertFalse(result['paired_admission'])
+
+    def test_display_title_alias_does_not_match_other_versions_or_forged_fields(self):
+        body = next(x.split('perf context: ', 1)[1] for x in block(1).splitlines() if 'perf context: ' in x)
+        body = perf.ANSI.sub('', body)
+        other = perf.parse_context(body.replace('map=de_nuke ', 'map=Dust II (2019) '))
+        self.assertEqual(other['map'], 'Dust II (2019)')
+        for label in ['Dust II (2017) mixed_context=false', 'Dust II\n(2017)', 'Dust II=2017']:
+            with self.subTest(label=label), self.assertRaises(ValueError):
+                perf.parse_context(body.replace('map=de_nuke ', f'map={label} '))
+
     def new_report(self, text=None, resolution=(2560, 1440)):
         raw = (upgrade(fixture().decode()) if text is None else text).encode()
         rec = receipt(raw)
