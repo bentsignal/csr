@@ -22,6 +22,12 @@ provides conservative helper-bounded early/late summaries and synthetic
 regressions. Actual immutable-binary run review, matched camera/local-alive
 evidence and performance acceptance remain open.
 
+A narrow [world skinned-culling source candidate](SKINNED-WORLD-CULLING.md)
+uses Bevy's built-in joint bounds with explicit world-only eligibility and
+same-frame fallback. Synthetic CPU/schedule tests are authored but unexecuted;
+compilation, rendered edge/shadow admission and paired performance evidence
+remain root-owned prerequisites. No gain is established.
+
 Owner return-home playtest on 2026-10-14: all reported defects, required
 features, accepted improvements and priorities are retained in
 [PLAYTEST-2026-10-14.md](PLAYTEST-2026-10-14.md). Work continues without another

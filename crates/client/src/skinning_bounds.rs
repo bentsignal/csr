@@ -268,4 +268,3 @@ fn padded(min: Vec3A, max: Vec3A, padding: f32) -> Option<Aabb> {
 
 #[cfg(test)]
 mod tests;
-
