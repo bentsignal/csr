@@ -141,6 +141,7 @@ pub fn sync(
     level: Res<LoadedLevel>,
     mat_query: Query<&MeshMaterial3d<WorldMaterial>>,
 ) {
+    let _frame_scope = crate::input_latency::frame_scope("ground_items");
     let world = &world.0;
     let sun = characters.sun;
 

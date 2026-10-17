@@ -200,6 +200,7 @@ fn update(
     mut surfaces: Query<(&mut Visibility, &mut Node), (With<Surface>, Without<Fallback>)>,
     mut fallback: Query<(&mut Text, &mut Node), With<Fallback>>,
 ) {
+    let _frame_scope = crate::input_latency::frame_scope("classic_hud");
     for (_, mut node) in &mut fallback {
         node.top = px(60.0);
     }

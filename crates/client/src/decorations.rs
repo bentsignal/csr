@@ -83,6 +83,7 @@ pub fn update(
     mut materials: ResMut<Assets<WorldMaterial>>,
     mut images: ResMut<Assets<Image>>,
 ) {
+    let _frame_scope = crate::input_latency::frame_scope("decorations");
     let stale: Vec<_> = state
         .instances
         .keys()

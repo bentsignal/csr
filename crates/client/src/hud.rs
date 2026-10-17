@@ -394,6 +394,7 @@ pub fn update(
     mut bar: Query<&mut Visibility, (With<ProgressBar>, Without<HitMarker>)>,
     mut fill: Query<&mut Node, With<ProgressFill>>,
 ) {
+    let _frame_scope = crate::input_latency::frame_scope("hud");
     static DEBUG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     let debug = *DEBUG.get_or_init(|| std::env::var("CSR_HUD_DEBUG").is_ok_and(|value| value == "1"));
     let fps = diagnostics

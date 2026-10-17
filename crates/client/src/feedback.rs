@@ -294,6 +294,7 @@ pub fn update(
     mut particles: Query<(Entity, &mut Transform, &mut ImpactFx)>,
     mut edges: Query<(&HurtEdge, &mut Node, &mut BackgroundColor)>,
 ) {
+    let _frame_scope = crate::input_latency::frame_scope("feedback");
     let now = time.elapsed_secs();
     let dt = time.delta_secs();
     let eye = to_bevy(local.render_eye);

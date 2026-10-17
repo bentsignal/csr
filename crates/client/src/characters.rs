@@ -55,6 +55,13 @@ struct Character {
 #[derive(Resource, Default)]
 pub struct Characters(HashMap<sim::PlayerId, Character>, death_bodies::DeathBodies);
 
+impl Characters {
+    /// Read only by the opt-in interval report; no per-frame collection.
+    pub(crate) fn performance_counts(&self) -> (usize, [usize; 3]) {
+        (self.0.len(), self.1.performance_counts())
+    }
+}
+
 fn load_model(fs: &vfs::Vfs, path: &str) -> Option<mdl::Model> {
     let base = path.trim_end_matches(".mdl");
     let m = fs.read(path)?;
