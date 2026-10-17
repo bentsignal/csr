@@ -5,6 +5,7 @@ pub mod bot_profiles;
 mod character_profiles;
 mod empty_trigger;
 mod grenade_animations;
+mod historical_awp;
 mod recoil_trajectories;
 mod suppressor_animations;
 
@@ -238,6 +239,7 @@ impl Level {
         let catalog_sha1=grenade_animations::import(&mut catalog,&fs,catalog_sha1,item_schema_sha1);
         let catalog_sha1=suppressor_animations::import(&mut catalog,&fs,catalog_sha1);
         let catalog_sha1=empty_trigger::import(&mut catalog,item_schema_sha1,catalog_sha1);
+        let catalog_sha1=historical_awp::import_2018_target(&mut catalog,item_schema_sha1,catalog_sha1);
         // Distinguish clients which interpreted this authored field from older
         // parsers of the same raw schema. Keep item_schema_sha1 unmodified.
         let catalog_sha1 = if catalog.weapons.iter().any(|w| !w.dropped_model.is_empty()) {
@@ -269,6 +271,18 @@ impl Level {
             catalog_sha1.map(|previous| {
                 let mut hash = Sha1::new();
                 hash.update(b"csr-scoped-recoil-metadata-v1\0");
+                hash.update(previous);
+                hash.finalize().into()
+            })
+        } else { catalog_sha1 };
+        // Bolt-action zoom uses the primary shot cycle, including when the
+        // raw schema carries an inherited alternate-cycle default.
+        let catalog_sha1 = if catalog.weapons.iter().any(|w|
+            w.attr_f32("unzoom after shot").is_some_and(|v| v != 0.)
+                && w.attr_f32("cycletime alt").is_some_and(|v| v != w.cycle_time)) {
+            catalog_sha1.map(|previous| {
+                let mut hash = Sha1::new();
+                hash.update(b"csr-bolt-primary-cycle-v1\0");
                 hash.update(previous);
                 hash.finalize().into()
             })
