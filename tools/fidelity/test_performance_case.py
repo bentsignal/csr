@@ -294,6 +294,16 @@ class CaseFixtures(unittest.TestCase):
             self.assertIsNone(record['expected_physical_resolution'])
             self.assertEqual(reports.observed_resolutions, [[2560, 1440]])
 
+    def test_exact_old_dust_display_title_matches_requested_map_without_auto_admission(self):
+        text = metadata.upgrade(report(40)).replace('map=de_nuke ', 'map=Dust II (2017) ')
+        for requested, ready in [('de_dust2_2017', True), ('de_nuke', False), ('de_dust2', False)]:
+            reports = case.Reports(requested)
+            for line in text.splitlines():
+                reports.line(line)
+            self.assertEqual(reports.ready, ready)
+            self.assertEqual(reports.records[0]['parsed']['context']['map_logged'], 'Dust II (2017)')
+            self.assertFalse(any(w['admitted'] for w in reports.windows(False)))
+
     def test_expected_physical_mismatch_missing_and_zero_size_cannot_be_ready(self):
         for text in (metadata.upgrade(report(40)), report(40).replace('size: (1920, 1080)', 'size: (0, 1080)'),
                      report(40).replace('size: (1920, 1080), ', '')):

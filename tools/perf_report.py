@@ -112,7 +112,7 @@ def parse_interval(body):
 ACTOR = (r"(?:None|Some\(ActorContext \{ id: \d+, life_epoch: \d+, alive: (?:true|false), "
          r"team: \w+, active_slot: \d+, weapon_def_index: (?:None|Some\(\d+\)) \}\))")
 CONTEXT = re.compile(
-    r"endpoint_only=true map=(?P<map>\S+) mixed_context=(?P<mixed>true|false) "
+    r"endpoint_only=true map=(?P<map>[A-Za-z0-9_()-]+(?: [A-Za-z0-9_()-]+)*) mixed_context=(?P<mixed>true|false) "
     r"observed=Some\(FrameContext \{ state: (?P<state>\w+), page: (?P<page>None|Some\(\w+\)), "
     r"in_match: (?P<in_match>true|false), window: Some\(WindowContext \{ "
     r"size: \((?P<width>\d+), (?P<height>\d+)\), focused: (?P<focused>true|false), "
@@ -142,7 +142,10 @@ def parse_context(body):
         raise ValueError("missing or unrecognized FrameContext/window/local metadata")
     f = match.groupdict()
     return {
-        "map": f["map"], "state": f["state"], "page": f["page"],
+        # Workshop maps log the loaded level's display title. Retain that exact
+        # spelling and normalize only the source-verified supported alias.
+        "map": {"Dust II (2017)": "de_dust2_2017"}.get(f["map"], f["map"]),
+        "map_logged": f["map"], "state": f["state"], "page": f["page"],
         **{k: boolean(f[k]) for k in ("in_match", "focused", "screenshot", "input_enabled", "noclip")},
         "mixed_context": boolean(f["mixed"]), "local_id": int(f["local_id"]),
         "spectating": f["spectating"], "resolution": [int(f["width"]), int(f["height"])],
