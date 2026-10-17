@@ -383,9 +383,17 @@ impl Settings {
     /// a slot number that may no longer be bound to that key.
     pub(crate) fn selection_binding_label(&self, slot: u8) -> String {
         let Some(index) = (1..=5).contains(&slot).then_some(KEY_SELECTION_FIRST + slot as usize) else { return String::new(); };
-        if let Some(key) = self.binds[index] { return key_name(key); }
-        self.mouse_binds.iter().position(|action| *action == MouseAction::Action(index))
-            .map(|index| format!("Mouse {}", index + 1)).unwrap_or_default()
+        self.action_binding_label(index)
+    }
+    /// Keyboard and mouse are independent alternatives in the shared model.
+    /// Show both, including bindings made through the console or import.
+    pub(crate) fn action_binding_label(&self, index: usize) -> String {
+        let Some(command) = ACTION_COMMANDS.get(index) else { return String::new(); };
+        let mut labels: Vec<_> = self.binds[index].map(key_name).into_iter().collect();
+        labels.extend(self.mouse_binds.iter().enumerate()
+            .filter(|(_, action)| action.command() == *command)
+            .map(|(button, _)| format!("Mouse {}", button + 1)));
+        labels.join(" / ")
     }
     pub fn encode(&self) -> String {
         let mut text = format!(
@@ -439,6 +447,26 @@ impl Settings {
             self.binds[other] = old;
         }
         self.binds[index] = Some(key);
+    }
+    /// Move this action's first mouse binding to the chosen button, swapping
+    /// its former command onto the old button. Keyboard alternatives survive.
+    /// Use the console's canonical variants (attacks/weapon cycling are special).
+    pub(crate) fn rebind_mouse(&mut self, index: usize, button: MouseButton) {
+        let Some(command) = ACTION_COMMANDS.get(index) else { return; };
+        let Some(target) = MOUSE_BUTTONS.iter().position(|candidate| *candidate == button) else { return; };
+        let action = MouseAction::parse(command).unwrap();
+        if self.mouse_binds[target] == action { return; }
+        if let Some(old) = self.mouse_binds.iter().position(|candidate| *candidate == action) {
+            self.mouse_binds[old] = self.mouse_binds[target];
+        }
+        self.mouse_binds[target] = action;
+    }
+    pub(crate) fn clear_action_binding(&mut self, index: usize) {
+        let Some(command) = ACTION_COMMANDS.get(index) else { return; };
+        self.binds[index] = None;
+        for action in &mut self.mouse_binds {
+            if action.command() == *command { *action = MouseAction::None; }
+        }
     }
     pub fn unbind_key(&mut self, key: KeyCode) {
         if self.console_key == Some(key) { self.console_key = None; }
@@ -547,6 +575,54 @@ pub fn key_name(key: KeyCode) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn action_row_mouse_bindings_use_canonical_commands_for_every_action_and_button() {
+        for (index, command) in ACTION_COMMANDS.iter().enumerate() {
+            for (button, value) in MOUSE_BUTTONS.iter().copied().enumerate() {
+                let mut settings = Settings::default();
+                let keyboard = settings.binds;
+                settings.rebind_mouse(index, value);
+                assert_eq!(settings.mouse_binds[button], MouseAction::parse(command).unwrap());
+                assert_eq!(settings.binds, keyboard, "mouse capture preserves keyboard alternatives");
+                assert_eq!(Settings::parse(&settings.encode()), settings);
+                assert!(settings.action_binding_label(index).contains(&format!("Mouse {}", button + 1)));
+            }
+        }
+    }
+
+    #[test]
+    fn mouse_capture_swaps_occupied_buttons_without_changing_keyboard_wheel_or_console() {
+        let knife = KEY_SELECTION_FIRST + 3;
+        let mut settings = Settings::default();
+        settings.rebind(knife, KeyCode::KeyV);
+        settings.mouse_binds[3] = MouseAction::Action(knife);
+        settings.mouse_binds[4] = MouseAction::Action(4);
+        let original = settings.clone();
+        settings.rebind_mouse(knife, MouseButton::Forward);
+        let mut expected = original.clone();
+        expected.mouse_binds.swap(3, 4);
+        assert_eq!(settings, expected);
+        assert_eq!(settings.selection_binding_label(3), "V / Mouse 5");
+        settings.rebind_mouse(knife, MouseButton::Forward);
+        assert_eq!(settings, expected, "capturing the same button is idempotent");
+        settings.rebind_mouse(knife, MouseButton::Back);
+        assert_eq!(settings, original);
+        // The existing keyboard swap must still work beside a mouse binding.
+        settings.rebind(knife, KeyCode::KeyR);
+        assert_eq!(settings.binds[8], Some(KeyCode::KeyV));
+        assert_eq!(settings.selection_binding_label(3), "R / Mouse 4");
+        settings.clear_action_binding(knife);
+        assert_eq!(settings.binds[knife], None);
+        assert_eq!(settings.mouse_binds[3], MouseAction::None);
+        assert_eq!(settings.mouse_binds[4], MouseAction::Action(4));
+        assert_eq!(settings.selection_binding_label(3), "");
+        let unchanged = settings.clone();
+        settings.rebind_mouse(ACTIONS.len(), MouseButton::Back);
+        settings.rebind_mouse(knife, MouseButton::Other(4));
+        settings.clear_action_binding(ACTIONS.len());
+        assert_eq!(settings, unchanged, "unsupported buttons/local console are not gameplay actions");
+    }
+
     #[test]
     fn weapon_hints_follow_rebinds_unbinds_and_mouse_selection_after_reload() {
         let mut s = Settings::default();
