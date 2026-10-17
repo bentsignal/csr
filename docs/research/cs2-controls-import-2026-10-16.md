@@ -171,3 +171,11 @@ parity claims. Preserve frozen `feedback-20261016-9cabef2-staged` unchanged.
    unsupported CS2 zoom_sensitivity_ratio are not newly measured or accepted by
    these unscoped tests. Return mismatches with exact settings and count/angle
    receipts before changing any calibration law.
+
+## Combined integration handoff (2026-10-17)
+
+The completed controls and lifecycle source stacks are reconciled in
+[the integration handoff](controls-options-integration-20261017.md), including
+replacement commit mapping, scoped Restore Defaults and pending root checks.
+Use that combined apply order; the original lifecycle hashes are superseded
+there. Runtime and visual acceptance remain pending.

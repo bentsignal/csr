@@ -264,6 +264,20 @@ pub fn path() -> std::path::PathBuf {
     std::path::PathBuf::from("config/user.cfg")
 }
 impl Settings {
+    /// Reset only the keyboard/mouse model, including the local console key.
+    /// Raw device input and scoped FOV scaling have no persisted preferences.
+    /// Audio, video, crosshair, radar and other gameplay/UI preferences survive.
+    pub(crate) fn restore_controls_defaults(&mut self) {
+        let defaults = Self::default();
+        self.binds = defaults.binds;
+        self.console_key = defaults.console_key;
+        self.mouse_binds = defaults.mouse_binds;
+        self.wheel_up = defaults.wheel_up;
+        self.wheel_down = defaults.wheel_down;
+        self.sensitivity = defaults.sensitivity;
+        self.invert_y = defaults.invert_y;
+        self.controls_source = defaults.controls_source;
+    }
     pub fn load() -> Self {
         std::fs::read_to_string(path())
             .map(|s| Self::parse(&s))

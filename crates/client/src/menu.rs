@@ -145,6 +145,7 @@ pub enum Action {
     ClearBind(usize),
     Save,
     Defaults,
+    ControlsDefaults,
     ControlsBack,
 }
 
@@ -312,6 +313,10 @@ pub(crate) fn input(
                     else if let Some(binding) = settings.binds.get_mut(i) { *binding = None; }
                 }
                 Action::ControlsBack => menu.close_classic_controls(),
+                Action::ControlsDefaults => {
+                    settings.restore_controls_defaults();
+                    menu.status = "Control defaults restored. Apply to save.".into();
+                }
                 Action::Defaults => {
                     *settings = Settings::default();
                     menu.status = "Defaults restored. Apply to save.".into();
@@ -1369,7 +1374,7 @@ pub fn draw(
             &mut commands,
             footer,
             "RESTORE DEFAULTS",
-            Action::Defaults,
+            if page == Page::Controls { Action::ControlsDefaults } else { Action::Defaults },
             px(220.0),
         );
     }
@@ -1479,7 +1484,7 @@ fn draw_classic_controls(commands: &mut Commands, menu: &Menu, settings: &Settin
         column_gap: px(12.0), flex_shrink: 0.0, flex_wrap: FlexWrap::Wrap, row_gap: px(8.0), ..default()
     });
     button(commands, footer, "APPLY / SAVE", Action::Save, px(180.0));
-    button(commands, footer, "RESTORE DEFAULTS", Action::Defaults, px(200.0));
+    button(commands, footer, "RESTORE DEFAULTS", Action::ControlsDefaults, px(200.0));
     button(commands, footer, "BACK", Action::ControlsBack, px(120.0));
     root
 }
@@ -1825,6 +1830,72 @@ mod tests {
     }
 
     #[test]
+    fn controls_restore_apply_reload_preserves_unrelated_preferences() {
+        const CHILD: &str = "CSR_CONTROLS_DEFAULTS_FIXTURE_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let data = std::env::temp_dir().join(format!("csr-controls-defaults-{}-{}", std::process::id(),
+                std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+            std::fs::create_dir_all(&data).unwrap();
+            let result = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "menu::tests::controls_restore_apply_reload_preserves_unrelated_preferences", "--nocapture"])
+                .env(CHILD, "1").current_dir(&data).output().unwrap();
+            std::fs::remove_dir_all(&data).unwrap();
+            assert!(result.status.success(), "{}\n{}", String::from_utf8_lossy(&result.stdout), String::from_utf8_lossy(&result.stderr));
+            return;
+        }
+        // Every unrelated persisted field differs from its default. Equality
+        // after real UI actions and disk reload detects a whole-settings reset.
+        let sentinel = Settings::parse(concat!(
+            "volume=0.73\nsnd_mute_losefocus=0\nsnd_menumusic_volume=0.27\n",
+            "cl_showfps=1\nmenu_blur=false\nexposure=3.25\nvsync=true\nfullscreen=true\n",
+            "resolution=3\nmsaa=false\nblood=false\nhitmarker=true\n",
+            "cross_color=3\ncross_size=13\ncross_gap=7\ncross_thickness=4\ncross_dot=true\n",
+            "radar_scale=0.8\nradar_rotate=false\ncloseonbuy=1\n"
+        ));
+        for in_match in [false, true] {
+            let mut a = harness();
+            let mut changed = sentinel.clone();
+            changed.controls_source = "Fixture import".into();
+            changed.binds.fill(None);
+            changed.console_key = Some(KeyCode::Backslash);
+            changed.mouse_binds.fill(crate::settings::MouseAction::Action(4));
+            changed.wheel_up = crate::settings::WheelAction::Jump;
+            changed.wheel_down = crate::settings::WheelAction::None;
+            changed.sensitivity = 3.375;
+            changed.invert_y = true;
+            changed.save().unwrap();
+            a.insert_resource(changed.clone());
+            a.world_mut().resource_mut::<Menu>().in_match = in_match;
+            a.world_mut().resource_mut::<Menu>().open_classic_controls();
+            let action = a.world_mut().spawn((Interaction::Pressed, Action::ControlsDefaults)).id();
+            a.update();
+            let defaults = Settings::default();
+            let mut expected = sentinel.clone();
+            expected.binds = defaults.binds;
+            expected.console_key = defaults.console_key;
+            expected.mouse_binds = defaults.mouse_binds;
+            expected.wheel_up = defaults.wheel_up;
+            expected.wheel_down = defaults.wheel_down;
+            expected.sensitivity = defaults.sensitivity;
+            expected.invert_y = defaults.invert_y;
+            expected.controls_source = defaults.controls_source;
+            assert_eq!(*a.world().resource::<Settings>(), expected);
+            assert_eq!(Settings::load(), changed, "Restore waits for Apply before saving");
+            a.world_mut().entity_mut(action).insert((Interaction::Pressed, Action::Save));
+            a.update();
+            assert_eq!(a.world().resource::<Menu>().status, "Settings saved.");
+            let reloaded = Settings::load();
+            assert_eq!(reloaded, expected);
+            a.world_mut().entity_mut(action).insert((Interaction::Pressed, Action::ControlsBack));
+            a.update();
+            assert_eq!(a.world().resource::<Menu>().page, Some(if in_match { Page::Pause } else { Page::Main }));
+            a.insert_resource(reloaded);
+            a.world_mut().resource_mut::<Menu>().open_classic_controls();
+            assert_eq!(*a.world().resource::<Settings>(), expected);
+        }
+    }
+
+    #[test]
     fn controls_body_scrolls_independently_of_footer_and_keeps_every_binding_row() {
         let mut a = App::new();
         a.init_resource::<Menu>().init_resource::<Settings>().add_systems(Update,
@@ -1843,6 +1914,8 @@ mod tests {
         let buttons: Vec<_> = world.query::<(&Action, &ChildOf)>().iter(world)
             .map(|(action, parent)| (*action, parent.parent())).collect();
         assert_eq!(buttons.iter().filter(|(action, _)| matches!(action, Action::Bind(_))).count(), ACTIONS.len() + 1);
+        assert_eq!(buttons.iter().filter(|(action, _)| matches!(action, Action::ControlsDefaults)).count(), 1);
+        assert!(!buttons.iter().any(|(action, _)| matches!(action, Action::Defaults)));
         for (_, parent) in buttons.iter().filter(|(action, _)| matches!(action, Action::Save | Action::ControlsBack)) {
             assert_ne!(*parent, body);
             assert_eq!(world.get::<ChildOf>(*parent).unwrap().parent(), root);

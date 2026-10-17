@@ -173,3 +173,11 @@ images. UI16-01/02 are not accepted by this source patch. UI16-03 remains open;
 no route-specific concealment or latency tuning was added. The frozen owner
 candidate/settings are unchanged. The independent input follow-up is not
 included and must be integrated/checked separately by root.
+
+## Combined integration handoff (2026-10-17)
+
+The completed controls and lifecycle source stacks are reconciled in
+[the integration handoff](controls-options-integration-20261017.md), including
+replacement commit mapping, scoped Restore Defaults and pending root checks.
+Use that combined apply order; the original lifecycle hashes are superseded
+there. Runtime and visual acceptance remain pending.
