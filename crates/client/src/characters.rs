@@ -256,7 +256,7 @@ pub fn sync(
                     despawn_instance(&mut commands, &weapon.instance);
                 }
             }
-            let body = skinning::spawn(&mut commands, &team_model.asset, None, Some(&mut materials));
+            let body = skinning::spawn_world(&mut commands, &team_model.asset, Some(&mut materials), crate::skinning_bounds::WorldSkin::Body);
             if p.id==local.id{crate::decorations::tag(&mut commands,&team_model.asset,&body,crate::skin_finish::Target::Gloves,0);}
             chars.0.insert(
                 p.id,
@@ -303,7 +303,7 @@ pub fn sync(
                 despawn_instance(&mut commands, &w.instance);
             }
             if let Some(asset) = models.weapons.get(&active) {
-                let inst = skinning::spawn(&mut commands, asset, None, Some(&mut materials));
+                let inst = skinning::spawn_world(&mut commands, asset, Some(&mut materials), crate::skinning_bounds::WorldSkin::HeldWeapon);
                 crate::skin_finish::tag(&mut commands,&inst,crate::skin_finish::Target::Held(p.id));
                 crate::decorations::tag(&mut commands,asset,&inst,crate::skin_finish::Target::Held(p.id),0);
                 // This instance and its merge share one child/parent pair.

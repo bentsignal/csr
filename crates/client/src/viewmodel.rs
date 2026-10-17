@@ -375,6 +375,7 @@ mod asset_ownership_tests {
             model: Arc::new(mdl::Model { name: name.into(), ..Default::default() }),
             parts: Vec::new(),
             inverse_bindposes: Default::default(),
+            culling: Vec::new(),
         }
     }
 
