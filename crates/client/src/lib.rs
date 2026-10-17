@@ -55,6 +55,7 @@ mod targeted_render_trace;
 pub mod characters;
 pub mod player_anim;
 pub mod skinning;
+pub mod skinning_bounds;
 pub mod viewmodel;
 pub mod coords;
 pub mod effects;
@@ -294,6 +295,7 @@ impl Plugin for CsgoPlugin {
         menu::install_controls_retirement(app);
         if let Err(error) = remote_render_gate::install(app) { error!("Remote render preparation unavailable: {error:?}"); }
         shadow_diagnostic::install(app);
+        if skinning_bounds::experiment_enabled() { skinning_bounds::install(app); }
         console::install(app);
         kill_feed::install(app);
     }
