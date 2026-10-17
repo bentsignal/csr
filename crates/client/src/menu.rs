@@ -32,6 +32,8 @@ pub struct Menu {
     pub terrorist: bool,
     pub bots: u32,
     pub capture: Option<usize>,
+    /// Buttons already held when the row opened capture must release first.
+    capture_held_mouse: u8,
     /// The working classic menu explicitly hands keyboard/mouse ownership to
     /// this shared controls panel. Other fallback pages stay disabled.
     pub(crate) classic_controls: bool,
@@ -53,6 +55,7 @@ impl Default for Menu {
             terrorist: false,
             bots: 5,
             capture: None,
+            capture_held_mouse: 0,
             classic_controls: false,
             controls_just_closed: false,
             status: String::new(),
@@ -235,7 +238,7 @@ pub(crate) fn input(
     mut commands: Commands,
     mut menu: ResMut<Menu>,
     mut settings: ResMut<Settings>,
-    keys: Res<ButtonInput<KeyCode>>,
+    (keys, mouse): (Res<ButtonInput<KeyCode>>, Res<ButtonInput<MouseButton>>),
     actions: Query<(&Interaction, &Action), Changed<Interaction>>,
     mut exit: MessageWriter<AppExit>,
     (load_request, opts, remote, front): (Res<LoadRequest>, Res<crate::Options>, Option<Res<crate::remote::RemoteClient>>, Option<Res<crate::frontend::Frontend>>),
@@ -255,7 +258,11 @@ pub(crate) fn input(
     menu.controls_just_closed = false;
     // Native movie callbacks may close the menu between input passes.
     let was_open = menu.open() || *previous_open;
+    let was_capturing = menu.capture.is_some();
     if let Some(index) = menu.capture {
+        for (button, value) in crate::settings::MOUSE_BUTTONS.iter().enumerate() {
+            if !mouse.pressed(*value) || mouse.just_released(*value) { menu.capture_held_mouse &= !(1 << button); }
+        }
         if keys.just_pressed(KeyCode::Escape) {
             menu.capture = None;
             menu.dirty = true;
@@ -268,6 +275,15 @@ pub(crate) fn input(
             save_controls = menu.classic_controls;
             menu.capture = None;
             menu.dirty = true;
+        } else if index < ACTIONS.len() {
+            if let Some((_, button)) = crate::settings::MOUSE_BUTTONS.iter().enumerate()
+                .find(|(i, button)| menu.capture_held_mouse & (1 << *i) == 0 && mouse.just_pressed(**button))
+            {
+                settings.rebind_mouse(index, *button);
+                save_controls = menu.classic_controls;
+                menu.capture = None;
+                menu.dirty = true;
+            }
         }
     } else if keys.just_pressed(KeyCode::Escape) && menu.classic_controls {
         menu.close_classic_controls();
@@ -280,7 +296,9 @@ pub(crate) fn input(
         }
         menu.dirty = true;
     }
-    if menu.open() && menu.capture.is_none() {
+    // The edge completing/cancelling capture belongs only to capture. A left
+    // binding click must not also reopen its row, clear a bind or resume play.
+    if menu.open() && !was_capturing && menu.capture.is_none() {
         for (interaction, action) in &actions {
             if *interaction != Interaction::Pressed {
                 continue;
@@ -351,12 +369,17 @@ pub(crate) fn input(
                 Action::Bots(d) => menu.bots = (menu.bots as i32 + d).clamp(0, 10) as u32,
                 Action::Bind(i) => {
                     menu.capture = Some(i);
-                    menu.status =
-                        "Press a keyboard key. Esc cancels. Existing bindings swap.".into();
+                    menu.capture_held_mouse = crate::settings::MOUSE_BUTTONS.iter().enumerate()
+                        .fold(0, |mask, (i, button)| mask | if mouse.pressed(*button) { 1 << i } else { 0 });
+                    menu.status = if i == ACTIONS.len() {
+                        "Press a keyboard key. Esc cancels. Existing bindings swap."
+                    } else {
+                        "Press a key or mouse button (1-5). Esc cancels. Mouse bindings swap; keyboard alternatives stay."
+                    }.into();
                 }
                 Action::ClearBind(i) => {
                     if i == ACTIONS.len() { settings.console_key = None; }
-                    else if let Some(binding) = settings.binds.get_mut(i) { *binding = None; }
+                    else { settings.clear_action_binding(i); }
                     save_controls |= menu.classic_controls;
                 }
                 Action::ControlsBack => menu.close_classic_controls(),
@@ -427,6 +450,7 @@ pub(crate) fn input(
                     }
                 },
             }
+            if menu.capture.is_some() { break; }
         }
     }
     if save_controls {
@@ -1482,7 +1506,7 @@ fn controls_content(commands: &mut Commands, body: Entity, menu: &Menu, settings
     }
     row(commands, body, "Mouse wheel up", settings.wheel_up.label().into(), 30, 1.0);
     row(commands, body, "Mouse wheel down", settings.wheel_down.label().into(), 31, 1.0);
-    label(commands, body, "Keyboard bindings", 18.0, Color::srgb(0.8, 0.85, 0.89));
+    label(commands, body, "Action bindings", 18.0, Color::srgb(0.8, 0.85, 0.89));
     for (i, name) in ACTIONS.iter().chain(std::iter::once(&"Toggle developer console")).enumerate() {
         let r = column(
             commands,
@@ -1508,9 +1532,11 @@ fn controls_content(commands: &mut Commands, body: Entity, menu: &Menu, settings
             commands,
             r,
             if menu.capture == Some(i) {
-                "Press a key…".into()
+                if i == ACTIONS.len() { "Press a key…".into() } else { "Key / mouse 1-5…".into() }
             } else {
-                (if i == ACTIONS.len() { settings.console_key } else { settings.binds[i] }).map(crate::settings::key_name).unwrap_or_else(|| "Unbound".into())
+                let label = if i == ACTIONS.len() { settings.console_key.map(crate::settings::key_name).unwrap_or_default() }
+                    else { settings.action_binding_label(i) };
+                if label.is_empty() { "Unbound".into() } else { label }
             },
             Action::Bind(i),
             px(180.0),
@@ -1537,7 +1563,7 @@ fn draw_classic_controls(commands: &mut Commands, menu: &Menu, settings: &Settin
     }, BackgroundColor(Color::srgb(0.035, 0.055, 0.072)), GlobalZIndex(100),
         ClassicControlsRoot(if menu.in_match { crate::AppState::Match } else { crate::AppState::Menu }))).id();
     label(commands, root, "KEYBOARD / MOUSE", 30.0, Color::WHITE);
-    label(commands, root, "Scroll to see all controls. Select a key to change it; Escape cancels capture.",
+    label(commands, root, "Scroll to see all controls. Select an action binding, then press a key or mouse button; Escape cancels.",
         17.0, Color::srgb(0.8, 0.85, 0.89));
     let body = column(commands, root, Node::default());
     controls_scroll(commands, body, menu.scroll);

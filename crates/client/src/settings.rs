@@ -383,9 +383,17 @@ impl Settings {
     /// a slot number that may no longer be bound to that key.
     pub(crate) fn selection_binding_label(&self, slot: u8) -> String {
         let Some(index) = (1..=5).contains(&slot).then_some(KEY_SELECTION_FIRST + slot as usize) else { return String::new(); };
-        if let Some(key) = self.binds[index] { return key_name(key); }
-        self.mouse_binds.iter().position(|action| *action == MouseAction::Action(index))
-            .map(|index| format!("Mouse {}", index + 1)).unwrap_or_default()
+        self.action_binding_label(index)
+    }
+    /// Keyboard and mouse are independent alternatives in the shared model.
+    /// Show both, including bindings made through the console or import.
+    pub(crate) fn action_binding_label(&self, index: usize) -> String {
+        let Some(command) = ACTION_COMMANDS.get(index) else { return String::new(); };
+        let mut labels: Vec<_> = self.binds[index].map(key_name).into_iter().collect();
+        labels.extend(self.mouse_binds.iter().enumerate()
+            .filter(|(_, action)| action.command() == *command)
+            .map(|(button, _)| format!("Mouse {}", button + 1)));
+        labels.join(" / ")
     }
     pub fn encode(&self) -> String {
         let mut text = format!(
@@ -439,6 +447,26 @@ impl Settings {
             self.binds[other] = old;
         }
         self.binds[index] = Some(key);
+    }
+    /// Move this action's first mouse binding to the chosen button, swapping
+    /// its former command onto the old button. Keyboard alternatives survive.
+    /// Use the console's canonical variants (attacks/weapon cycling are special).
+    pub(crate) fn rebind_mouse(&mut self, index: usize, button: MouseButton) {
+        let Some(command) = ACTION_COMMANDS.get(index) else { return; };
+        let Some(target) = MOUSE_BUTTONS.iter().position(|candidate| *candidate == button) else { return; };
+        let action = MouseAction::parse(command).unwrap();
+        if self.mouse_binds[target] == action { return; }
+        if let Some(old) = self.mouse_binds.iter().position(|candidate| *candidate == action) {
+            self.mouse_binds[old] = self.mouse_binds[target];
+        }
+        self.mouse_binds[target] = action;
+    }
+    pub(crate) fn clear_action_binding(&mut self, index: usize) {
+        let Some(command) = ACTION_COMMANDS.get(index) else { return; };
+        self.binds[index] = None;
+        for action in &mut self.mouse_binds {
+            if action.command() == *command { *action = MouseAction::None; }
+        }
     }
     pub fn unbind_key(&mut self, key: KeyCode) {
         if self.console_key == Some(key) { self.console_key = None; }
