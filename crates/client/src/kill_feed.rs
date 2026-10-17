@@ -192,6 +192,7 @@ fn update(
     data: Res<GameData>,
     state: Res<State<AppState>>,
     windows: Query<&Window, With<PrimaryWindow>>,
+    ui_scale: Res<UiScale>,
     effects: Option<Res<Effects>>,
     local: Option<Res<LocalPlayer>>,
     world: Option<Res<SimWorld>>,
@@ -202,7 +203,7 @@ fn update(
 ) {
     let _frame_scope = crate::input_latency::frame_scope("classic_hud");
     for (_, mut node) in &mut fallback {
-        node.top = px(60.0);
+        node.top = crate::hud_layout::unit(crate::hud_layout::NOTICE_TOP);
     }
     let notice_enabled = std::env::var_os("CSR_NO_CLASSIC_KILL_FEED").is_none();
     let matched = *state.get() == AppState::Match
@@ -226,7 +227,7 @@ fn update(
                 .map(crate::combat_hud::Snapshot::from_player)
         })
         .flatten();
-    let surface_height = px(size.1.div_ceil(2) as f32 / window.scale_factor());
+    let surface_height = crate::hud_layout::raster_pixel(size.1.div_ceil(2), window.scale_factor(), ui_scale.0);
     if feed.movie.is_none()
         && matched
         && !feed.failed.load(Ordering::Acquire)
@@ -529,7 +530,7 @@ fn update(
             if rendered_count > 0 && !plain.is_empty() {
                 // Exceptional plain rows sit below the cropped authored HUD
                 // rather than covering a healthy notice at the same anchor.
-                node.top = px((size.1.div_ceil(2) + 16) as f32 / window.scale_factor());
+                node.top = crate::hud_layout::raster_pixel(size.1.div_ceil(2) + 16, window.scale_factor(), ui_scale.0);
             }
         }
     }

@@ -79,7 +79,13 @@ pub fn load(mut commands: Commands, level: Res<crate::GameData>, mut fonts: ResM
 /// Covers text spawned later by menus, too. Runs before Bevy's text layout.
 pub fn fonts(assets: Res<UiAssets>, mut text: Query<&mut TextFont, Added<TextFont>>) {
     for mut font in &mut text {
-        let bold = matches!(font.font_size, FontSize::Px(size) if size >= 24.0);
+        let bold = match font.font_size {
+            FontSize::Px(size) => size >= 24.0,
+            // HUD typography uses physical viewport-height units, keeping its
+            // original font-weight choice through resolution/DPI changes.
+            FontSize::Vh(size) => size >= 24.0 * scaleform::HUD_SCALING as f32 / 1080.0 * 100.0,
+            _ => false,
+        };
         font.font = bevy::text::FontSource::Handle(if bold { assets.bold.clone() } else { assets.regular.clone() });
     }
 }

@@ -27,7 +27,7 @@ pub(crate) fn call(object: &str, method: &str, args: &[Value]) -> Option<Value> 
     match (object, method) {
         ("GameInterface", "GetConvarNumber") => match arg0.as_str() {
             "safezonex" | "safezoney" => n(1.0),
-            "hud_scaling" => n(0.85),
+            "hud_scaling" => n(crate::HUD_SCALING),
             _ => n(0.0),
         },
         ("GameInterface", "GetConvarBoolean") => b(arg0 == "play_with_friends_enabled"),

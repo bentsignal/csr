@@ -61,6 +61,7 @@ pub mod coords;
 pub mod effects;
 mod kill_feed;
 mod combat_hud;
+mod hud_layout;
 pub mod hud;
 pub mod ui_assets;
 pub mod hud_art;
@@ -281,7 +282,7 @@ impl Plugin for CsgoPlugin {
                     scope::update,
                     buymenu::draw,
                     scoreboard::draw,
-                    hud_art::update.run_if(|| std::env::var_os("CSR_NO_HUD").is_none()),
+                    (hud_art::layout, hud_art::update).chain().run_if(|| std::env::var_os("CSR_NO_HUD").is_none()),
                     (menu_scene::update.run_if(frontend::native_enabled),skin_finish::update,decorations::update).chain(),
                     (menu::draw.in_set(menu::ControlsDraw).after(frontend::update), (case_ui::input, case_ui::draw, case_ui::animate).chain().run_if(frontend::native_enabled)).chain(),
                     (menu::scroll_controls, menu::cards).chain().run_if(frontend::engine_menu_enabled),

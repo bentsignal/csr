@@ -5,6 +5,7 @@
 use crate::effects::Effects;
 use crate::localize::Localization;
 use crate::player::{LocalPlayer, SimWorld};
+use crate::hud_layout::{self as layout, legacy as hp, unit as hu, font as hf};
 use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin};
 use bevy::prelude::*;
 use sim::{Phase, Team};
@@ -110,7 +111,7 @@ fn text(commands: &mut Commands, kind: HudText, size: f32, color: Color, node: N
         .spawn((
             Text::new(""),
             TextFont {
-                font_size: FontSize::Px(size),
+                font_size: layout::legacy_font(size),
                 ..default()
             },
             TextColor(color),
@@ -121,6 +122,7 @@ fn text(commands: &mut Commands, kind: HudText, size: f32, color: Color, node: N
     match kind {
         HudText::Health | HudText::Armor => { commands.entity(entity).insert(crate::combat_hud::Fallback::Health); }
         HudText::Ammo => { commands.entity(entity).insert(crate::combat_hud::Fallback::Ammo); }
+        HudText::Money => { commands.entity(entity).insert(crate::hud_art::RadarLayout::Money); }
         _ => (),
     }
     entity
@@ -197,7 +199,7 @@ pub fn setup(mut commands: Commands) {
             });
         });
 
-    let speed = text(&mut commands, HudText::Speed, 20.0, Color::srgba(1.0, 1.0, 1.0, 0.8), centered_row(Val::Auto, px(90.0)));
+    let speed = text(&mut commands, HudText::Speed, 20.0, Color::srgba(1.0, 1.0, 1.0, 0.8), centered_row(Val::Auto, hp(90.0)));
     commands.entity(speed).insert(TextLayout::justify(Justify::Center));
     text(
         &mut commands,
@@ -206,8 +208,8 @@ pub fn setup(mut commands: Commands) {
         Color::srgba(1.0, 1.0, 1.0, 0.75),
         Node {
             position_type: PositionType::Absolute,
-            top: px(6.0),
-            left: px(8.0),
+            top: hp(6.0),
+            left: hp(8.0),
             ..default()
         },
     );
@@ -218,12 +220,12 @@ pub fn setup(mut commands: Commands) {
         HUD_YELLOW,
         Node {
             position_type: PositionType::Absolute,
-            bottom: px(16.0),
-            left: px(66.0),
+            bottom: hp(16.0),
+            left: hp(66.0),
             ..default()
         },
     );
-    text(&mut commands, HudText::Armor, 34.0, HUD_YELLOW, Node { position_type: PositionType::Absolute, bottom: px(16.0), left: px(217.0), ..default() });
+    text(&mut commands, HudText::Armor, 34.0, HUD_YELLOW, Node { position_type: PositionType::Absolute, bottom: hp(16.0), left: hp(217.0), ..default() });
     text(
         &mut commands,
         HudText::Money,
@@ -231,8 +233,8 @@ pub fn setup(mut commands: Commands) {
         MONEY_GREEN,
         Node {
             position_type: PositionType::Absolute,
-            top: px(286.0),
-            left: px(24.0),
+            top: hu(layout::RADAR_TOP + layout::RADAR_DIAMETER + 32.0),
+            left: hu(60.0),
             ..default()
         },
     );
@@ -243,8 +245,8 @@ pub fn setup(mut commands: Commands) {
         HUD_YELLOW,
         Node {
             position_type: PositionType::Absolute,
-            bottom: px(16.0),
-            right: px(24.0),
+            bottom: hp(16.0),
+            right: hp(24.0),
             ..default()
         },
     );
@@ -256,8 +258,8 @@ pub fn setup(mut commands: Commands) {
         Color::srgba(1.0, 1.0, 1.0, 0.8),
         Node {
             position_type: PositionType::Absolute,
-            bottom: px(110.0),
-            right: px(24.0),
+            bottom: hp(110.0),
+            right: hp(24.0),
             ..default()
         },
     );
@@ -269,23 +271,24 @@ pub fn setup(mut commands: Commands) {
         Color::WHITE,
         Node {
             position_type: PositionType::Absolute,
-            top: px(60.0),
-            right: px(16.0),
+            top: hu(layout::NOTICE_TOP),
+            right: hp(16.0),
             ..default()
         },
     );
     commands.entity(feed).insert((TextLayout::justify(Justify::Right), crate::kill_feed::Fallback));
     let center = text(&mut commands, HudText::Center, 32.0, Color::WHITE, centered_row(percent(24), Val::Auto));
     commands.entity(center).insert(TextLayout::justify(Justify::Center));
-    let hint = text(&mut commands, HudText::Hint, 20.0, Color::WHITE, centered_row(Val::Auto, px(150.0)));
+    let hint = text(&mut commands, HudText::Hint, 20.0, Color::WHITE, centered_row(Val::Auto, hp(150.0)));
     commands.entity(hint).insert(TextLayout::justify(Justify::Center));
 
-    // Top centre: CT score | timer | T score, with the phase under it.
+    // Classic top centre: timer ABOVE the two scores, inside the same strip
+    // used to anchor both teams. Reference: 2015 tutorial nominal254s.
     commands
         .spawn((
             Node {
                 position_type: PositionType::Absolute,
-                top: px(8.0),
+                top: hu(0.0),
                 width: percent(100),
                 flex_direction: FlexDirection::Column,
                 align_items: AlignItems::Center,
@@ -295,30 +298,26 @@ pub fn setup(mut commands: Commands) {
         .with_children(|top| {
             top.spawn((
                 Node {
-                    column_gap: px(18.0),
-                    padding: UiRect::axes(px(14.0), px(4.0)),
+                    width: hu(layout::CENTER_WIDTH),
+                    height: hu(layout::PLAYER_HEIGHT),
+                    flex_direction: FlexDirection::Column,
                     align_items: AlignItems::Center,
                     ..default()
                 },
                 BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.45)),
             ))
             .with_children(|row| {
-                for (kind, color, size) in [(HudText::ScoreCt, CT_BLUE, 26.0), (HudText::Timer, Color::WHITE, 26.0), (HudText::ScoreT, T_GOLD, 26.0)] {
-                    row.spawn((
-                        Text::new(""),
-                        TextFont {
-                            font_size: FontSize::Px(size),
-                            ..default()
-                        },
-                        TextColor(color),
-                        kind,
-                    ));
-                }
+                row.spawn((Text::new(""), TextFont { font_size: hf(20.0), ..default() }, TextColor(Color::WHITE), HudText::Timer));
+                row.spawn(Node { width: percent(100), justify_content: JustifyContent::SpaceAround, ..default() }).with_children(|scores| {
+                    for (kind, color) in [(HudText::ScoreCt, CT_BLUE), (HudText::ScoreT, T_GOLD)] {
+                        scores.spawn((Text::new(""), TextFont { font_size: hf(14.0), ..default() }, TextColor(color), kind));
+                    }
+                });
             });
             top.spawn((
                 Text::new(""),
                 TextFont {
-                    font_size: FontSize::Px(14.0),
+                    font_size: hf(10.0),
                     ..default()
                 },
                 TextColor(Color::srgba(1.0, 1.0, 1.0, 0.8)),
