@@ -152,6 +152,10 @@ fn held_scope_and_primary_attempts_cannot_rapid_fire_a_magazine() {
             Arc::make_mut(&mut w.def).clip_size = 10;
             Arc::make_mut(&mut w.def).full_auto = automatic;
             w.clip = 10;
+            // Isolate one magazine from the normal empty-trigger autoreload.
+            // That behavior is covered independently and must remain enabled
+            // for ordinary loadouts with reserve ammunition.
+            w.reserve = 0;
             w.set_zoom(2, 0.);
             let mut deadline = 0.;
             let mut shots = Vec::new();
