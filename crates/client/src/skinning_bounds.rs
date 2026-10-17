@@ -221,6 +221,8 @@ fn pose_padding(
 ) -> Option<f32> {
     let entity = global.to_matrix();
     if !affine(entity) { return None; }
+    let determinant = global.affine().matrix3.determinant();
+    if !determinant.is_finite() || determinant == 0.0 { return None; }
     // Match the calculator's affine inverse, including its rounding path.
     let entity_inverse = Mat4::from(global.affine().inverse());
     if !affine(entity_inverse) { return None; }
@@ -263,4 +265,7 @@ fn padded(min: Vec3A, max: Vec3A, padding: f32) -> Option<Aabb> {
     (aabb.center.is_finite() && aabb.half_extents.is_finite()
         && aabb.min().cmple(min).all() && aabb.max().cmpge(max).all()).then_some(aabb)
 }
+
+#[cfg(test)]
+mod tests;
 
