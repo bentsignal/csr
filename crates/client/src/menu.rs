@@ -1828,11 +1828,11 @@ mod tests {
         install_controls_retirement(&mut app);
         app.add_systems(Update, draw.in_set(ControlsDraw).run_if(home_controls))
             .add_systems(Update, draw.in_set(ControlsDraw).run_if(crate::remote_join::ready));
-        app.world_mut().resource_scope(|world, mut schedules: Mut<Schedules>| {
+        app.world_mut().schedule_scope(Update, |world, schedule| {
             // Build actual system metadata and ordering without executing draw
             // or requiring a renderer. Before(draw) used to fail initialization
             // because these two instances share one SystemTypeSet.
-            schedules.get_mut(Update).unwrap().initialize(world).unwrap();
+            schedule.initialize(world).unwrap();
         });
     }
 
