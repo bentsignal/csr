@@ -40,6 +40,7 @@ struct Data {
     home_retired: bool,
     pause_surface: crate::frontend_pause_surface::Tracker,
     deferred_pause: crate::frontend_pause_surface::DeferredPause,
+    flow_roots: HashMap<String, String>,
 }
 
 impl Data {
@@ -49,7 +50,7 @@ impl Data {
             state: self.state, menu_open: self.menu_open, controls_open: false, loading: self.loading.clone(),
             loading_map: self.loading_map.clone(), player_name: self.player_name.clone(),
             movie_ready: HashSet::new(), home_bootstrapped: false, home_retired: false,
-            pause_surface: Default::default(), deferred_pause: Default::default() }
+            pause_surface: Default::default(), flow_roots: Default::default(), deferred_pause: Default::default() }
     }
 }
 
@@ -678,6 +679,9 @@ impl Engine for Bridge {
             self.data.lock().unwrap().movie_ready.remove(object);
             if let Some(path) = arg(0).strip_prefix("mc:") {
                 self.roots.insert(object.into(), path.into());
+                if crate::frontend_acceptance::enabled() {
+                    self.data.lock().unwrap().flow_roots.insert(object.into(), path.into());
+                }
                 match object {
                     "PauseMenu" => self.data.lock().unwrap().pause_surface.root(crate::frontend_pause_surface::Root::Pause, path),
                     "OptionsMenu" => self.data.lock().unwrap().pause_surface.root(crate::frontend_pause_surface::Root::Options, path),
@@ -1109,6 +1113,7 @@ pub struct Frontend {
     loading_presentation: crate::frontend_loading_presentation::Presentation,
     pause_presentation: crate::frontend_pause_surface::Presentation,
     performance_ack: Option<(u64, std::time::Instant)>,
+    flow_observation: Option<(u64, Vec<String>)>,
     worker_generation: u64,
     root: Entity,
     camera: Entity,
@@ -1164,6 +1169,7 @@ impl Frontend {
         self.home_show_pending = kind == WorkerKind::Home;
         self.home_return_started = (kind == WorkerKind::Home).then(std::time::Instant::now);
         self.performance_ack = None;
+        self.flow_observation = None;
         self.pause_presentation.open();
         info!(worker = ?kind, generation = self.worker_generation, "Classic UI selected cached domain");
         true
@@ -1205,6 +1211,10 @@ impl Frontend {
         Input::Call { path: "_global.csrBindings".into(),
             function: "cancelOwnedOptions".into(), args: vec![receiver.into()] }
     }
+    // Read-only diagnostics for the explicitly selected rendered acceptance case.
+    pub(crate) fn flow_roots(&self) -> HashMap<String, String> { self.data.lock().unwrap().flow_roots.clone() }
+    pub(crate) fn flow_observation(&self) -> Option<&(u64, Vec<String>)> { self.flow_observation.as_ref() }
+    pub(crate) fn flow_presented(&self) -> bool { self.menu_presented() }
     pub(crate) fn pause_root(&self) -> Option<String> { self.data.lock().unwrap().pause_surface.pause_root().map(str::to_owned) }
     pub(crate) fn loaded(&self, name: &str) -> bool { self.loaded.contains(name) }
     /// Authored OnReady received for the current cached movie; Loaded alone is earlier.
@@ -1302,7 +1312,7 @@ pub(crate) fn setup(
         player_name: "You".into(),
         movie_ready: HashSet::new(), home_bootstrapped: false, home_retired: false,
         pause_surface: Default::default(),
-        deferred_pause: Default::default(),
+        flow_roots: Default::default(), deferred_pause: Default::default(),
     }));
     let lobby = Arc::new(Mutex::new(crate::frontend_lobby::Scene::new(
         crate::frontend_lobby::Catalog::installed(&options.0, &menu.maps),
@@ -1418,7 +1428,7 @@ pub(crate) fn setup(
         presented_serial: 0,
         loading_presentation: Default::default(),
         pause_presentation: presentation,
-        performance_ack: None,
+        performance_ack: None, flow_observation: None,
         worker_generation: 0,
         root,
         camera,
@@ -1968,6 +1978,11 @@ pub(crate) fn update(
                 if let Some(id) = path.strip_prefix("_global.csrPerformanceProbe.").and_then(|id| id.parse().ok()) {
                     front.performance_ack = Some((id, std::time::Instant::now()));
                 }
+                if crate::frontend_acceptance::enabled() {
+                    if let Some(id) = path.strip_prefix("_global.csrFlowProbe.").and_then(|id| id.parse().ok()) {
+                        front.flow_observation = Some((id, properties.clone()));
+                    }
+                }
                 debug!("UI API {path}: {properties:?}")
             }
             None => break,
@@ -2407,14 +2422,14 @@ mod tests {
             state: AppState::Match, menu_open: true, controls_open: false, loading: String::new(),
             loading_map: None, player_name: "Fixture".into(), movie_ready: Default::default(),
             home_bootstrapped: false, home_retired: false,
-            pause_surface: Default::default(), deferred_pause: Default::default(),
+            pause_surface: Default::default(), flow_roots: Default::default(), deferred_pause: Default::default(),
         }, catalog);
         Frontend {
             worker_kind: WorkerKind::Home, parked: None, next_worker_generation: 12,
             home_show_pending: false, home_return_started: None, movie: None,
             data: worker.data, actions: worker.actions, image: Default::default(),
             presented_serial: 0, loading_presentation: Default::default(),
-            pause_presentation: Default::default(), performance_ack: None, worker_generation: 11,
+            pause_presentation: Default::default(), performance_ack: None, flow_observation: None, worker_generation: 11,
             root: Entity::PLACEHOLDER, camera: Entity::PLACEHOLDER, visible: true,
             active: true, ready: false, failed: None, viewport: (1920, 1080),
             requested: Default::default(), loaded: Default::default(), scene: None,
@@ -2575,7 +2590,7 @@ mod tests {
             inventory: InventoryView::new(&fs), fs, settings: Settings::default(),
             localization: Default::default(), game_modes: modes.clone(),
             state: AppState::Menu, menu_open: true, controls_open: false, loading: String::new(), loading_map: None, player_name: "You".into(), movie_ready: HashSet::new(), home_bootstrapped: false, home_retired: false, pause_surface: Default::default(),
-        deferred_pause: Default::default(),
+        flow_roots: Default::default(), deferred_pause: Default::default(),
         }));
         let mut scene = Scene::new(Catalog::installed(&crate::ClientOptions::default(), &["de_dust2".into()]));
         assert!(scene.begin(&modes)); assert!(scene.open_lobby());
@@ -2668,7 +2683,7 @@ mod tests {
                     state, menu_open: true, controls_open: false, loading: String::new(), loading_map: None,
                     player_name: "Fixture".into(), movie_ready: Default::default(),
                     home_bootstrapped: false, home_retired: false,
-                    pause_surface: Default::default(), deferred_pause: Default::default(),
+                    pause_surface: Default::default(), flow_roots: Default::default(), deferred_pause: Default::default(),
                 }));
                 let mut bridge = Bridge { dispatch_epoch: None,
                     data: data.clone(), actions: Default::default(), seen: Default::default(),
@@ -2715,7 +2730,7 @@ mod tests {
             state: AppState::Menu, menu_open: true, controls_open: false, loading: String::new(),
             loading_map: None, player_name: "You".into(), movie_ready: Default::default(),
             home_bootstrapped: true, home_retired: false,
-            pause_surface: Default::default(), deferred_pause: Default::default(),
+            pause_surface: Default::default(), flow_roots: Default::default(), deferred_pause: Default::default(),
         }));
         let mut bridge = Bridge {
             dispatch_epoch: None, data: data.clone(), actions: Default::default(),
@@ -2800,7 +2815,7 @@ mod tests {
             localization: Default::default(), game_modes: Default::default(),
             state: AppState::Menu, menu_open: true, controls_open: false, loading: String::new(),
             loading_map: None, player_name: "You".into(), movie_ready: Default::default(), home_bootstrapped: false, home_retired: false,
-            pause_surface: Default::default(), deferred_pause: Default::default(),
+            pause_surface: Default::default(), flow_roots: Default::default(), deferred_pause: Default::default(),
         }));
         let mut bridge = Bridge { dispatch_epoch: None,
             data: data.clone(), actions: Default::default(), seen: Default::default(),
@@ -2837,7 +2852,7 @@ mod tests {
             state: AppState::Menu, menu_open: true, controls_open: false, loading: String::new(),
             loading_map: None, player_name: "You".into(), movie_ready: Default::default(),
             home_bootstrapped: false, home_retired: false,
-            pause_surface: Default::default(), deferred_pause: Default::default(),
+            pause_surface: Default::default(), flow_roots: Default::default(), deferred_pause: Default::default(),
         }));
         let mut bridge = Bridge {
             dispatch_epoch: None, data: data.clone(), actions: Default::default(),
@@ -2899,7 +2914,7 @@ mod tests {
             player_name: "You".into(),
         movie_ready: HashSet::new(), home_bootstrapped: false, home_retired: false,
         pause_surface: Default::default(),
-        deferred_pause: Default::default(),
+        flow_roots: Default::default(), deferred_pause: Default::default(),
         }));
         let actions = Arc::new(Mutex::new(ActionQueue::default()));
         let mut bridge = Bridge { dispatch_epoch: None,

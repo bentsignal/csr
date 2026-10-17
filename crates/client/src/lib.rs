@@ -17,6 +17,7 @@ mod frontend_loading_presentation;
 mod frontend_lobby;
 mod frontend_options;
 mod frontend_flow;
+mod frontend_acceptance;
 mod frontend_input;
 mod frontend_pause_surface;
 mod pack_flow;
@@ -337,7 +338,17 @@ pub fn run(opts: ClientOptions) -> i32 {
     material::install_lighting(&mut app);
     input_latency::install_frame_log(&mut app);
     if frontend_flow::enabled() {
-        app.add_systems(Update, frontend_flow::update.after(frontend::update));
+        if frontend_acceptance::enabled() {
+            frontend_acceptance::install(&mut app);
+            if frontend_acceptance::match_case() {
+                // Reuse the existing authored launch only. The acceptance case
+                // owns every Pause/Options transition through public input.
+                app.add_systems(Update, frontend_flow::update.after(frontend::update)
+                    .run_if(|state: Res<State<AppState>>| *state.get() != AppState::Match));
+            }
+        } else {
+            app.add_systems(Update, frontend_flow::update.after(frontend::update));
+        }
     }
     if opts.screenshot.is_some() {
         // Automated runs never have focus; don't let the unfocused 60 Hz
