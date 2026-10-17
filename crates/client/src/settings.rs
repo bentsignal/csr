@@ -419,13 +419,13 @@ impl Settings {
         let Some(binding) = self.mouse_binds.get_mut(index) else { return };
         let actions: Vec<_> = std::iter::once(MouseAction::None)
             .chain(ACTION_COMMANDS.iter().filter_map(|command| MouseAction::parse(command))).collect();
-        let current = actions.iter().position(|action| action == binding).unwrap_or(0);
+        let current = actions.iter().position(|action| *action == *binding).unwrap_or(0);
         *binding = actions[(current as i32 + direction.signum()).rem_euclid(actions.len() as i32) as usize];
     }
     pub fn cycle_wheel_binding(&mut self, up: bool, direction: i32) {
         let actions = [WheelAction::None, WheelAction::Jump, WheelAction::Previous, WheelAction::Next];
         let binding = if up { &mut self.wheel_up } else { &mut self.wheel_down };
-        let current = actions.iter().position(|action| action == binding).unwrap_or(0);
+        let current = actions.iter().position(|action| *action == *binding).unwrap_or(0);
         *binding = actions[(current as i32 + direction.signum()).rem_euclid(actions.len() as i32) as usize];
     }
     pub fn mouse_pressed(&self, action: MouseAction, mouse: &ButtonInput<MouseButton>, blocked: u8) -> bool {
