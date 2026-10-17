@@ -196,8 +196,61 @@ mod life_tests {
             .add_systems(Update, update);
         app.world_mut().spawn((Window::default(), bevy::window::PrimaryWindow));
         app.update(); // create the cached instances
+        assert_mesh_visibility(&app, Visibility::Hidden);
         app.update(); // sample the actual authored Draw clip
         (app, id)
+    }
+
+    fn assert_mesh_visibility(app: &App, expected: Visibility) {
+        let (_, gun, arms, _) = app.world().resource::<ViewModelState>().weapon.as_ref().unwrap();
+        assert!(!gun.meshes.is_empty());
+        for mesh in gun.meshes.iter().chain(arms.iter().flat_map(|a| &a.meshes)) {
+            assert_eq!(app.world().get::<Visibility>(*mesh), Some(&expected));
+        }
+    }
+
+    #[test]
+    #[ignore = "requires the player's installed CS:GO Legacy; no GPU required"]
+    fn installed_spectator_switch_and_missing_target_never_show_unposed_or_stale_hands() {
+        let (mut app, id) = installed_app(None);
+        assert_mesh_visibility(&app, Visibility::Inherited);
+        let other = app.world_mut().resource_mut::<SimWorld>().0
+            .add_player("spectator fixture", sim::Team::Terrorist);
+        app.world_mut().resource_mut::<LocalPlayer>().spectating = Some(other);
+        app.update(); // replacement gun/arms have no sampled joints yet
+        assert_mesh_visibility(&app, Visibility::Hidden);
+        app.update();
+        assert_mesh_visibility(&app, Visibility::Inherited);
+        let baseline = app.world().resource::<ViewModelState>().pose.clone();
+        let joints = app.world().resource::<ViewModelState>().weapon.as_ref().unwrap().1.joints.clone();
+        {
+            let mut state = app.world_mut().resource_mut::<ViewModelState>();
+            state.activity = "ACT_VM_RELOAD".into();
+            state.reloading = true;
+            state.pose.iter_mut().for_each(|pose| pose.0 = glam::Vec3::splat(90.));
+        }
+        // A snapshot can temporarily lack the selected target. Returning the
+        // same target/life must bootstrap playback rather than reuse the pose.
+        app.world_mut().resource_mut::<LocalPlayer>().spectating = Some(u32::MAX);
+        app.update();
+        assert_mesh_visibility(&app, Visibility::Hidden);
+        assert_eq!(app.world().resource::<ViewModelState>().life, None);
+        app.world_mut().resource_mut::<LocalPlayer>().spectating = Some(other);
+        app.update();
+        assert_mesh_visibility(&app, Visibility::Inherited);
+        let state = app.world().resource::<ViewModelState>();
+        assert_eq!(state.activity, "ACT_VM_DRAW");
+        assert_eq!(state.pose, baseline);
+        assert_eq!(state.weapon.as_ref().unwrap().1.joints, joints);
+        app.world_mut().resource_mut::<SimWorld>().0.damage_environment(other, 1000, "fixture");
+        app.update();
+        assert_mesh_visibility(&app, Visibility::Hidden);
+        app.world_mut().resource_mut::<LocalPlayer>().spectating = None;
+        app.update();
+        assert_mesh_visibility(&app, Visibility::Hidden);
+        app.update();
+        assert_mesh_visibility(&app, Visibility::Inherited);
+        assert_eq!(app.world().resource::<ViewModelState>().owner, Some(id));
     }
 
     #[test]
@@ -424,6 +477,20 @@ pub struct ViewModelState {
 }
 
 impl ViewModelState {
+    fn hide(&mut self, visibility: &mut Query<&mut Visibility>) {
+        if let Some((_, gun, arms, _)) = &self.weapon {
+            for mesh in gun.meshes.iter().chain(arms.iter().flat_map(|a| &a.meshes)) {
+                if let Ok(mut visible) = visibility.get_mut(*mesh) {
+                    *visible = Visibility::Hidden;
+                }
+            }
+        }
+        // An absent view target is a presentation discontinuity even if it
+        // later reappears with the same player id and replicated life epoch.
+        self.life = None;
+        self.look_motion.clear();
+    }
+
     fn begin_life(&mut self, life: u64, bones: &[mdl::skeleton::Bone], now: f32,
         attack_serial: u64, inspect_serial: u64) -> bool {
         if self.life == Some(life) { return false; }
@@ -646,7 +713,10 @@ pub fn update(
     wick.sample = None;
     let now = time.elapsed_secs();
     let dt = time.delta_secs();
-    let Some(p) = world.0.player(local.view_target()) else { return };
+    let Some(p) = world.0.player(local.view_target()) else {
+        state.hide(&mut visibility);
+        return;
+    };
     let show = p.alive && !local.noclip && !p.active_weapon().is_some_and(|w| w.hides_viewmodel());
     let active = p.active_weapon().map(|w| w.def.class_name.clone()).unwrap_or_default();
 
@@ -670,6 +740,12 @@ pub fn update(
             });
             // Knives and some weapons carry their own hands; others get arms.
             let arms = arms_asset.map(|a| skinning::spawn(&mut commands, a, Some(layer()), Some(&mut *materials)));
+            // Deferred entities cannot receive their sampled joint transforms
+            // until the next update. Do not render identity-joint hands in
+            // this intervening frame (including a switch to a dead target).
+            for mesh in gun.meshes.iter().chain(arms.iter().flat_map(|a| &a.meshes)) {
+                commands.entity(*mesh).insert(Visibility::Hidden);
+            }
             if !glove.is_empty(){if let Some(a)=&arms{crate::skin_finish::tag(&mut commands,a,crate::skin_finish::Target::Gloves);}}
             state.glove=glove.into();
             state.weapon = Some((active.clone(), gun, arms, Vec::new()));
