@@ -217,6 +217,54 @@ pub fn bone_merge(child: &[Bone], parent_bones: &[Bone], parent_pose: &[glam::Ma
     out
 }
 
+/// A bone merge for one immutable child/parent skeleton pair. Compile when an
+/// instance is equipped, never from an animation pose: names, first-match
+/// indices and child rest transforms stay fixed while parent matrices change.
+pub(crate) struct PreparedBoneMerge {
+    bones: Vec<MergeBone>,
+}
+
+struct MergeBone {
+    source: Option<usize>,
+    parent: i32,
+    pos: glam::Vec3,
+    quat: glam::Quat,
+}
+
+impl PreparedBoneMerge {
+    pub(crate) fn new(child: &[Bone], parent: &[Bone]) -> Self {
+        Self {
+            bones: child.iter().map(|bone| MergeBone {
+                // Preserve bone_merge's first ASCII-insensitive match, even
+                // for duplicate names or a pose shorter than the skeleton.
+                source: parent.iter().position(|p| p.name.eq_ignore_ascii_case(&bone.name)),
+                parent: bone.parent,
+                pos: bone.pos,
+                quat: bone.quat,
+            }).collect(),
+        }
+    }
+
+    /// Same arithmetic and missing-source fallback as bone_merge. The caller
+    /// owns the output so steady-state evaluation needs no allocation or name
+    /// search. Skeletons retain the importer's parent-before-child invariant.
+    pub(crate) fn evaluate_into(&self, parent_pose: &[glam::Mat4], out: &mut Vec<glam::Mat4>) {
+        out.clear();
+        for bone in &self.bones {
+            let m = match bone.source.and_then(|i| parent_pose.get(i).copied()) {
+                Some(m) => m,
+                None => {
+                    // Keep construction lazy, as in bone_merge: matched bones
+                    // never evaluate their unused rest quaternion.
+                    let local = glam::Mat4::from_rotation_translation(bone.quat, bone.pos);
+                    if bone.parent >= 0 { out[bone.parent as usize] * local } else { local }
+                }
+            };
+            out.push(m);
+        }
+    }
+}
+
 /// Writes joint transforms for a pose. `world_from_model` is in Bevy
 /// space; `pose` holds Source-space bone-to-model matrices.
 pub fn apply_pose(instance: &SkinnedInstance, world_from_model: Mat4, pose: &[glam::Mat4], transforms: &mut Query<&mut Transform>) {
@@ -253,4 +301,124 @@ pub fn spawn_posed(
         commands.entity(*joint).insert(t);
     }
     instance
+}
+
+#[cfg(test)]
+mod prepared_merge_tests {
+    use super::*;
+    use glam::{Mat4 as SourceMat4, Quat, Vec3 as SourceVec3};
+
+    fn bone(name: &str, parent: i32, pos: SourceVec3, quat: Quat) -> Bone {
+        Bone {
+            name: name.into(), parent, pos, quat,
+            rot: SourceVec3::ZERO, pos_scale: SourceVec3::ONE, rot_scale: SourceVec3::ONE,
+            pose_to_bone: SourceMat4::IDENTITY, flags: 0,
+        }
+    }
+
+    fn assert_pose_bits(actual: &[SourceMat4], expected: &[SourceMat4]) {
+        assert_eq!(actual.len(), expected.len());
+        for (index, (a, b)) in actual.iter().zip(expected).enumerate() {
+            assert_eq!(a.to_cols_array().map(f32::to_bits), b.to_cols_array().map(f32::to_bits),
+                "bone {index}");
+        }
+    }
+
+    #[test]
+    fn prepared_merge_preserves_first_match_and_authored_fallbacks() {
+        let child = [
+            bone("root", -1, SourceVec3::X, Quat::IDENTITY),
+            bone("HAND", 0, SourceVec3::Y * 2., Quat::IDENTITY),
+            bone("unbound_tip", 1, SourceVec3::Z * 3., Quat::IDENTITY),
+            bone("unbound_root", -1, SourceVec3::X * 7., Quat::IDENTITY),
+            bone("Ä", 3, SourceVec3::Y * 5., Quat::IDENTITY),
+        ];
+        let parent = [
+            bone("hand", -1, SourceVec3::ZERO, Quat::IDENTITY),
+            bone("Hand", 0, SourceVec3::ZERO, Quat::IDENTITY),
+            bone("ROOT", 0, SourceVec3::ZERO, Quat::IDENTITY),
+            bone("ä", 0, SourceVec3::ZERO, Quat::IDENTITY),
+        ];
+        let pose = [10., 99., 20., 88.].map(|x| SourceMat4::from_translation(SourceVec3::X * x));
+        let merge = PreparedBoneMerge::new(&child, &parent);
+        let mut out = Vec::new();
+        merge.evaluate_into(&pose, &mut out);
+        // Literal expectations distinguish first-match selection, direct
+        // model-space copying, chained rest transforms and ASCII-only casing.
+        let expected = [
+            SourceVec3::new(20., 0., 0.), SourceVec3::new(10., 0., 0.),
+            SourceVec3::new(10., 0., 3.), SourceVec3::new(7., 0., 0.),
+            SourceVec3::new(7., 5., 0.),
+        ].map(SourceMat4::from_translation);
+        assert_pose_bits(&out, &expected);
+        assert_pose_bits(&out, &bone_merge(&child, &parent, &pose));
+
+        // A missing first-match matrix falls back to the child's own rest
+        // hierarchy; it must never search for a different matching bone.
+        for len in 0..=pose.len() {
+            merge.evaluate_into(&pose[..len], &mut out);
+            assert_pose_bits(&out, &bone_merge(&child, &parent, &pose[..len]));
+        }
+        let missing_first = [
+            bone("other", -1, SourceVec3::ZERO, Quat::IDENTITY),
+            bone("root", 0, SourceVec3::ZERO, Quat::IDENTITY),
+            bone("ROOT", 0, SourceVec3::ZERO, Quat::IDENTITY),
+        ];
+        PreparedBoneMerge::new(&child, &missing_first).evaluate_into(&pose[..1], &mut out);
+        assert_pose_bits(&out, &bone_merge(&child, &missing_first, &pose[..1]));
+        assert_eq!(out[0], SourceMat4::from_translation(SourceVec3::X));
+    }
+
+    #[test]
+    fn prepared_merge_tracks_animated_parent_without_reallocating() {
+        let child = [
+            bone("root", -1, SourceVec3::X, Quat::from_rotation_z(0.3)),
+            bone("hand", 0, SourceVec3::Y, Quat::from_rotation_x(-0.2)),
+            bone("accessory", 1, SourceVec3::Z, Quat::from_rotation_y(0.7)),
+        ];
+        // The parent order deliberately differs from the child's. The map is
+        // independent of current matrices, including non-rigid transforms.
+        let parent = [child[1].clone(), child[0].clone()];
+        let merge = PreparedBoneMerge::new(&child, &parent);
+        let mut out = Vec::with_capacity(child.len());
+        let allocation = out.as_ptr();
+        let capacity = out.capacity();
+        for frame in 0..256 {
+            let t = frame as f32 * 0.03125;
+            let pose = [
+                SourceMat4::from_scale_rotation_translation(SourceVec3::new(1., 0.75, 1.25),
+                    Quat::from_rotation_z(t), SourceVec3::new(t, -t, t * 0.5)),
+                SourceMat4::from_rotation_translation(Quat::from_rotation_x(-t), SourceVec3::X * t),
+            ];
+            merge.evaluate_into(&pose, &mut out);
+            assert_pose_bits(&out, &bone_merge(&child, &parent, &pose));
+            assert_eq!(out.as_ptr(), allocation);
+            assert_eq!(out.capacity(), capacity);
+        }
+        // No new finite-value policy: preserve the original's propagation.
+        let nonfinite = [SourceMat4::from_cols_array(&[f32::NAN; 16])];
+        merge.evaluate_into(&nonfinite, &mut out);
+        assert_pose_bits(&out, &bone_merge(&child, &parent, &nonfinite));
+    }
+
+    #[test]
+    fn prepared_merge_replacement_uses_new_team_and_weapon_skeletons() {
+        let weapon_a = [bone("hand", -1, SourceVec3::X, Quat::IDENTITY)];
+        let weapon_b = [
+            bone("root", -1, SourceVec3::Y, Quat::IDENTITY),
+            bone("hand", 0, SourceVec3::Z, Quat::IDENTITY),
+        ];
+        let team_a = [weapon_a[0].clone(), weapon_b[0].clone()];
+        let team_b = [weapon_b[0].clone(), weapon_a[0].clone()];
+        let pose = [SourceVec3::X * 10., SourceVec3::Y * 20.].map(SourceMat4::from_translation);
+        let mut out = Vec::new();
+        for (child, parent) in [(&weapon_a[..], &team_a[..]), (&weapon_b[..], &team_a[..]),
+            (&weapon_b[..], &team_b[..]), (&[][..], &team_b[..]), (&weapon_a[..], &[][..])] {
+            // Same output buffer across equip/team replacements and empty
+            // skeletons: no stale trailing matrices or cached source indices.
+            let merge = PreparedBoneMerge::new(child, parent);
+            merge.evaluate_into(&pose, &mut out);
+            assert_pose_bits(&out, &bone_merge(child, parent, &pose));
+        }
+    }
 }
