@@ -109,6 +109,12 @@ file copying and no reading.
   liberties.** Research the original (footage, old builds' files, other
   restoration projects) and reproduce it.
 
+  Owner update2026-10-16: prioritize sustained smooth gameplay performance and
+  core playability before content-pack expansion. Two explicit exceptions are
+  CS2-feel grenade trajectories/throws and automatic read-only translation of
+  CS2 settings/keybinds. Old CS:GO assets/UI/sounds remain the target; no CS2
+  assets or leaked/SDK code. [Full feedback and scopes](PLAYTEST-2026-10-16.md).
+
 What the reference screenshots show, as a checklist:
 
 - **Top bar:** full width, dark, centred tabs with thin separators: home
