@@ -50,6 +50,8 @@ pub mod buymenu;
 pub mod items;
 pub mod interpolation;
 mod input_latency;
+#[cfg(feature = "targeted-render-trace")]
+mod targeted_render_trace;
 pub mod characters;
 pub mod player_anim;
 pub mod skinning;
@@ -310,8 +312,22 @@ pub fn run(opts: ClientOptions) -> i32 {
     let (resolution, window_mode) = frontend_display::startup(&opts, &video_settings);
     let load_request = menu::LoadRequest::default();
     let mut app = App::new();
+    #[cfg(feature = "targeted-render-trace")]
+    let trace_guard = match targeted_render_trace::configure(&mut app, &data.game_dir) {
+        Ok(guard) => guard,
+        Err(error) => {
+            eprintln!("targeted render trace refused: {error}");
+            return 1;
+        }
+    };
+    let plugins = input_latency::desktop_plugins();
+    #[cfg(feature = "targeted-render-trace")]
+    let plugins = plugins.set(bevy::log::LogPlugin {
+        custom_layer: targeted_render_trace::layer,
+        ..default()
+    });
     app.add_plugins(
-        input_latency::desktop_plugins()
+        plugins
             .set(WindowPlugin {
                 close_when_requested: false,
                 primary_window: Some(Window {
@@ -345,6 +361,8 @@ pub fn run(opts: ClientOptions) -> i32 {
     bot_performance::install(&mut app);
     material::install_lighting(&mut app);
     input_latency::install_frame_log(&mut app);
+    #[cfg(feature = "targeted-render-trace")]
+    targeted_render_trace::install(&mut app);
     if frontend_flow::enabled() {
         if frontend_acceptance::enabled() {
             frontend_acceptance::install(&mut app);
@@ -385,6 +403,8 @@ pub fn run(opts: ClientOptions) -> i32 {
             .add_systems(Update, display_proof::measure.after(menu::apply).after(frontend::input));
     }
     let result = app.run();
+    #[cfg(feature = "targeted-render-trace")]
+    drop(trace_guard);
     match result { AppExit::Success=>0,AppExit::Error(code)=>code.get() as i32 }
 
 }

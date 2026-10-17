@@ -7,6 +7,8 @@ license.workspace = true
 authors.workspace = true
 
 [features]
+# Private CPU attribution only; never enabled by the normal release build.
+targeted-render-trace = ["bevy/trace", "bevy/debug", "dep:tracing", "dep:tracing-subscriber"]
 # Hardware smoke remains opt-in; desktop releases keep their existing renderer.
 xr-smoke = ["dep:bevy_mod_openxr", "dep:bevy_mod_xr", "dep:openxr"]
 
@@ -17,6 +19,8 @@ required-features = ["xr-smoke"]
 
 [dependencies]
 bevy.workspace = true
+tracing = { version = "=0.1.44", optional = true, default-features = false, features = ["std"] }
+tracing-subscriber = { version = "=0.3.23", optional = true, default-features = false, features = ["registry", "std"] }
 glam.workspace = true
 kv.workspace = true
 weapons.workspace = true
