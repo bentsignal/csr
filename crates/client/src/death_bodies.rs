@@ -136,7 +136,133 @@ pub(super) fn update(
             }
         }
         for e in &body.instance.meshes {
-            if let Ok(mut v)=visibility.get_mut(*e) {*v=Visibility::Inherited;}
+            if let Ok(mut v)=visibility.get_mut(*e) {v.set_if_neq(Visibility::Inherited);}
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{collections::{BTreeMap, HashMap}, sync::Arc};
+
+    #[derive(Resource)]
+    struct BodyFixture(DeathBodies);
+
+    #[derive(Component)]
+    struct BodyMesh;
+
+    #[derive(Resource, Default)]
+    struct VisibilityChanges(Vec<Entity>);
+
+    fn record_visibility_changes(
+        changed: Query<Entity, (With<BodyMesh>, Changed<Visibility>)>,
+        mut seen: ResMut<VisibilityChanges>,
+    ) {
+        seen.0 = changed.iter().collect();
+    }
+
+    fn update_fixture(
+        mut commands: Commands,
+        mut state: ResMut<BodyFixture>,
+        mut models: ResMut<CharacterModels>,
+        mut materials: ResMut<Assets<WorldMaterial>>,
+        level: Res<crate::LoadedLevel>,
+        mat_query: Query<&MeshMaterial3d<WorldMaterial>>,
+        mut transforms: Query<&mut Transform>,
+        mut visibility: Query<&mut Visibility>,
+    ) {
+        update(&mut commands, &mut state.0, Vec::new(), 1, 1.0, &mut models,
+            &mut materials, &level.0, &mat_query, &mut transforms, &mut visibility);
+    }
+
+    #[test]
+    fn real_bevy_death_update_reveals_hidden_mesh_then_visibility_settles() {
+        bevy::tasks::ComputeTaskPool::get_or_init(bevy::tasks::TaskPool::default);
+        let pool = AsyncComputeTaskPool::get_or_init(bevy::tasks::TaskPool::default);
+        // Keep the existing pending-cook path deterministic without running a
+        // physics cook. The fixture owns/cancels this task when it is dropped.
+        let pending = pool.spawn(std::future::pending::<Option<ragdoll::Corpse>>());
+
+        // Both content files are synthetic in-memory headers. Loading through
+        // existing readers avoids test-only constructors in production code.
+        let mut bsp = vec![0; 8 + 64 * 16 + 4];
+        bsp[..4].copy_from_slice(b"VBSP");
+        bsp[4..8].copy_from_slice(&21i32.to_le_bytes());
+        let mut mdl = vec![0; 408];
+        mdl[..4].copy_from_slice(b"IDST");
+        mdl[4..8].copy_from_slice(&48i32.to_le_bytes());
+        let mut fs = vfs::Vfs::new();
+        fs.push_back("synthetic", vfs::Mount::Memory(BTreeMap::from([
+            ("maps/body-fixture.bsp".into(), Arc::from(bsp)),
+            ("models/body-fixture.mdl".into(), Arc::from(mdl)),
+        ])));
+        let model = Arc::new(mdl::Model {
+            include_models: vec!["models/body-fixture.mdl".into()],
+            ..Default::default()
+        });
+        let anims = Arc::new(crate::player_anim::PlayerAnimSet::load(&model, &fs).unwrap());
+        let level = level::Level::load_from_vfs(
+            content::ContentId::csgo(content::ContentKind::Map, "body-fixture"),
+            "body-fixture", "no-game-install".into(), fs,
+        ).unwrap();
+        let mut app = App::new();
+        app.add_plugins(bevy::camera::visibility::VisibilityPlugin)
+            .init_resource::<Assets<Mesh>>()
+            .init_resource::<Assets<bevy::mesh::skinning::SkinnedMeshInverseBindposes>>()
+            .init_resource::<Assets<WorldMaterial>>()
+            .init_resource::<VisibilityChanges>()
+            .insert_resource(crate::LoadedLevel(level))
+            .insert_resource(CharacterModels {
+                terrorist: Some(super::super::TeamModel {
+                    asset: skinning::SkinnedAsset {
+                        model, parts: Vec::new(), inverse_bindposes: Handle::default(),
+                    },
+                    anims, ragdoll: None,
+                }),
+                counter_terrorist: None, weapons: HashMap::new(), sun: None,
+            })
+            .add_systems(Last, record_visibility_changes);
+        let joint = app.world_mut().spawn(Transform::default()).id();
+        let mesh = app.world_mut().spawn((
+            BodyMesh, Mesh3d(Handle::default()), Visibility::Hidden,
+            bevy::camera::visibility::NoFrustumCulling,
+        )).id();
+        // Consume Added<Visibility> before the real update reveals the mesh;
+        // otherwise an insertion tick could mask a missing transition write.
+        app.update();
+        app.update();
+        assert!(app.world().resource::<VisibilityChanges>().0.is_empty());
+        assert!(!app.world().get::<InheritedVisibility>(mesh).unwrap().get());
+        app.insert_resource(BodyFixture(DeathBodies {
+            bodies: VecDeque::from([Body {
+                death: DeathReceipt {
+                    key: DeathKey { victim: 1, life_epoch: 1, tick: 1 }, round: 1,
+                    pose: sim::death::DeathPose {
+                        origin: glam::Vec3::ZERO, view_angles: glam::Vec3::ZERO,
+                        velocity: glam::Vec3::ZERO, ducked: false, duck_amount: 0.0,
+                        on_ground: true, tracked: None,
+                    },
+                    victim_name: "fixture".into(), victim_team: sim::Team::Terrorist,
+                    attacker: None, hit: None,
+                },
+                born: 0.0, instance: SkinnedInstance { joints: vec![joint], meshes: vec![mesh] },
+                // Skip unrelated material acquisition/lighting, just as after
+                // a body's own handles have already been acquired.
+                materials: vec![Handle::default()], corpse: None, pending: Some(pending),
+                captured_pose: vec![glam::Mat4::IDENTITY], last_time: 0.0, trace_pending: false,
+            }]),
+            seen: VecDeque::new(), round: Some(1),
+        })).add_systems(Update, update_fixture);
+        app.update();
+        assert_eq!(app.world().resource::<VisibilityChanges>().0, vec![mesh]);
+        assert_eq!(*app.world().get::<Visibility>(mesh).unwrap(), Visibility::Inherited);
+        assert!(app.world().get::<InheritedVisibility>(mesh).unwrap().get());
+        for _ in 0..3 {
+            app.update();
+            assert!(app.world().resource::<VisibilityChanges>().0.is_empty());
+            assert_eq!(*app.world().get::<Visibility>(mesh).unwrap(), Visibility::Inherited);
+            assert!(app.world().get::<InheritedVisibility>(mesh).unwrap().get());
         }
     }
 }
