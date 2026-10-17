@@ -285,6 +285,102 @@ fn render_world_gpu_take_retains_certificate_and_tracked_edits_fail_closed() {
 }
 
 #[test]
+fn real_asset_disposal_bounds_edit_cache_and_live_handle_restore_still_recertifies() {
+    // Observe the production cache handler with real Bevy asset events, without
+    // exposing the guard's Local state or fabricating disposal messages.
+    #[derive(Resource, Default)]
+    struct EditCache {
+        edited: HashMap<AssetId<Mesh>, Option<bool>>,
+        batch: Vec<AssetEvent<Mesh>>,
+    }
+    fn observe_cache(mut events: MessageReader<AssetEvent<Mesh>>, mut cache: ResMut<EditCache>) {
+        let batch: Vec<_> = events.read().copied().collect();
+        record_mesh_edits(&mut cache.edited, batch.iter().copied());
+        cache.batch = batch;
+    }
+    fn assert_disposed(app: &App, id: AssetId<Mesh>) {
+        let cache = app.world().resource::<EditCache>();
+        let unused = cache.batch.iter().position(|e| e.is_unused(id)).expect("real Unused event");
+        let removed = cache.batch.iter().position(|e| e.is_removed(id)).expect("real Removed event");
+        assert!(unused < removed, "exercise Bevy's last-handle event order");
+        assert!(!cache.edited.contains_key(&id), "disposed asset must leave no cache entry");
+        assert!(!app.world().resource::<Assets<Mesh>>().contains(id));
+    }
+
+    let mut app = app();
+    app.init_resource::<EditCache>()
+        .add_systems(PostUpdate, observe_cache
+            .after(bevy::asset::AssetEventSystems).before(GuardedBoundsReady));
+    let f = fixture(&mut app, geometry(), vec![Mat4::IDENTITY; 3], &[Transform::from_xyz(0.0, 0.0, -30.0); 3]);
+    app.update();
+    oracle(&app, &f);
+    assert!(app.world().resource::<EditCache>().edited.is_empty());
+
+    // Explicit removal retains both fixture/entity strong handles. Its tombstone
+    // must survive unrelated disposal and absence across multiple frames.
+    let mut removed = app.world_mut().resource_mut::<Assets<Mesh>>().remove(f.mesh.id()).unwrap();
+    app.update();
+    assert_eq!(app.world().resource::<EditCache>().batch, vec![AssetEvent::Removed { id: f.mesh.id() }]);
+    assert_eq!(app.world().resource::<EditCache>().edited.get(&f.mesh.id()), Some(&None));
+    assert!(app.world().entity(f.entity).contains::<NoFrustumCulling>());
+
+    // An unrelated edited mesh has an entry before normal last-handle disposal.
+    let transient = app.world_mut().resource_mut::<Assets<Mesh>>().add(geometry());
+    let transient_id = transient.id();
+    app.world_mut().resource_mut::<Assets<Mesh>>().get_mut(&transient).unwrap().set_skinned_mesh_bounds(None);
+    app.update();
+    assert!(app.world().resource::<EditCache>().edited.contains_key(&transient_id));
+    drop(transient);
+    app.update();
+    assert_disposed(&app, transient_id);
+    assert_eq!(app.world().resource::<EditCache>().edited.len(), 1);
+
+    // Particle-like meshes never opt into WorldSkinBounds. Repeated batches
+    // include tracked edits and all last-handle drops in the same event batch.
+    for _ in 0..32 {
+        let mut ids = Vec::new();
+        for _ in 0..16 {
+            let handle = app.world_mut().resource_mut::<Assets<Mesh>>().add(geometry());
+            ids.push(handle.id());
+            app.world_mut().resource_mut::<Assets<Mesh>>().get_mut(&handle).unwrap().set_skinned_mesh_bounds(None);
+            drop(handle);
+        }
+        app.update();
+        for id in ids { assert_disposed(&app, id); }
+        let cache = app.world().resource::<EditCache>();
+        assert_eq!(cache.edited.len(), 1, "unrelated mesh churn must not accumulate entries");
+        assert_eq!(cache.edited.get(&f.mesh.id()), Some(&None));
+    }
+
+    // Preserve the old finite generated bounds but corrupt GPU weights. This
+    // restoration emits Added, so forgetting the live-handle tombstone would
+    // bypass re-certification and incorrectly enable culling.
+    removed.insert_attribute(Mesh::ATTRIBUTE_JOINT_WEIGHT, vec![[f32::NAN, 0.0, 0.0, 0.0]; 3]);
+    app.world_mut().resource_mut::<Assets<Mesh>>().insert(f.mesh.id(), removed).unwrap();
+    app.update();
+    assert_eq!(app.world().resource::<EditCache>().batch, vec![AssetEvent::Added { id: f.mesh.id() }]);
+    assert!(app.world().entity(f.entity).contains::<NoFrustumCulling>());
+    app.update();
+    assert!(app.world().entity(f.entity).contains::<NoFrustumCulling>());
+
+    let mut valid = geometry();
+    certify(&mut valid, &[Mat4::IDENTITY; 3]).unwrap();
+    app.world_mut().resource_mut::<Assets<Mesh>>().insert(f.mesh.id(), valid).unwrap();
+    app.update();
+    assert_eq!(app.world().resource::<EditCache>().batch, vec![AssetEvent::Modified { id: f.mesh.id() }]);
+    oracle(&app, &f);
+
+    // Scene teardown also releases the previously edited eligible mesh.
+    let id = f.mesh.id();
+    assert!(app.world_mut().despawn(f.entity));
+    for &joint in &f.joints { assert!(app.world_mut().despawn(joint)); }
+    drop(f);
+    app.update();
+    assert_disposed(&app, id);
+    assert!(app.world().resource::<EditCache>().edited.is_empty());
+}
+
+#[test]
 fn runtime_malformed_geometry_bindposes_and_missing_aabb_restore_conservatively() {
     let mut app = app();
     let f = fixture(&mut app, geometry(), vec![Mat4::IDENTITY; 3], &[Transform::from_xyz(0.0, 0.0, -30.0); 3]);

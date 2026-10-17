@@ -80,6 +80,13 @@ compared with the certificate each frame. A changed mesh whose CPU data has
 already been extracted cannot re-certify and stays uncullable until a fresh
 valid geometry replacement arrives. Bind matrices are validated every frame.
 
+Review R3 identified edit-cache retention on normal mesh disposal: Bevy queues
+`Unused` before `Removed`, so immediate cleanup was undone by the latter event,
+including for unrelated meshes. The cache handler now applies all `Unused`
+cleanup after the complete event batch. Explicit removal with live handles
+retains its tombstone until replacement re-certification or last-handle disposal.
+This narrow source fix and its real-asset lifetime fixture remain unexecuted.
+
 Bevy's render extractor uses `get_mut_untracked` for `take_gpu_data`, which
 retains the certified bounds and emits no modification event. That is the only
 permitted untracked geometry mutation. A future untracked vertex edit, vertex
@@ -89,7 +96,7 @@ claim of safety for silently bypassing asset change tracking.
 
 ## Root-owned admission work
 
-Seven synthetic tests are authored in `skinning_bounds/tests.rs`, not run:
+Eight synthetic tests are authored in `skinning_bounds/tests.rs`, not run:
 
 1. Final attribute coverage, malformed weights/indices and nonfinite rejection.
 2. Blended CPU/skin-shader enclosure, Source axis conversion and inverse binds,
@@ -102,6 +109,11 @@ Seven synthetic tests are authored in `skinning_bounds/tests.rs`, not run:
 6. Large cancellation, outward margin and unsupported numeric-envelope fallback.
 7. Actual deferred Update spawn and explicit exemptions for generic/default,
    world-decoration, layer-2 and layer-3 callers.
+8. Real `Assets<Mesh>` last-handle disposal/event order, bounded edit-cache
+   lifetime across unrelated mesh churn and scene teardown, and explicit
+   removal with live handles followed by malformed/valid tracked restoration.
+   A test observer uses the production event-batch handler to inspect cache
+   entries; the installed guard independently verifies fallback and recovery.
 
 Root should first compile/run the focused tests, then the required workspace,
 probe and sim checks. Use the exclusive Cargo slot and the documented explicit

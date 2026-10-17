@@ -135,6 +135,26 @@ pub(crate) fn install(app: &mut App) {
             .before(SimulationLightSystems::CheckLightVisibility));
 }
 
+fn record_mesh_edits(
+    edited: &mut HashMap<AssetId<Mesh>, Option<bool>>,
+    events: impl IntoIterator<Item = AssetEvent<Mesh>>,
+) {
+    let mut unused = Vec::new();
+    for event in events {
+        match event {
+            AssetEvent::Modified { id } | AssetEvent::Removed { id } => { edited.insert(id, None); }
+            AssetEvent::Added { id } if edited.contains_key(&id) => { edited.insert(id, None); }
+            AssetEvent::Unused { id } => { unused.push(id); }
+            _ => {}
+        }
+    }
+    // Bevy queues Unused before Removed on last-handle disposal. Clean up only
+    // after the full batch so Removed cannot recreate a dead asset's entry.
+    // Explicit remove with live handles emits no Unused: keep that tombstone
+    // so a later Added replacement must re-certify even with retained bounds.
+    for id in unused { edited.remove(&id); }
+}
+
 // Asset edits must use tracked Assets APIs, before AssetEventSystems (as all
 // current geometry writers do). Render extraction alone uses get_mut_untracked
 // to take GPU data; it retains exactly the certified bounds. Modified/replaced
@@ -150,14 +170,7 @@ fn update(
     mut skins: Query<(Entity, &WorldSkinBounds, Option<&Mesh3d>, Option<&SkinnedMesh>,
         Option<&GlobalTransform>, Option<&mut Aabb>, Has<NoFrustumCulling>)>,
 ) {
-    for event in events.read() {
-        match *event {
-            AssetEvent::Modified { id } | AssetEvent::Removed { id } => { edited.insert(id, None); }
-            AssetEvent::Added { id } if edited.contains_key(&id) => { edited.insert(id, None); }
-            AssetEvent::Unused { id } => { edited.remove(&id); }
-            _ => {}
-        }
-    }
+    record_mesh_edits(&mut edited, events.read().copied());
     for (entity, eligibility, mesh_handle, skin, global, aabb, disabled) in &mut skins {
         let fresh = (|| {
             let handle = mesh_handle?;
