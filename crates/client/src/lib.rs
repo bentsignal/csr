@@ -231,6 +231,13 @@ impl Plugin for CsgoPlugin {
                     .run_if(remote_join::ready)
                     .in_set(bevy::app::RunFixedMainLoopSystems::BeforeFixedMainLoop),
             )
+            // Home owns the same controls editor before any LocalPlayer or
+            // match exists. Keep gameplay's readiness condition unchanged.
+            .add_systems(RunFixedMainLoop, menu::input
+                .run_if(console::allows_input).run_if(menu::home_controls)
+                .in_set(bevy::app::RunFixedMainLoopSystems::BeforeFixedMainLoop))
+            .add_systems(Update, (menu::draw, menu::scroll_controls, menu::hover, ui_assets::fonts)
+                .chain().after(frontend::update).run_if(menu::home_controls))
             .add_systems(Update, player::update_camera.run_if(remote_join::ready))
             .init_resource::<interpolation::RenderPoses>()
             .init_resource::<tracers::Muzzles>()

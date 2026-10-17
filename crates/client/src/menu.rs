@@ -186,6 +186,13 @@ pub(crate) fn setup(
     }
 }
 
+pub(crate) fn home_controls(state: Res<State<crate::AppState>>, menu: Res<Menu>) -> bool {
+    *state.get() == crate::AppState::Menu && !menu.in_match
+        // Retain the close pass: input clears the handoff flag, while draw
+        // removes its former root before the movie becomes visible again.
+        && (menu.classic_controls || menu.controls_just_closed || menu.root.is_some())
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn input(
     mut commands: Commands,
@@ -195,7 +202,7 @@ pub(crate) fn input(
     actions: Query<(&Interaction, &Action), Changed<Interaction>>,
     mut exit: MessageWriter<AppExit>,
     (load_request, opts, remote, front): (Res<LoadRequest>, Res<crate::Options>, Option<Res<crate::remote::RemoteClient>>, Option<Res<crate::frontend::Frontend>>),
-    mut local: ResMut<LocalPlayer>,
+    mut local: Option<ResMut<LocalPlayer>>,
     mut buy: ResMut<crate::buymenu::BuyMenu>,
     mut clock: ResMut<Time<Virtual>>,
     mut cursor: Single<&mut CursorOptions, With<PrimaryWindow>>,
@@ -382,13 +389,15 @@ pub(crate) fn input(
     if menu.open() {
         buy.open = false;
         buy.just_closed = false;
-        local.latched = 0;
-        local.pointer_attacks = 0;
-        local.keyboard_attacks = 0;
-        local.pending_drop = false;
-        local.pending_slot = 0;
-        local.clear_utility_requests();
-        local.pending_buys.clear();
+        if let Some(local) = local.as_mut() {
+            local.latched = 0;
+            local.pointer_attacks = 0;
+            local.keyboard_attacks = 0;
+            local.pending_drop = false;
+            local.pending_slot = 0;
+            local.clear_utility_requests();
+            local.pending_buys.clear();
+        }
         if remote.is_some() { clock.unpause(); } else { clock.pause(); }
         cursor.grab_mode = CursorGrabMode::None;
         cursor.visible = true;
@@ -1774,6 +1783,58 @@ pub(crate) fn apply(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn home_controls_accept_public_key_edges_before_a_player_exists() {
+        use bevy::input::{ButtonState, keyboard::{Key, KeyboardInput}};
+        let mut a = App::new();
+        a.add_plugins((MinimalPlugins, bevy::input::InputPlugin))
+            .insert_resource(State::new(crate::AppState::Menu))
+            .init_resource::<Menu>()
+            .init_resource::<Settings>()
+            .init_resource::<LoadRequest>()
+            .init_resource::<crate::inventory::Inventory>()
+            .init_resource::<crate::inventory::Collection>()
+            .init_resource::<crate::buymenu::BuyMenu>()
+            .insert_resource(crate::Options(crate::ClientOptions::default()))
+            .insert_resource(InputEnabled(true))
+            .add_systems(RunFixedMainLoop, input.run_if(home_controls)
+                .in_set(bevy::app::RunFixedMainLoopSystems::BeforeFixedMainLoop));
+        let window = a.world_mut().spawn((PrimaryWindow, CursorOptions::default())).id();
+        assert!(!a.world().contains_resource::<LocalPlayer>());
+        {
+            let mut menu = a.world_mut().resource_mut::<Menu>();
+            menu.in_match = false;
+            menu.page = Some(Page::Main);
+            menu.open_classic_controls();
+            // Button/callback and rendered-layout delivery are covered by the
+            // opt-in acceptance case; this fixture isolates schedule/key input.
+            menu.capture = Some(0);
+        }
+        let mut edge = |code, state| {
+            a.world_mut().write_message(KeyboardInput { key_code: code,
+                logical_key: if code == KeyCode::Escape { Key::Escape } else { Key::F11 },
+                state, text: None, repeat: false, window });
+            a.update();
+        };
+        edge(KeyCode::F11, ButtonState::Pressed);
+        edge(KeyCode::F11, ButtonState::Released);
+        assert_eq!(a.world().resource::<Settings>().binds[0], Some(KeyCode::F11));
+        assert!(a.world().resource::<Menu>().classic_controls);
+        a.world_mut().write_message(KeyboardInput { key_code: KeyCode::Escape,
+            logical_key: Key::Escape, state: ButtonState::Pressed, text: None, repeat: false, window });
+        a.update();
+        assert_eq!(a.world().resource::<Menu>().page, Some(Page::Main));
+        assert!(a.world().resource::<Menu>().controls_just_closed);
+        a.world_mut().write_message(KeyboardInput { key_code: KeyCode::Escape,
+            logical_key: Key::Escape, state: ButtonState::Released, text: None, repeat: false, window });
+        a.update();
+        assert!(!a.world().resource::<Menu>().controls_just_closed);
+        a.world_mut().write_message(KeyboardInput { key_code: KeyCode::Escape,
+            logical_key: Key::Escape, state: ButtonState::Pressed, text: None, repeat: false, window });
+        a.update();
+        assert_eq!(a.world().resource::<Menu>().page, Some(Page::Main), "closed Home editor no longer owns Escape");
+    }
 
     #[test]
     fn classic_controls_apply_reopen_capture_and_back_use_private_preferences() {
