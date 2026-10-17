@@ -811,7 +811,7 @@ pub(crate) fn prove_settings(world: &mut World) -> Result<bool, String> {
         .presented_serial();
     let wanted = world
         .resource::<crate::frontend::Frontend>()
-        .options_requested();
+        .options_receiver().is_some();
     let visible = world.resource::<Ui>().visible;
     let window = world
         .query_filtered::<Entity, With<PrimaryWindow>>()
