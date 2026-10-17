@@ -8,6 +8,15 @@ them are listed. Every item ends in a verified state (`cargo test`,
 
 ## Where we are (assessed 2026-10-16)
 
+The October16 owner test is complete. [All new feedback and accepted scopes](PLAYTEST-2026-10-16.md)
+are retained separately from the October14 ledger. **Priority one is sustained,
+smooth gameplay performance**, especially bots versus solo and degradation over
+a session. Core input/weapons, menu lifecycle, exact old HUD layout and map
+interactions follow; content-pack expansion is deferred. The owner explicitly
+authorizes CS2-feel grenade trajectories and read-only CS2 settings/keybind
+import as narrow exceptions to the historical baseline. No new replacement
+test build is requested until fixes have passed their actual verification.
+
 Owner return-home playtest on 2026-10-14: all reported defects, required
 features, accepted improvements and priorities are retained in
 [PLAYTEST-2026-10-14.md](PLAYTEST-2026-10-14.md). Work continues without another

@@ -38,6 +38,10 @@
 - **CS:GO, not CS2.** We rebuild the original CS:GO. Never use or imitate
   Counter-Strike 2 content, behaviour, UI or the CS2 install (`game\csgo`,
   `.vpk`s under app 730's CS2 layout); the only source is CS:GO Legacy.
+  **Owner exceptions (2026-10-16):** grenade launch/throw feel targets clean-room
+  observed CS2 behavior, and setup may read/translate CS2 config/keybinds.
+  These scopes do not authorize CS2 assets/UI or leaked/SDK code. See
+  [docs/PLAYTEST-2026-10-16.md](docs/PLAYTEST-2026-10-16.md).
 - **Friction is a bug.** Players may not be technical. Setup must feel like
   magic: install CS:GO Legacy on Steam, run our installer, play. No
   terminals, config files, manual copying or long setup. Anything a player
