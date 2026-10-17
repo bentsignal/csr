@@ -181,7 +181,7 @@ _global.csrBindings.releaseOwnedQuit = function(path) {
     return true;
 };
 
-// Bind the observed Options close callback names on our cached loader proxy.
+// Bind the observed Options close/layout callbacks on our cached loader proxy.
 // Retained function references keep their old receiver. A retained API object
 // reading these properties after rebind sees the NEW receiver; synthetic tests
 // distinguish both cases, but do not establish the installed movie's pattern.
@@ -195,6 +195,7 @@ _global.csrBindings.bindOwnedOptions = function(path, name) {
     var owned = _global.csrMakeProxy(name);
     api.OnCancel = owned.OnCancel;
     api.OnUnload = owned.OnUnload;
+    api.OnLayoutComplete = owned.OnLayoutComplete;
     return true;
 };
 // The host consumes match Escape once. It sends the immutable receiver captured

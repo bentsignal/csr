@@ -267,6 +267,13 @@ fn keyvalues(block: &kv::Block, localization: &crate::localize::Localization) ->
 impl Bridge {
     fn push_action(&self, action: Action) { self.actions.lock().unwrap().push_at(self.dispatch_epoch, action); }
 
+    fn page_ready(&self, page: &str, calls: &mut Calls) {
+        let mut data = self.data.lock().unwrap();
+        if data.pause_surface.awaiting_page(page) {
+            data.pause_surface.page_ready(page, calls.require_raster());
+        }
+    }
+
     fn reset_navigation(&mut self, calls: &mut Calls) {
         self.close_quit(calls);
         self.close_options(calls);
@@ -353,6 +360,7 @@ impl Bridge {
 
     fn close_lobby(&mut self, calls: &mut Calls) {
         self.lobby.lock().unwrap().cancel();
+        self.data.lock().unwrap().pause_surface.cancel_page(calls.require_raster());
         for element in ["LobbyBrowser", "LobbyScreen", "StartSinglePlayer"] {
             if let Some(path) = self.roots.get(element) {
                 calls.call("_global.csrBindings", "releaseOwnedLifecycle", vec![Value::String(path.to_string())]);
@@ -497,7 +505,7 @@ impl Engine for Bridge {
         // stale label before dispatch, including zero-argument Start/getters.
         if crate::frontend_lobby::Scene::owned_receiver(object) {
             use crate::frontend_lobby::Api;
-            let data = self.data.lock().unwrap();
+            let mut data = self.data.lock().unwrap();
             let mut lobby = self.lobby.lock().unwrap();
             let Some((api, epoch)) = lobby.receiver(object) else { return None; };
             if data.state != AppState::Menu { lobby.cancel(); return None; }
@@ -516,6 +524,7 @@ impl Engine for Bridge {
                             if lobby.phase() == crate::frontend_lobby::Phase::Lobby {
                                 if let Some(path) = self.roots.get("LobbyScreen") { lobby.show(path, &data.player_name, calls); }
                             }
+                            data.pause_surface.page_ready("StartSinglePlayer", calls.require_raster());
                         } else if element == "LobbyScreen" || lobby.phase() == crate::frontend_lobby::Phase::Browser {
                             drop(lobby); drop(data); self.close_lobby(calls);
                         }
@@ -525,12 +534,14 @@ impl Engine for Bridge {
                 }
                 (Api::Lobby, "ChooseGameSettings") if args.is_empty() => {
                     if lobby.choose(epoch) {
+                        data.pause_surface.await_page("StartSinglePlayer");
                         if let Some(path) = self.roots.get("LobbyScreen") {
                             calls.call(path, "hidePanelNoDestroy", vec![]);
                         }
-                        if let Some(path) = self.roots.get("StartSinglePlayer") {
-                            lobby.show_picker(path, calls);
-                        } else { if self.requested.insert("StartSinglePlayer".into()) { calls.request_element("StartSinglePlayer"); } }
+                        if data.movie_ready.contains("StartSinglePlayer") {
+                            if let Some(path) = self.roots.get("StartSinglePlayer") { lobby.show_picker(path, calls); }
+                            data.pause_surface.page_ready("StartSinglePlayer", calls.require_raster());
+                        } else if self.requested.insert("StartSinglePlayer".into()) { calls.request_element("StartSinglePlayer"); }
                     }
                 }
                 (Api::Picker, "SetCustomBotDifficulty") => lobby.difficulty(epoch, args),
@@ -654,6 +665,15 @@ impl Engine for Bridge {
             };
             let base = if data.state == AppState::Match { "PauseMenu" } else { "MainMenu" };
             drop(data);
+            if current && method == "OnLayoutComplete" && args.is_empty() {
+                let mut data = self.data.lock().unwrap();
+                if data.pause_surface.awaiting_page(object) {
+                    if let Some(path) = self.roots.get("OptionsMenu") {
+                        self.options.layout_ready(path, &data.settings, calls);
+                        data.pause_surface.page_ready(object, calls.require_raster());
+                    }
+                }
+            }
             if current && close {
                 // Authored Home navigation can close via OnUnload without a
                 // BasePanelRunCommand. Revoke the opening, not just its pixels.
@@ -665,8 +685,9 @@ impl Engine for Bridge {
             }
             return Some(Value::Undefined);
         }
-        // A cached loader proxy cannot identify which opening is closing.
-        if object == "OptionsMenu" && matches!(method, "OnCancel" | "OnUnload") {
+        // A cached loader proxy cannot identify which opening is closing or
+        // completing layout. Both must use the self-bound opening receiver.
+        if object == "OptionsMenu" && matches!(method, "OnCancel" | "OnUnload" | "OnLayoutComplete") {
             return Some(Value::Undefined);
         }
         if method == "OnReady" {
@@ -734,14 +755,16 @@ impl Engine for Bridge {
             return None;
         }
         if method == "OnReady" && matches!(object, "LobbyBrowser" | "LobbyScreen") {
-            let data = self.data.lock().unwrap();
+            let mut data = self.data.lock().unwrap();
             let lobby = self.lobby.lock().unwrap();
             if let Some(path) = self.roots.get(object) {
                 if data.state == AppState::Menu && lobby.active() {
                     if object == "LobbyScreen" && lobby.phase() == crate::frontend_lobby::Phase::Lobby {
                         lobby.show(path, &data.player_name, calls);
+                        data.pause_surface.page_ready(object, calls.require_raster());
                     } else if object == "LobbyBrowser" && lobby.phase() == crate::frontend_lobby::Phase::Browser {
                         lobby.show_browser(path, &data.player_name, calls);
+                        data.pause_surface.page_ready(object, calls.require_raster());
                     } else { calls.set(path, "_visible", false.into()); }
                 } else { calls.set(path, "_visible", false.into()); }
             }
@@ -751,6 +774,8 @@ impl Engine for Bridge {
             let lobby = self.lobby.lock().unwrap();
             if lobby.picker() {
                 if let Some(path) = self.roots.get(object) { lobby.show_picker(path, calls); }
+                drop(lobby);
+                self.page_ready(object, calls);
                 return None;
             }
             if lobby.active() {
@@ -764,6 +789,7 @@ impl Engine for Bridge {
                     AppState::Menu | AppState::Browser
                 ) {
                     show_single_player(path, calls);
+                    self.page_ready(object, calls);
                 } else {
                     calls.set(path, "_visible", false.into());
                 }
@@ -843,25 +869,32 @@ impl Engine for Bridge {
             }
             match command.as_str() {
                 "ShowJoinPartyUI:competitive" => {
-                    let data = self.data.lock().unwrap();
+                    let mut data = self.data.lock().unwrap();
                     if data.state != AppState::Menu { return None; }
                     let mut lobby = self.lobby.lock().unwrap();
                     if lobby.begin(&data.game_modes) {
+                        data.pause_surface.await_page("LobbyBrowser");
                         self.push_action(Action::Notice(crate::frontend_lobby::ADDRESS_NOTICE.into()));
-                        if let Some(path) = self.roots.get("LobbyBrowser") {
-                            lobby.show_browser(path, &data.player_name, calls);
-                        } else { if self.requested.insert("LobbyBrowser".into()) { calls.request_element("LobbyBrowser"); } }
+                        if data.movie_ready.contains("LobbyBrowser") {
+                            if let Some(path) = self.roots.get("LobbyBrowser") { lobby.show_browser(path, &data.player_name, calls); }
+                            data.pause_surface.page_ready("LobbyBrowser", calls.require_raster());
+                        } else if self.requested.insert("LobbyBrowser".into()) { calls.request_element("LobbyBrowser"); }
                     }
                 }
                 "ShowLobbyUI" => {
-                    let data = self.data.lock().unwrap();
+                    let mut data = self.data.lock().unwrap();
                     let mut lobby = self.lobby.lock().unwrap();
                     if data.state == AppState::Menu && lobby.open_lobby() {
-                        if let Some(path) = self.roots.get("LobbyScreen") { lobby.show(path, &data.player_name, calls); }
+                        data.pause_surface.await_page("LobbyScreen");
+                        if data.movie_ready.contains("LobbyScreen") {
+                            if let Some(path) = self.roots.get("LobbyScreen") { lobby.show(path, &data.player_name, calls); }
+                            data.pause_surface.page_ready("LobbyScreen", calls.require_raster());
+                        }
                         else { if self.requested.insert("LobbyScreen".into()) { calls.request_element("LobbyScreen"); } }
                     }
                 }
                 "OpenCreateSinglePlayerGameDialog" => {
+                    self.data.lock().unwrap().pause_surface.await_page("StartSinglePlayer");
                     self.offline_open = true;
                     self.lobby.lock().unwrap().cancel();
                     for element in ["LobbyBrowser", "LobbyScreen"] {
@@ -869,6 +902,7 @@ impl Engine for Bridge {
                     }
                     if self.data.lock().unwrap().movie_ready.contains("StartSinglePlayer") {
                         if let Some(path) = self.roots.get("StartSinglePlayer") { show_single_player(path, calls); }
+                        self.page_ready("StartSinglePlayer", calls);
                     } else if self.requested.insert("StartSinglePlayer".into()) {
                         calls.request_element("StartSinglePlayer");
                     }
@@ -893,6 +927,8 @@ impl Engine for Bridge {
                     self.lobby.lock().unwrap().cancel();
                     let mut data = self.data.lock().unwrap();
                     data.pause_surface.options_opened();
+                    let receiver = data.pause_surface.options_receiver();
+                    data.pause_surface.await_page(&receiver);
                     data.pause_surface.require_raster(calls.require_raster());
                     data.deferred_pause.cancel_pending();
                     if let Some(path) = self.roots.get("PauseMenu") { calls.set(path, "_visible", false.into()); }
@@ -972,12 +1008,6 @@ impl Engine for Bridge {
             ("OptionsMenu", "OnRefreshValues") => {
                 if let Some(path) = self.roots.get("OptionsMenu") {
                     self.options.refresh_values(path, &data.settings, calls);
-                }
-                None
-            }
-            ("OptionsMenu", "OnLayoutComplete") => {
-                if let Some(path) = self.roots.get("OptionsMenu") {
-                    self.options.layout_ready(path, &data.settings, calls);
                 }
                 None
             }
@@ -1196,7 +1226,27 @@ impl Frontend {
             && self.movie_ready("MainMenu") && self.menu_presented()
     }
     fn menu_presented(&self) -> bool {
-        self.pause_presentation.ready(self.data.lock().unwrap().pause_surface.raster_fence())
+        let data = self.data.lock().unwrap();
+        data.pause_surface.raster_ready()
+            && self.pause_presentation.ready(data.pause_surface.raster_fence())
+    }
+
+    /// The same gate owns both readiness and the actual image mutation. Keep
+    /// the previous image untouched until all destination initialization and
+    /// its post-callback readback have completed. Loading retains its own gate.
+    fn assign_frame(&mut self, frame: scaleform::Frame, images: &mut Assets<Image>, loading: bool) -> bool {
+        let data = self.data.lock().unwrap();
+        let admitted = data.pause_surface.raster_ready() && self.pause_presentation.accepts(
+            frame.presentation_revision, frame.raster_fence, data.pause_surface.raster_fence());
+        if !admitted && !loading { return false; }
+        let Some(mut image) = images.get_mut(&self.image) else { return false; };
+        image.texture_descriptor.size = Extent3d {
+            width: frame.width, height: frame.height, depth_or_array_layers: 1,
+        };
+        image.data = Some(frame.rgba);
+        if admitted { self.pause_presentation.presented(frame.presentation_revision, frame.raster_fence); }
+        self.presented_serial = self.presented_serial.saturating_add(1);
+        true
     }
     pub(crate) fn take_performance_ack(&mut self) -> Option<(u64, std::time::Instant)> { self.performance_ack.take() }
     pub(crate) fn camera(&self) -> Entity { self.camera }
@@ -1942,13 +1992,6 @@ pub(crate) fn update(
             menu.status.clone()
         };
     }
-    if let Ok(mut root) = nodes.get_mut(front.root) {
-        root.display = if !menu.classic_controls && ((visible && front.failed.is_none() && front.menu_presented()) || loading) {
-            Display::Flex
-        } else {
-            Display::None
-        };
-    }
     if let Ok(mut background) = backgrounds.get_mut(front.root) {
         background.0 = if loading { Color::BLACK } else { Color::NONE };
     }
@@ -2012,33 +2055,26 @@ pub(crate) fn update(
     }
     let frame = front.frame();
     if let Some(frame) = frame {
-        let required = front.data.lock().unwrap().pause_surface.raster_fence();
-        // A local authored close can change ownership without another Present.
-        // Never assign a pre-callback readback, even after a newer one was shown.
-        let admitted = front.pause_presentation.accepts(frame.presentation_revision, frame.raster_fence, required);
-        if admitted || loading {
-            if let Some(mut image) = images.get_mut(&front.image) {
-                image.texture_descriptor.size = Extent3d {
-                    width: frame.width,
-                    height: frame.height,
-                    depth_or_array_layers: 1,
-                };
-                image.data = Some(frame.rgba);
-                if admitted { front.pause_presentation.presented(frame.presentation_revision, frame.raster_fence); }
-                if front.loading_presentation.assigned(frame.presentation_revision, app_frame.0) {
-                    info!(generation = ?loader.generation(), revision = frame.presentation_revision,
-                        app_frame = app_frame.0, "Loading post-Init raster assigned to main image");
-                }
-                front.presented_serial = front.presented_serial.saturating_add(1);
-                if admitted && front.worker_kind == WorkerKind::Home && !front.home_show_pending {
-                    if let Some(started) = front.home_return_started.take() {
-                        info!(generation = front.worker_generation, revision = frame.presentation_revision,
-                            raster_fence = frame.raster_fence, elapsed_ms = started.elapsed().as_secs_f64() * 1000.,
-                            "Home restoration fresh raster assigned");
-                    }
+        let (revision, fence) = (frame.presentation_revision, frame.raster_fence);
+        if front.assign_frame(frame, &mut images, loading) {
+            if front.loading_presentation.assigned(revision, app_frame.0) {
+                info!(generation = ?loader.generation(), revision,
+                    app_frame = app_frame.0, "Loading post-Init raster assigned to main image");
+            }
+            if !loading && front.worker_kind == WorkerKind::Home && !front.home_show_pending {
+                if let Some(started) = front.home_return_started.take() {
+                    info!(generation = front.worker_generation, revision,
+                        raster_fence = fence, elapsed_ms = started.elapsed().as_secs_f64() * 1000.,
+                        "Home restoration fresh raster assigned");
                 }
             }
         }
+    }
+    // Assignment and visibility change in this update. Callback fences suspend
+    // replacement/input, not the already accepted image in this host opening.
+    if let Ok(mut root) = nodes.get_mut(front.root) {
+        root.display = if !menu.classic_controls && ((visible && front.failed.is_none()
+            && front.pause_presentation.retained()) || loading) { Display::Flex } else { Display::None };
     }
     let actions = front.actions.lock().unwrap().take();
     // Home/quit in this batch wins over a preceding queued Start.
@@ -2175,7 +2211,7 @@ pub(crate) fn input(
     remote: Option<Res<crate::remote::RemoteClient>>,
 ) {
     let (window_entity, window) = *window;
-    let blocked = menu.classic_controls || menu.controls_just_closed || console.is_some_and(|console| console.blocks_input()) || *state.get() == AppState::Browser || crate::remote_join::loading(remote.as_deref()) || packs.is_some_and(|packs| packs.blocks_movie()) || sharing.is_some_and(|sharing| sharing.blocks_movie()) || crate::frontend_flow::enabled() || !enabled.0 || !front.visible || front.home_show_pending || front.failed.is_some() || !window.focused;
+    let blocked = menu.classic_controls || menu.controls_just_closed || console.is_some_and(|console| console.blocks_input()) || *state.get() == AppState::Browser || crate::remote_join::loading(remote.as_deref()) || packs.is_some_and(|packs| packs.blocks_movie()) || sharing.is_some_and(|sharing| sharing.blocks_movie()) || crate::frontend_flow::enabled() || !enabled.0 || !front.visible || front.home_show_pending || !front.menu_presented() || front.failed.is_some() || !window.focused;
     for input in ownership.transition(blocked, window.focused) { front.send(input); }
     if blocked {
         keys.clear();
@@ -2436,6 +2472,100 @@ mod tests {
             loading_text: String::new(), loading_map: None, loading_selection: None,
             lobby: worker.lobby, notice: Entity::PLACEHOLDER,
             notice_text: Entity::PLACEHOLDER, cancel: Entity::PLACEHOLDER,
+        }
+    }
+
+    fn pixel_frame(revision: u64, fence: u64, color: u8) -> scaleform::Frame {
+        scaleform::Frame { width: 1, height: 1, rgba: vec![color, color, color, 255],
+            serial: fence, presentation_revision: revision, raster_fence: fence }
+    }
+
+    #[test]
+    fn page_loading_retains_actual_image_until_owned_layout_then_rejects_late_pixels() {
+        for state in [AppState::Menu, AppState::Match] {
+            for command in ["OpenAudioSettingsDialog", "OpenVideoSettingsDialog", "OpenGameSettingsDialog"] {
+                let mut front = fixture_frontend();
+                front.data.lock().unwrap().state = state;
+                let mut images = Assets::<Image>::default();
+                front.image = images.add(Image::new(
+                    Extent3d { width: 1, height: 1, depth_or_array_layers: 1 }, TextureDimension::D2,
+                    vec![0, 0, 0, 255], TextureFormat::Rgba8UnormSrgb, RenderAssetUsages::default()));
+                front.pause_presentation.open();
+                let revision = front.pause_presentation.revision();
+                assert!(front.assign_frame(pixel_frame(revision, 0, 90), &mut images, false));
+                let mut bridge = Bridge {
+                    dispatch_epoch: None, data: front.data.clone(), actions: front.actions.clone(),
+                    seen: Default::default(), roots: HashMap::from([
+                        ("MainMenu".into(), "_level31".into()), ("PauseMenu".into(), "_level100".into()),
+                        ("OptionsMenu".into(), "_level21".into()), ("StartSinglePlayer".into(), "_level15".into()),
+                    ]), requested: Default::default(), options: Default::default(),
+                    offline: Default::default(), offline_open: false, quit: Default::default(), lobby: front.lobby.clone(),
+                };
+                let mut calls = Calls::default();
+                let base = if state == AppState::Match { "PauseMenu" } else { "MainMenu" };
+                bridge.call(base, "BasePanelRunCommand", &[command.into()], &mut calls);
+                let old = front.options_receiver().unwrap();
+                bridge.call("OptionsMenu", "OnReady", &[], &mut calls);
+                // Loaded/Ready starts the asynchronous widget layout. Its
+                // transparent/partial raster must not replace the accepted base.
+                let pending = front.data.lock().unwrap().pause_surface.raster_fence();
+                assert!(!front.assign_frame(pixel_frame(revision, pending, 0), &mut images, false));
+                assert!(front.pause_presentation.retained());
+                assert!(!front.menu_presented());
+                assert_eq!(images.get(&front.image).unwrap().data.as_deref(), Some([90, 90, 90, 255].as_slice()));
+
+                // Replace A with B before A's retained layout callback arrives.
+                bridge.call(base, "BasePanelRunCommand", &[command.into()], &mut calls);
+                let current = front.options_receiver().unwrap();
+                assert_ne!(old, current);
+                for receiver in [old.as_str(), "OptionsMenu"] {
+                    bridge.call(receiver, "OnLayoutComplete", &[], &mut calls);
+                    assert!(!front.data.lock().unwrap().pause_surface.raster_ready());
+                }
+                bridge.call(&current, "OnLayoutComplete", &[true.into()], &mut calls);
+                assert!(!front.data.lock().unwrap().pause_surface.raster_ready());
+                let before_layout = front.data.lock().unwrap().pause_surface.raster_fence();
+                bridge.call(&current, "OnLayoutComplete", &[], &mut calls);
+                let settled = front.data.lock().unwrap().pause_surface.raster_fence();
+                assert!(settled > before_layout);
+                assert!(!front.assign_frame(pixel_frame(revision, before_layout, 0), &mut images, false));
+                assert!(front.assign_frame(pixel_frame(revision, settled, 170), &mut images, false));
+                assert!(front.menu_presented());
+                assert_eq!(images.get(&front.image).unwrap().data.as_deref(), Some([170, 170, 170, 255].as_slice()));
+                assert!(!front.assign_frame(pixel_frame(revision, pending, 0), &mut images, false));
+
+                // A native Home/Back close also retains the complete Options
+                // image until the post-close base readback, without reviving A.
+                bridge.call(&current, "OnUnload", &["mc:_level21".into()], &mut calls);
+                let closed = front.data.lock().unwrap().pause_surface.raster_fence();
+                assert!(!front.assign_frame(pixel_frame(revision, settled, 0), &mut images, false));
+                assert!(front.pause_presentation.retained());
+                assert_eq!(images.get(&front.image).unwrap().data.as_deref(), Some([170, 170, 170, 255].as_slice()));
+                bridge.call(&old, "OnLayoutComplete", &[], &mut calls);
+                assert!(front.assign_frame(pixel_frame(revision, closed, 90), &mut images, false));
+                assert!(!front.assign_frame(pixel_frame(revision, settled, 170), &mut images, false));
+
+                if state == AppState::Menu {
+                    bridge.call(base, "BasePanelRunCommand", &["OpenCreateSinglePlayerGameDialog".into()], &mut calls);
+                    let loading = front.data.lock().unwrap().pause_surface.raster_fence();
+                    bridge.call(&current, "OnLayoutComplete", &[], &mut calls);
+                    bridge.call("StartSinglePlayer", "OnLoadFinished", &["mc:_level15".into()], &mut calls);
+                    assert!(!front.assign_frame(pixel_frame(revision, loading, 0), &mut images, false));
+                    assert!(front.pause_presentation.retained());
+                    assert_eq!(images.get(&front.image).unwrap().data.as_deref(), Some([90, 90, 90, 255].as_slice()));
+                    bridge.call("StartSinglePlayer", "OnReady", &[], &mut calls);
+                    let ready = front.data.lock().unwrap().pause_surface.raster_fence();
+                    assert!(ready > loading);
+                    assert!(!front.assign_frame(pixel_frame(revision, loading, 0), &mut images, false));
+                    assert!(front.assign_frame(pixel_frame(revision, ready, 210), &mut images, false));
+                    assert!(!front.assign_frame(pixel_frame(revision, settled, 170), &mut images, false));
+                    assert_eq!(images.get(&front.image).unwrap().data.as_deref(), Some([210, 210, 210, 255].as_slice()));
+                }
+                // No accepted pixels cross a host opening/worker revision.
+                front.pause_presentation.open();
+                assert!(!front.pause_presentation.retained());
+                assert!(!front.assign_frame(pixel_frame(revision, u64::MAX, 0), &mut images, false));
+            }
         }
     }
 
