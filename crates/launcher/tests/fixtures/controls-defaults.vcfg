@@ -1,0 +1,15 @@
+// Independently authored quoted KeyValues fixture; not a general KV3 specimen.
+"config"
+{
+    "bindings"
+    {
+        "w" "+forward"
+        "s" "+back"
+        "SPACE" "+jump"
+        "`" "toggleconsole"
+        "v" "slot6"
+        "F3" "slot7"
+        "MOUSE1" "+attack"
+        "MWHEELUP" "invprev"
+    }
+}

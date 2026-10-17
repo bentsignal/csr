@@ -33,7 +33,9 @@ motion and the winit adapter forwards DeviceEvent::MouseMotion delta directly.
   does not exist. Even an empty or partial existing file wins byte for byte.
   Detection/import failures log a message without preventing play.
 - `CSR_STEAM_DIR` confines importer discovery to that Steam root; tests pass
-  fixture roots directly and never change environment variables or real Steam.
+  fixture roots directly. The setup integration fixture uses a subprocess with private
+  CSR_DATA_DIR/CSR_STEAM_DIR/CSR_GAME_DIR values; the parent environment and
+  working directory remain unchanged. No real Steam path is written.
 - Prefer Steam's MostRecent login if it has CS2 config, then config modification
   time, with deterministic ties. Both files come from the same account and
   primary player/slot0. No cloud-cache/other-player files are merged.
@@ -56,17 +58,24 @@ motion and the winit adapter forwards DeviceEvent::MouseMotion delta directly.
   decoded config text (including unknown sections), and records translation
   decisions. `controls_source` persists a short description in user.cfg. Source
   config files remain untouched, including unsupported values.
-- First publication uses a completed temporary file and a no-clobber hardlink;
-  filesystems without hardlinks fall back to no-clobber create_new. An existing
-  user.cfg can never be truncated by the importer. No game/settings source is
-  ever opened for writing.
+- First publication uses a completed, synced temporary file;
+  on Windows this now uses same-directory MoveFileExW without replacement or
+  copy flags, supporting FAT/exFAT portable storage as well. Other platforms
+  use a hardlink and fail closed if unsupported. No writer opens the final
+  name: injected partial writes leave no user.cfg and setup can retry. A racing
+  saver wins without being replaced. No source is ever opened for writing.
 - New sensitivity is 1 in Settings and LocalPlayer. Saved values remain in
   place and input samples the saved preference even before its first Update
   settings pass. Unscoped input keeps the existing 0.022 degrees/count law,
   without dt, DPI, speed-based acceleration, smoothing or extra gain.
-- A gameplay binding on V suppresses the existing V noclip shortcut, avoiding
-  a collision with imported grenade selection. The console noclip path is
-  unchanged. Other unsupported/reserved source controls are not implemented.
+- Console toggle is a saved local UI binding outside TickInput. Import honors
+  `toggleconsole`, explicit unbinding of backquote, and a literal backslash key.
+  Rebinding a console key clears any gameplay ownership of that physical key.
+  The console binding is editable via bind/unbind and the controls page.
+- Removed the unconditional V noclip shortcut and F3 HUD-debug shortcut so
+  unsupported/explicitly unbound keys cannot trigger hidden actions. Noclip
+  remains available by console command; detailed HUD diagnostics are opt-in
+  through CSR_HUD_DEBUG=1. cl_showfps remains available.
 
 ## UI integration for root/menu track
 

@@ -284,10 +284,6 @@ pub fn look(
         local.yaw = local.yaw.rem_euclid(360.0);
     }
     if remote.is_some() { local.noclip = false; }
-    if remote.is_none() && !menu.open && !settings.binds.contains(&Some(KeyCode::KeyV)) && keys.just_pressed(KeyCode::KeyV) {
-        local.noclip = !local.noclip;
-        local.noclip_pos = local.curr_eye;
-    }
     let me = world.0.player(local.id);
     let alive = me.is_some_and(|p| p.alive);
     if alive && grabbed && settings.action_just_pressed(12, &keys, &mouse, blocked_mouse) {inspect.start();}
@@ -1083,6 +1079,15 @@ mod remote_input_tests {
                 assert!((local.pitch - 4.4 * sensitivity).abs() < 0.0001);
             }
         }
+    }
+
+    #[test]
+    fn unbound_or_unsupported_v_has_no_hidden_noclip_action() {
+        let mut app = capture_app();
+        app.world_mut().resource_mut::<crate::settings::Settings>().unbind_key(KeyCode::KeyV);
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::KeyV);
+        app.world_mut().run_system_cached(look).unwrap();
+        assert!(!app.world().resource::<LocalPlayer>().noclip);
     }
 
     #[test]

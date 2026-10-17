@@ -133,6 +133,7 @@ fn translated_command(command: &str) -> Option<&str> {
         "slot7" => "use weapon_flashbang",
         "slot8" => "use weapon_smokegrenade",
         "slot9" => "use weapon_decoy",
+        "toggleconsole" => "toggleconsole",
         other if ACTION_COMMANDS.contains(&other) => other,
         _ => return None,
     })
@@ -162,6 +163,7 @@ fn bindings(
     }
     if defaults.is_some() {
         settings.binds.fill(None);
+        settings.console_key = None;
         settings.mouse_binds.fill(MouseAction::None);
         settings.wheel_up = WheelAction::None;
         settings.wheel_down = WheelAction::None;
@@ -212,6 +214,9 @@ fn bindings(
             }
         } else if let Some(keycode) = settings::source_key(&key) {
             if command.is_empty() {
+                true
+            } else if command == "toggleconsole" {
+                settings.set_console_key(keycode);
                 true
             } else if let Some(index) = ACTION_COMMANDS.iter().position(|value| *value == command) {
                 if let Some(old) = settings.binds[index] {
@@ -322,50 +327,99 @@ fn import_from(data: &Path, roots: &[PathBuf]) -> std::io::Result<()> {
         .create(true)
         .open(report_path)?;
     report_file.write_all(report.as_bytes())?;
-    // Link a fully written file into place: rename on Unix replaces existing
-    // files, while hard_link fails if another process has created user.cfg.
-    let nonce = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    let temp = data.join(format!(
-        "config/.cs2-import-{}-{nonce}.tmp",
-        std::process::id()
-    ));
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&temp)?;
-    let encoded = settings.encode();
-    let publish = file
-        .write_all(encoded.as_bytes())
-        .and_then(|_| file.sync_all())
-        .and_then(|_| match std::fs::hard_link(&temp, &target) {
-            Ok(()) => Ok(()),
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Err(error),
-            // Some portable-drive filesystems cannot hardlink. create_new
-            // retains the no-overwrite guarantee on that fallback too.
-            Err(_) => std::fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&target)
-                .and_then(|mut target| target.write_all(encoded.as_bytes())),
-        });
-    drop(file);
-    let _ = std::fs::remove_file(temp);
-    match publish {
-        Ok(()) => (),
-        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => return Ok(()),
-        Err(error) => return Err(error),
-    }
+    publish_settings(&target, settings.encode().as_bytes(), |file, bytes| file.write_all(bytes))?;
     eprintln!("{}", settings.controls_source);
     Ok(())
+}
+
+/// Publish only a closed, synced, complete file. A failed write leaves no final
+/// name, so first-run setup can retry. The publication never replaces a winner.
+fn publish_settings(
+    target: &Path,
+    encoded: &[u8],
+    write: impl FnOnce(&mut std::fs::File, &[u8]) -> std::io::Result<()>,
+) -> std::io::Result<()> {
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos();
+    let temp = target.with_file_name(format!(".cs2-import-{}-{nonce}.tmp", std::process::id()));
+    let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(&temp)?;
+    let prepared = write(&mut file, encoded).and_then(|_| file.sync_all());
+    drop(file); // Windows rename must not retain the writer's open handle.
+    let result = prepared.and_then(|_| publish_completed(&temp, target));
+    let _ = std::fs::remove_file(&temp);
+    match result {
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
+        result => result,
+    }
+}
+
+#[cfg(windows)]
+fn publish_completed(temp: &Path, target: &Path) -> std::io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn MoveFileExW(existing: *const u16, new: *const u16, flags: u32) -> i32;
+    }
+    let temp: Vec<_> = temp.as_os_str().encode_wide().chain(Some(0)).collect();
+    let target: Vec<_> = target.as_os_str().encode_wide().chain(Some(0)).collect();
+    // Same-directory rename supports portable FAT/exFAT too. WRITE_THROUGH,
+    // deliberately WITHOUT REPLACE_EXISTING or COPY_ALLOWED: no partial copy
+    // can appear at the destination, and a concurrently saved user.cfg wins.
+    let moved = unsafe { MoveFileExW(temp.as_ptr(), target.as_ptr(), 0x8) };
+    if moved != 0 { Ok(()) } else { Err(std::io::Error::last_os_error()) }
+}
+
+#[cfg(not(windows))]
+fn publish_completed(temp: &Path, target: &Path) -> std::io::Result<()> {
+    // Fail closed on filesystems without hardlinks; never copy to the final
+    // name or use std::fs::rename (which would replace an existing preference).
+    std::fs::hard_link(temp, target)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::time::SystemTime;
+    #[test]
+    fn completed_publish_retries_after_partial_write_and_never_clobbers_a_winner() {
+        let (data, _, _) = fixture("publish");
+        std::fs::create_dir_all(data.join("config")).unwrap();
+        let target = data.join("config/user.cfg");
+        let encoded = Settings::default().encode();
+        let failed = publish_settings(&target, encoded.as_bytes(), |file, bytes| {
+            file.write_all(&bytes[..7])?;
+            Err(std::io::Error::other("injected interrupted write"))
+        });
+        assert!(failed.is_err());
+        assert!(!target.exists(), "partial output must not block first-run retry");
+        assert_eq!(std::fs::read_dir(target.parent().unwrap()).unwrap().count(), 0);
+        publish_settings(&target, encoded.as_bytes(), |file, bytes| file.write_all(bytes)).unwrap();
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), encoded);
+        std::fs::remove_file(&target).unwrap();
+        // A competing saver wins after the importer has prepared its temp file.
+        publish_settings(&target, encoded.as_bytes(), |file, bytes| {
+            file.write_all(bytes)?;
+            std::fs::write(&target, "winner preferences")
+        }).unwrap();
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "winner preferences");
+    }
+
+    #[test]
+    fn quoted_literal_backslash_console_and_explicit_unbinds_round_trip() {
+        let defaults = kv::parse(include_str!("../tests/fixtures/controls-defaults.vcfg")).unwrap();
+        let overrides = kv::parse(include_str!("../tests/fixtures/controls-user.vcfg")).unwrap();
+        let mut settings = Settings::default();
+        bindings(&mut settings, defaults.block("config").unwrap().block("bindings"),
+            overrides.block("config").unwrap().block("bindings").unwrap(), &mut String::new());
+        let restored = Settings::parse(&settings.encode());
+        assert_eq!(restored.console_key, settings::source_key("\\"));
+        assert!(!restored.binds.contains(&settings::source_key("`")));
+        assert!(!restored.binds.contains(&settings::source_key("v")));
+        assert!(!restored.binds.contains(&settings::source_key("f3")));
+        assert_eq!(restored.binds[0], settings::source_key("w"));
+        assert_eq!(restored.binds[4], None);
+        assert_eq!(restored.wheel_up, WheelAction::Jump);
+    }
     const DEFAULTS: &str = r#"config { bindings {
         w +forward s +back a +left d +right SPACE +jump CTRL +duck SHIFT +sprint
         q lastinv g drop 1 slot1 2 slot2 3 slot3 4 slot4 5 slot5

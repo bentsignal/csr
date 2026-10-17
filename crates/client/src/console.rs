@@ -183,6 +183,7 @@ fn input(
     mut block: ResMut<crate::player::InputBlockFrames>,
     mut cursor: Single<(&Window, &mut CursorOptions), With<PrimaryWindow>>,
     menu: Res<crate::menu::Menu>,
+    settings: Res<crate::settings::Settings>,
 ) {
     static INPUT_TRACE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     let was_open = console.open;
@@ -200,7 +201,8 @@ fn input(
         if !window.focused || event.state != ButtonState::Pressed {
             continue;
         }
-        if event.key_code == KeyCode::Backquote {
+        // Key capture must be able to select the current console key too.
+        if settings.console_key == Some(event.key_code) && menu.capture.is_none() {
             if !event.repeat {
                 console.open = !console.open;
                 console.blocked_frame = true;
@@ -471,6 +473,10 @@ fn bind(
         settings.unbind_key(key);
     } else if let Some(command) = args.get(1) {
         let command = command.to_ascii_lowercase();
+        if command == "toggleconsole" {
+            settings.set_console_key(key);
+            return Ok(format!("{name} = toggleconsole"));
+        }
         let action = ACTION_COMMANDS
             .iter()
             .position(|candidate| *candidate == command)
@@ -479,12 +485,12 @@ fn bind(
     }
     Ok(format!(
         "{name} = {}",
-        settings
+        if settings.console_key == Some(key) { "toggleconsole" } else { settings
             .binds
             .iter()
             .position(|candidate| *candidate == Some(key))
             .map(|i| ACTION_COMMANDS[i])
-            .unwrap_or("unbound")
+            .unwrap_or("unbound") }
     ))
 }
 fn has_pending(console: Res<DeveloperConsole>) -> bool {
@@ -601,7 +607,7 @@ fn run(world: &mut World, line: &str) -> Result<String, String> {
         "bindlist" if args.is_empty() => {
             let settings = world.resource::<crate::settings::Settings>();
             Ok(format!(
-                "{}\n{}\nmwheelup = {}\nmwheeldown = {}\nKeyboard binds swap an occupied key's previous action. Mouse binds replace that button's action; keyboard binds remain available. The console key remains fixed.",
+                "{}\n{}\nmwheelup = {}\nmwheeldown = {}\n{} = toggleconsole\nKeyboard binds swap an occupied key's previous action. Mouse binds replace that button's action; keyboard binds remain available.",
                 settings
                     .binds
                     .iter()
@@ -615,7 +621,8 @@ fn run(world: &mut World, line: &str) -> Result<String, String> {
                     .join("\n"),
                 settings.mouse_binds.iter().enumerate().map(|(index, action)| format!("mouse{} = {}", index + 1, action.command())).collect::<Vec<_>>().join("\n"),
                 settings.wheel_up.command(),
-                settings.wheel_down.command()
+                settings.wheel_down.command(),
+                settings.console_key.map(crate::settings::key_name).unwrap_or_else(|| "unbound".into())
             ))
         }
         "maps" if args.is_empty() => Ok(world.resource::<crate::menu::Menu>().maps.join("\n")),
@@ -819,6 +826,7 @@ mod tests {
             .insert_resource(crate::player::InputEnabled(true))
             .insert_resource(State::new(crate::AppState::Match))
             .init_resource::<DeveloperConsole>()
+            .init_resource::<crate::settings::Settings>()
             .init_resource::<crate::menu::Menu>()
             .init_resource::<crate::player::InputBlockFrames>()
             .add_systems(PreUpdate, input.after(InputSystems))
@@ -1025,6 +1033,7 @@ mod tests {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, bevy::input::InputPlugin))
             .init_resource::<DeveloperConsole>()
+            .init_resource::<crate::settings::Settings>()
             .init_resource::<DiagnosticsStore>()
             .init_resource::<crate::menu::Menu>()
             .init_resource::<crate::player::InputBlockFrames>()
@@ -1125,10 +1134,56 @@ mod tests {
         assert_eq!(console.visible_output(30).lines().next(), Some("bounded 50"));
     }
     #[test]
+    fn imported_console_key_owns_focus_and_explicit_unbind_does_not_steal_backquote() {
+        let mut settings = crate::settings::Settings::default();
+        bind(&mut settings, &["`".into()], true).unwrap();
+        bind(&mut settings, &["\\".into(), "toggleconsole".into()], false).unwrap();
+        let settings = crate::settings::Settings::parse(&settings.encode());
+        assert_eq!(settings.console_key, Some(KeyCode::Backslash));
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, bevy::input::InputPlugin))
+            .init_resource::<DeveloperConsole>()
+            .init_resource::<crate::menu::Menu>()
+            .init_resource::<crate::player::InputBlockFrames>()
+            .insert_resource(settings)
+            .insert_resource(crate::player::InputEnabled(true))
+            .add_systems(PreUpdate, input.after(InputSystems));
+        let window = app.world_mut().spawn((Window::default(), CursorOptions::default(), PrimaryWindow)).id();
+        let event = |key_code| KeyboardInput {
+            key_code, logical_key: bevy::input::keyboard::Key::Character("\\".into()),
+            state: ButtonState::Pressed, text: Some("\\".into()), repeat: false, window,
+        };
+        app.world_mut().resource_mut::<Messages<KeyboardInput>>().write(event(KeyCode::Backquote));
+        app.update();
+        assert!(!app.world().resource::<DeveloperConsole>().open);
+        assert!(app.world().resource::<ButtonInput<KeyCode>>().just_pressed(KeyCode::Backquote));
+        app.world_mut().get_mut::<Window>(window).unwrap().focused = false;
+        app.world_mut().resource_mut::<Messages<KeyboardInput>>().write(event(KeyCode::Backslash));
+        app.update();
+        assert!(!app.world().resource::<DeveloperConsole>().open);
+        app.world_mut().get_mut::<Window>(window).unwrap().focused = true;
+        for open in [true, false] {
+            app.world_mut().resource_mut::<Messages<KeyboardInput>>().write(event(KeyCode::Backslash));
+            app.update();
+            assert_eq!(app.world().resource::<DeveloperConsole>().open, open);
+            assert!(app.world().resource::<DeveloperConsole>().blocked_frame);
+            assert!(app.world().resource::<Messages<KeyboardInput>>().is_empty());
+            assert!(!app.world().resource::<ButtonInput<KeyCode>>().pressed(KeyCode::Backslash));
+        }
+        assert!(app.world().resource::<DeveloperConsole>().line.is_empty());
+        bind(&mut app.world_mut().resource_mut::<crate::settings::Settings>(), &["\\".into()], true).unwrap();
+        app.world_mut().resource_mut::<Messages<KeyboardInput>>().write(event(KeyCode::Backslash));
+        app.update();
+        assert!(!app.world().resource::<DeveloperConsole>().open);
+        assert!(!app.world().resource::<DeveloperConsole>().blocked_frame);
+    }
+
+    #[test]
     fn console_consumes_open_typing_and_escape_before_gameplay_and_movie_readers() {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, bevy::input::InputPlugin))
             .init_resource::<DeveloperConsole>()
+            .init_resource::<crate::settings::Settings>()
             .init_resource::<crate::menu::Menu>()
             .init_resource::<crate::player::InputBlockFrames>()
             .insert_resource(crate::player::InputEnabled(true))

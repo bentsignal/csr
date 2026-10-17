@@ -132,15 +132,15 @@ pub const KEYS: &[KeyCode] = &[
     KeyCode::Digit5,
     KeyCode::Digit0, KeyCode::Digit6, KeyCode::Digit7, KeyCode::Digit8, KeyCode::Digit9,
     KeyCode::ShiftRight, KeyCode::ControlRight, KeyCode::AltRight, KeyCode::Enter,
-    KeyCode::Backslash, KeyCode::BracketLeft, KeyCode::BracketRight,
+    KeyCode::Backquote, KeyCode::Backslash, KeyCode::BracketLeft, KeyCode::BracketRight,
     KeyCode::Comma, KeyCode::Period, KeyCode::Quote, KeyCode::Semicolon,
     KeyCode::Slash, KeyCode::Minus, KeyCode::Equal,
     KeyCode::F1, KeyCode::F2, KeyCode::F3, KeyCode::F4, KeyCode::F5, KeyCode::F6,
     KeyCode::F7, KeyCode::F8, KeyCode::F9, KeyCode::F10, KeyCode::F11, KeyCode::F12,
 ];
 
-/// Physical key names used by Source configs and the console. Escape and the
-/// console key remain reserved for navigation rather than gameplay bindings.
+/// Physical key names used by Source configs and the console. Escape remains
+/// reserved for navigation. The console binding owns its selected physical key.
 pub fn source_key(name: &str) -> Option<KeyCode> {
     let name = name.to_ascii_lowercase();
     let alias = match name.as_str() {
@@ -150,7 +150,7 @@ pub fn source_key(name: &str) -> Option<KeyCode> {
         "uparrow" => "arrowup", "downarrow" => "arrowdown",
         "leftarrow" => "arrowleft", "rightarrow" => "arrowright",
         "ins" => "insert", "del" => "delete", "pgup" => "pageup", "pgdn" => "pagedown",
-        "capslock" => "capslock", "\\" => "backslash", "[" => "bracketleft", "]" => "bracketright",
+        "capslock" => "capslock", "`" => "backquote", "\\" => "backslash", "[" => "bracketleft", "]" => "bracketright",
         "," => "comma", "." => "period", "'" => "quote", ";" => "semicolon",
         "/" => "slash", "-" => "minus", "=" => "equal", other => other,
     };
@@ -173,6 +173,8 @@ impl WheelAction {
 pub struct Settings {
     /// Human-readable first-run control provenance, retained across saves.
     pub controls_source: String,
+    /// Local UI action, deliberately outside the authoritative TickInput model.
+    pub console_key: Option<KeyCode>,
     pub volume: f32,
     pub audio_options: crate::audio_options::AudioOptions,
     pub show_fps: bool,
@@ -204,6 +206,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             controls_source: String::new(),
+            console_key: Some(KeyCode::Backquote),
             volume: 0.5,
             audio_options: Default::default(),
             show_fps: false,
@@ -277,6 +280,10 @@ impl Settings {
             let v = value.parse::<f32>().ok().filter(|x| x.is_finite());
             match key {
                 "controls_source" => s.controls_source = value.into(),
+                "console_key" => {
+                    if value.is_empty() { s.console_key = None; }
+                    else if let Some(key) = source_key(value) { s.set_console_key(key); }
+                }
                 "mouse1" | "mouse2" | "mouse3" | "mouse4" | "mouse5" => {
                     if let Some(action) = MouseAction::parse(value) {
                         s.mouse_binds[key.as_bytes()[5] as usize - b'1' as usize] = action;
@@ -389,6 +396,7 @@ impl Settings {
             let name = key.map(|key| format!("{key:?}")).unwrap_or_default();
             text.push_str(&format!("bind{i}={name}\n"));
         }
+        text.push_str(&format!("console_key={}\n", self.console_key.map(|key| format!("{key:?}")).unwrap_or_default()));
         self.audio_options.encode_into(&mut text);
         text
     }
@@ -404,15 +412,22 @@ impl Settings {
             return;
         }
         let old = self.binds[index];
+        if self.console_key == Some(key) { self.console_key = None; }
         if let Some(other) = self.binds.iter().position(|k| *k == Some(key)) {
             self.binds[other] = old;
         }
         self.binds[index] = Some(key);
     }
     pub fn unbind_key(&mut self, key: KeyCode) {
+        if self.console_key == Some(key) { self.console_key = None; }
         for binding in &mut self.binds {
             if *binding == Some(key) { *binding = None; }
         }
+    }
+    pub fn set_console_key(&mut self, key: KeyCode) {
+        if !KEYS.contains(&key) { return; }
+        self.unbind_key(key);
+        self.console_key = Some(key);
     }
     /// The settings page offers only commands the input sampler implements.
     pub fn cycle_mouse_binding(&mut self, index: usize, direction: i32) {

@@ -1,0 +1,14 @@
+// Independently authored sparse overrides. The backslash key is ONE literal
+// backslash inside quotes, with escaping disabled by this KeyValues dialect.
+"config"
+{
+    "bindings"
+    {
+        "`" "<unbound>"
+        "\" "toggleconsole"
+        "SPACE" "<unbound>"
+        "v" "+voicerecord"
+        "F3" "<unbound>"
+        "MWHEELUP" "+jump"
+    }
+}

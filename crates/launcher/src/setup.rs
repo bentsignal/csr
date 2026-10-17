@@ -440,6 +440,55 @@ pub fn report(error: &str) {
 mod tests {
     use super::*;
 
+    #[test]
+    fn first_run_setup_imports_fake_steam_controls_then_loads_saved_settings() {
+        const CHILD: &str = "CSR_SETUP_CONTROLS_FIXTURE_CHILD";
+        if std::env::var_os(CHILD).is_some() {
+            // Only this subprocess changes cwd/environment. No real Steam,
+            // game, GUI, migration candidates or player preferences are used.
+            assert!(matches!(Layout::current(), Layout::Source(_)));
+            let data = PathBuf::from(std::env::var_os("CSR_DATA_DIR").unwrap());
+            let steam = PathBuf::from(std::env::var_os("CSR_STEAM_DIR").unwrap());
+            let cfg = steam.join("userdata/123/730/local/cfg");
+            let keys = cfg.join("cs2_user_keys_0_slot0.vcfg");
+            let convars = cfg.join("cs2_user_convars_0_slot0.vcfg");
+            let sources = [std::fs::read(&keys).unwrap(), std::fs::read(&convars).unwrap()];
+            prepare(false).unwrap();
+            assert_eq!(std::env::current_dir().unwrap(), data);
+            let settings = client::settings::Settings::load();
+            assert_eq!(settings.sensitivity, 1.375);
+            assert_eq!(settings.console_key, client::settings::source_key("\\"));
+            assert_eq!(settings.binds[0], client::settings::source_key("w"));
+            assert_eq!(settings.binds[4], None);
+            assert_eq!(settings.wheel_up, client::settings::WheelAction::Jump);
+            let existing = b"sensitivity=2.625\nunknown=keep byte for byte\nconsole_key=\n";
+            std::fs::write(data.join("config/user.cfg"), existing).unwrap();
+            prepare(false).unwrap();
+            assert_eq!(std::fs::read(data.join("config/user.cfg")).unwrap(), existing);
+            assert_eq!(client::settings::Settings::load().sensitivity, 2.625);
+            assert_eq!(std::fs::read(keys).unwrap(), sources[0]);
+            assert_eq!(std::fs::read(convars).unwrap(), sources[1]);
+            return;
+        }
+        let root = std::env::temp_dir().join(format!("csr-setup-controls-{}-{}", std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let data = root.join("rewrite");
+        let steam = root.join("fakeSteam");
+        let cfg = steam.join("userdata/123/730/local/cfg");
+        let defaults = steam.join("steamapps/common/Counter-Strike Global Offensive/game/csgo/cfg");
+        for dir in [&data, &cfg, &defaults] { std::fs::create_dir_all(dir).unwrap(); }
+        std::fs::write(cfg.join("cs2_user_keys_0_slot0.vcfg"), include_str!("../tests/fixtures/controls-user.vcfg")).unwrap();
+        std::fs::write(defaults.join("user_keys_default.vcfg"), include_str!("../tests/fixtures/controls-defaults.vcfg")).unwrap();
+        std::fs::write(cfg.join("cs2_user_convars_0_slot0.vcfg"),
+            r#""config" { "convars" { "sensitivity" "1.375" } }"#).unwrap();
+        let result = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "setup::tests::first_run_setup_imports_fake_steam_controls_then_loads_saved_settings", "--nocapture"])
+            .env(CHILD, "1").env("CSR_DATA_DIR", &data).env("CSR_STEAM_DIR", &steam)
+            .env("CSR_GAME_DIR", root.join("unused-fake-legacy"))
+            .output().unwrap();
+        assert!(result.status.success(), "{}\n{}", String::from_utf8_lossy(&result.stdout), String::from_utf8_lossy(&result.stderr));
+    }
+
     fn temp(name: &str) -> PathBuf {
         let d = std::env::temp_dir().join(format!("csr-setup-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
