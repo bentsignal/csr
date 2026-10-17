@@ -759,6 +759,8 @@ fn scoped_world() -> (World, PlayerId) {
         ("zoom levels", "2"), ("zoom fov 1", "40"), ("zoom fov 2", "10"),
         ("zoom time 0", "0.05"), ("zoom time 1", "0.05"), ("zoom time 2", "0.05"),
         ("hide view model zoomed", "1"), ("unzoom after shot", "1"),
+        // The installed shared prefab supplies this, even for the AWP.
+        ("cycletime alt", "0.300000"),
         ("max player speed alt", "100"), ("inaccuracy stand alt", "2"),
     ] { awp.attributes.insert(key.into(), value.into()); }
     let player = world.player_mut(id).unwrap();
@@ -842,6 +844,80 @@ fn bolt_action_unscopes_and_resumes_the_same_zoom() {
     assert_eq!(world.player(id).unwrap().active_weapon().unwrap().zoom_level, 0);
     run(&mut world, 0.6, &[]);
     assert_eq!(world.player(id).unwrap().active_weapon().unwrap().zoom_level, 2);
+}
+
+#[test]
+fn bolt_action_zoom_and_trigger_spam_cannot_shorten_primary_cadence() {
+    for rate in [64, 128] {
+        let (mut world, id) = scoped_world();
+        world.set_tick_rate(rate);
+        world.player_mut(id).unwrap().weapons[0].set_zoom(2, 0.0);
+        let mut shots = Vec::new();
+        let mut deadline = 0.;
+        let mut scope_changes = 0;
+        for tick in 0..rate * 8 {
+            let now = world.time();
+            // Repeated real press/release edges for both buttons reproduce
+            // the owner case; holding a semiautomatic trigger is insufficient.
+            let input = TickInput { buttons: if tick % 2 == 0 {
+                buttons::ATTACK | buttons::ATTACK2
+            } else { 0 }, ..Default::default() };
+            // Keep the first shot at zoom 2 rather than cycling it to 0.
+            let input = if tick == 0 { TickInput { buttons: buttons::ATTACK, ..input } } else { input };
+            world.step(&[(id, input)]);
+            scope_changes += world.events.iter().filter(|e| matches!(e, GameEvent::Scope { .. })).count();
+            let w = world.player(id).unwrap().active_weapon().unwrap();
+            if world.events.iter().any(|e| matches!(e, GameEvent::Fire { .. })) {
+                assert!(now >= deadline, "rate={rate}: early shot at {now}, due {deadline}");
+                assert!((w.next_attack - now - 1.455).abs() < 0.00001);
+                deadline = w.next_attack;
+                shots.push(now);
+            } else if now < deadline {
+                assert_eq!(w.next_attack, deadline, "zoom presses must preserve the shot deadline");
+            }
+        }
+        assert_eq!(shots.len(), 5, "all rounds remain usable at rate={rate}");
+        assert!(shots.windows(2).all(|pair| pair[1] - pair[0] >= 1.455));
+        assert!(scope_changes > 0, "ready secondary presses still cycle zoom");
+    }
+}
+
+#[test]
+fn bolt_action_resume_precedes_a_ready_shot_and_never_the_primary_deadline() {
+    for rate in [64, 128] {
+        let (mut world, id) = scoped_world();
+        world.set_tick_rate(rate);
+        world.player_mut(id).unwrap().weapons[0].set_zoom(2, 0.0);
+        world.step(&[(id, TickInput { buttons: buttons::ATTACK, ..Default::default() })]);
+        let deadline = world.player(id).unwrap().active_weapon().unwrap().next_attack;
+        assert_eq!(deadline, 1.455);
+        while world.time() < deadline {
+            world.step(&[(id, TickInput::default())]);
+            let w = world.player(id).unwrap().active_weapon().unwrap();
+            assert_eq!((w.zoom_level, w.resume_zoom), (0, Some(2)));
+            assert!(!world.events.iter().any(|e| matches!(e, GameEvent::Fire { .. })));
+        }
+        // On the first ready tick, restore the original zoom before firing.
+        // The new shot must unzoom and retain that level for its own resume.
+        let now = world.time();
+        world.step(&[(id, TickInput { buttons: buttons::ATTACK, ..Default::default() })]);
+        let w = world.player(id).unwrap().active_weapon().unwrap();
+        assert_eq!((w.zoom_level, w.resume_zoom, w.clip), (0, Some(2), 3));
+        assert_eq!(w.next_attack, now + 1.455);
+        assert_eq!(world.events.iter().filter(|e| matches!(e, GameEvent::Fire { .. })).count(), 1);
+    }
+}
+
+#[test]
+fn scoped_non_bolt_action_retains_alternate_cycle_policy() {
+    let (mut world, id) = scoped_world();
+    let w = &mut world.player_mut(id).unwrap().weapons[0];
+    Arc::make_mut(&mut w.def).attributes.insert("unzoom after shot".into(), "0".into());
+    w.set_zoom(1, 0.0);
+    world.step(&[(id, TickInput { buttons: buttons::ATTACK, ..Default::default() })]);
+    let w = world.player(id).unwrap().active_weapon().unwrap();
+    assert_eq!((w.zoom_level, w.resume_zoom, w.clip), (1, None, 4));
+    assert_eq!(w.next_attack, 0.3);
 }
 
 #[test]

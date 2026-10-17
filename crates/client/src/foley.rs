@@ -1,8 +1,9 @@
 //! Player foley: footsteps, jump and landing sounds, and the weapon sounds
-//! that the original plays from animation events (deploy, reload).
+//! that the original plays from animation events (deploy, reload, AWP bolt).
 //!
-//! Timings were measured in CS:GO Legacy with `snd_showstart`
-//! (docs/FIDELITY.md, "Sound audit"). Everything here is derived from the
+//! Footstep timings were measured in CS:GO Legacy with `snd_showstart`
+//! (docs/FIDELITY.md, "Sound audit"); weapon events use the installed clips.
+//! Everything here is derived from the
 //! simulation's player state, so it works the same for the local player,
 //! bots and (later) networked players.
 
@@ -88,6 +89,7 @@ struct Queued {
     reload: bool,
     suppressor: Option<sim::weapon::SuppressorTransition>,
     grenade_pull: Option<u64>,
+    primary_attack: bool,
 }
 
 #[derive(Resource, Default)]
@@ -120,13 +122,26 @@ impl Foley {
         self.players.retain(|id, state| players.iter().any(|player| {
             player.id == *id && player.alive && state.life_epoch == Some(player.life_epoch)
         }));
-        self.queue.retain(|sound| self.players.contains_key(&sound.player));
+        self.queue.retain(|sound| self.players.contains_key(&sound.player)
+            && (!sound.primary_attack || players.iter().any(|player|
+                player.id == sound.player && player.active_weapon().is_some_and(|w|
+                    w.def.class_name == sound.weapon && w.reload_end.is_none()))));
     }
 
     fn schedule(&mut self, player: sim::PlayerId, weapon: &str, now: f32, duration: f32, events: &[(f32, String)], reload: bool) {
         for (cycle, entry) in events {
-            self.queue.push(Queued { at: now + cycle * duration, player, weapon: weapon.to_string(), entry: entry.clone(), reload, suppressor: None, grenade_pull: None });
+            self.queue.push(Queued { at: now + cycle * duration, player, weapon: weapon.to_string(), entry: entry.clone(), reload, suppressor: None, grenade_pull: None, primary_attack: false });
         }
+    }
+
+    /// Called only for a confirmed Fire event. The installed AWP attack clip
+    /// owns its bolt cues; neither scope changes nor trigger attempts do.
+    pub(crate) fn primary_attack(&mut self, player: sim::PlayerId, weapon: &str,
+        now: f32, duration: f32, events: &[(f32, String)]) {
+        self.queue.retain(|q| q.player != player || !q.primary_attack);
+        let first = self.queue.len();
+        self.schedule(player, weapon, now, duration, events, false);
+        for q in &mut self.queue[first..] { q.primary_attack = true; }
     }
 }
 
@@ -220,7 +235,7 @@ pub fn update(
                     // seconds of screw sounds as one burst.
                     if at >= now - elapsed.tick_seconds {
                         foley.queue.push(Queued { at, player: p.id, weapon: weapon.clone(),
-                            entry: entry.clone(), reload: false, suppressor: Some(transition), grenade_pull: None });
+                            entry: entry.clone(), reload: false, suppressor: Some(transition), grenade_pull: None, primary_attack: false });
                     }
                 }
             }
@@ -239,7 +254,7 @@ pub fn update(
                 for (cycle, entry) in events.iter() {
                     foley.queue.push(Queued { at: pull.unwrap() as f32 * world.0.dt() + cycle * duration,
                         player: p.id, weapon: weapon.clone(), entry: entry.clone(), reload: false,
-                        suppressor: None, grenade_pull: pull });
+                        suppressor: None, grenade_pull: pull, primary_attack: false });
                 }
             }
         }
@@ -450,6 +465,88 @@ mod tests {
             foley.schedule(player.id, "weapon_ak47", 0.0, 1.0, &[(0.8, "deploy".into())], false);
         }
         (world, foley, first, second)
+    }
+
+    fn awp_world() -> (sim::World, Foley, sim::PlayerId, sim::PlayerId) {
+        let (mut world, mut foley, first, second) = tracked_world();
+        let catalog = weapons::Catalog::from_items_game(r#"items_game {
+            items { 9 { name weapon_awp baseitem 1
+                attributes { "primary clip size" 10 cycletime 1.455 } } }
+        }"#).unwrap();
+        for player in &mut world.players {
+            player.weapons = vec![sim::weapon::WeaponState::new(std::sync::Arc::new(
+                catalog.get("weapon_awp").unwrap().clone()))];
+            player.active = 0;
+            foley.players.get_mut(&player.id).unwrap().weapon = "weapon_awp".into();
+        }
+        (world, foley, first, second)
+    }
+
+    #[test]
+    fn awp_primary_sound_queue_uses_authored_cycles_and_replaces_only_its_own_attack() {
+        let (world, mut foley, first, second) = awp_world();
+        // Independently inspected Legacy awp_fire: 51 frames at 30fps;
+        // the two sound events are at cycles .36 and .56, with no fire cue.
+        let duration = 50. / 30.;
+        let events = [(0.36, "Weapon_AWP.BoltBack".into()), (0.56, "Weapon_AWP.BoltForward".into())];
+        foley.primary_attack(first, "weapon_awp", 10., duration, &events);
+        foley.primary_attack(second, "weapon_awp", 10., duration, &events);
+        foley.retain_lives(&world.players);
+        let own: Vec<_> = foley.queue.iter().filter(|q| q.player == first && q.primary_attack).collect();
+        assert_eq!(own.len(), 2);
+        assert_eq!(own[0].entry, "Weapon_AWP.BoltBack");
+        assert!((own[0].at - 10.6).abs() < 0.00001);
+        assert_eq!(own[1].entry, "Weapon_AWP.BoltForward");
+        assert!((own[1].at - (10. + 28. / 30.)).abs() < 0.00001);
+        foley.primary_attack(first, "weapon_awp", 12., duration, &events);
+        assert_eq!(foley.queue.iter().filter(|q| q.player == first && q.primary_attack).count(), 2);
+        assert!(foley.queue.iter().filter(|q| q.player == first && q.primary_attack).all(|q| q.at > 12.));
+        assert_eq!(foley.queue.iter().filter(|q| q.player == second && q.primary_attack).count(), 2);
+        assert_eq!(foley.queue.iter().filter(|q| !q.primary_attack).count(), 4,
+            "replacing a primary clip must preserve unrelated deploy/reload cues");
+    }
+
+    #[test]
+    fn awp_bolt_sounds_cancel_on_reload_holster_death_and_life_change() {
+        for interruption in 0..4 {
+            let (mut world, mut foley, first, second) = awp_world();
+            for player in [first, second] {
+                foley.primary_attack(player, "weapon_awp", 10., 50. / 30.,
+                    &[(0.36, "Weapon_AWP.BoltBack".into()), (0.56, "Weapon_AWP.BoltForward".into())]);
+            }
+            let player = world.player_mut(first).unwrap();
+            match interruption {
+                0 => player.weapons[0].reload_end = Some(14.),
+                1 => player.weapons.clear(),
+                2 => player.alive = false,
+                _ => player.life_epoch += 1,
+            }
+            foley.retain_lives(&world.players);
+            assert!(!foley.queue.iter().any(|q| q.player == first && q.primary_attack));
+            assert_eq!(foley.queue.iter().filter(|q| q.player == second && q.primary_attack).count(), 2);
+        }
+    }
+
+    #[test]
+    fn installed_awp_attack_declares_both_bolt_events_and_resolves_the_legacy_samples() {
+        let Some(game) = vfs::find_csgo_dir() else { return; };
+        let mut fs = vfs::Vfs::new();
+        fs.mount_game_dir(&game).unwrap();
+        let bytes = fs.read("models/weapons/v_snip_awp.mdl").unwrap();
+        let model = mdl::Model::load_header(&bytes).unwrap();
+        let attack = model.sequences.iter().find(|s| s.activity == "ACT_VM_PRIMARYATTACK").unwrap();
+        let ani = (!model.anim_block_file.is_empty()).then(|| fs.read(&model.anim_block_file)).flatten();
+        let clip = model.decode_animation(attack.anims[0] as usize, ani.as_deref()).unwrap();
+        let events: Vec<_> = attack.events.iter().filter_map(|e|
+            Some((e.cycle, e.client_sound()?.to_string()))).collect();
+        assert_eq!(events, [(0.36, "Weapon_AWP.BoltBack".to_string()), (0.56, "Weapon_AWP.BoltForward".to_string())]);
+        assert!((clip.duration() - 50. / 30.).abs() < 0.00001);
+        let script = kv::parse(&fs.read_string("scripts/game_sounds_weapons.txt").unwrap()).unwrap();
+        for (entry, sample) in [("Weapon_AWP.BoltBack", "weapons/awp/awp_boltback.wav"),
+            ("Weapon_AWP.BoltForward", "weapons/awp/awp_boltforward.wav")] {
+            assert_eq!(script.block(entry).unwrap().str("wave"), Some(format!("~{sample}").as_str()));
+            assert!(!fs.read(&format!("sound/{sample}")).unwrap().is_empty());
+        }
     }
 
     #[test]
