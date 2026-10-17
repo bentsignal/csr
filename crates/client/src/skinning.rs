@@ -2,7 +2,7 @@
 //!
 //! A [`SkinnedAsset`] is a model's meshes with joint indices/weights, its
 //! skeleton and inverse bind poses. Instances spawn one joint entity per
-//! bone; every frame [`apply_pose`] writes each joint's world transform:
+//! bone; every frame [`apply_pose`] computes each joint's world transform:
 //!
 //! `joint = world_from_model · S · bone_to_model · S⁻¹`
 //!
@@ -225,9 +225,20 @@ pub fn apply_pose(instance: &SkinnedInstance, world_from_model: Mat4, pose: &[gl
     for (joint, m) in instance.joints.iter().zip(pose) {
         if let Ok(mut t) = transforms.get_mut(*joint) {
             let world = world_from_model * s * to_bevy_mat(*m) * s_inv;
-            *t = Transform::from_matrix(world);
+            let next = Transform::from_matrix(world);
+            // Preserve every decomposed float bit, including signed zero.
+            // Read without mutably dereferencing a settled joint.
+            if !same_transform_bits(&t, &next) {
+                *t = next;
+            }
         }
     }
+}
+
+fn same_transform_bits(a: &Transform, b: &Transform) -> bool {
+    a.translation.to_array().map(f32::to_bits) == b.translation.to_array().map(f32::to_bits)
+        && a.rotation.to_array().map(f32::to_bits) == b.rotation.to_array().map(f32::to_bits)
+        && a.scale.to_array().map(f32::to_bits) == b.scale.to_array().map(f32::to_bits)
 }
 
 /// Joint transforms for a pose, for instances whose joints were just
@@ -253,4 +264,287 @@ pub fn spawn_posed(
         commands.entity(*joint).insert(t);
     }
     instance
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Component)]
+    struct Joint;
+
+    #[derive(Resource)]
+    struct PoseFixture {
+        instance: SkinnedInstance,
+        world_from_model: Mat4,
+        pose: Vec<glam::Mat4>,
+    }
+
+    #[derive(Resource, Default)]
+    struct PoseChanges {
+        local: Vec<Entity>,
+        global: Vec<Entity>,
+    }
+
+    fn apply_fixture(fixture: Res<PoseFixture>, mut transforms: Query<&mut Transform>) {
+        apply_pose(
+            &fixture.instance,
+            fixture.world_from_model,
+            &fixture.pose,
+            &mut transforms,
+        );
+    }
+
+    fn record_pose_changes(
+        local: Query<Entity, (With<Joint>, Changed<Transform>)>,
+        global: Query<Entity, (With<Joint>, Changed<GlobalTransform>)>,
+        mut seen: ResMut<PoseChanges>,
+    ) {
+        seen.local = local.iter().collect();
+        seen.global = global.iter().collect();
+    }
+
+    fn fixture_app() -> (App, Entity, Entity) {
+        bevy::tasks::ComputeTaskPool::get_or_init(bevy::tasks::TaskPool::default);
+        let mut app = App::new();
+        app.add_plugins(bevy::transform::TransformPlugin)
+            .init_resource::<PoseChanges>()
+            .add_systems(Update, apply_fixture)
+            .add_systems(Last, record_pose_changes);
+        let a = app.world_mut().spawn((Joint, Transform::default())).id();
+        let b = app.world_mut().spawn((Joint, Transform::default())).id();
+        app.insert_resource(PoseFixture {
+            instance: SkinnedInstance {
+                joints: vec![a, b],
+                meshes: Vec::new(),
+            },
+            world_from_model: Mat4::IDENTITY,
+            pose: vec![
+                glam::Mat4::from_rotation_translation(
+                    glam::Quat::from_rotation_z(0.3),
+                    glam::Vec3::new(1.0, 2.0, 3.0),
+                ),
+                glam::Mat4::from_translation(glam::Vec3::new(4.0, 5.0, 6.0)),
+            ],
+        });
+        (app, a, b)
+    }
+
+    fn expect_changes(app: &App, expected: &[Entity]) {
+        let seen = app.world().resource::<PoseChanges>();
+        for changed in [&seen.local, &seen.global] {
+            assert_eq!(changed.len(), expected.len(), "changed joints: {changed:?}");
+            assert!(
+                expected.iter().all(|entity| changed.contains(entity)),
+                "changed joints: {changed:?}"
+            );
+        }
+    }
+
+    fn expect_pose(app: &App) {
+        let fixture = app.world().resource::<PoseFixture>();
+        // The existing spawn-time path remains our reference for the precise
+        // matrix multiplication and decomposition, independent of the guard.
+        let expected = pose_transforms(fixture.world_from_model, &fixture.pose);
+        for (joint, expected) in fixture.instance.joints.iter().zip(expected) {
+            let Some(actual) = app.world().get::<Transform>(*joint) else {
+                continue;
+            };
+            assert_eq!(
+                actual.translation.to_array().map(f32::to_bits),
+                expected.translation.to_array().map(f32::to_bits)
+            );
+            assert_eq!(
+                actual.rotation.to_array().map(f32::to_bits),
+                expected.rotation.to_array().map(f32::to_bits)
+            );
+            assert_eq!(
+                actual.scale.to_array().map(f32::to_bits),
+                expected.scale.to_array().map(f32::to_bits)
+            );
+            assert_eq!(
+                *app.world().get::<GlobalTransform>(*joint).unwrap(),
+                GlobalTransform::from(expected)
+            );
+        }
+    }
+
+    #[test]
+    fn real_bevy_pose_settles_and_exact_changes_reach_global_transforms() {
+        let (mut app, a, b) = fixture_app();
+        let child_transform = Transform::from_xyz(2.0, 3.0, 4.0);
+        let child = app.world_mut().spawn((child_transform, ChildOf(a))).id();
+        app.update();
+        expect_changes(&app, &[a, b]);
+        expect_pose(&app);
+        for _ in 0..3 {
+            app.update();
+            expect_changes(&app, &[]);
+            expect_pose(&app);
+        }
+
+        // One ULP in Source-space translation must not be suppressed by an
+        // epsilon, animation throttling or a geometry-equivalence shortcut.
+        app.world_mut().resource_mut::<PoseFixture>().pose[0]
+            .w_axis
+            .x = f32::from_bits(1.0f32.to_bits() + 1);
+        app.update();
+        expect_changes(&app, &[a]);
+        expect_pose(&app);
+        assert_eq!(
+            app.world()
+                .get::<Transform>(a)
+                .unwrap()
+                .translation
+                .x
+                .to_bits(),
+            1.0f32.to_bits() + 1
+        );
+        assert_eq!(
+            *app.world().get::<GlobalTransform>(child).unwrap(),
+            app.world()
+                .get::<GlobalTransform>(a)
+                .unwrap()
+                .mul_transform(child_transform),
+        );
+        app.update();
+        expect_changes(&app, &[]);
+
+        app.world_mut()
+            .resource_mut::<PoseFixture>()
+            .world_from_model = Mat4::from_scale_rotation_translation(
+            Vec3::splat(1.25),
+            Quat::from_rotation_y(0.2),
+            Vec3::new(7.0, 8.0, 9.0),
+        );
+        app.update();
+        expect_changes(&app, &[a, b]);
+        expect_pose(&app);
+        app.update();
+        expect_changes(&app, &[]);
+    }
+
+    #[test]
+    fn real_bevy_pose_rotation_only_change_propagates() {
+        let (mut app, _, b) = fixture_app();
+        app.update();
+        app.update();
+        expect_changes(&app, &[]);
+        let before = *app.world().get::<Transform>(b).unwrap();
+        app.world_mut().resource_mut::<PoseFixture>().pose[1] =
+            glam::Mat4::from_rotation_translation(
+                // An exact half-turn keeps decomposed scale bits unchanged.
+                glam::Quat::from_xyzw(1.0, 0.0, 0.0, 0.0),
+                glam::Vec3::new(4.0, 5.0, 6.0),
+            );
+        app.update();
+        expect_changes(&app, &[b]);
+        expect_pose(&app);
+        let after = app.world().get::<Transform>(b).unwrap();
+        assert_eq!(
+            before.translation.to_array().map(f32::to_bits),
+            after.translation.to_array().map(f32::to_bits)
+        );
+        assert_eq!(
+            before.scale.to_array().map(f32::to_bits),
+            after.scale.to_array().map(f32::to_bits)
+        );
+        assert_ne!(
+            before.rotation.to_array().map(f32::to_bits),
+            after.rotation.to_array().map(f32::to_bits)
+        );
+        app.update();
+        expect_changes(&app, &[]);
+    }
+
+    #[test]
+    fn real_bevy_pose_scale_only_change_propagates() {
+        let (mut app, _, b) = fixture_app();
+        app.update();
+        app.update();
+        expect_changes(&app, &[]);
+        let before = *app.world().get::<Transform>(b).unwrap();
+        app.world_mut().resource_mut::<PoseFixture>().pose[1] =
+            glam::Mat4::from_scale_rotation_translation(
+                glam::Vec3::new(1.0, 1.5, 2.0),
+                glam::Quat::IDENTITY,
+                glam::Vec3::new(4.0, 5.0, 6.0),
+            );
+        app.update();
+        expect_changes(&app, &[b]);
+        expect_pose(&app);
+        let after = app.world().get::<Transform>(b).unwrap();
+        assert_eq!(
+            before.translation.to_array().map(f32::to_bits),
+            after.translation.to_array().map(f32::to_bits)
+        );
+        assert_eq!(
+            before.rotation.to_array().map(f32::to_bits),
+            after.rotation.to_array().map(f32::to_bits)
+        );
+        assert_ne!(
+            before.scale.to_array().map(f32::to_bits),
+            after.scale.to_array().map(f32::to_bits)
+        );
+        app.update();
+        expect_changes(&app, &[]);
+    }
+
+    #[test]
+    fn real_bevy_pose_preserves_signed_zero_new_joints_and_missing_entities() {
+        let (mut app, a, b) = fixture_app();
+        app.update();
+        app.update();
+        expect_changes(&app, &[]);
+
+        // PartialEq considers +0 and -0 equal. Restore the decomposition's
+        // exact bits even if another writer left the opposite zero sign.
+        let expected_x = app.world().get::<Transform>(a).unwrap().rotation.x;
+        assert_eq!(expected_x, 0.0);
+        app.world_mut().get_mut::<Transform>(a).unwrap().rotation.x =
+            f32::from_bits(expected_x.to_bits() ^ (1 << 31));
+        app.update();
+        expect_pose(&app);
+        assert_eq!(
+            app.world()
+                .get::<Transform>(a)
+                .unwrap()
+                .rotation
+                .x
+                .to_bits(),
+            expected_x.to_bits()
+        );
+        app.update();
+        expect_changes(&app, &[]);
+
+        let missing = app.world_mut().spawn(Transform::default()).id();
+        assert!(app.world_mut().despawn(missing));
+        let untouched = Transform::from_xyz(100.0, 200.0, 300.0);
+        let unposed = app.world_mut().spawn((Joint, untouched)).id();
+        {
+            let mut fixture = app.world_mut().resource_mut::<PoseFixture>();
+            fixture.instance.joints = vec![a, missing, b, unposed];
+            fixture.pose.insert(1, glam::Mat4::IDENTITY);
+        }
+        app.update();
+        expect_changes(&app, &[unposed]); // Initial spawn still propagates.
+        expect_pose(&app);
+        assert_eq!(*app.world().get::<Transform>(unposed).unwrap(), untouched);
+        app.update();
+        expect_changes(&app, &[]);
+
+        // A new joint receives its pose immediately while the existing joints
+        // and an extra joint beyond the supplied pose remain settled.
+        let new = app.world_mut().spawn((Joint, Transform::default())).id();
+        app.world_mut()
+            .resource_mut::<PoseFixture>()
+            .instance
+            .joints[2] = new;
+        app.update();
+        expect_changes(&app, &[new]);
+        expect_pose(&app);
+        assert_eq!(*app.world().get::<Transform>(unposed).unwrap(), untouched);
+        app.update();
+        expect_changes(&app, &[]);
+    }
 }
