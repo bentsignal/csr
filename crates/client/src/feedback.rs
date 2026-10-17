@@ -5,6 +5,9 @@ use crate::{
     player::{LocalPlayer, SimWorld},
 };
 use bevy::prelude::*;
+use std::collections::HashSet;
+
+const MAX_FEEDBACK_FX: usize = 512;
 
 #[derive(Resource)]
 pub struct FeedbackAssets {
@@ -31,6 +34,30 @@ pub struct Hurt {
     time: Option<f32>,
     direction: glam::Vec3,
     amount: f32,
+}
+
+/// A new impact mark has priority over an older cosmetic effect. Keep the
+/// existing global entity bound; deferred despawns must not choose one victim
+/// twice when several impacts arrive in the same render frame.
+fn reserve_impact_slot(
+    commands: &mut Commands,
+    budget: &mut usize,
+    retired: &mut HashSet<Entity>,
+    candidates: impl Iterator<Item = (Entity, f32)>,
+) -> bool {
+    if *budget > 0 {
+        *budget -= 1;
+        return true;
+    }
+    let oldest = candidates.filter(|(entity, _)| !retired.contains(entity))
+        .min_by(|a, b| a.1.total_cmp(&b.1));
+    if let Some((entity, _)) = oldest {
+        commands.entity(entity).despawn();
+        retired.insert(entity);
+        true
+    } else {
+        false
+    }
 }
 
 pub fn setup(
@@ -298,7 +325,8 @@ pub fn update(
     let now = time.elapsed_secs();
     let dt = time.delta_secs();
     let eye = to_bevy(local.render_eye);
-    let mut budget = 512usize.saturating_sub(particles.iter().count());
+    let mut budget = MAX_FEEDBACK_FX.saturating_sub(particles.iter().count());
+    let mut retired = HashSet::new();
     let reset = effects
         .feedback
         .iter()
@@ -308,7 +336,7 @@ pub fn update(
             commands.entity(e).despawn();
         }
         hurt.time = None;
-        budget = 512;
+        budget = MAX_FEEDBACK_FX;
     }
     for event in effects.feedback.drain(..) {
         match event {
@@ -319,15 +347,16 @@ pub fn update(
                 surface,
                 ..
             } => {
-                if budget < 4 || level.0.collision.is_sky(surface) {
+                if level.0.collision.is_sky(surface) {
                     continue;
                 }
-                budget -= 4;
                 let prop = props.prop_of(&level.0.vfs, level.0.collision.surface_name(surface));
                 if let Some(decal) = props.get(&prop).and_then(|p| p.game_material.as_deref())
                     .and_then(|code| assets.decals.choose(code)) {
                     let normal = to_bevy(normal).normalize_or_zero();
-                    if normal.length_squared() > 0.5 && pos.is_finite() {
+                    if normal.length_squared() > 0.5 && pos.is_finite()
+                        && reserve_impact_slot(&mut commands, &mut budget, &mut retired,
+                            particles.iter().filter(|_| !reset).map(|(e, _, fx)| (e, fx.born))) {
                         if std::env::var_os("CSR_WEAPON_TRACE").is_some() {
                             info!("impact artwork: {:?} at {:?}; surface={prop}, game_material={:?}", decal.id, pos, props.get(&prop).and_then(|p| p.game_material.as_deref()));
                         }
@@ -338,6 +367,8 @@ pub fn update(
                     }
                 }
                 for i in 0..3 {
+                    if budget == 0 { break; }
+                    budget -= 1;
                     let drift = to_bevy(normal) * 25.0
                         + Vec3::new(i as f32 * 9.0 - 9.0, 8.0, 5.0 - i as f32 * 5.0);
                     spawn(
@@ -388,6 +419,7 @@ pub fn update(
     }
     if !reset {
         for (e, mut transform, mut fx) in &mut particles {
+            if retired.contains(&e) { continue; }
             if now - fx.born > fx.life {
                 commands.entity(e).despawn();
                 continue;
@@ -464,6 +496,61 @@ mod tests {
 #[cfg(test)]
 mod decal_tests {
     use super::*;
+
+    #[test]
+    fn new_impact_marks_replace_distinct_old_effects_at_the_entity_limit() {
+        let mut world = World::new();
+        let old: Vec<_> = (0..MAX_FEEDBACK_FX).map(|i| world.spawn(ImpactFx {
+            born: i as f32, life: 30., velocity: Vec3::ZERO, billboard: false,
+        }).id()).collect();
+        let mut candidates = world.query::<(Entity, &ImpactFx)>();
+        let mut queue = bevy::ecs::world::CommandQueue::default();
+        let mut budget = 0;
+        let mut retired = HashSet::new();
+        let mut added = Vec::new();
+        {
+            let mut commands = Commands::new(&mut queue, &world);
+            for i in 0..32 {
+                assert!(reserve_impact_slot(&mut commands, &mut budget, &mut retired,
+                    candidates.iter(&world).map(|(e, fx)| (e, fx.born))));
+                added.push(commands.spawn(ImpactFx {
+                    born: 1000. + i as f32, life: 30., velocity: Vec3::ZERO, billboard: false,
+                }).id());
+            }
+        }
+        queue.apply(&mut world);
+        assert_eq!(world.query::<&ImpactFx>().iter(&world).count(), MAX_FEEDBACK_FX);
+        assert_eq!(retired.len(), 32);
+        assert!(old[..32].iter().all(|e| world.get_entity(*e).is_err()));
+        assert!(old[32..].iter().chain(&added).all(|e| world.get::<ImpactFx>(*e).is_some()));
+        assert_eq!(budget, 0);
+    }
+
+    #[test]
+    fn impact_mark_does_not_require_three_dust_slots() {
+        let mut world = World::new();
+        let mut queue = bevy::ecs::world::CommandQueue::default();
+        for free in 1..4 {
+            let mut budget = free;
+            let mut retired = HashSet::new();
+            let mut commands = Commands::new(&mut queue, &world);
+            assert!(reserve_impact_slot(&mut commands, &mut budget, &mut retired,
+                std::iter::empty()));
+            assert_eq!(budget, free - 1);
+            assert!(retired.is_empty());
+        }
+        queue.apply(&mut world);
+    }
+
+    #[test]
+    fn impact_overflow_without_a_retirable_effect_stays_bounded() {
+        let world = World::new();
+        let mut queue = bevy::ecs::world::CommandQueue::default();
+        let mut commands = Commands::new(&mut queue, &world);
+        assert!(!reserve_impact_slot(&mut commands, &mut 0, &mut HashSet::new(),
+            std::iter::empty()));
+    }
+
     #[test]
     fn multiply_white_is_transparent_and_dark_is_covered() {
         let mut white = [255, 255, 255, 255];
