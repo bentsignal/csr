@@ -11,6 +11,7 @@ use scaleform::Value;
 pub(crate) struct Presentation {
     revision: u64,
     waiting: bool,
+    raster_fence: u64,
 }
 impl Presentation {
     pub(crate) fn open(&mut self) {
@@ -19,10 +20,13 @@ impl Presentation {
     }
     pub(crate) fn close(&mut self) { self.waiting = false; }
     pub(crate) fn revision(&self) -> u64 { self.revision }
-    pub(crate) fn presented(&mut self, revision: u64) {
-        if revision == self.revision { self.waiting = false; }
+    pub(crate) fn accepts(&self, revision: u64, fence: u64, required: u64) -> bool {
+        revision == self.revision && fence >= required
     }
-    pub(crate) fn ready(&self) -> bool { !self.waiting }
+    pub(crate) fn presented(&mut self, revision: u64, fence: u64) {
+        if revision == self.revision { self.waiting = false; self.raster_fence = fence; }
+    }
+    pub(crate) fn ready(&self, required: u64) -> bool { !self.waiting && self.raster_fence >= required }
 }
 
 /// One deferred show per open cycle. Readiness callbacks can arrive in either
@@ -86,6 +90,8 @@ pub(crate) struct Tracker {
     pause: Option<String>,
     options: Option<String>,
     options_opening: bool,
+    options_generation: u64,
+    raster_fence: u64,
     pending: Option<Request>,
     last_frame: Option<u64>,
     visible: bool,
@@ -131,8 +137,25 @@ impl Tracker {
     /// Call before requesting/showing Options, rather than waiting for OnReady.
     pub(crate) fn options_opened(&mut self) {
         self.invalidate();
-        self.options_opening = true;
+        if let Some(next) = self.options_generation.checked_add(1) {
+            self.options_generation = next;
+            self.options_opening = !self.exhausted;
+        } else {
+            self.exhausted = true;
+            self.options_opening = false;
+        }
     }
+
+    pub(crate) fn options_receiver(&self) -> String { format!("OwnedOptions{}", self.options_generation) }
+    /// Capture presence and identity together while the caller holds its lock.
+    pub(crate) fn requested_options_receiver(&self) -> Option<String> {
+        self.options_requested().then(|| self.options_receiver())
+    }
+    pub(crate) fn owns_options(&self, receiver: &str) -> bool {
+        self.options_requested() && receiver == self.options_receiver()
+    }
+    pub(crate) fn require_raster(&mut self, fence: u64) { self.raster_fence = fence; }
+    pub(crate) fn raster_fence(&self) -> u64 { self.raster_fence }
 
     /// Desired Options lifecycle, independent of this overlay's active scope.
     /// The caller gates late Options OnReady/show on this flag even in Menu.
@@ -253,19 +276,52 @@ mod tests {
     #[test]
     fn pause_reopen_never_reveals_old_or_partial_transition_frames() {
         let mut presentation = Presentation::default();
-        assert!(presentation.ready());
+        assert!(presentation.ready(0));
         presentation.open();
         let first = presentation.revision();
-        presentation.presented(0);
-        assert!(!presentation.ready());
-        presentation.presented(first);
-        assert!(presentation.ready());
+        presentation.presented(0, 0);
+        assert!(!presentation.ready(0));
+        presentation.presented(first, 1);
+        assert!(presentation.ready(1));
         presentation.close();
         presentation.open();
-        presentation.presented(first);
-        assert!(!presentation.ready(), "previous open must remain hidden");
-        presentation.presented(presentation.revision());
-        assert!(presentation.ready());
+        presentation.presented(first, 2);
+        assert!(!presentation.ready(2), "previous open must remain hidden");
+        presentation.presented(presentation.revision(), 2);
+        assert!(presentation.ready(2));
+    }
+
+    #[test]
+    fn callback_fence_rejects_old_pixels_even_with_the_current_revision() {
+        let mut p = Presentation::default();
+        p.open();
+        let revision = p.revision();
+        p.presented(revision, 7);
+        assert!(p.ready(7));
+        // Options closes locally without another host Present transaction.
+        assert!(!p.ready(8));
+        assert!(!p.accepts(revision, 7, 8));
+        assert!(!p.accepts(revision - 1, 8, 8));
+        assert!(p.accepts(revision, 8, 8));
+        p.presented(revision, 8);
+        assert!(p.ready(8));
+        assert!(!p.accepts(revision, 7, 8), "old readbacks cannot repaint after admission");
+    }
+
+    #[test]
+    fn options_close_belongs_to_its_opening_not_its_cached_root() {
+        let mut t = tracker();
+        t.options_opened();
+        let old = t.options_receiver();
+        assert!(t.owns_options(&old));
+        t.options_cancelled();
+        assert!(!t.owns_options(&old));
+        t.options_opened();
+        assert!(!t.owns_options(&old));
+        assert!(t.owns_options(&t.options_receiver()));
+        t.options_generation = u64::MAX;
+        t.options_opened();
+        assert!(!t.options_requested());
     }
 
     fn tracker() -> Tracker {

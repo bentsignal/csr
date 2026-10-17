@@ -61,7 +61,7 @@ impl LocalPlayer {
             id,
             pitch: 0.0,
             yaw,
-            sensitivity: 2.0,
+            sensitivity: 1.0,
             noclip: false,
             noclip_pos: eye,
             prev_eye: eye,
@@ -271,6 +271,9 @@ pub fn look(
     if !enabled.0 {
         return;
     }
+    // A newly spawned player can receive input before the Update-stage
+    // settings application. The saved preference wins on that first sample.
+    local.sensitivity = settings.sensitivity;
     let grabbed = captured(&cursor) && !menu.open;
     let blocked_mouse = if grabbed { local.capture_mouse } else { u8::MAX };
     if grabbed {
@@ -278,15 +281,14 @@ pub fn look(
         let zoom = if local.noclip { 1.0 } else {
             world.0.player(local.id).filter(|p| p.alive).and_then(|p| p.active_weapon()).map_or(1.0, |w| w.rendered_fov(world.0.time()) / 90.0)
         };
+        // Bevy MouseMotion is raw device motion, not cursor pixels. Counts
+        // multiply by degrees/count directly: no dt, DPI, smoothing or speed
+        // curve. At unscoped sensitivity 1, 1000 counts turn 22 degrees.
         local.yaw -= d.x * local.sensitivity * M_YAW * zoom;
         local.pitch = (local.pitch + d.y * (if settings.invert_y {-1.0} else {1.0}) * local.sensitivity * M_YAW * zoom).clamp(-89.0, 89.0);
         local.yaw = local.yaw.rem_euclid(360.0);
     }
     if remote.is_some() { local.noclip = false; }
-    if remote.is_none() && !menu.open && keys.just_pressed(KeyCode::KeyV) {
-        local.noclip = !local.noclip;
-        local.noclip_pos = local.curr_eye;
-    }
     let me = world.0.player(local.id);
     let alive = me.is_some_and(|p| p.alive);
     if alive && grabbed && settings.action_just_pressed(12, &keys, &mouse, blocked_mouse) {inspect.start();}
@@ -337,6 +339,10 @@ pub fn look(
             if settings.action_just_pressed(crate::settings::KEY_GRENADE_FIRST + index, &keys, &mouse, blocked_mouse) {
                 local.pending_utility = carried_utility(&world.0, local.id, name).unwrap_or(0);
             }
+        }
+        if settings.action_just_pressed(crate::settings::KEY_FIRE_GRENADE, &keys, &mouse, blocked_mouse) {
+            local.pending_utility = carried_utility(&world.0, local.id, "weapon_molotov")
+                .or_else(|| carried_utility(&world.0, local.id, "weapon_incgrenade")).unwrap_or(0);
         }
         for (binding, button) in [(crate::settings::KEY_ATTACK, buttons::ATTACK), (crate::settings::KEY_ATTACK2, buttons::ATTACK2)] {
             if settings.binds[binding].is_some_and(|key| keys.just_pressed(key)) {
@@ -1048,7 +1054,7 @@ mod remote_input_tests {
         // Run just the production input/camera systems with alpha zero and
         // no sim step; the previous pose must not delay the latest look.
         app.world_mut().run_schedule(Update);
-        let expected = glam::Vec3::new(0.44, 359.12, 0.);
+        let expected = glam::Vec3::new(0.22, 359.56, 0.);
         let local = app.world().resource::<LocalPlayer>();
         assert!((local.render_angles - expected).abs().max_element() < 0.0001);
         assert_eq!(app.world().resource::<Sampled>().0.view_angles, local.render_angles);
@@ -1058,6 +1064,63 @@ mod remote_input_tests {
         }
         assert_eq!(app.world().resource::<SimWorld>().0.player(1).unwrap().view_angles, old_angles);
         assert_eq!(app.world().resource::<SimWorld>().0.snapshot(), before);
+    }
+
+    #[test]
+    fn unscoped_mouse_counts_are_linear_without_frame_rate_or_acceleration_gain() {
+        for sensitivity in [1., 1.375, 2.71828] {
+            for frames in [1, 10, 100] {
+                let mut app = capture_app();
+                app.world_mut().query::<&mut CursorOptions>().single_mut(app.world_mut()).unwrap().grab_mode = CursorGrabMode::Locked;
+                {
+                    let mut local = app.world_mut().resource_mut::<LocalPlayer>();
+                    local.yaw = 180.;
+                }
+                app.world_mut().resource_mut::<crate::settings::Settings>().sensitivity = sensitivity;
+                app.world_mut().resource_mut::<AccumulatedMouseMotion>().delta = Vec2::new(1000., 200.) / frames as f32;
+                for _ in 0..frames { app.world_mut().run_system_cached(look).unwrap(); }
+                let local = app.world().resource::<LocalPlayer>();
+                assert!((local.yaw - (180. - 22. * sensitivity)).abs() < 0.002);
+                assert!((local.pitch - 4.4 * sensitivity).abs() < 0.0001);
+            }
+        }
+    }
+
+    #[test]
+    fn unbound_or_unsupported_v_has_no_hidden_noclip_action() {
+        let mut app = capture_app();
+        app.world_mut().resource_mut::<crate::settings::Settings>().unbind_key(KeyCode::KeyV);
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::KeyV);
+        app.world_mut().run_system_cached(look).unwrap();
+        assert!(!app.world().resource::<LocalPlayer>().noclip);
+    }
+
+    #[test]
+    fn imported_fire_slot_uses_carried_team_grenade_and_v_does_not_enable_noclip() {
+        let catalog = std::sync::Arc::new(weapons::Catalog::from_items_game(r#"
+            items_game { items {
+                7344 { name weapon_molotov attributes { "primary default clip size" 1 } }
+                7345 { name weapon_incgrenade attributes { "primary default clip size" 1 } }
+            } }"#).unwrap());
+        for (team, name, definition) in [(sim::Team::Terrorist, "weapon_molotov", 7344),
+            (sim::Team::CounterTerrorist, "weapon_incgrenade", 7345)] {
+            let mut simulation = sim::World::with_catalog(std::sync::Arc::new(collision::CollisionWorld::new()), catalog.clone());
+            let id = simulation.add_player("Local", team);
+            let player = simulation.player_mut(id).unwrap();
+            player.alive = true;
+            player.weapons = vec![sim::weapon::WeaponState::new(std::sync::Arc::new(catalog.get(name).unwrap().clone()))];
+            let mut app = capture_app();
+            app.insert_resource(SimWorld(simulation));
+            app.world_mut().query::<&mut CursorOptions>().single_mut(app.world_mut()).unwrap().grab_mode = CursorGrabMode::Locked;
+            app.world_mut().resource_mut::<crate::settings::Settings>().rebind(crate::settings::KEY_FIRE_GRENADE, KeyCode::KeyV);
+            app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::KeyV);
+            app.world_mut().run_system_cached(look).unwrap();
+            app.world_mut().run_system_cached(sample_after_capture).unwrap();
+            assert!(!app.world().resource::<LocalPlayer>().noclip);
+            assert_eq!(app.world().resource::<Sampled>().0.utility, definition);
+            app.world_mut().run_system_cached(sample_after_capture).unwrap();
+            assert_eq!(app.world().resource::<Sampled>().0.utility, 0);
+        }
     }
 
     #[test]
@@ -1110,8 +1173,8 @@ mod remote_input_tests {
         }
         app.update(); // Both mouse buttons are still held, with fresh frame motion.
         let local = app.world().resource::<LocalPlayer>();
-        assert!((local.yaw - 359.12).abs() < 0.0001);
-        assert!((local.pitch - 0.44).abs() < 0.0001);
+        assert!((local.yaw - 359.56).abs() < 0.0001);
+        assert!((local.pitch - 0.22).abs() < 0.0001);
         assert_eq!(app.world().resource::<Sampled>().0.forward_move, 450.);
         assert_eq!(app.world().resource::<Sampled>().0.buttons & (buttons::ATTACK | buttons::ATTACK2), 0);
         app.world_mut().resource_mut::<ButtonInput<MouseButton>>().clear();

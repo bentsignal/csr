@@ -388,8 +388,6 @@ pub fn update(
     diagnostics: Res<DiagnosticsStore>,
     level_name: Res<crate::LevelInfo>,
     loc: Res<Localization>,
-    keys: Res<ButtonInput<KeyCode>>,
-    mut debug: Local<bool>,
     mut burst_notice: Local<BurstNotice>,
     mut texts: Query<(&mut Text, &mut TextColor, &HudText)>,
     mut markers: Query<&mut Visibility, (With<HitMarker>, Without<ProgressBar>)>,
@@ -397,9 +395,8 @@ pub fn update(
     mut fill: Query<&mut Node, With<ProgressFill>>,
 ) {
     let _frame_scope = crate::input_latency::frame_scope("hud");
-    if keys.just_pressed(KeyCode::F3) {
-        *debug = !*debug;
-    }
+    static DEBUG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    let debug = *DEBUG.get_or_init(|| std::env::var("CSR_HUD_DEBUG").is_ok_and(|value| value == "1"));
     let fps = diagnostics
         .get(&FrameTimeDiagnosticsPlugin::FPS)
         .and_then(|d| d.smoothed())
@@ -438,12 +435,12 @@ pub fn update(
 
     for (mut t, mut color, kind) in &mut texts {
         let value: String = match kind {
-            HudText::Speed if !*debug => String::new(),
-            HudText::Debug if !*debug && settings.show_fps => format!("{fps:.0} fps | {frame_ms:.1} ms"),
-            HudText::Debug if !*debug => String::new(),
+            HudText::Speed if !debug => String::new(),
+            HudText::Debug if !debug && settings.show_fps => format!("{fps:.0} fps | {frame_ms:.1} ms"),
+            HudText::Debug if !debug => String::new(),
             HudText::Speed => format!("{:.0}", p.movement.velocity.truncate().length()),
             HudText::Debug => format!(
-                "{} | {:.0} fps\npos {:.0} {:.0} {:.0}\nK {} D {}{} | F3 hide",
+                "{} | {:.0} fps\npos {:.0} {:.0} {:.0}\nK {} D {}{}",
                 level_name.name,
                 fps,
                 local.curr_eye.x,

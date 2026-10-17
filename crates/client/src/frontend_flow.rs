@@ -286,7 +286,7 @@ pub(crate) fn update(
                         click(&front, &window, 650., if flow.video_options { 780. } else { 817. });
                     }
                     2 => {
-                        if !front.options_requested() || !front.movie_ready("OptionsMenu") { return; }
+                        if front.options_receiver().is_none() || !front.movie_ready("OptionsMenu") { return; }
                         capture(&mut commands, &options, if flow.video_options { "flow-pause-video.png" } else { "flow-pause-audio.png" });
                         if flow.video_options && flow.video_edit {
                             click(&front, &window, 1430., 230.);
@@ -316,7 +316,7 @@ pub(crate) fn update(
                         click(&front, &window, 380., 970.);
                     }
                     _ => {
-                        if front.options_requested() || !front.pause_surface_visible() { return; }
+                        if front.options_receiver().is_some() || !front.pause_surface_visible() { return; }
                         info!("frontend flow: native {} Back restored Pause", if flow.video_options { "Video" } else { "Audio" });
                         capture(&mut commands, &options, "flow-pause-options-returned.png");
                         flow.tick = world.as_ref().unwrap().0.tick;

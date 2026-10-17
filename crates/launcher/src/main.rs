@@ -21,6 +21,7 @@
 //! Set `CSR_GAME_DIR` if the CS:GO install is not found automatically.
 
 mod art;
+mod cs2_config;
 mod dialog;
 mod fileassoc;
 mod mapcmd;

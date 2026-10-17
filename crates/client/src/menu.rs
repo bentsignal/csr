@@ -32,6 +32,10 @@ pub struct Menu {
     pub terrorist: bool,
     pub bots: u32,
     pub capture: Option<usize>,
+    /// The working classic menu explicitly hands keyboard/mouse ownership to
+    /// this shared controls panel. Other fallback pages stay disabled.
+    pub(crate) classic_controls: bool,
+    pub(crate) controls_just_closed: bool,
     pub status: String,
     dirty: bool,
     scroll: f32,
@@ -49,6 +53,8 @@ impl Default for Menu {
             terrorist: false,
             bots: 5,
             capture: None,
+            classic_controls: false,
+            controls_just_closed: false,
             status: String::new(),
             dirty: true,
             scroll: 0.0,
@@ -61,12 +67,43 @@ impl Menu {
     pub fn open(&self) -> bool {
         self.page.is_some()
     }
+    /// Return true when the movie's owned child must cancel instead of the
+    /// host closing Pause. One physical Escape must have exactly one owner.
+    fn escape(&mut self, movie_options: bool) -> bool {
+        if self.in_match && self.open() && movie_options { return true; }
+        self.page = match self.page {
+            None => Some(Page::Pause),
+            Some(Page::Pause) => None,
+            Some(Page::Main) => Some(Page::Main),
+            _ => Some(if self.in_match { Page::Pause } else { Page::Main }),
+        };
+        false
+    }
     pub(crate) fn reset_match(&mut self) {
         self.root = None;
         self.in_match = false;
         self.page = Some(Page::Main);
         self.dirty = true;
         self.capture = None;
+        self.classic_controls = false;
+        self.controls_just_closed = false;
+    }
+    pub(crate) fn open_classic_controls(&mut self) {
+        self.classic_controls = true;
+        self.controls_just_closed = false;
+        self.page = Some(Page::Controls);
+        self.capture = None;
+        self.scroll = 0.0;
+        self.status.clear();
+        self.dirty = true;
+    }
+    fn close_classic_controls(&mut self) {
+        self.classic_controls = false;
+        self.controls_just_closed = true;
+        self.page = Some(if self.in_match { Page::Pause } else { Page::Main });
+        self.capture = None;
+        self.status.clear();
+        self.dirty = true;
     }
 }
 /// A catalog selection retains its immutable archive identity through loading.
@@ -105,8 +142,11 @@ pub enum Action {
     Bots(i32),
     Adjust(u8, f32),
     Bind(usize),
+    ClearBind(usize),
     Save,
     Defaults,
+    ControlsDefaults,
+    ControlsBack,
 }
 
 pub(crate) fn setup(
@@ -146,6 +186,50 @@ pub(crate) fn setup(
     }
 }
 
+pub(crate) fn home_controls(state: Res<State<crate::AppState>>, menu: Res<Menu>) -> bool {
+    *state.get() == crate::AppState::Menu && !menu.in_match
+        // Retain the close pass: input clears the handoff flag, while draw
+        // removes its former root before the movie becomes visible again.
+        && (menu.classic_controls || menu.controls_just_closed || menu.root.is_some())
+}
+
+/// Unlike match entities, a Home editor must survive without match ownership
+/// until its explicit retirement pass, even if reset_match forgets its handle.
+#[derive(Component)]
+pub(crate) struct ClassicControlsRoot(crate::AppState);
+
+// Both Home and Match register draw. Order by an explicit shared set rather
+// than its ambiguous SystemTypeSet, even though their run conditions differ.
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct ControlsDraw;
+
+pub(crate) fn install_controls_retirement(app: &mut App) {
+    app.add_systems(Update, retire_classic_controls
+        .after(crate::frontend::cancel_loading).before(ControlsDraw));
+}
+
+pub(crate) fn retire_classic_controls(
+    mut commands: Commands,
+    mut menu: ResMut<Menu>,
+    state: Res<State<crate::AppState>>,
+    roots: Query<(Entity, &ClassicControlsRoot)>,
+) {
+    let scene = if menu.in_match { crate::AppState::Match } else { crate::AppState::Menu };
+    for (root, owner) in &roots {
+        let tracked = menu.root == Some(root);
+        if tracked && menu.classic_controls && owner.0 == scene && owner.0 == *state.get() {
+            continue;
+        }
+        commands.entity(root).despawn();
+        // A forgotten root must never clear a replacement's handle. Draw runs
+        // after these commands are applied and cannot despawn this root twice.
+        if tracked {
+            menu.root = None;
+            menu.dirty = true;
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn input(
     mut commands: Commands,
@@ -154,8 +238,8 @@ pub(crate) fn input(
     keys: Res<ButtonInput<KeyCode>>,
     actions: Query<(&Interaction, &Action), Changed<Interaction>>,
     mut exit: MessageWriter<AppExit>,
-    (load_request, opts, remote): (Res<LoadRequest>, Res<crate::Options>, Option<Res<crate::remote::RemoteClient>>),
-    mut local: ResMut<LocalPlayer>,
+    (load_request, opts, remote, front): (Res<LoadRequest>, Res<crate::Options>, Option<Res<crate::remote::RemoteClient>>, Option<Res<crate::frontend::Frontend>>),
+    mut local: Option<ResMut<LocalPlayer>>,
     mut buy: ResMut<crate::buymenu::BuyMenu>,
     mut clock: ResMut<Time<Virtual>>,
     mut cursor: Single<&mut CursorOptions, With<PrimaryWindow>>,
@@ -167,6 +251,7 @@ pub(crate) fn input(
     if !enabled.0 {
         return;
     }
+    menu.controls_just_closed = false;
     // Native movie callbacks may close the menu between input passes.
     let was_open = menu.open() || *previous_open;
     if let Some(index) = menu.capture {
@@ -177,21 +262,20 @@ pub(crate) fn input(
             .get_just_pressed()
             .find(|k| crate::settings::KEYS.contains(k))
         {
-            settings.rebind(index, *key);
+            if index == ACTIONS.len() { settings.set_console_key(*key); }
+            else { settings.rebind(index, *key); }
             menu.capture = None;
             menu.dirty = true;
         }
+    } else if keys.just_pressed(KeyCode::Escape) && menu.classic_controls {
+        menu.close_classic_controls();
     } else if keys.just_pressed(KeyCode::Escape) && !buy.open {
-        menu.page = match menu.page {
-            None => Some(Page::Pause),
-            Some(Page::Pause) => None,
-            Some(Page::Main) => Some(Page::Main),
-            _ => Some(if menu.in_match {
-                Page::Pause
-            } else {
-                Page::Main
-            }),
-        };
+        let movie_options = front.as_ref().and_then(|front| front.options_receiver());
+        if menu.escape(movie_options.is_some()) {
+            // Options is a child of Pause, although the host page remains
+            // Pause. Cancel only that owned child and keep the match paused.
+            front.as_ref().unwrap().cancel_options(movie_options.unwrap());
+        }
         menu.dirty = true;
     }
     if menu.open() && menu.capture.is_none() {
@@ -268,6 +352,15 @@ pub(crate) fn input(
                     menu.status =
                         "Press a keyboard key. Esc cancels. Existing bindings swap.".into();
                 }
+                Action::ClearBind(i) => {
+                    if i == ACTIONS.len() { settings.console_key = None; }
+                    else if let Some(binding) = settings.binds.get_mut(i) { *binding = None; }
+                }
+                Action::ControlsBack => menu.close_classic_controls(),
+                Action::ControlsDefaults => {
+                    settings.restore_controls_defaults();
+                    menu.status = "Control defaults restored. Apply to save.".into();
+                }
                 Action::Defaults => {
                     *settings = Settings::default();
                     menu.status = "Defaults restored. Apply to save.".into();
@@ -295,10 +388,10 @@ pub(crate) fn input(
                 Action::Adjust(id, delta) => match id {
                     0 => settings.volume = (settings.volume + delta).clamp(0.0, 1.0),
                     1 => {
-                        settings.sensitivity = ((settings.sensitivity + delta) * 10.0)
+                        settings.sensitivity = ((settings.sensitivity + delta) * 1000.0)
                             .round()
-                            .clamp(1.0, 100.0)
-                            / 10.0
+                            .clamp(100.0, 10000.0)
+                            / 1000.0
                     }
                     2 => settings.exposure = (settings.exposure + delta).clamp(0.5, 4.0),
                     3 => settings.vsync = !settings.vsync,
@@ -323,6 +416,8 @@ pub(crate) fn input(
                     }
                     14 => settings.cross_dot = !settings.cross_dot,
                     24 => settings.menu_blur=!settings.menu_blur,
+                    25..=29 => settings.cycle_mouse_binding((id - 25) as usize, delta.signum() as i32),
+                    30..=31 => settings.cycle_wheel_binding(id == 30, delta.signum() as i32),
                     _ => {}
                 },
             }
@@ -331,13 +426,15 @@ pub(crate) fn input(
     if menu.open() {
         buy.open = false;
         buy.just_closed = false;
-        local.latched = 0;
-        local.pointer_attacks = 0;
-        local.keyboard_attacks = 0;
-        local.pending_drop = false;
-        local.pending_slot = 0;
-        local.clear_utility_requests();
-        local.pending_buys.clear();
+        if let Some(local) = local.as_mut() {
+            local.latched = 0;
+            local.pointer_attacks = 0;
+            local.keyboard_attacks = 0;
+            local.pending_drop = false;
+            local.pending_slot = 0;
+            local.clear_utility_requests();
+            local.pending_buys.clear();
+        }
         if remote.is_some() { clock.unpause(); } else { clock.pause(); }
         cursor.grab_mode = CursorGrabMode::None;
         cursor.visible = true;
@@ -409,6 +506,7 @@ fn row(commands: &mut Commands, parent: Entity, name: &str, value: String, id: u
         Node {
             width: percent(100),
             height: px(38.0),
+            flex_shrink: 0.0,
             align_items: AlignItems::Center,
             column_gap: px(10.0),
             ..default()
@@ -447,7 +545,15 @@ pub fn draw(
     preview: Res<crate::menu_scene::Preview>,
     loc: Res<crate::localize::Localization>,
     window: Single<&Window, With<PrimaryWindow>>,
+    front: Option<Res<crate::frontend::Frontend>>,
 ) {
+    // Cleanup must also run on the frame the explicit controls route closes;
+    // gating the whole draw system would strand its former root on screen.
+    if front.as_ref().is_some_and(|front| front.has_classic_menu()) && !menu.classic_controls {
+        if let Some(root) = menu.root.take() { commands.entity(root).despawn(); }
+        menu.dirty = true;
+        return;
+    }
     let size = Vec2::new(window.width(), window.height());
     if menu.size != size {
         menu.size = size;
@@ -463,6 +569,12 @@ pub fn draw(
     let Some(page) = menu.page else {
         return;
     };
+    if menu.classic_controls {
+        let root = draw_classic_controls(&mut commands, &menu, &settings);
+        if let Some(front) = &front { commands.entity(root).insert(UiTargetCamera(front.camera())); }
+        menu.root = Some(root);
+        return;
+    }
     let root = commands
         .spawn((
             Node {
@@ -603,7 +715,7 @@ pub fn draw(
             ("GAME", Page::Settings),
             ("VIDEO", Page::Graphics),
             ("AUDIO", Page::Audio),
-            ("CONTROLS", Page::Controls),
+            ("KEYBOARD / MOUSE", Page::Controls),
             ("CROSSHAIR", Page::Crosshair),
         ] {
             button(&mut commands, tabs, name, Action::Page(p), Val::Auto);
@@ -1187,62 +1299,8 @@ pub fn draw(
             );
         }
         Page::Controls => {
-            row(
-                &mut commands,
-                body,
-                "Mouse sensitivity",
-                format!("{:.1}", settings.sensitivity),
-                1,
-                0.1,
-            );
-            row(
-                &mut commands,
-                body,
-                "Invert mouse",
-                on(settings.invert_y),
-                9,
-                1.0,
-            );
-            for (i, name) in ACTIONS.iter().enumerate() {
-                let r = column(
-                    &mut commands,
-                    body,
-                    Node {
-                        height: px(28.0),
-                        column_gap: px(20.0),
-                        align_items: AlignItems::Center,
-                        ..default()
-                    },
-                );
-                let l = column(
-                    &mut commands,
-                    r,
-                    Node {
-                        width: px(260.0),
-                        ..default()
-                    },
-                );
-                label(&mut commands, l, *name, 17.0, Color::srgb(0.8, 0.85, 0.89));
-                let binding = button(
-                    &mut commands,
-                    r,
-                    if menu.capture == Some(i) {
-                        "Press a key…".into()
-                    } else {
-                        settings.binds[i].map(crate::settings::key_name).unwrap_or_else(|| "Unbound".into())
-                    },
-                    Action::Bind(i),
-                    px(180.0),
-                );
-                commands.entity(binding).insert(Node {
-                    width: px(180.0),
-                    min_height: px(26.0),
-                    padding: UiRect::axes(px(12.0), px(2.0)),
-                    justify_content: JustifyContent::Center,
-                    align_items: AlignItems::Center,
-                    ..default()
-                });
-            }
+            controls_scroll(&mut commands, body, menu.scroll);
+            controls_content(&mut commands, body, &menu, &settings);
         }
         Page::Crosshair => {
             row(
@@ -1347,6 +1405,7 @@ pub fn draw(
             content,
             Node {
                 column_gap: px(12.0),
+                flex_shrink: 0.0,
                 ..default()
             },
         );
@@ -1361,11 +1420,148 @@ pub fn draw(
             &mut commands,
             footer,
             "RESTORE DEFAULTS",
-            Action::Defaults,
+            if page == Page::Controls { Action::ControlsDefaults } else { Action::Defaults },
             px(220.0),
         );
     }
 }
+#[derive(Component)]
+pub(crate) struct ControlsScroll;
+
+fn controls_scroll(commands: &mut Commands, body: Entity, scroll: f32) {
+    commands.entity(body).insert((ControlsScroll, RelativeCursorPosition::default(),
+        ScrollPosition(Vec2::new(0.0, scroll))));
+    // Keep the same flex sizing as the common body, with dedicated vertical
+    // scrolling. CardGrid wraps cards and is deliberately not reused here.
+    commands.entity(body).insert(Node {
+        flex_grow: 1.0, flex_basis: px(0.0), min_height: px(0.0), min_width: px(0.0),
+        width: percent(100), flex_direction: FlexDirection::Column, row_gap: px(5.0),
+        overflow: Overflow::scroll_y(), padding: UiRect::all(px(10.0)), ..default()
+    });
+}
+
+fn controls_content(commands: &mut Commands, body: Entity, menu: &Menu, settings: &Settings) {
+    let on = |v: bool| if v { "Enabled" } else { "Disabled" }.to_string();
+    if !settings.controls_source.is_empty() {
+        label(commands, body, &settings.controls_source, 16.0, Color::srgb(0.7, 0.76, 0.8));
+    }
+    row(
+        commands,
+        body,
+        "Mouse sensitivity",
+        format!("{:.3}", settings.sensitivity),
+        1,
+        0.1,
+    );
+    row(
+        commands,
+        body,
+        "Invert mouse",
+        on(settings.invert_y),
+        9,
+        1.0,
+    );
+    for (index, action) in settings.mouse_binds.iter().enumerate() {
+        row(commands, body, &format!("Mouse button {}", index + 1), action.label().into(), 25 + index as u8, 1.0);
+    }
+    row(commands, body, "Mouse wheel up", settings.wheel_up.label().into(), 30, 1.0);
+    row(commands, body, "Mouse wheel down", settings.wheel_down.label().into(), 31, 1.0);
+    label(commands, body, "Keyboard bindings", 18.0, Color::srgb(0.8, 0.85, 0.89));
+    for (i, name) in ACTIONS.iter().chain(std::iter::once(&"Toggle developer console")).enumerate() {
+        let r = column(
+            commands,
+            body,
+            Node {
+                min_height: px(36.0),
+                flex_shrink: 0.0,
+                column_gap: px(20.0),
+                align_items: AlignItems::Center,
+                ..default()
+            },
+        );
+        let l = column(
+            commands,
+            r,
+            Node {
+                width: px(260.0),
+                ..default()
+            },
+        );
+        label(commands, l, *name, 17.0, Color::srgb(0.8, 0.85, 0.89));
+        let binding = button(
+            commands,
+            r,
+            if menu.capture == Some(i) {
+                "Press a key…".into()
+            } else {
+                (if i == ACTIONS.len() { settings.console_key } else { settings.binds[i] }).map(crate::settings::key_name).unwrap_or_else(|| "Unbound".into())
+            },
+            Action::Bind(i),
+            px(180.0),
+        );
+        commands.entity(binding).insert(Node {
+            width: px(180.0),
+            min_height: px(26.0),
+            padding: UiRect::axes(px(12.0), px(2.0)),
+            justify_content: JustifyContent::Center,
+            align_items: AlignItems::Center,
+            ..default()
+        });
+        button(commands, r, "Clear", Action::ClearBind(i), px(74.0));
+    }
+}
+
+/// Functional controls route shared with the fallback settings page. Its
+/// appearance still requires reference work; this does not claim Scaleform parity.
+fn draw_classic_controls(commands: &mut Commands, menu: &Menu, settings: &Settings) -> Entity {
+    let root = commands.spawn((Node {
+        position_type: PositionType::Absolute, width: percent(100), height: percent(100),
+        padding: UiRect::axes(px(32.0), px(24.0)), flex_direction: FlexDirection::Column,
+        row_gap: px(12.0), ..default()
+    }, BackgroundColor(Color::srgb(0.035, 0.055, 0.072)), GlobalZIndex(100),
+        ClassicControlsRoot(if menu.in_match { crate::AppState::Match } else { crate::AppState::Menu }))).id();
+    label(commands, root, "KEYBOARD / MOUSE", 30.0, Color::WHITE);
+    label(commands, root, "Scroll to see all controls. Select a key to change it; Escape cancels capture.",
+        17.0, Color::srgb(0.8, 0.85, 0.89));
+    let body = column(commands, root, Node::default());
+    controls_scroll(commands, body, menu.scroll);
+    controls_content(commands, body, menu, settings);
+    label(commands, root, &menu.status, 17.0, Color::srgb(0.83, 0.83, 0.63));
+    let footer = column(commands, root, Node {
+        column_gap: px(12.0), flex_shrink: 0.0, flex_wrap: FlexWrap::Wrap, row_gap: px(8.0), ..default()
+    });
+    button(commands, footer, "APPLY / SAVE", Action::Save, px(180.0));
+    button(commands, footer, "RESTORE DEFAULTS", Action::ControlsDefaults, px(200.0));
+    button(commands, footer, "BACK", Action::ControlsBack, px(120.0));
+    root
+}
+
+pub(crate) fn scroll_controls(
+    mut areas: Query<(&RelativeCursorPosition, &ComputedNode, &mut ScrollPosition), With<ControlsScroll>>,
+    mut wheel: MessageReader<bevy::input::mouse::MouseWheel>,
+    keys: Res<ButtonInput<KeyCode>>,
+    mut menu: ResMut<Menu>,
+) {
+    let dy = wheel.read().map(|event| event.y *
+        if event.unit == bevy::input::mouse::MouseScrollUnit::Line { 42.0 } else { 1.0 }).sum::<f32>();
+    for (cursor, node, mut scroll) in &mut areas {
+        // A redraw has not reached PostUpdate layout yet. Retain its saved
+        // offset until there is a measured viewport/content size to clamp to.
+        if node.size().y <= 0.0 { continue; }
+        let max = ((node.content_size().y - node.size().y) * node.inverse_scale_factor()).max(0.0);
+        let page = node.size().y * node.inverse_scale_factor() * 0.8;
+        if cursor.cursor_over { scroll.y -= dy; }
+        if menu.capture.is_none() {
+            if keys.just_pressed(KeyCode::PageDown) { scroll.y += page; }
+            if keys.just_pressed(KeyCode::PageUp) { scroll.y -= page; }
+            if keys.just_pressed(KeyCode::Home) { scroll.y = 0.0; }
+            if keys.just_pressed(KeyCode::End) { scroll.y = max; }
+        }
+        scroll.y = scroll.y.clamp(0.0, max);
+        menu.scroll = scroll.y;
+    }
+}
+
 pub fn cross_bar(s: &Settings, i: u8) -> (f32, f32, f32, f32) {
     let (l, t, g) = (s.cross_size, s.cross_thickness, s.cross_gap);
     match i {
@@ -1625,6 +1821,361 @@ pub(crate) fn apply(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn controls_retirement_schedule_accepts_both_actual_draw_registrations() {
+        let mut app = App::new();
+        install_controls_retirement(&mut app);
+        app.add_systems(Update, draw.in_set(ControlsDraw).run_if(home_controls))
+            .add_systems(Update, draw.in_set(ControlsDraw).run_if(crate::remote_join::ready));
+        app.world_mut().schedule_scope(Update, |world, schedule| {
+            // Build actual system metadata and ordering without executing draw
+            // or requiring a renderer. Before(draw) used to fail initialization
+            // because these two instances share one SystemTypeSet.
+            schedule.initialize(world).unwrap();
+        });
+    }
+
+    // Build the actual controls hierarchy without layout, assets, a movie,
+    // renderer or map loading. Console dispatch and request_load are real;
+    // keyboard-to-console delivery and production draw scheduling are outside
+    // this entity-lifetime fixture.
+    fn controls_lifetime_app() -> App {
+        let mut a = harness();
+        a.add_plugins((MinimalPlugins, bevy::state::app::StatesPlugin))
+            .init_state::<crate::AppState>()
+            .init_resource::<crate::session::Loader>()
+            .init_resource::<crate::hosting::Hosting>()
+            .add_observer(crate::session::own_entity::<Node>)
+            .add_systems(Update, crate::session::request_load)
+            .add_systems(Update, retire_classic_controls.after(input).after(crate::session::request_load));
+        {
+            let mut menu = a.world_mut().resource_mut::<Menu>();
+            menu.in_match = false;
+            menu.page = Some(Page::Main);
+            menu.maps = vec!["de_dust2".into()];
+        }
+        a.update(); // Consume initial state entry before dispatching requests.
+        a
+    }
+
+    fn spawn_controls_tree(world: &mut World) -> Vec<Entity> {
+        world.resource_mut::<Menu>().open_classic_controls();
+        let mut queue = bevy::ecs::world::CommandQueue::default();
+        let root = draw_classic_controls(&mut Commands::new(&mut queue, world),
+            world.resource::<Menu>(), world.resource::<Settings>());
+        queue.apply(world);
+        world.resource_mut::<Menu>().root = Some(root);
+        let mut tree = vec![root];
+        let mut at = 0;
+        while at < tree.len() {
+            if let Some(children) = world.get::<Children>(tree[at]) {
+                tree.extend(children.iter());
+            }
+            at += 1;
+        }
+        assert!(tree.len() > ACTIONS.len(), "fixture must contain the real controls widgets");
+        tree
+    }
+
+    fn assert_controls_tree_gone(world: &World, tree: &[Entity]) {
+        for entity in tree {
+            assert!(world.get_entity(*entity).is_err(), "old controls entity {entity:?} survived");
+        }
+    }
+
+    #[test]
+    fn home_console_disconnect_retires_the_forgotten_controls_tree() {
+        let mut a = controls_lifetime_app();
+        let old = spawn_controls_tree(a.world_mut());
+        assert!(a.world().get::<crate::session::MatchEntity>(old[0]).is_none());
+        assert_eq!(crate::console::command_fixture(a.world_mut(), "disconnect").unwrap(), "Disconnected.");
+        assert!(a.world().resource::<Menu>().root.is_none(), "exercise the lost-handle reset");
+        assert!(!a.world().resource::<Menu>().classic_controls);
+        assert!(!a.world().resource::<Menu>().controls_just_closed);
+        assert!(a.world().get_entity(old[0]).is_ok(), "reset alone cannot retire a Home entity");
+        a.update();
+        assert_controls_tree_gone(a.world(), &old);
+        let reopened = spawn_controls_tree(a.world_mut());
+        a.update();
+        assert_eq!(a.world().resource::<Menu>().root, Some(reopened[0]));
+        assert!(reopened.iter().all(|entity| a.world().get_entity(*entity).is_ok()));
+    }
+
+    #[test]
+    fn home_console_map_retires_controls_on_loading_even_before_flag_cleanup() {
+        let mut a = controls_lifetime_app();
+        let old = spawn_controls_tree(a.world_mut());
+        crate::console::command_fixture(a.world_mut(), "map de_dust2").unwrap();
+        assert!(a.world().resource::<LoadRequest>().0.lock().unwrap().is_some());
+        a.update(); // The supported loader request queues the state transition.
+        assert_eq!(*a.world().resource::<State<crate::AppState>>().get(), crate::AppState::Menu);
+        assert!(matches!(a.world().resource::<NextState<crate::AppState>>(),
+            NextState::Pending(crate::AppState::Loading)));
+        a.update(); // No begin_load is installed: no game data or worker needed.
+        assert_eq!(*a.world().resource::<State<crate::AppState>>().get(), crate::AppState::Loading);
+        assert!(a.world().resource::<Menu>().classic_controls,
+            "scene retirement must work independently of frontend flag cleanup");
+        assert!(a.world().resource::<Menu>().root.is_none());
+        assert_controls_tree_gone(a.world(), &old);
+    }
+
+    #[test]
+    fn classic_controls_back_retires_children_and_keeps_the_reopened_tree() {
+        for in_match in [false, true] {
+            let mut a = controls_lifetime_app();
+            a.insert_state(if in_match { crate::AppState::Match } else { crate::AppState::Menu });
+            a.world_mut().resource_mut::<Menu>().in_match = in_match;
+            let old = spawn_controls_tree(a.world_mut());
+            let back = old.iter().copied().find(|entity|
+                matches!(a.world().get::<Action>(*entity), Some(Action::ControlsBack))).unwrap();
+            a.world_mut().entity_mut(back).insert(Interaction::Pressed);
+            a.update(); // Real ControlsBack handling, then unconditional retirement.
+            assert_eq!(a.world().resource::<Menu>().page,
+                Some(if in_match { Page::Pause } else { Page::Main }));
+            assert!(a.world().resource::<Menu>().root.is_none());
+            assert_controls_tree_gone(a.world(), &old);
+            let reopened = spawn_controls_tree(a.world_mut());
+            a.update();
+            a.update();
+            assert_eq!(a.world().resource::<Menu>().root, Some(reopened[0]));
+            assert!(reopened.iter().all(|entity| a.world().get_entity(*entity).is_ok()));
+        }
+    }
+
+    #[test]
+    fn retiring_a_forgotten_controls_tree_preserves_its_replacement_handle() {
+        let mut a = controls_lifetime_app();
+        let old = spawn_controls_tree(a.world_mut());
+        crate::console::command_fixture(a.world_mut(), "disconnect").unwrap();
+        // Reopening before the retirement pass leaves both marked roots live.
+        let replacement = spawn_controls_tree(a.world_mut());
+        a.update();
+        assert_controls_tree_gone(a.world(), &old);
+        assert_eq!(a.world().resource::<Menu>().root, Some(replacement[0]));
+        assert!(replacement.iter().all(|entity| a.world().get_entity(*entity).is_ok()));
+        assert_eq!(a.world_mut().query_filtered::<Entity, With<ClassicControlsRoot>>()
+            .iter(a.world()).count(), 1);
+    }
+
+    #[test]
+    fn home_controls_accept_public_key_edges_before_a_player_exists() {
+        use bevy::input::{ButtonState, keyboard::{Key, KeyboardInput}};
+        let mut a = App::new();
+        a.add_plugins((MinimalPlugins, bevy::input::InputPlugin))
+            .insert_resource(State::new(crate::AppState::Menu))
+            .init_resource::<Menu>()
+            .init_resource::<Settings>()
+            .init_resource::<LoadRequest>()
+            .init_resource::<crate::inventory::Inventory>()
+            .init_resource::<crate::inventory::Collection>()
+            .init_resource::<crate::buymenu::BuyMenu>()
+            .insert_resource(crate::Options(crate::ClientOptions::default()))
+            .insert_resource(InputEnabled(true))
+            .add_systems(RunFixedMainLoop, input.run_if(home_controls)
+                .in_set(bevy::app::RunFixedMainLoopSystems::BeforeFixedMainLoop));
+        let window = a.world_mut().spawn((PrimaryWindow, CursorOptions::default())).id();
+        assert!(!a.world().contains_resource::<LocalPlayer>());
+        {
+            let mut menu = a.world_mut().resource_mut::<Menu>();
+            menu.in_match = false;
+            menu.page = Some(Page::Main);
+            menu.open_classic_controls();
+            // Button/callback and rendered-layout delivery are covered by the
+            // opt-in acceptance case; this fixture isolates schedule/key input.
+            menu.capture = Some(0);
+        }
+        let mut edge = |code, state| {
+            a.world_mut().write_message(KeyboardInput { key_code: code,
+                logical_key: if code == KeyCode::Escape { Key::Escape } else { Key::F11 },
+                state, text: None, repeat: false, window });
+            a.update();
+        };
+        edge(KeyCode::F11, ButtonState::Pressed);
+        edge(KeyCode::F11, ButtonState::Released);
+        assert_eq!(a.world().resource::<Settings>().binds[0], Some(KeyCode::F11));
+        assert!(a.world().resource::<Menu>().classic_controls);
+        a.world_mut().write_message(KeyboardInput { key_code: KeyCode::Escape,
+            logical_key: Key::Escape, state: ButtonState::Pressed, text: None, repeat: false, window });
+        a.update();
+        assert_eq!(a.world().resource::<Menu>().page, Some(Page::Main));
+        assert!(a.world().resource::<Menu>().controls_just_closed);
+        a.world_mut().write_message(KeyboardInput { key_code: KeyCode::Escape,
+            logical_key: Key::Escape, state: ButtonState::Released, text: None, repeat: false, window });
+        a.update();
+        assert!(!a.world().resource::<Menu>().controls_just_closed);
+        a.world_mut().write_message(KeyboardInput { key_code: KeyCode::Escape,
+            logical_key: Key::Escape, state: ButtonState::Pressed, text: None, repeat: false, window });
+        a.update();
+        assert_eq!(a.world().resource::<Menu>().page, Some(Page::Main), "closed Home editor no longer owns Escape");
+    }
+
+    #[test]
+    fn classic_controls_apply_reopen_capture_and_back_use_private_preferences() {
+        const CHILD: &str = "CSR_CONTROLS_MENU_FIXTURE_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let data = std::env::temp_dir().join(format!("csr-menu-controls-{}-{}", std::process::id(),
+                std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+            std::fs::create_dir_all(&data).unwrap();
+            let result = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "menu::tests::classic_controls_apply_reopen_capture_and_back_use_private_preferences", "--nocapture"])
+                .env(CHILD, "1").current_dir(data).output().unwrap();
+            assert!(result.status.success(), "{}\n{}", String::from_utf8_lossy(&result.stdout), String::from_utf8_lossy(&result.stderr));
+            return;
+        }
+        for in_match in [false, true] {
+            let mut a = harness();
+            a.world_mut().resource_mut::<Menu>().in_match = in_match;
+            a.world_mut().resource_mut::<Menu>().open_classic_controls();
+            let action = a.world_mut().spawn((Interaction::Pressed, Action::Bind(ACTIONS.len()))).id();
+            a.update();
+            assert_eq!(a.world().resource::<Menu>().capture, Some(ACTIONS.len()));
+            a.world_mut().entity_mut(action).insert(Interaction::None);
+            a.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::Backslash);
+            a.update();
+            assert_eq!(a.world().resource::<Settings>().console_key, Some(KeyCode::Backslash));
+            a.world_mut().resource_mut::<ButtonInput<KeyCode>>().reset_all();
+            a.world_mut().entity_mut(action).insert((Interaction::Pressed, Action::ClearBind(4)));
+            a.update();
+            a.world_mut().entity_mut(action).insert((Interaction::Pressed, Action::Adjust(25, 1.0)));
+            a.update();
+            a.world_mut().entity_mut(action).insert((Interaction::Pressed, Action::Adjust(30, 1.0)));
+            a.update();
+            a.world_mut().resource_mut::<Settings>().sensitivity = 1.375;
+            a.world_mut().entity_mut(action).insert((Interaction::Pressed, Action::Save));
+            a.update();
+            assert_eq!(a.world().resource::<Menu>().status, "Settings saved.");
+            let expected = a.world().resource::<Settings>().clone();
+            assert_eq!(Settings::load(), expected);
+            a.world_mut().entity_mut(action).insert((Interaction::Pressed, Action::ControlsBack));
+            a.update();
+            assert!(!a.world().resource::<Menu>().classic_controls);
+            assert!(a.world().resource::<Menu>().controls_just_closed);
+            assert_eq!(a.world().resource::<Menu>().page, Some(if in_match { Page::Pause } else { Page::Main }));
+            a.world_mut().entity_mut(action).insert(Interaction::None);
+            a.world_mut().resource_mut::<Menu>().open_classic_controls();
+            assert_eq!(*a.world().resource::<Settings>(), expected);
+            a.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::Escape);
+            a.update();
+            assert!(!a.world().resource::<Menu>().classic_controls);
+            assert_eq!(a.world().resource::<Menu>().page, Some(if in_match { Page::Pause } else { Page::Main }));
+            // Return keeps the menu/cursor open; the same Escape does not resume.
+            assert!(a.world().resource::<Menu>().open());
+        }
+    }
+
+    #[test]
+    fn controls_restore_apply_reload_preserves_unrelated_preferences() {
+        const CHILD: &str = "CSR_CONTROLS_DEFAULTS_FIXTURE_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let data = std::env::temp_dir().join(format!("csr-controls-defaults-{}-{}", std::process::id(),
+                std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+            std::fs::create_dir_all(&data).unwrap();
+            let result = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "menu::tests::controls_restore_apply_reload_preserves_unrelated_preferences", "--nocapture"])
+                .env(CHILD, "1").current_dir(&data).output().unwrap();
+            std::fs::remove_dir_all(&data).unwrap();
+            assert!(result.status.success(), "{}\n{}", String::from_utf8_lossy(&result.stdout), String::from_utf8_lossy(&result.stderr));
+            return;
+        }
+        // Every unrelated persisted field differs from its default. Equality
+        // after real UI actions and disk reload detects a whole-settings reset.
+        let sentinel = Settings::parse(concat!(
+            "volume=0.73\nsnd_mute_losefocus=0\nsnd_menumusic_volume=0.27\n",
+            "cl_showfps=1\nmenu_blur=false\nexposure=3.25\nvsync=true\nfullscreen=true\n",
+            "resolution=3\nmsaa=false\nblood=false\nhitmarker=true\n",
+            "cross_color=3\ncross_size=13\ncross_gap=7\ncross_thickness=4\ncross_dot=true\n",
+            "radar_scale=0.8\nradar_rotate=false\ncloseonbuy=1\n"
+        ));
+        for in_match in [false, true] {
+            let mut a = harness();
+            let mut changed = sentinel.clone();
+            changed.controls_source = "Fixture import".into();
+            changed.binds.fill(None);
+            changed.console_key = Some(KeyCode::Backslash);
+            changed.mouse_binds.fill(crate::settings::MouseAction::Action(4));
+            changed.wheel_up = crate::settings::WheelAction::Jump;
+            changed.wheel_down = crate::settings::WheelAction::None;
+            changed.sensitivity = 3.375;
+            changed.invert_y = true;
+            changed.save().unwrap();
+            a.insert_resource(changed.clone());
+            a.world_mut().resource_mut::<Menu>().in_match = in_match;
+            a.world_mut().resource_mut::<Menu>().open_classic_controls();
+            let action = a.world_mut().spawn((Interaction::Pressed, Action::ControlsDefaults)).id();
+            a.update();
+            let defaults = Settings::default();
+            let mut expected = sentinel.clone();
+            expected.binds = defaults.binds;
+            expected.console_key = defaults.console_key;
+            expected.mouse_binds = defaults.mouse_binds;
+            expected.wheel_up = defaults.wheel_up;
+            expected.wheel_down = defaults.wheel_down;
+            expected.sensitivity = defaults.sensitivity;
+            expected.invert_y = defaults.invert_y;
+            expected.controls_source = defaults.controls_source;
+            assert_eq!(*a.world().resource::<Settings>(), expected);
+            assert_eq!(Settings::load(), changed, "Restore waits for Apply before saving");
+            a.world_mut().entity_mut(action).insert((Interaction::Pressed, Action::Save));
+            a.update();
+            assert_eq!(a.world().resource::<Menu>().status, "Settings saved.");
+            let reloaded = Settings::load();
+            assert_eq!(reloaded, expected);
+            a.world_mut().entity_mut(action).insert((Interaction::Pressed, Action::ControlsBack));
+            a.update();
+            assert_eq!(a.world().resource::<Menu>().page, Some(if in_match { Page::Pause } else { Page::Main }));
+            a.insert_resource(reloaded);
+            a.world_mut().resource_mut::<Menu>().open_classic_controls();
+            assert_eq!(*a.world().resource::<Settings>(), expected);
+        }
+    }
+
+    #[test]
+    fn controls_body_scrolls_independently_of_footer_and_keeps_every_binding_row() {
+        let mut a = App::new();
+        a.init_resource::<Menu>().init_resource::<Settings>().add_systems(Update,
+            |mut commands: Commands, menu: Res<Menu>, settings: Res<Settings>| {
+                draw_classic_controls(&mut commands, &menu, &settings);
+            });
+        a.update();
+        let world = a.world_mut();
+        let mut query = world.query_filtered::<(Entity, &ChildOf, &Node), With<ControlsScroll>>();
+        let (body, root) = {
+            let (body, parent, node) = query.single(world).unwrap();
+            assert_eq!(node.overflow, Overflow::scroll_y());
+            assert_eq!(node.min_height, px(0.0));
+            (body, parent.parent())
+        };
+        let buttons: Vec<_> = world.query::<(&Action, &ChildOf)>().iter(world)
+            .map(|(action, parent)| (*action, parent.parent())).collect();
+        assert_eq!(buttons.iter().filter(|(action, _)| matches!(action, Action::Bind(_))).count(), ACTIONS.len() + 1);
+        assert_eq!(buttons.iter().filter(|(action, _)| matches!(action, Action::ControlsDefaults)).count(), 1);
+        assert!(!buttons.iter().any(|(action, _)| matches!(action, Action::Defaults)));
+        for (_, parent) in buttons.iter().filter(|(action, _)| matches!(action, Action::Save | Action::ControlsBack)) {
+            assert_ne!(*parent, body);
+            assert_eq!(world.get::<ChildOf>(*parent).unwrap().parent(), root);
+            assert_eq!(world.get::<Node>(*parent).unwrap().flex_shrink, 0.0);
+        }
+    }
+
+    #[test]
+    fn options_escape_returns_to_pause_then_each_press_toggles_once() {
+        let mut menu = Menu::default();
+        assert!(!menu.escape(false));
+        assert_eq!(menu.page, Some(Page::Pause));
+        // Native Options does not change the host's Page::Pause.
+        assert!(menu.escape(true));
+        assert_eq!(menu.page, Some(Page::Pause));
+        // The owned Options callback closes the child; the next press resumes.
+        assert!(!menu.escape(false));
+        assert_eq!(menu.page, None);
+        for _ in 0..4 {
+            assert!(!menu.escape(false));
+            assert_eq!(menu.page, Some(Page::Pause));
+            assert!(!menu.escape(false));
+            assert_eq!(menu.page, None);
+        }
+    }
     fn harness() -> App {
         let mut a = App::new();
         a.init_resource::<Menu>()

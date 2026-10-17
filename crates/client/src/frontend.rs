@@ -31,6 +31,7 @@ struct Data {
     game_modes: kv::Block,
     state: AppState,
     menu_open: bool,
+    controls_open: bool,
     loading: String,
     loading_map: Option<LoadingContext>,
     player_name: String,
@@ -39,16 +40,17 @@ struct Data {
     home_retired: bool,
     pause_surface: crate::frontend_pause_surface::Tracker,
     deferred_pause: crate::frontend_pause_surface::DeferredPause,
+    flow_roots: HashMap<String, String>,
 }
 
 impl Data {
     fn fork_worker(&self) -> Self {
         Self { fs: self.fs.clone(), settings: self.settings.clone(), inventory: self.inventory.clone(),
             localization: self.localization.clone(), game_modes: self.game_modes.clone(),
-            state: self.state, menu_open: self.menu_open, loading: self.loading.clone(),
+            state: self.state, menu_open: self.menu_open, controls_open: false, loading: self.loading.clone(),
             loading_map: self.loading_map.clone(), player_name: self.player_name.clone(),
             movie_ready: HashSet::new(), home_bootstrapped: false, home_retired: false,
-            pause_surface: Default::default(), deferred_pause: Default::default() }
+            pause_surface: Default::default(), flow_roots: Default::default(), deferred_pause: Default::default() }
     }
 }
 
@@ -138,6 +140,7 @@ enum Action {
     Notice(String),
     Host(crate::frontend_lobby::Start, String),
     LobbyHome,
+    Controls,
 }
 /// Park immediately rejects in-flight old actions. Worker-ordered resume
 /// advances the epoch only after old queued input has been cancelled.
@@ -293,10 +296,18 @@ impl Bridge {
     fn close_options(&mut self, calls: &mut Calls) {
         let mut data = self.data.lock().unwrap();
         data.pause_surface.options_cancelled();
+        data.pause_surface.require_raster(calls.require_raster());
         data.deferred_pause.cancel_pending();
         if let Some(path) = self.roots.get("OptionsMenu") {
+            calls.call(path, "HidePanel", vec![]);
             calls.set(path, "_visible", false.into());
         }
+    }
+
+    fn bind_options(data: &Data, path: &str, calls: &mut Calls) {
+        calls.call("_global.csrBindings", "bindOwnedOptions", vec![
+            path.into(), data.pause_surface.options_receiver().into(),
+        ]);
     }
 
     fn close_quit(&mut self, calls: &mut Calls) {
@@ -403,6 +414,7 @@ impl Engine for Bridge {
         if object == "MainMenu" && self.data.lock().unwrap().home_retired { return Some(Value::Undefined); }
         let seen_object = if object.starts_with("OwnedLobby") { "OwnedLobby" }
             else if object.starts_with("OwnedPicker") { "OwnedPicker" }
+            else if object.starts_with("OwnedOptions") { "OwnedOptions" }
             else if object.starts_with("OwnedQuit") { "OwnedQuit" } else { object };
         // Repeated native getters are the common path. Borrow their existing
         // names instead of allocating two Strings only to discard them when
@@ -629,18 +641,32 @@ impl Engine for Bridge {
             self.data.lock().unwrap().pause_surface.accept(args);
             return Some(Value::Undefined);
         }
-        if object == "OptionsMenu" && method == "OnCancel" {
-            let mut data = self.data.lock().unwrap();
-            if data.pause_surface.options_requested() {
-                data.pause_surface.options_cancelled();
-                data.deferred_pause.cancel_pending();
-                if let Some(path) = self.roots.get("OptionsMenu") { calls.set(path, "_visible", false.into()); }
-                let base = if data.state == AppState::Match && data.menu_open { "PauseMenu" } else { "MainMenu" };
+        if object.starts_with("OwnedOptions") {
+            let data = self.data.lock().unwrap();
+            let current = self.dispatch_epoch.is_some() && data.pause_surface.owns_options(object)
+                && (matches!(data.state, AppState::Menu | AppState::Browser)
+                    || (data.state == AppState::Match && data.menu_open));
+            let close = match (method, args) {
+                ("OnCancel", []) => true,
+                ("OnUnload", [Value::String(handle)]) => handle.strip_prefix("mc:")
+                    .is_some_and(|path| self.roots.get("OptionsMenu").is_some_and(|root| root == path)),
+                _ => false,
+            };
+            let base = if data.state == AppState::Match { "PauseMenu" } else { "MainMenu" };
+            drop(data);
+            if current && close {
+                // Authored Home navigation can close via OnUnload without a
+                // BasePanelRunCommand. Revoke the opening, not just its pixels.
+                self.close_options(calls);
                 if let Some(path) = self.roots.get(base) {
                     calls.set(path, "_visible", true.into());
                     calls.call(path, "showPanel", vec![]);
                 }
             }
+            return Some(Value::Undefined);
+        }
+        // A cached loader proxy cannot identify which opening is closing.
+        if object == "OptionsMenu" && matches!(method, "OnCancel" | "OnUnload") {
             return Some(Value::Undefined);
         }
         if method == "OnReady" {
@@ -653,6 +679,9 @@ impl Engine for Bridge {
             self.data.lock().unwrap().movie_ready.remove(object);
             if let Some(path) = arg(0).strip_prefix("mc:") {
                 self.roots.insert(object.into(), path.into());
+                if crate::frontend_acceptance::enabled() {
+                    self.data.lock().unwrap().flow_roots.insert(object.into(), path.into());
+                }
                 match object {
                     "PauseMenu" => self.data.lock().unwrap().pause_surface.root(crate::frontend_pause_surface::Root::Pause, path),
                     "OptionsMenu" => self.data.lock().unwrap().pause_surface.root(crate::frontend_pause_surface::Root::Options, path),
@@ -748,7 +777,10 @@ impl Engine for Bridge {
                     && (matches!(data.state, AppState::Menu | AppState::Browser)
                         || (data.state == AppState::Match && data.menu_open))
                 {
+                    Self::bind_options(&data, path, calls);
                     self.options.show(path, &data.settings, calls);
+                    drop(data);
+                    self.data.lock().unwrap().pause_surface.require_raster(calls.require_raster());
                 } else {
                     calls.set(path, "_visible", false.into());
                 }
@@ -785,6 +817,7 @@ impl Engine for Bridge {
             return None;
         }
         if method == "BasePanelRunCommand" {
+            if self.dispatch_epoch.is_none() || self.data.lock().unwrap().controls_open { return None; }
             let command = arg(0);
             // The installed Home power button emits Quit. Confirmation must
             // precede generic navigation teardown so Cancel keeps the picker.
@@ -840,15 +873,27 @@ impl Engine for Bridge {
                         calls.request_element("StartSinglePlayer");
                     }
                 }
+                "OpenMouseDialog" | "OpenKeyboardMouseDialog" | "OpenKeyboardDialog" => {
+                    // A working classic movie explicitly transfers ownership;
+                    // the numeric OptionsMenu schema cannot represent binds.
+                    self.data.lock().unwrap().controls_open = true;
+                    for element in ["MainMenu", "PauseMenu", "OptionsMenu", "LobbyBrowser", "LobbyScreen", "StartSinglePlayer"] {
+                        if let Some(path) = self.roots.get(element) {
+                            calls.call("_global.csrBindings", "releaseOwnedLifecycle", vec![path.clone().into()]);
+                            calls.set(path, "_visible", false.into());
+                        }
+                    }
+                    self.push_action(Action::Controls);
+                }
                 "OpenVideoSettingsDialog"
                 | "OpenAudioSettingsDialog"
                 | "OpenGameSettingsDialog"
                 | "OpenSettingsDialog"
-                | "OpenMouseDialog"
-                | "OpenKeyboardMouseDialog" => {
+                => {
                     self.lobby.lock().unwrap().cancel();
                     let mut data = self.data.lock().unwrap();
                     data.pause_surface.options_opened();
+                    data.pause_surface.require_raster(calls.require_raster());
                     data.deferred_pause.cancel_pending();
                     if let Some(path) = self.roots.get("PauseMenu") { calls.set(path, "_visible", false.into()); }
                     self.options = crate::frontend_options::Scene::load(
@@ -857,7 +902,10 @@ impl Engine for Bridge {
                         &data.localization,
                     );
                     if data.movie_ready.contains("OptionsMenu") {
-                        if let Some(path) = self.roots.get("OptionsMenu") { self.options.show(path, &data.settings, calls); }
+                        if let Some(path) = self.roots.get("OptionsMenu") {
+                            Self::bind_options(&data, path, calls);
+                            self.options.show(path, &data.settings, calls);
+                        }
                     } else if self.requested.insert("OptionsMenu".into()) {
                         calls.request_element("OptionsMenu");
                     }
@@ -880,6 +928,10 @@ impl Engine for Bridge {
         }
         // The original movie's native widget API is shared by dropdowns,
         // choices and sliders. Cached/hidden pages cannot publish changes.
+        if data.controls_open && (method.starts_with("SetConvar")
+            || (object == "OptionsMenu" && matches!(method, "OnCancel" | "OnUpdateValue" | "OnRefreshValues"))) {
+            return Some(Value::Undefined);
+        }
         if object == "OptionsMenu"
             && matches!(method, "OnUpdateValue" | "OnHighlightWidget" | "OnRefreshValues" | "OnLayoutComplete")
             && !(data.pause_surface.options_requested()
@@ -1052,6 +1104,7 @@ pub struct Frontend {
     parked: Option<CachedWorker>,
     next_worker_generation: u64,
     home_show_pending: bool,
+    home_return_started: Option<std::time::Instant>,
     movie: Option<Mutex<scaleform::Menu>>,
     data: Arc<Mutex<Data>>,
     actions: Arc<Mutex<ActionQueue>>,
@@ -1060,6 +1113,7 @@ pub struct Frontend {
     loading_presentation: crate::frontend_loading_presentation::Presentation,
     pause_presentation: crate::frontend_pause_surface::Presentation,
     performance_ack: Option<(u64, std::time::Instant)>,
+    flow_observation: Option<(u64, Vec<String>)>,
     worker_generation: u64,
     root: Entity,
     camera: Entity,
@@ -1113,7 +1167,9 @@ impl Frontend {
         self.parked = Some(other);
         self.worker_kind = kind;
         self.home_show_pending = kind == WorkerKind::Home;
+        self.home_return_started = (kind == WorkerKind::Home).then(std::time::Instant::now);
         self.performance_ack = None;
+        self.flow_observation = None;
         self.pause_presentation.open();
         info!(worker = ?kind, generation = self.worker_generation, "Classic UI selected cached domain");
         true
@@ -1129,19 +1185,36 @@ impl Frontend {
         }
     }
 
+    pub(crate) fn has_classic_menu(&self) -> bool { self.failed.is_none() }
     pub(crate) fn home_bootstrapped(&self) -> bool { self.data.lock().unwrap().home_bootstrapped }
     pub(crate) fn pause_presented(&self) -> bool {
         self.worker_kind == WorkerKind::Match && self.pause_surface_visible()
-            && self.pause_presentation.ready()
+            && self.menu_presented()
     }
     pub(crate) fn home_presented(&self) -> bool {
         self.worker_kind == WorkerKind::Home && !self.home_show_pending
-            && self.movie_ready("MainMenu") && self.pause_presentation.ready()
+            && self.movie_ready("MainMenu") && self.menu_presented()
+    }
+    fn menu_presented(&self) -> bool {
+        self.pause_presentation.ready(self.data.lock().unwrap().pause_surface.raster_fence())
     }
     pub(crate) fn take_performance_ack(&mut self) -> Option<(u64, std::time::Instant)> { self.performance_ack.take() }
     pub(crate) fn camera(&self) -> Entity { self.camera }
     pub(crate) fn pause_surface_visible(&self) -> bool { self.data.lock().unwrap().pause_surface.visible() }
-    pub(crate) fn options_requested(&self) -> bool { self.data.lock().unwrap().pause_surface.options_requested() }
+    pub(crate) fn options_receiver(&self) -> Option<String> {
+        self.data.lock().unwrap().pause_surface.requested_options_receiver()
+    }
+    pub(crate) fn cancel_options(&self, receiver: String) {
+        self.send(Self::options_cancel_input(receiver));
+    }
+    fn options_cancel_input(receiver: String) -> Input {
+        Input::Call { path: "_global.csrBindings".into(),
+            function: "cancelOwnedOptions".into(), args: vec![receiver.into()] }
+    }
+    // Read-only diagnostics for the explicitly selected rendered acceptance case.
+    pub(crate) fn flow_roots(&self) -> HashMap<String, String> { self.data.lock().unwrap().flow_roots.clone() }
+    pub(crate) fn flow_observation(&self) -> Option<&(u64, Vec<String>)> { self.flow_observation.as_ref() }
+    pub(crate) fn flow_presented(&self) -> bool { self.menu_presented() }
     pub(crate) fn pause_root(&self) -> Option<String> { self.data.lock().unwrap().pause_surface.pause_root().map(str::to_owned) }
     pub(crate) fn loaded(&self, name: &str) -> bool { self.loaded.contains(name) }
     /// Authored OnReady received for the current cached movie; Loaded alone is earlier.
@@ -1211,6 +1284,10 @@ pub fn native_enabled(front: Option<Res<Frontend>>) -> bool {
     front.is_none_or(|front| front.failed.is_some())
 }
 
+pub(crate) fn engine_menu_enabled(front: Option<Res<Frontend>>, menu: Res<crate::menu::Menu>) -> bool {
+    menu.classic_controls || front.is_none_or(|front| front.failed.is_some())
+}
+
 pub(crate) fn setup(
     mut commands: Commands,
     data: Res<GameData>,
@@ -1229,12 +1306,13 @@ pub(crate) fn setup(
         game_modes: crate::frontend_game::load(&data.vfs, &installed),
         state: AppState::Menu,
         menu_open: menu.open(),
+        controls_open: false,
         loading: String::new(),
         loading_map: None,
         player_name: "You".into(),
         movie_ready: HashSet::new(), home_bootstrapped: false, home_retired: false,
         pause_surface: Default::default(),
-        deferred_pause: Default::default(),
+        flow_roots: Default::default(), deferred_pause: Default::default(),
     }));
     let lobby = Arc::new(Mutex::new(crate::frontend_lobby::Scene::new(
         crate::frontend_lobby::Catalog::installed(&options.0, &menu.maps),
@@ -1342,6 +1420,7 @@ pub(crate) fn setup(
         parked: None,
         next_worker_generation: 0,
         home_show_pending: true,
+        home_return_started: None,
         movie: None,
         data: shared,
         actions,
@@ -1349,7 +1428,7 @@ pub(crate) fn setup(
         presented_serial: 0,
         loading_presentation: Default::default(),
         pause_presentation: presentation,
-        performance_ack: None,
+        performance_ack: None, flow_observation: None,
         worker_generation: 0,
         root,
         camera,
@@ -1394,9 +1473,10 @@ pub(crate) fn update(
         Res<bevy::diagnostic::FrameCount>,
     ),
     loc: Res<crate::localize::Localization>,
-    (inventory, practice): (
+    (inventory, practice, mut previous_controls): (
         Res<crate::cosmetics::Inventory>,
         Res<crate::inventory::Inventory>,
+        Local<bool>,
     ),
     catalog: Res<crate::cosmetics::Catalog>,
     mut next: ResMut<NextState<AppState>>,
@@ -1414,6 +1494,35 @@ pub(crate) fn update(
         let catalog = crate::frontend_lobby::Catalog::installed(&options.0, &menu.maps);
         front.select_worker(kind, catalog)
     } else { false };
+    if !matches!(scene, AppState::Menu | AppState::Match) {
+        menu.classic_controls = false;
+        menu.capture = None;
+    }
+    let controls_closed = *previous_controls && !menu.classic_controls;
+    *previous_controls = menu.classic_controls;
+    if controls_closed || switched || !matches!(scene, AppState::Menu | AppState::Match) {
+        front.data.lock().unwrap().controls_open = false;
+    }
+    if controls_closed && menu.open() && matches!(scene, AppState::Menu | AppState::Match) && front.failed.is_none() {
+        // Return from the one explicit engine-owned route through a fresh
+        // presentation. Stale native options never regain ownership on return.
+        let (base, stale_options) = {
+            let mut data = front.data.lock().unwrap();
+            data.pause_surface.options_cancelled();
+            data.deferred_pause.cancel_pending();
+            let base = if scene == AppState::Match { data.pause_surface.pause_root().map(str::to_owned)
+                .unwrap_or_else(|| "_level100".into()) } else { "_global.MainMenuMovie".into() };
+            (base, data.pause_surface.options_root().map(str::to_owned))
+        };
+        front.pause_presentation.open();
+        let mut restore = vec![];
+        if let Some(path) = stale_options { restore.push(scaleform::Command::Set {
+            path, property: "_visible".into(), value: false.into(),
+        }); }
+        restore.push(scaleform::Command::Set { path: base.clone(), property: "_visible".into(), value: true.into() });
+        restore.push(scaleform::Command::Call { path: base, function: "showPanel".into(), args: vec![] });
+        front.send(Input::Present { commands: restore, revision: front.pause_presentation.revision() });
+    }
     let loading_selection = if scene == AppState::Loading { loader.loading_map() } else { None };
     let loading_selection_changed = front.loading_selection != loading_selection;
     front.loading_selection = loading_selection.clone();
@@ -1510,6 +1619,10 @@ pub(crate) fn update(
     }
     if switched {
         front.resume_worker(window.focused, window.physical_width(), window.physical_height());
+        if let Some(started) = front.home_return_started {
+            info!(generation = front.worker_generation, cached = front.movie.is_some(),
+                elapsed_ms = started.elapsed().as_secs_f64() * 1000., "Home restoration resume queued");
+        }
         // An unbooted Loading domain must not show the parked Home raster.
         if scene == AppState::Loading {
             if let Some(mut image) = images.get_mut(&front.image) {
@@ -1602,6 +1715,10 @@ pub(crate) fn update(
             scaleform::Command::Call { path: "_global.MainMenuMovie".into(), function: "showPanel".into(), args: vec![] },
         ], revision: front.pause_presentation.revision() });
         info!(generation = front.worker_generation, "Classic UI Home Ready; awaiting fresh presentation");
+        if let Some(started) = front.home_return_started {
+            info!(generation = front.worker_generation,
+                elapsed_ms = started.elapsed().as_secs_f64() * 1000., "Home restoration Ready transaction queued");
+        }
     }
     // Load the first Pause while the map loads, rather than making Escape pay
     // for its movies/fonts. A closed late load stays hidden in the bridge.
@@ -1798,7 +1915,7 @@ pub(crate) fn update(
         // between the 55px navigation bar and 155px panels holds our notice.
         node.top = if owned_lobby_notice { percent(7) } else { Val::Auto };
         node.bottom = if owned_lobby_notice { Val::Auto } else { px(24.0) };
-        node.display = if loading || (visible && !menu.status.is_empty()) {
+        node.display = if !menu.classic_controls && (loading || (visible && !menu.status.is_empty())) {
             Display::Flex
         } else {
             Display::None
@@ -1826,7 +1943,7 @@ pub(crate) fn update(
         };
     }
     if let Ok(mut root) = nodes.get_mut(front.root) {
-        root.display = if (visible && front.failed.is_none() && front.pause_presentation.ready()) || loading {
+        root.display = if !menu.classic_controls && ((visible && front.failed.is_none() && front.menu_presented()) || loading) {
             Display::Flex
         } else {
             Display::None
@@ -1861,6 +1978,11 @@ pub(crate) fn update(
                 if let Some(id) = path.strip_prefix("_global.csrPerformanceProbe.").and_then(|id| id.parse().ok()) {
                     front.performance_ack = Some((id, std::time::Instant::now()));
                 }
+                if crate::frontend_acceptance::enabled() {
+                    if let Some(id) = path.strip_prefix("_global.csrFlowProbe.").and_then(|id| id.parse().ok()) {
+                        front.flow_observation = Some((id, properties.clone()));
+                    }
+                }
                 debug!("UI API {path}: {properties:?}")
             }
             None => break,
@@ -1890,19 +2012,32 @@ pub(crate) fn update(
     }
     let frame = front.frame();
     if let Some(frame) = frame {
-        if let Some(mut image) = images.get_mut(&front.image) {
-            image.texture_descriptor.size = Extent3d {
-                width: frame.width,
-                height: frame.height,
-                depth_or_array_layers: 1,
-            };
-            image.data = Some(frame.rgba);
-            front.pause_presentation.presented(frame.presentation_revision);
-            if front.loading_presentation.assigned(frame.presentation_revision, app_frame.0) {
-                info!(generation = ?loader.generation(), revision = frame.presentation_revision,
-                    app_frame = app_frame.0, "Loading post-Init raster assigned to main image");
+        let required = front.data.lock().unwrap().pause_surface.raster_fence();
+        // A local authored close can change ownership without another Present.
+        // Never assign a pre-callback readback, even after a newer one was shown.
+        let admitted = front.pause_presentation.accepts(frame.presentation_revision, frame.raster_fence, required);
+        if admitted || loading {
+            if let Some(mut image) = images.get_mut(&front.image) {
+                image.texture_descriptor.size = Extent3d {
+                    width: frame.width,
+                    height: frame.height,
+                    depth_or_array_layers: 1,
+                };
+                image.data = Some(frame.rgba);
+                if admitted { front.pause_presentation.presented(frame.presentation_revision, frame.raster_fence); }
+                if front.loading_presentation.assigned(frame.presentation_revision, app_frame.0) {
+                    info!(generation = ?loader.generation(), revision = frame.presentation_revision,
+                        app_frame = app_frame.0, "Loading post-Init raster assigned to main image");
+                }
+                front.presented_serial = front.presented_serial.saturating_add(1);
+                if admitted && front.worker_kind == WorkerKind::Home && !front.home_show_pending {
+                    if let Some(started) = front.home_return_started.take() {
+                        info!(generation = front.worker_generation, revision = frame.presentation_revision,
+                            raster_fence = frame.raster_fence, elapsed_ms = started.elapsed().as_secs_f64() * 1000.,
+                            "Home restoration fresh raster assigned");
+                    }
+                }
             }
-            front.presented_serial = front.presented_serial.saturating_add(1);
         }
     }
     let actions = front.actions.lock().unwrap().take();
@@ -1913,7 +2048,16 @@ pub(crate) fn update(
         *host_request.0.lock().unwrap() = None;
     }
     for action in actions {
+        if menu.classic_controls { continue; }
         match action {
+            Action::Controls => {
+                menu.open_classic_controls();
+                *previous_controls = true;
+                // Update runs after the menu input pass: block movie input and
+                // presentation immediately, including the opening mouse click.
+                if let Ok(mut root) = nodes.get_mut(front.root) { root.display = Display::None; }
+                if let Ok(mut notice) = nodes.get_mut(front.notice) { notice.display = Display::None; }
+            }
             Action::Host(start, name) => {
                 if scene == AppState::Menu {
                     let mut map = start.map;
@@ -1969,6 +2113,7 @@ pub(crate) fn update(
                     exit.write(AppExit::Success);
                 }
                 "disconnect" => {
+                    info!(generation = front.worker_generation, "Home transition requested; awaiting scene teardown");
                     next.set(AppState::Menu);
                 }
                 "resume" | "resumegame" => menu.page = None,
@@ -2030,7 +2175,7 @@ pub(crate) fn input(
     remote: Option<Res<crate::remote::RemoteClient>>,
 ) {
     let (window_entity, window) = *window;
-    let blocked = console.is_some_and(|console| console.blocks_input()) || *state.get() == AppState::Browser || crate::remote_join::loading(remote.as_deref()) || packs.is_some_and(|packs| packs.blocks_movie()) || sharing.is_some_and(|sharing| sharing.blocks_movie()) || crate::frontend_flow::enabled() || !enabled.0 || !front.visible || front.home_show_pending || front.failed.is_some() || !window.focused;
+    let blocked = menu.classic_controls || menu.controls_just_closed || console.is_some_and(|console| console.blocks_input()) || *state.get() == AppState::Browser || crate::remote_join::loading(remote.as_deref()) || packs.is_some_and(|packs| packs.blocks_movie()) || sharing.is_some_and(|sharing| sharing.blocks_movie()) || crate::frontend_flow::enabled() || !enabled.0 || !front.visible || front.home_show_pending || front.failed.is_some() || !window.focused;
     for input in ownership.transition(blocked, window.focused) { front.send(input); }
     if blocked {
         keys.clear();
@@ -2091,7 +2236,9 @@ pub(crate) fn input(
     let control = buttons.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]);
     let shift = buttons.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]);
     for event in keys.read() {
-        if event.key_code == KeyCode::Escape && *state.get() == AppState::Match && !menu.open() {
+        // Match Escape belongs entirely to menu::input. Sending the opening
+        // press to the newly visible movie immediately closes it again.
+        if event.key_code == KeyCode::Escape && *state.get() == AppState::Match {
             continue;
         }
         if let Some((name, vkey)) = key(event.key_code) {
@@ -2266,6 +2413,130 @@ pub(crate) fn capture_menu(
 mod tests {
     use super::*;
 
+    fn fixture_frontend() -> Frontend {
+        let fs = Arc::new(vfs::Vfs::new());
+        let catalog = crate::frontend_lobby::Catalog::installed(&crate::ClientOptions::default(), &[]);
+        let worker = CachedWorker::new(Data {
+            inventory: InventoryView::new(&fs), fs, settings: Settings::default(),
+            localization: Default::default(), game_modes: Default::default(),
+            state: AppState::Match, menu_open: true, controls_open: false, loading: String::new(),
+            loading_map: None, player_name: "Fixture".into(), movie_ready: Default::default(),
+            home_bootstrapped: false, home_retired: false,
+            pause_surface: Default::default(), flow_roots: Default::default(), deferred_pause: Default::default(),
+        }, catalog);
+        Frontend {
+            worker_kind: WorkerKind::Home, parked: None, next_worker_generation: 12,
+            home_show_pending: false, home_return_started: None, movie: None,
+            data: worker.data, actions: worker.actions, image: Default::default(),
+            presented_serial: 0, loading_presentation: Default::default(),
+            pause_presentation: Default::default(), performance_ack: None, flow_observation: None, worker_generation: 11,
+            root: Entity::PLACEHOLDER, camera: Entity::PLACEHOLDER, visible: true,
+            active: true, ready: false, failed: None, viewport: (1920, 1080),
+            requested: Default::default(), loaded: Default::default(), scene: None,
+            loading_text: String::new(), loading_map: None, loading_selection: None,
+            lobby: worker.lobby, notice: Entity::PLACEHOLDER,
+            notice_text: Entity::PLACEHOLDER, cancel: Entity::PLACEHOLDER,
+        }
+    }
+
+    #[test]
+    fn fresh_and_adopted_workers_reject_delayed_readbacks_below_their_callback_floor() {
+        let mut front = fixture_frontend();
+        let home = front.data.clone();
+        front.data.lock().unwrap().pause_surface.require_raster(10);
+        front.pause_presentation.open();
+        let old_home_revision = front.pause_presentation.revision();
+        front.pause_presentation.presented(old_home_revision, 10);
+        assert!(front.menu_presented());
+        let catalog = || crate::frontend_lobby::Catalog::installed(&crate::ClientOptions::default(), &[]);
+        assert!(front.select_worker(WorkerKind::Match, catalog()));
+        let match_worker = front.data.clone();
+        assert!(!Arc::ptr_eq(&home, &match_worker));
+        assert_eq!(match_worker.lock().unwrap().pause_surface.raster_fence(), 0,
+            "fresh worker must not inherit another worker's callback counter");
+        assert!(!front.menu_presented());
+        let match_revision = front.pause_presentation.revision();
+        // Delayed completion from the previously selected worker cannot satisfy
+        // a fresh worker's transaction even with a numerically larger fence.
+        assert!(!front.pause_presentation.accepts(old_home_revision, 10, 0));
+        match_worker.lock().unwrap().pause_surface.require_raster(2);
+        assert!(!front.pause_presentation.accepts(match_revision, 1, 2));
+        assert!(front.pause_presentation.accepts(match_revision, 2, 2));
+        front.pause_presentation.presented(match_revision, 2);
+        assert!(front.menu_presented());
+        assert!(!front.pause_presentation.accepts(match_revision, 1, 2),
+            "late stale pixels cannot replace a fresh accepted frame");
+
+        assert!(front.select_worker(WorkerKind::Home, catalog()));
+        assert!(Arc::ptr_eq(&home, &front.data), "adopt the original cached worker");
+        let home_revision = front.pause_presentation.revision();
+        assert_eq!(front.data.lock().unwrap().pause_surface.raster_fence(), 10);
+        assert!(!front.menu_presented());
+        assert!(!front.pause_presentation.accepts(match_revision, 20, 10));
+        assert!(!front.pause_presentation.accepts(old_home_revision, 10, 10));
+        assert!(!front.pause_presentation.accepts(home_revision, 9, 10));
+        assert!(front.pause_presentation.accepts(home_revision, 10, 10));
+        front.pause_presentation.presented(home_revision, 10);
+        assert!(front.menu_presented());
+        // Another close can raise the floor without changing Present revision.
+        front.data.lock().unwrap().pause_surface.require_raster(11);
+        assert!(!front.menu_presented());
+        assert!(!front.pause_presentation.accepts(home_revision, 10, 11));
+        front.pause_presentation.presented(home_revision, 11);
+        assert!(front.menu_presented());
+        assert!(front.select_worker(WorkerKind::Match, catalog()));
+        assert!(Arc::ptr_eq(&match_worker, &front.data));
+        assert_eq!(front.data.lock().unwrap().pause_surface.raster_fence(), 2);
+        assert!(!front.menu_presented());
+    }
+
+    #[test]
+    fn actual_escape_edges_keep_cold_options_in_pause_and_ignore_repeat() {
+        // Actual KeyboardInput -> InputPlugin -> menu::input path, without a
+        // window runner or movie worker. Shim dispatch is tested separately;
+        // this fixture does not claim delivery to an installed Options movie.
+        let front = fixture_frontend();
+        let data = front.data.clone();
+        data.lock().unwrap().pause_surface.options_opened();
+        assert!(!data.lock().unwrap().movie_ready.contains("OptionsMenu"));
+        let mut menu = crate::menu::Menu::default();
+        menu.page = Some(crate::menu::Page::Pause);
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, bevy::input::InputPlugin))
+            .insert_resource(front)
+            .insert_resource(menu)
+            .init_resource::<Settings>()
+            .init_resource::<crate::menu::LoadRequest>()
+            .init_resource::<crate::inventory::Inventory>()
+            .init_resource::<crate::inventory::Collection>()
+            .init_resource::<crate::buymenu::BuyMenu>()
+            .insert_resource(Options(crate::ClientOptions::default()))
+            .insert_resource(crate::player::LocalPlayer::new(1, glam::Vec3::ZERO, 0.))
+            .insert_resource(crate::player::InputEnabled(true))
+            .add_systems(Update, crate::menu::input);
+        let window = app.world_mut().spawn((PrimaryWindow, CursorOptions::default())).id();
+        let mut edge = |state, repeat| {
+            app.world_mut().write_message(KeyboardInput {
+                key_code: KeyCode::Escape, logical_key: bevy::input::keyboard::Key::Escape,
+                state, text: None, repeat, window,
+            });
+            app.update();
+            app.world().resource::<crate::menu::Menu>().page
+        };
+        assert_eq!(edge(ButtonState::Pressed, false), Some(crate::menu::Page::Pause));
+        // The worker's eventual acknowledgement closes only the child, before
+        // its OnReady. A held key must not then resume the host Pause.
+        data.lock().unwrap().pause_surface.options_cancelled();
+        for _ in 0..3 {
+            assert_eq!(edge(ButtonState::Pressed, true), Some(crate::menu::Page::Pause));
+        }
+        assert_eq!(edge(ButtonState::Released, false), Some(crate::menu::Page::Pause));
+        assert_eq!(edge(ButtonState::Pressed, false), None);
+        assert_eq!(edge(ButtonState::Pressed, true), None);
+        assert_eq!(edge(ButtonState::Released, false), None);
+        assert_eq!(edge(ButtonState::Pressed, false), Some(crate::menu::Page::Pause));
+    }
+
     #[test]
     fn fitted_radar_status_accepts_current_installed_art_without_weakening_archive_proof() {
         let mut context = LoadingContext {
@@ -2318,8 +2589,8 @@ mod tests {
         let data = Arc::new(Mutex::new(Data {
             inventory: InventoryView::new(&fs), fs, settings: Settings::default(),
             localization: Default::default(), game_modes: modes.clone(),
-            state: AppState::Menu, menu_open: true, loading: String::new(), loading_map: None, player_name: "You".into(), movie_ready: HashSet::new(), home_bootstrapped: false, home_retired: false, pause_surface: Default::default(),
-        deferred_pause: Default::default(),
+            state: AppState::Menu, menu_open: true, controls_open: false, loading: String::new(), loading_map: None, player_name: "You".into(), movie_ready: HashSet::new(), home_bootstrapped: false, home_retired: false, pause_surface: Default::default(),
+        flow_roots: Default::default(), deferred_pause: Default::default(),
         }));
         let mut scene = Scene::new(Catalog::installed(&crate::ClientOptions::default(), &["de_dust2".into()]));
         assert!(scene.begin(&modes)); assert!(scene.open_lobby());
@@ -2402,14 +2673,149 @@ mod tests {
     }
 
     #[test]
+    fn classic_controls_commands_transfer_ownership_and_reject_late_options_writes() {
+        for state in [AppState::Menu, AppState::Match] {
+            for command in ["OpenMouseDialog", "OpenKeyboardMouseDialog", "OpenKeyboardDialog"] {
+                let fs = Arc::new(vfs::Vfs::new());
+                let data = Arc::new(Mutex::new(Data {
+                    inventory: InventoryView::new(&fs), fs, settings: Settings::default(),
+                    localization: Default::default(), game_modes: Default::default(),
+                    state, menu_open: true, controls_open: false, loading: String::new(), loading_map: None,
+                    player_name: "Fixture".into(), movie_ready: Default::default(),
+                    home_bootstrapped: false, home_retired: false,
+                    pause_surface: Default::default(), flow_roots: Default::default(), deferred_pause: Default::default(),
+                }));
+                let mut bridge = Bridge { dispatch_epoch: None,
+                    data: data.clone(), actions: Default::default(), seen: Default::default(),
+                    roots: HashMap::from([("OptionsMenu".into(), "_level12".into()),
+                        ("MainMenu".into(), "_level0".into()), ("PauseMenu".into(), "_level100".into())]),
+                    requested: Default::default(), options: Default::default(),
+                    offline: Default::default(), offline_open: false, quit: Default::default(),
+                    lobby: Arc::new(Mutex::new(crate::frontend_lobby::Scene::new(
+                        crate::frontend_lobby::Catalog::installed(&crate::ClientOptions::default(), &[])))),
+                };
+                let mut calls = Calls::default();
+                bridge.call("MainMenu", "BasePanelRunCommand", &["OpenAudioSettingsDialog".into()], &mut calls);
+                assert!(data.lock().unwrap().pause_surface.options_requested());
+                bridge.call("MainMenu", "BasePanelRunCommand", &[command.into()], &mut calls);
+                assert!(data.lock().unwrap().controls_open);
+                assert!(!data.lock().unwrap().pause_surface.options_requested());
+                assert!(matches!(bridge.actions.lock().unwrap().take().as_slice(), [Action::Controls]));
+                let before = data.lock().unwrap().settings.clone();
+                bridge.call("OptionsMenu", "OnReady", &[], &mut calls);
+                bridge.call("OptionsMenu", "OnCancel", &[], &mut calls);
+                for method in ["SetConvar", "SetConvarNumber", "SetConvarString", "SetConvarBoolean"] {
+                    bridge.call("GameInterface", method, &["sensitivity".into(), "9".into()], &mut calls);
+                }
+                bridge.call("MainMenu", "BasePanelRunCommand", &["OpenAudioSettingsDialog".into()], &mut calls);
+                assert!(data.lock().unwrap().controls_open);
+                assert!(!data.lock().unwrap().pause_surface.options_requested());
+                assert_eq!(data.lock().unwrap().settings, before);
+                assert!(bridge.actions.lock().unwrap().is_empty());
+                // Host closes the engine route; the same classic command can
+                // acquire a fresh controls visit after Apply/Back.
+                data.lock().unwrap().controls_open = false;
+                bridge.call("MainMenu", "BasePanelRunCommand", &[command.into()], &mut calls);
+                assert!(matches!(bridge.actions.lock().unwrap().take().as_slice(), [Action::Controls]));
+            }
+        }
+    }
+
+    #[test]
+    fn cached_options_unload_revokes_the_opening_and_stale_closes_cannot_resume_match() {
+        let fs = Arc::new(vfs::Vfs::new());
+        let data = Arc::new(Mutex::new(Data {
+            inventory: InventoryView::new(&fs), fs, settings: Settings::default(),
+            localization: Default::default(), game_modes: Default::default(),
+            state: AppState::Menu, menu_open: true, controls_open: false, loading: String::new(),
+            loading_map: None, player_name: "You".into(), movie_ready: Default::default(),
+            home_bootstrapped: true, home_retired: false,
+            pause_surface: Default::default(), flow_roots: Default::default(), deferred_pause: Default::default(),
+        }));
+        let mut bridge = Bridge {
+            dispatch_epoch: None, data: data.clone(), actions: Default::default(),
+            seen: Default::default(), roots: HashMap::from([
+                ("MainMenu".into(), "_level31".into()),
+                ("PauseMenu".into(), "_level100".into()),
+                ("OptionsMenu".into(), "_level21".into()),
+            ]), requested: Default::default(), options: Default::default(),
+            offline: Default::default(), offline_open: false, quit: Default::default(),
+            lobby: Arc::new(Mutex::new(crate::frontend_lobby::Scene::new(
+                crate::frontend_lobby::Catalog::installed(&crate::ClientOptions::default(), &[])))),
+        };
+        let mut calls = Calls::default();
+        bridge.call("MainMenu", "BasePanelRunCommand", &["OpenAudioSettingsDialog".into()], &mut calls);
+        let home_options = data.lock().unwrap().pause_surface.options_receiver();
+        let before = data.lock().unwrap().pause_surface.raster_fence();
+        bridge.call(&home_options, "OnUnload", &["mc:_level99".into()], &mut calls);
+        assert!(data.lock().unwrap().pause_surface.options_requested());
+        // Home can unload the cached settings movie without an engine command.
+        bridge.call(&home_options, "OnUnload", &["mc:_level21".into()], &mut calls);
+        assert!(!data.lock().unwrap().pause_surface.options_requested());
+        assert!(data.lock().unwrap().pause_surface.raster_fence() > before);
+        bridge.call("OptionsMenu", "OnReady", &[], &mut calls);
+        assert!(!data.lock().unwrap().pause_surface.options_requested());
+        {
+            let mut d = data.lock().unwrap();
+            d.state = AppState::Match;
+            d.menu_open = true;
+        }
+        bridge.call("PauseMenu", "BasePanelRunCommand", &["OpenAudioSettingsDialog".into()], &mut calls);
+        let match_options = data.lock().unwrap().pause_surface.options_receiver();
+        // Match menu::input's single-lock decision, then let the worker close A
+        // and reopen B before the queued Escape cancellation is dispatched.
+        let mut front = fixture_frontend();
+        front.data = data.clone();
+        let captured = front.options_receiver().unwrap();
+        assert_eq!(captured, match_options);
+        bridge.call(&match_options, "OnCancel", &[], &mut calls);
+        bridge.call("PauseMenu", "BasePanelRunCommand", &["OpenAudioSettingsDialog".into()], &mut calls);
+        let replacement = data.lock().unwrap().pause_surface.options_receiver();
+        assert_ne!(replacement, captured);
+        let Input::Call { path, function, args } = Frontend::options_cancel_input(captured.clone()) else {
+            panic!("Options cancellation must use the shim callback adapter");
+        };
+        assert_eq!(path, "_global.csrBindings");
+        assert_eq!(function, "cancelOwnedOptions");
+        assert_eq!(args, vec![Value::String(captured)]);
+        // The real adapter's receiver -> OnCancel mapping is separately
+        // executed against shim.as by scaleform/tests/options_lifecycle.rs.
+        bridge.call(&args[0].str(), "OnCancel", &[], &mut calls);
+        assert!(data.lock().unwrap().pause_surface.owns_options(&replacement),
+            "Escape captured for A must not cancel replacement B before dispatch");
+        assert!(data.lock().unwrap().menu_open);
+        for args in [
+            vec![], vec![Value::Null], vec!["_level21".into()],
+            vec!["mc:_level21.child".into()], vec!["mc:_level21".into(), "extra".into()],
+        ] {
+            bridge.call(&replacement, "OnUnload", &args, &mut calls);
+            assert!(data.lock().unwrap().pause_surface.owns_options(&replacement));
+        }
+        bridge.call(&replacement, "OnCancel", &[true.into()], &mut calls);
+        assert!(data.lock().unwrap().pause_surface.owns_options(&replacement));
+        for receiver in [home_options.as_str(), "OptionsMenu"] {
+            bridge.call(receiver, "OnCancel", &[], &mut calls);
+            bridge.call(receiver, "OnUnload", &["mc:_level21".into()], &mut calls);
+            assert!(data.lock().unwrap().pause_surface.options_requested());
+        }
+        bridge.call(&replacement, "OnCancel", &[], &mut calls);
+        assert!(!data.lock().unwrap().pause_surface.options_requested());
+        assert!(data.lock().unwrap().menu_open, "Options cancellation retains the host Pause owner");
+        assert!(bridge.actions.lock().unwrap().take().is_empty(), "a child close cannot queue Resume");
+        bridge.lifecycle(false, &mut calls);
+        bridge.call(&match_options, "OnCancel", &[], &mut calls);
+        assert!(!data.lock().unwrap().pause_surface.options_requested());
+    }
+
+    #[test]
     fn offline_navigation_revokes_audio_even_if_options_becomes_ready_late() {
         let fs = Arc::new(vfs::Vfs::new());
         let data = Arc::new(Mutex::new(Data {
             inventory: InventoryView::new(&fs), fs, settings: Settings::default(),
             localization: Default::default(), game_modes: Default::default(),
-            state: AppState::Menu, menu_open: true, loading: String::new(),
+            state: AppState::Menu, menu_open: true, controls_open: false, loading: String::new(),
             loading_map: None, player_name: "You".into(), movie_ready: Default::default(), home_bootstrapped: false, home_retired: false,
-            pause_surface: Default::default(), deferred_pause: Default::default(),
+            pause_surface: Default::default(), flow_roots: Default::default(), deferred_pause: Default::default(),
         }));
         let mut bridge = Bridge { dispatch_epoch: None,
             data: data.clone(), actions: Default::default(), seen: Default::default(),
@@ -2443,10 +2849,10 @@ mod tests {
         let data = Arc::new(Mutex::new(Data {
             inventory: InventoryView::new(&fs), fs, settings: Settings::default(),
             localization: Default::default(), game_modes: Default::default(),
-            state: AppState::Menu, menu_open: true, loading: String::new(),
+            state: AppState::Menu, menu_open: true, controls_open: false, loading: String::new(),
             loading_map: None, player_name: "You".into(), movie_ready: Default::default(),
             home_bootstrapped: false, home_retired: false,
-            pause_surface: Default::default(), deferred_pause: Default::default(),
+            pause_surface: Default::default(), flow_roots: Default::default(), deferred_pause: Default::default(),
         }));
         let mut bridge = Bridge {
             dispatch_epoch: None, data: data.clone(), actions: Default::default(),
@@ -2502,13 +2908,13 @@ mod tests {
             localization: crate::localize::Localization::default().into(),
             game_modes: kv::Block::new(),
             state: AppState::Menu,
-            menu_open: false,
+            menu_open: false, controls_open: false,
             loading: String::new(),
             loading_map: None,
             player_name: "You".into(),
         movie_ready: HashSet::new(), home_bootstrapped: false, home_retired: false,
         pause_surface: Default::default(),
-        deferred_pause: Default::default(),
+        flow_roots: Default::default(), deferred_pause: Default::default(),
         }));
         let actions = Arc::new(Mutex::new(ActionQueue::default()));
         let mut bridge = Bridge { dispatch_epoch: None,

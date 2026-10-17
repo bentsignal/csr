@@ -181,6 +181,30 @@ _global.csrBindings.releaseOwnedQuit = function(path) {
     return true;
 };
 
+// Bind the observed Options close callback names on our cached loader proxy.
+// Retained function references keep their old receiver. A retained API object
+// reading these properties after rebind sees the NEW receiver; synthetic tests
+// distinguish both cases, but do not establish the installed movie's pattern.
+_global.csrBindings.bindOwnedOptions = function(path, name) {
+    if (typeof path != "string" || path != "_level21" ||
+        !_global.csrBindings.validOwnedName(name, "OwnedOptions")) { return false; }
+    var root = _global.csrResolve(path);
+    var api = _global.csrApi("OptionsMenu");
+    if (typeof root != "movieclip" || String(root) != path ||
+        root.elementName != "OptionsMenu" || root.gameAPI != api) { return false; }
+    var owned = _global.csrMakeProxy(name);
+    api.OnCancel = owned.OnCancel;
+    api.OnUnload = owned.OnUnload;
+    return true;
+};
+// The host consumes match Escape once. It sends the immutable receiver captured
+// on that press, so queued cancellation cannot close a replacement opening.
+_global.csrBindings.cancelOwnedOptions = function(name) {
+    if (_global.csrBindings.validOwnedName(name, "OwnedOptions")) {
+        csrEI.call(name + ".OnCancel");
+    }
+};
+
 // Our cached-root ownership adapter tags only unload. Other loader callbacks
 // retain their original API receiver. A retained wrapper keeps its own epoch;
 // an authored action that reads the newly rebound property uses the new epoch.
