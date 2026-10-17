@@ -1,5 +1,10 @@
 # Notes for agents working on CSGO Rewrite
 
+**OWNER HOLD (2026-10-17): game development is paused. Read
+[docs/OWNER-PRIORITIES.md](docs/OWNER-PRIORITIES.md) before selecting work.
+Only the owner's locked priority order may schedule future implementation;
+older agent-selected work orders do not apply. Planning-board work is allowed.**
+
 **If [docs/HANDOFF.md](docs/HANDOFF.md) says `Status: OPEN`, start there.**
 **Read [docs/VISION.md](docs/VISION.md) first.** It is the owner's intent.
 [docs/ROADMAP.md](docs/ROADMAP.md) is the plan; tick items off as they land.

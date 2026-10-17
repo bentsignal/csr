@@ -1,5 +1,11 @@
 # Roadmap
 
+> **Owner hold — 2026-10-17:** Game implementation, optimization, builds and
+> native checks are paused while the owner ranks the backlog. The live
+> [owner priority document](OWNER-PRIORITIES.md) supersedes all work-order
+> statements below. Historical phases and feedback remain scope references,
+> not permission for agents to choose the next task.
+
 How we get to [VISION.md](VISION.md). Work is organised as **phases with
 parallel tracks**, not calendar estimates: tracks inside a phase run
 concurrently (one agent or worktree per track), and the dependencies between
