@@ -770,19 +770,19 @@ fn scoped_world() -> (World, PlayerId) {
 }
 
 #[test]
-fn scope_cycles_on_presses_and_uses_scoped_stats() {
+fn scope_taps_cycle_and_use_scoped_stats() {
     let (mut world, id) = scoped_world();
     let right = TickInput { buttons: buttons::ATTACK2, ..Default::default() };
-    let events = run(&mut world, 0.6, &[(id, right)]);
-    assert_eq!(events.iter().filter(|e| matches!(e, GameEvent::Scope { .. })).count(), 1);
-    assert!(!events.iter().any(|e| matches!(e, GameEvent::Fire { .. } | GameEvent::Tracer { .. })));
+    world.step(&[(id, right)]);
+    assert_eq!(world.events.iter().filter(|e| matches!(e, GameEvent::Scope { .. })).count(), 1);
+    assert!(!world.events.iter().any(|e| matches!(e, GameEvent::Fire { .. } | GameEvent::Tracer { .. })));
     let w = world.player(id).unwrap().active_weapon().unwrap();
     assert_eq!((w.zoom_level, w.fov(), w.max_speed(), w.clip), (1, 40.0, 100.0, 5));
     assert!(w.hides_viewmodel());
     assert_eq!(weapon::inaccuracy(w, AccuracyContext { speed: 0.0, on_ground: true, ducked: false }), 2.0);
     for (level, fov) in [(2, 10.0), (0, 90.0)] {
-        world.step(&[(id, TickInput::default())]);
-        run(&mut world, 0.4, &[(id, right)]);
+        run(&mut world, 0.4, &[(id, TickInput::default())]);
+        world.step(&[(id, right)]);
         let w = world.player(id).unwrap().active_weapon().unwrap();
         assert_eq!((w.zoom_level, w.fov()), (level, fov));
     }
@@ -1025,7 +1025,7 @@ fn holding_scope_does_not_freeze_recoil_recovery() {
     world.player_mut(id).unwrap().weapons[0].recoil_index = 3.0;
     run(&mut world, 0.5, &[(id, TickInput { buttons: buttons::ATTACK2, ..Default::default() })]);
     let w = world.player(id).unwrap().active_weapon().unwrap();
-    assert_eq!(w.zoom_level, 1);
+    assert_eq!(w.zoom_level, 2);
     assert_eq!(w.recoil_index, 0.0);
     assert_eq!(w.clip, 5);
 }

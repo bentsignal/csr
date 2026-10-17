@@ -139,7 +139,8 @@ pub struct TickInput {
     pub forward_move: f32,
     /// -450..450, positive is right.
     pub side_move: f32,
-    /// `movement::buttons` bits (JUMP, DUCK, WALK, ATTACK, RELOAD, USE...).
+    /// Held `movement::buttons` bits (JUMP, DUCK, WALK, ATTACK, ATTACK2,
+    /// RELOAD, USE...). The sim derives press edges for actions that need them.
     pub buttons: u32,
     /// Inventory slot to switch to (1 primary, 2 pistol, 3 knife, 5 bomb;
     /// pressing the current slot again cycles within it), [`SLOT_LAST`] for
@@ -1580,7 +1581,10 @@ impl World {
                 let ducked = p.movement.ducked;
                 let eye = p.eye();
                 if let Some(w) = p.weapons.get_mut(p.active) {
-                    if secondary_pressed && w.zoom_levels() > 0 && w.reload_end.is_none()
+                    // Scope cycles repeat from the held command at secondary
+                    // readiness. Keep edge-only suppressor/burst actions below
+                    // and never change the primary/bolt deadline here.
+                    if secondary && w.zoom_levels() > 0 && w.reload_end.is_none()
                         && time >= w.next_attack && time >= w.next_secondary_attack {
                         w.resume_zoom = None;
                         w.set_zoom((w.zoom_level + 1) % (w.zoom_levels() + 1), time);
