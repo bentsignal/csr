@@ -1,6 +1,6 @@
-# Bounded targeted render trace (source-only R20 candidate)
+# Bounded targeted render trace (source-only R23 fixes)
 
-Status: **SOURCE ONLY, UNCOMPILED; all fixtures and commands below UNRUN.**
+Status: **R23 SOURCE ONLY, UNCOMPILED; R23 fixtures and commands below UNRUN.**
 This is an attribution instrument for the next root-controlled diagnostic QA,
 not an optimization or an admitted performance result. Cargo.lock deliberately
 remains unchanged; the parent must resolve the optional dependency/feature graph
@@ -26,9 +26,9 @@ rather than silently running an unbounded collector:
 
 | Variable | Meaning / hard bound |
 |---|---|
-| `CSR_RENDER_TRACE_PATH` | Absolute **new** TSV; existing parent, outside the independent build-time source workspace, current directory, GameData.game_dir, CSR_DATA_DIR and existing installed userdata directory. Existing files are never overwritten. |
+| `CSR_RENDER_TRACE_PATH` | ASCII absolute local Windows drive path for a **new** TSV; existing parent, outside the independent build-time source workspace, current directory, GameData.game_dir, CSR_DATA_DIR and existing installed userdata directory. Existing files are never overwritten. See namespace policy below. |
 | `CSR_RENDER_TRACE_RUN_ID` | 1..64 ASCII letters/digits/`-_.`; join key for the parent's immutable executable/build/context receipt. |
-| `CSR_RENDER_TRACE_START_S`, `CSR_RENDER_TRACE_END_S` | Finite sim-time `[start,end)`, start >= 0, end > start, width <= 120 seconds. |
+| `CSR_RENDER_TRACE_START_S`, `CSR_RENDER_TRACE_END_S` | Finite sim-time `[start,end)`, start > 0, end > start, width <= 120 seconds. Zero start is rejected up front: a nonnegative `lower_previous` observation below it is impossible. |
 | `CSR_RENDER_TRACE_WALL_S` | Finite startup-relative deadline in `(0,300]` seconds, including loading. |
 | `CSR_RENDER_TRACE_MAX_RECORDS` | 1..100000, combined boundary + context + sample rows. |
 | `CSR_RENDER_TRACE_MAX_BYTES` | 4096..16777216, **whole file** including names/header/footer. |
@@ -39,6 +39,29 @@ It is used only as a deny boundary, never as a runtime save base. All protected
 roots and the existing output parent are canonicalized; an unavailable build
 workspace fails closed. Keep that workspace available for a future immutable
 capture. No save-path, launcher setup or config behavior changes.
+
+This local diagnostic supports `C:\...` (or `C:/...`) input on Windows only.
+UNC/network paths, device paths, **all user-supplied verbatim paths** (even
+`\\?\C:\...`), generic verbatim/volume namespaces, drive-relative `C:...` and
+root-relative `\...` paths are unsupported and rejected before resolution/file
+open. GetDriveTypeW must report a local fixed/removable/RAM drive; mapped network,
+unknown and unavailable drives fail closed. The canonical output parent and
+every canonical protected root must also satisfy the local-drive policy before
+file creation. Canonicalization's `\\?\C:\...` form is accepted at that stage;
+canonical UNC/device/generic verbatim results fail closed. Resolved links into
+protected local directories are still denied. No directory is created.
+
+All participating canonical paths must be ASCII; unsupported Unicode fails
+closed rather than approximating Windows Unicode case rules. Drive and directory
+comparisons ignore ASCII case, accept the normal/canonical drive spellings, and
+require a component boundary, so `trace-r20-sibling` is outside `trace-r20`.
+Case-sensitive directories are conservatively denied on a case-insensitive
+match. A protected drive root denies that entire drive. Unavailable or unsupported
+protected roots prevent capture, including the independent source workspace even
+with private CWD/CSR_DATA_DIR. This is a constrained namespace policy, not a
+universal directory-identity or race-resistance guarantee. Root must later verify
+real canonicalization, drive classification and new-only I/O under its guards;
+the authored policy fixtures use injected results without files/shares/env edits.
 
 Unset RUST_LOG and TRACE_CHROME for this capture. RUST_LOG is rejected because
 Bevy's outer EnvFilter can otherwise suppress selected INFO spans. The standard
@@ -58,7 +81,7 @@ frame counter. Root's receipt should preserve map/mode, camera/pose history,
 actual bot/corpse context, executable hash, source SHA, build cwd and wrapper
 identity. No queries or gameplay mutation are added to obtain those counts.
 
-## Root-controlled QA commands (future; not executed for R20)
+## Root-controlled QA commands (future; not executed for R23)
 
 Only after the active controls checks close, resolve Cargo.lock and acquire the
 exclusive Cargo slot. For a shared-target worktree handoff, run the existing
@@ -134,6 +157,14 @@ record the actual discrete extraction times, not interpolated samples exactly
 at 30 and 60. The sim tick can advance by multiple ticks between consecutive
 render contexts; the parent must assess actual boundary/cadence history.
 
+Header bounds and every context/sample `sim_s` use round-trip f64 Display
+formatting of the values used by the collector. This preserves the exact
+f32-to-f64 SimWorld time conversion across fractional boundaries. The parser
+keeps exact comparisons, with no epsilon. Authored Rust and independent literal
+Python fixtures share a 20-tick `[0.0500000009,0.2)` contract: tick 1 is
+`0.05000000074505806` and remains below start (the former nine-decimal
+`0.050000001` would be above it). These fixtures have not been executed for R23.
+
 A structurally complete interval needs both crossings, contiguous increasing
 frame IDs, monotonic tick/sim/clock, `reason=window_end`, zero open scopes, and
 at least one invocation of **each** function in **each** observed in-window
@@ -207,5 +238,9 @@ failures, and an independent workspace boundary with private CWD/data inputs.
 Existing public engine-name/collision/subscriber fixtures remain. Python
 fixtures include every R19 parser counterexample, missing/mismatched receipt
 attempts rejected by the structural-only interface, and a valid overlapping
-producer-shaped interval. All fixtures and the helper remain **UNRUN**; no
-compilation, feature resolution or runtime verification has occurred in R20.
+producer-shaped interval.
+R23 adds round-trip fractional-boundary rows, zero-start rejection and Windows
+namespace/case/drive/unavailable-root policy fixtures. R23 fixtures remain
+**UNRUN** and R23 source remains uncompiled. Root separately reported R20's ten
+Python groups passing; that result does not verify these additions or the
+Rust collector. No compilation or runtime verification has occurred in R23.

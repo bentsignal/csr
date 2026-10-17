@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Authored UNRUN R20 standard-library fixtures. No game, processes or files.
+"""Standard-library source fixtures; R23 additions UNRUN. No game, processes or files.
 Future parent command: python -B -m unittest discover -s tools/fidelity -p test_targeted_render_trace.py
 """
 import contextlib
@@ -70,6 +70,43 @@ class TraceStructure(unittest.TestCase):
         self.assertEqual(result["lower_previous"], (99, 3838, 29.99, 1))
         self.assertEqual(result["upper"], (102, 7680, 60.0, 100))
         self.assertEqual(result["samples"][0], [20 / 1e6] * 2)
+
+    def test_r21_fractional_20_tick_producer_display_contract(self):
+        # Independent literal rows, not calculated by the parser or by a float
+        # formatter here. Match the Rust collector fixture's World::time f32/20
+        # values converted to f64 and serialized with Rust Display, including
+        # all five samples in each context and reversed completion order.
+        header = "# csr_targeted_render_trace_v2 run=r23-fractional feature=targeted-render-trace bevy=0.19.1 clock=monotonic_cpu_wall_ns start_s=0.0500000009 end_s=0.2 wall_ns=90000000000 max_records=100 max_bytes=8192"
+        literal = (
+            "lower_previous\t1\t1\t0.05000000074505806\t1\t\t\t\t\t\n"
+            "lower\t2\t2\t0.10000000149011612\t10\t\t\t\t\t\n"
+            "sample\t2\t2\t0.10000000149011612\t24\t6\t4\t5\tThreadId(1)\tfalse\n"
+            "sample\t2\t2\t0.10000000149011612\t23\t8\t3\t4\tThreadId(1)\tfalse\n"
+            "sample\t2\t2\t0.10000000149011612\t22\t10\t2\t3\tThreadId(1)\tfalse\n"
+            "sample\t2\t2\t0.10000000149011612\t21\t12\t1\t2\tThreadId(1)\tfalse\n"
+            "sample\t2\t2\t0.10000000149011612\t20\t14\t0\t1\tThreadId(1)\tfalse\n"
+            "context\t3\t3\t0.15000000596046448\t50\t\t\t\t\t\n"
+            "sample\t3\t3\t0.15000000596046448\t64\t6\t4\t5\tThreadId(1)\tfalse\n"
+            "sample\t3\t3\t0.15000000596046448\t63\t8\t3\t4\tThreadId(1)\tfalse\n"
+            "sample\t3\t3\t0.15000000596046448\t62\t10\t2\t3\tThreadId(1)\tfalse\n"
+            "sample\t3\t3\t0.15000000596046448\t61\t12\t1\t2\tThreadId(1)\tfalse\n"
+            "sample\t3\t3\t0.15000000596046448\t60\t14\t0\t1\tThreadId(1)\tfalse\n"
+            "upper\t4\t4\t0.20000000298023224\t100\t\t\t\t\t\n"
+        )
+        body = [line.split("\t") for line in literal.splitlines()]
+        result = trace.analyze(artifact(body, header=header))
+        self.assertTrue(result["structural_complete"])
+        self.assertFalse(result["evidence_complete"])
+        self.assertEqual(result["covered"], [2] * 5)
+        self.assertEqual(result["gaps"], 0)
+        self.assertEqual(result["lower_previous"], (1, 1, 0.05000000074505806, 1))
+        self.assertEqual(result["lower"], (2, 2, 0.10000000149011612, 10))
+        self.assertEqual(result["upper"], (4, 4, 0.20000000298023224, 100))
+        self.assertLess(result["lower_previous"][2], result["start"])
+        # Old fixed-nine predecessor crosses START and must still be rejected;
+        # there is no epsilon or relaxed comparison to hide the producer bug.
+        body[0][3] = "0.050000001"
+        self.invalid(artifact(body, header=header))
 
     def test_r19_late_599_first_context_and_missing_lower_receipts(self):
         late = [point("lower", 100, 7667, "59.900000000", 10)]
@@ -153,7 +190,8 @@ class TraceStructure(unittest.TestCase):
         self.invalid(artifact(body))  # same system overlap despite ordered exits
 
     def test_hard_limits_truncation_footer_and_context_schema(self):
-        for old, new in [("start_s=30", "start_s=nan"), ("end_s=60", "end_s=151"),
+        for old, new in [("start_s=30", "start_s=nan"), ("start_s=30", "start_s=0"),
+                         ("start_s=30", "start_s=-0"), ("end_s=60", "end_s=151"),
                          ("wall_ns=90000000000", "wall_ns=300000000001"),
                          ("max_records=100", "max_records=100001"),
                          ("max_bytes=8192", "max_bytes=4095"), ("run=r20-fixture", "run=bad/run")]:

@@ -73,7 +73,7 @@ def analyze(raw):
     footer = fields(lines[-1], "# end ", "reason records seen_mask open_scopes".split())
     require(footer["reason"] in REASONS, "unknown terminal reason")
     start, end = finite(meta["start_s"]), finite(meta["end_s"])
-    require(0 <= start < end and end - start <= 120, "invalid hard window bounds")
+    require(0 < start < end and end - start <= 120, "invalid hard window bounds (positive start requires a predecessor)")
     wall = uint(meta["wall_ns"], 300_000_000_000, 1)
     cap = uint(meta["max_records"], MAX_RECORDS, 1)
     byte_cap = uint(meta["max_bytes"], MAX_BYTES, 4096)

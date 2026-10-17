@@ -1,4 +1,4 @@
-//! Authored source fixtures; UNRUN in R20 (no Cargo/build/test authorization).
+//! Source fixtures; R23 additions UNRUN (no Cargo/build/test authorization).
 use super::*;
 use bevy::ecs::system::{IntoSystem, System};
 use tracing_subscriber::prelude::*;
@@ -60,7 +60,7 @@ fn real_subscriber_routes_only_exact_selected_system_spans_without_file_io() {
     for row in rows {
         let fields: Vec<_> = row.split('\t').collect();
         assert_eq!(fields.len(), 10);
-        assert_eq!(&fields[1..4], &["100", "3840", "30.000000000"]);
+        assert_eq!(&fields[1..4], &["100", "3840", "30"]);
         assert_eq!(fields[6], "0");
         assert_eq!(fields[9], "false");
     }
@@ -89,14 +89,58 @@ fn successful_interval_has_actual_boundary_receipts_and_every_function_per_conte
     capture.context(100, frame(102, 60.0));
     assert_eq!(capture.reason, Some("window_end"));
     assert_eq!(capture.records, 14); // predecessor + two contexts + ten invocations + upper
-    assert!(capture.text.contains("lower_previous\t99\t3838\t29.990000000\t1\t"));
-    assert!(capture.text.contains("lower\t100\t3840\t30.000000000\t10\t"));
-    assert!(capture.text.contains("upper\t102\t7680\t60.000000000\t100\t"));
+    assert!(capture.text.contains("lower_previous\t99\t3838\t29.99\t1\t"));
+    assert!(capture.text.contains("lower\t100\t3840\t30\t10\t"));
+    assert!(capture.text.contains("upper\t102\t7680\t60\t100\t"));
     assert!(capture.text.ends_with("reason=window_end records=14 seen_mask=31 open_scopes=0\n"));
     let closed = capture.text.clone();
     capture.context(200, frame(103, 61.0));
     sample(&mut capture, 210);
     assert_eq!(capture.text, closed);
+}
+
+#[test]
+fn fractional_20_tick_boundaries_and_samples_preserve_membership_exactly() {
+    let window = Window { start: 0.0500000009, end: 0.2, ..window() }.validate().unwrap();
+    // Same supported non-power-of-two rate and f32 division as World::time().
+    assert!(sim::TICK_RATE_RANGE.contains(&20));
+    let tick_frame = |tick: u64| Some(Frame {
+        frame: tick as u32, tick, sim_s: f64::from(tick as f32 / 20.0_f32),
+    });
+    let mut capture = Capture::new(window, "r23-fractional", None);
+    capture.context(1, tick_frame(1));
+    capture.context(10, tick_frame(2));
+    all_functions(&mut capture, 20);
+    capture.context(50, tick_frame(3));
+    all_functions(&mut capture, 60);
+    capture.context(100, tick_frame(4));
+    assert_eq!(capture.reason, Some("window_end"));
+    assert!(capture.text.contains("start_s=0.0500000009 end_s=0.2 "));
+    // Independent literal Python fixture uses these same Display row values.
+    let expected = ["0.05000000074505806", "0.10000000149011612",
+        "0.15000000596046448", "0.20000000298023224"];
+    let mut samples = 0;
+    for row in capture.text.lines().skip(7).take(capture.records) {
+        let fields: Vec<_> = row.split('\t').collect();
+        let tick: usize = fields[2].parse().unwrap();
+        assert_eq!(fields[3], expected[tick - 1]);
+        let emitted: f64 = fields[3].parse().unwrap();
+        assert_eq!(emitted.to_bits(), tick_frame(tick as u64).unwrap().sim_s.to_bits());
+        match fields[0] {
+            "lower_previous" => {
+                assert!(emitted < window.start);
+                // The previous fixed-nine representation crosses START.
+                assert!("0.050000001".parse::<f64>().unwrap() > window.start);
+            }
+            "lower" | "context" | "sample" => assert!(window.start <= emitted && emitted < window.end),
+            "upper" => assert!(emitted >= window.end),
+            kind => panic!("unexpected row: {kind}"),
+        }
+        if fields[0] == "sample" { samples += 1; }
+    }
+    assert_eq!(samples, 10);
+    assert_eq!(capture.records, 14);
+    assert!(capture.text.ends_with("reason=window_end records=14 seen_mask=31 open_scopes=0\n"));
 }
 
 #[test]
@@ -158,7 +202,7 @@ fn caps_deadlines_and_invalid_windows_fail_closed() {
     let mut capture = armed();
     capture.context(window().wall_ns, frame(101, 60.0));
     assert_eq!(capture.reason, Some("wall_limit"));
-    for bad in [f64::NAN, f64::INFINITY, -1.0, 60.0] {
+    for bad in [f64::NAN, f64::INFINITY, -1.0, -0.0, 0.0, 60.0] {
         assert!(Window { start: bad, ..window() }.validate().is_err());
     }
     assert!(Window { end: f64::INFINITY, ..window() }.validate().is_err());
@@ -195,12 +239,77 @@ fn context_and_scope_failures_cannot_become_complete() {
 #[test]
 fn workspace_boundary_survives_distinct_private_data_and_cwd_without_io() {
     // Inputs represent independently canonicalized paths; no CWD/env/config mutation.
-    let workspace = PathBuf::from("/source/trace-r20");
-    let private_data = PathBuf::from("/private/userdata");
+    let workspace = PathBuf::from(r"C:\source\trace-r20");
+    let private_data = PathBuf::from(r"C:\private\userdata");
     let roots = [workspace.clone(), private_data.clone(), private_data];
-    assert!(outside_protected(&workspace.join("captures"), &roots).is_err());
+    assert!(outside_protected(Path::new(r"\\?\c:\SOURCE\TRACE-R20\captures"), &roots).is_err());
     assert!(outside_protected(&workspace, &roots).is_err());
-    assert!(outside_protected(Path::new("/private/userdata/captures"), &roots).is_err());
-    assert!(outside_protected(Path::new("/private/evidence"), &roots).is_ok());
-    assert!(outside_protected(Path::new("/source/trace-r20-sibling"), &roots).is_ok());
+    assert!(outside_protected(Path::new(r"C:\private\userdata\captures"), &roots).is_err());
+    assert!(outside_protected(Path::new(r"C:\private\evidence"), &roots).is_ok());
+    assert!(outside_protected(Path::new(r"C:\source\trace-r20-sibling"), &roots).is_ok());
+    assert!(outside_protected(Path::new(r"C:\evidence"), &[PathBuf::from(r"c:\")]).is_err());
+    assert!(outside_protected(Path::new(r"D:\evidence"), &[PathBuf::from(r"c:\")]).is_ok());
+    // The local-share alias from R21 is unsupported even if it exposes source.
+    assert!(outside_protected(Path::new(r"\\localhost\csr-source\trace-r20\captures"), &roots).is_err());
+    assert!(outside_protected(Path::new(r"\\?\UNC\localhost\csr-source\trace-r20\captures"), &roots).is_err());
+}
+
+#[test]
+fn local_windows_namespace_and_drive_policy_without_io() {
+    for path in [r"C:\private\new.tsv", "c:/private/new.tsv"] {
+        assert!(require_local_drive(Path::new(path), false, &|_| 3).is_ok());
+    }
+    assert_eq!(local_drive_key(Path::new(r"\\?\C:\Private"), true).unwrap(), r"c:\private");
+    for path in [r"\\localhost\csr-source\new.tsv", r"\\server\share\new.tsv",
+        r"\\?\UNC\server\share\new.tsv", r"\\.\C:\private\new.tsv",
+        r"\\?\C:\private\new.tsv", r"\\?\Volume{abc}\new.tsv", r"\??\C:\new.tsv",
+        "//?/C:/private/new.tsv", "//server/share/new.tsv", r"C:private\new.tsv",
+        r"\private\new.tsv", "/private/new.tsv", "new.tsv", "C:\\privat\u{00e9}\\new.tsv"] {
+        assert!(require_local_drive(Path::new(path), false, &|_| panic!("namespace must reject before drive lookup")).is_err(), "{path}");
+    }
+    for path in [r"\\?\UNC\server\share", r"\\.\C:\private", r"\\?\Volume{abc}\private"] {
+        assert!(local_drive_key(Path::new(path), true).is_err());
+    }
+    for kind in [0, 1, 4, 5] { // unknown, unavailable, mapped remote, unsupported optical
+        assert!(require_local_drive(Path::new(r"Z:\evidence\new.tsv"), false, &|_| kind).is_err());
+    }
+    for kind in [2, 3, 6] {
+        assert!(require_local_drive(Path::new(r"Z:\evidence\new.tsv"), false, &|_| kind).is_ok());
+    }
+}
+
+#[test]
+#[cfg(windows)]
+fn private_path_checks_resolved_namespaces_and_unavailable_roots_without_io() {
+    let roots = [PathBuf::from(r"C:\source\trace-r20"), PathBuf::from(r"C:\private\userdata")];
+    let path = Path::new(r"C:\evidence\new.tsv");
+    let local = |_: u8| 3;
+    let identity = |path: &Path| Ok(path.to_path_buf());
+    assert_eq!(private_path_with(path, &roots, identity, local).unwrap(), path);
+    // Resolver simulates canonicalize failures, not a guessed nonexistent disk path.
+    for unavailable in &roots {
+        assert!(private_path_with(path, &roots, |p| {
+            if p == unavailable.as_path() { Err("unavailable protected root".into()) } else { Ok(p.to_path_buf()) }
+        }, local).unwrap_err().contains("protected path"));
+    }
+    assert!(private_path_with(path, &roots, |_| Err("unavailable parent".into()), local)
+        .unwrap_err().contains("trace parent"));
+    for resolved in [r"\\?\UNC\localhost\csr-source\trace-r20\captures",
+        r"\\.\C:\evidence", r"\\?\Volume{abc}\evidence", r"Z:\evidence",
+        r"\\?\c:\SOURCE\TRACE-R20\captures"] {
+        assert!(private_path_with(path, &roots, |p| {
+            Ok(if p == Path::new(r"C:\evidence") { PathBuf::from(resolved) } else { p.to_path_buf() })
+        }, |drive| if drive == b'z' { 4 } else { 3 }).is_err(), "{resolved}");
+    }
+    assert!(private_path_with(path, &roots, |p| {
+        Ok(if p == roots[0].as_path() { PathBuf::from(r"\\?\UNC\server\source") } else { p.to_path_buf() })
+    }, local).is_err());
+    // An allowed raw namespace may resolve to the normal local verbatim form.
+    assert!(private_path_with(path, &roots, |p| {
+        Ok(PathBuf::from(format!(r"\\?\{}", p.display())))
+    }, local).is_ok());
+    // Raw UNC/verbatim is rejected before even the injected resolver is called.
+    for raw in [r"\\localhost\csr-source\new.tsv", r"\\?\C:\evidence\new.tsv"] {
+        assert!(private_path_with(Path::new(raw), &roots, |_| panic!("no resolution allowed"), local).is_err());
+    }
 }

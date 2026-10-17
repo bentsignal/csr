@@ -42,12 +42,12 @@ struct Selected(usize);
 struct Window { start: f64, end: f64, wall_ns: u64, records: usize, bytes: usize }
 impl Window {
     fn validate(self) -> Result<Self, String> {
-        if !self.start.is_finite() || !self.end.is_finite() || self.start < 0.0
+        if !self.start.is_finite() || !self.end.is_finite() || self.start <= 0.0
             || self.end <= self.start || self.end - self.start > 120.0
             || self.wall_ns == 0 || self.wall_ns > 300_000_000_000
             || !(1..=MAX_RECORDS).contains(&self.records)
             || !(4096..=MAX_BYTES).contains(&self.bytes) {
-            return Err("require finite 0 <= START_S < END_S, width <= 120s, WALL_S in (0,300], MAX_RECORDS in 1..100000, MAX_BYTES in 4096..16777216".into());
+            return Err("require finite 0 < START_S < END_S (a lower predecessor is required), width <= 120s, WALL_S in (0,300], MAX_RECORDS in 1..100000, MAX_BYTES in 4096..16777216".into());
         }
         Ok(self)
     }
@@ -150,7 +150,8 @@ impl Capture {
         self.context_seen = 0;
     }
     fn context_row(&mut self, kind: &str, frame: Frame, at_ns: u64) {
-        self.append(&format!("{kind}\t{}\t{}\t{:.9}\t{at_ns}\t\t\t\t\t\n", frame.frame, frame.tick, frame.sim_s));
+        // Display round-trips the f64 used for membership, as in the header.
+        self.append(&format!("{kind}\t{}\t{}\t{}\t{at_ns}\t\t\t\t\t\n", frame.frame, frame.tick, frame.sim_s));
     }
     fn enter(&mut self, system: usize, span: u64, thread: ThreadId, at_ns: u64) {
         if self.reason.is_some() { return; }
@@ -169,7 +170,7 @@ impl Capture {
         }
         let changed = self.current.is_none_or(|frame| frame.frame != start.frame.frame);
         if changed { self.close("context_changed"); return; }
-        self.append(&format!("sample\t{}\t{}\t{:.9}\t{}\t{}\t{system}\t{span}\t{thread:?}\tfalse\n",
+        self.append(&format!("sample\t{}\t{}\t{}\t{}\t{}\t{system}\t{span}\t{thread:?}\tfalse\n",
             start.frame.frame, start.frame.tick, start.frame.sim_s, start.at_ns, at_ns - start.at_ns));
         if self.reason.is_none() {
             self.seen |= 1 << system;
@@ -219,21 +220,78 @@ fn required(name: &str) -> Result<String, String> {
 fn number<T: std::str::FromStr>(name: &str) -> Result<T, String> {
     required(name)?.parse().map_err(|_| format!("invalid {name}"))
 }
-fn outside_protected(parent: &Path, protected: &[PathBuf]) -> Result<(), String> {
-    if protected.iter().any(|root| parent.starts_with(root)) {
-        return Err("trace must be outside game/data/workspace directories".into());
+// Deliberately narrow local Windows namespace policy, not an identity guard for
+// arbitrary Windows paths. ASCII permits conservative case-insensitive matching
+// even in case-sensitive directories; unsupported Unicode fails closed.
+fn local_drive_key(path: &Path, canonical: bool) -> Result<String, String> {
+    let text = path.to_str().filter(|text| text.is_ascii())
+        .ok_or("trace path policy supports ASCII local Windows drive paths only")?;
+    let text = text.replace('/', "\\");
+    // Only canonicalize's drive form is accepted here. User-supplied verbatim,
+    // UNC (including verbatim UNC), device and generic verbatim paths are denied.
+    let text = if canonical { text.strip_prefix("\\\\?\\").unwrap_or(&text) } else { &text };
+    let bytes = text.as_bytes();
+    if bytes.len() < 3 || !bytes[0].is_ascii_alphabetic() || bytes[1] != b':' || bytes[2] != b'\\'
+        || text[2..].contains(':') {
+        return Err("trace path requires a local absolute Windows drive path; UNC/network/device/verbatim input is unsupported".into());
+    }
+    if canonical && text[3..].split('\\').any(|part| part == "." || part == "..") {
+        return Err("trace path was not canonicalized".into());
+    }
+    Ok(text.to_ascii_lowercase())
+}
+fn require_local_drive(path: &Path, canonical: bool, drive_type: &impl Fn(u8) -> u32) -> Result<(), String> {
+    let key = local_drive_key(path, canonical)?;
+    // GetDriveTypeW: removable, fixed and RAM disk only; remote/unknown/missing
+    // drives fail closed, including mapped network drive letters.
+    if !matches!(drive_type(key.as_bytes()[0]), 2 | 3 | 6) {
+        return Err("trace path requires an available local drive; network/unknown drives are unsupported".into());
     }
     Ok(())
 }
-fn private_path(path: &Path, protected: &[PathBuf]) -> Result<PathBuf, String> {
-    if !path.is_absolute() { return Err("PATH must be absolute".into()); }
-    let parent = path.parent().ok_or("PATH needs an existing private parent directory")?
-        .canonicalize().map_err(|e| format!("trace parent: {e}"))?;
-    let roots = protected.iter().map(|root| root.canonicalize()
-        .map_err(|e| format!("protected path {}: {e}", root.display())))
-        .collect::<Result<Vec<_>, _>>()?;
+fn outside_protected(parent: &Path, protected: &[PathBuf]) -> Result<(), String> {
+    let parent = local_drive_key(parent, true)?;
+    let parent = parent.trim_end_matches('\\');
+    for root in protected {
+        let root = local_drive_key(root, true)?;
+        let root = root.trim_end_matches('\\');
+        if parent == root || parent.strip_prefix(root).is_some_and(|suffix| suffix.starts_with('\\')) {
+            return Err("trace must be outside game/data/workspace directories".into());
+        }
+    }
+    Ok(())
+}
+// The injected read-only resolvers let fixtures exercise this exact decision
+// path without files, shares, drive mappings or environment changes.
+fn private_path_with(
+    path: &Path, protected: &[PathBuf],
+    canonicalize: impl Fn(&Path) -> Result<PathBuf, String>, drive_type: impl Fn(u8) -> u32,
+) -> Result<PathBuf, String> {
+    require_local_drive(path, false, &drive_type)?;
+    let name = path.file_name().ok_or("PATH needs a file name")?;
+    let parent = canonicalize(path.parent().ok_or("PATH needs an existing private parent directory")?)
+        .map_err(|e| format!("trace parent: {e}"))?;
+    require_local_drive(&parent, true, &drive_type)?;
+    let roots = protected.iter().map(|root| {
+        let root = canonicalize(root).map_err(|e| format!("protected path {}: {e}", root.display()))?;
+        require_local_drive(&root, true, &drive_type)?;
+        Ok(root)
+    }).collect::<Result<Vec<_>, String>>()?;
     outside_protected(&parent, &roots)?;
-    Ok(parent.join(path.file_name().ok_or("PATH needs a file name")?))
+    Ok(parent.join(name))
+}
+#[cfg(windows)]
+fn drive_type(drive: u8) -> u32 {
+    #[link(name = "kernel32")]
+    unsafe extern "system" { fn GetDriveTypeW(root: *const u16) -> u32; }
+    let root = [u16::from(drive), b':' as u16, b'\\' as u16, 0];
+    // A NUL-terminated drive root; no handle or file is opened.
+    unsafe { GetDriveTypeW(root.as_ptr()) }
+}
+#[cfg(not(windows))]
+fn drive_type(_: u8) -> u32 { 0 } // This local diagnostic path policy is Windows-only.
+fn private_path(path: &Path, protected: &[PathBuf]) -> Result<PathBuf, String> {
+    private_path_with(path, protected, |path| path.canonicalize().map_err(|e| e.to_string()), drive_type)
 }
 
 /// Called before LogPlugin: absent PATH installs no capture resources or clocks.
