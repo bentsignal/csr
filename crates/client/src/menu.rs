@@ -1846,7 +1846,7 @@ mod tests {
         let mut at = 0;
         while at < tree.len() {
             if let Some(children) = world.get::<Children>(tree[at]) {
-                tree.extend(children.iter().copied());
+                tree.extend(children.iter());
             }
             at += 1;
         }
