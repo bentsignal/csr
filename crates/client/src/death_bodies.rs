@@ -29,6 +29,16 @@ pub(super) struct DeathBodies {
     round: Option<u32>,
 }
 
+impl DeathBodies {
+    pub(super) fn performance_counts(&self) -> [usize; 3] {
+        [
+            self.bodies.len(),
+            self.bodies.iter().filter(|b| b.pending.is_some()).count(),
+            self.bodies.iter().filter(|b| b.corpse.is_some()).count(),
+        ]
+    }
+}
+
 fn admitted(death: &DeathReceipt, round: u32) -> bool {
     death.round == round && death.pose.origin.is_finite() && death.pose.view_angles.is_finite()
         && matches!(death.victim_team,sim::Team::Terrorist|sim::Team::CounterTerrorist)
@@ -42,6 +52,7 @@ pub(super) fn update(
     mat_query: &Query<&MeshMaterial3d<WorldMaterial>>,
     transforms: &mut Query<&mut Transform>, visibility: &mut Query<&mut Visibility>,
 ) {
+    let _frame_scope = crate::input_latency::frame_scope("characters.bodies");
     let sun = models.sun;
     if state.round != Some(round) {
         for body in state.bodies.drain(..) { despawn_instance(commands,&body.instance); }

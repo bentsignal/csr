@@ -396,6 +396,7 @@ pub fn update(
     mut bar: Query<&mut Visibility, (With<ProgressBar>, Without<HitMarker>)>,
     mut fill: Query<&mut Node, With<ProgressFill>>,
 ) {
+    let _frame_scope = crate::input_latency::frame_scope("hud");
     if keys.just_pressed(KeyCode::F3) {
         *debug = !*debug;
     }

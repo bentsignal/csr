@@ -1,4 +1,7 @@
 //! Desktop rendering policy: present the current input frame without CPU pipelining.
+#[path = "frame_report.rs"]
+mod frame_report;
+
 use bevy::window::PresentMode;
 use bevy::{
     app::PluginGroupBuilder, prelude::*, render::pipelined_rendering::PipelinedRenderingPlugin,
@@ -117,13 +120,16 @@ fn resolve_present_mode(vsync: bool, requested: Option<&str>) -> PresentMode {
 }
 
 /// Log app-frame intervals in ordinary interactive play as well as captures.
+/// CSR_PERF_REPORT=1 enables summaries without per-frame slow-frame lines.
 /// This is not a measurement of mouse-to-display or compositor latency.
 pub(crate) fn install_frame_log(app: &mut App) {
     let limit = std::env::var("CSR_FRAME_LOG")
         .ok()
         .and_then(|v| v.parse::<f32>().ok())
         .filter(|v| v.is_finite() && *v >= 0.);
-    if let Some(limit) = limit {
+    let summary = std::env::var("CSR_PERF_REPORT").as_deref() == Ok("1");
+    if summary || limit.is_some() {
+        info!("frame diagnostics: interval summaries enabled; slow_frame_threshold_ms={limit:?}");
         TIMING_ENABLED.store(true, Ordering::Relaxed);
         // Use Bevy's existing pass instrumentation to separate GPU execution
         // from the wall-time/command-encoding scopes below. This allocates GPU
@@ -169,35 +175,30 @@ pub(crate) fn install_frame_log(app: &mut App) {
                 )
                 .add_systems(Render, finish_render.after(RenderSystems::PostCleanup));
         }
-        app.add_systems(
+        app.init_resource::<frame_report::ReportInterval>().add_systems(
             Last,
             (
                 move |real: Res<Time<Real>>, mut frame: Local<u64>| {
                     *frame += 1;
                     let ms = real.delta_secs() * 1000.;
-                    if ms > limit {
+                    if limit.is_some_and(|limit| ms > limit) {
                         info!("slow frame {}: {ms:.1} ms", *frame);
                     }
                 },
-                report_stages.after(finish_main),
+                frame_report::report.after(finish_main),
+                report_stages.after(frame_report::report),
             ),
         );
     }
 }
 
 fn report_stages(
-    mut last: Local<Option<Instant>>,
+    interval: Res<frame_report::ReportInterval>,
     diagnostics: Res<bevy::diagnostic::DiagnosticsStore>,
 ) {
-    let now = Instant::now();
-    let Some(previous) = *last else {
-        *last = Some(now);
-        return;
-    };
-    if now.duration_since(previous).as_secs_f64() < 1. {
+    if !interval.due {
         return;
     }
-    *last = Some(now);
     let stages = std::mem::take(&mut *STAGES.get_or_init(Default::default).lock().unwrap());
     for (name, stage) in stages {
         info!(

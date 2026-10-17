@@ -896,6 +896,7 @@ pub fn update(
     mut faded: Query<(Entity, &SoundGain, &Fade, Option<&mut AudioSink>, Has<Emitter>)>,
     mut traces: Query<(Entity, &mut SoundTrace, Has<AudioSink>, Has<SpatialAudioSink>)>,
 ) {
+    let _frame_scope = crate::input_latency::frame_scope("audio.update");
     sounds.clock += time.delta_secs_f64();
     if let Some(ear) = ears.iter().next() {
         listener.0 = ear.translation();
@@ -932,6 +933,7 @@ pub fn update(
 /// disappear. A future Last audio producer must flush before this system.
 pub fn prune(mut commands: Commands, mut sounds: ResMut<SoundLibrary>,
     active: Query<(Has<AudioSink>, Has<SpatialAudioSink>), With<AudioPlayer>>) {
+    let _frame_scope = crate::input_latency::frame_scope("audio.prune");
     let trace_enabled = sounds.trace;
     let prune_clock = sounds.clock;
     let mut eligible = HashSet::new();
