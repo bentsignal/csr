@@ -68,7 +68,7 @@ impl NavigatorBackend for Movies {
     }
     fn spawn_future(&mut self, future: OwnedFuture<(), LoadError>) { self.spawner.spawn_local(future); }
     fn pre_process_url(&self, url: Url) -> Url { url }
-    fn connect_socket(&mut self, _: &str, _: u16, _: Duration, handle: SocketHandle,
+    fn connect_socket(&mut self, _: String, _: u16, _: Duration, handle: SocketHandle,
         _: async_channel::Receiver<Vec<u8>>, sender: async_channel::Sender<SocketAction>) {
         sender.try_send(SocketAction::Connect(handle, ConnectionState::Failed)).unwrap();
     }
