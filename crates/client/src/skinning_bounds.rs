@@ -170,6 +170,7 @@ fn update(
     mut skins: Query<(Entity, &WorldSkinBounds, Option<&Mesh3d>, Option<&SkinnedMesh>,
         Option<&GlobalTransform>, Option<&mut Aabb>, Has<NoFrustumCulling>)>,
 ) {
+    let _scope = crate::input_latency::frame_scope("skinning_bounds");
     record_mesh_edits(&mut edited, events.read().copied());
     for (entity, eligibility, mesh_handle, skin, global, aabb, disabled) in &mut skins {
         let fresh = (|| {
