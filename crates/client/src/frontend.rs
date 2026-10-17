@@ -295,10 +295,18 @@ impl Bridge {
     fn close_options(&mut self, calls: &mut Calls) {
         let mut data = self.data.lock().unwrap();
         data.pause_surface.options_cancelled();
+        data.pause_surface.require_raster(calls.require_raster());
         data.deferred_pause.cancel_pending();
         if let Some(path) = self.roots.get("OptionsMenu") {
+            calls.call(path, "HidePanel", vec![]);
             calls.set(path, "_visible", false.into());
         }
+    }
+
+    fn bind_options(data: &Data, path: &str, calls: &mut Calls) {
+        calls.call("_global.csrBindings", "bindOwnedOptions", vec![
+            path.into(), data.pause_surface.options_receiver().into(),
+        ]);
     }
 
     fn close_quit(&mut self, calls: &mut Calls) {
@@ -405,6 +413,7 @@ impl Engine for Bridge {
         if object == "MainMenu" && self.data.lock().unwrap().home_retired { return Some(Value::Undefined); }
         let seen_object = if object.starts_with("OwnedLobby") { "OwnedLobby" }
             else if object.starts_with("OwnedPicker") { "OwnedPicker" }
+            else if object.starts_with("OwnedOptions") { "OwnedOptions" }
             else if object.starts_with("OwnedQuit") { "OwnedQuit" } else { object };
         // Repeated native getters are the common path. Borrow their existing
         // names instead of allocating two Strings only to discard them when
@@ -631,18 +640,32 @@ impl Engine for Bridge {
             self.data.lock().unwrap().pause_surface.accept(args);
             return Some(Value::Undefined);
         }
-        if object == "OptionsMenu" && method == "OnCancel" {
-            let mut data = self.data.lock().unwrap();
-            if data.pause_surface.options_requested() {
-                data.pause_surface.options_cancelled();
-                data.deferred_pause.cancel_pending();
-                if let Some(path) = self.roots.get("OptionsMenu") { calls.set(path, "_visible", false.into()); }
-                let base = if data.state == AppState::Match && data.menu_open { "PauseMenu" } else { "MainMenu" };
+        if object.starts_with("OwnedOptions") {
+            let data = self.data.lock().unwrap();
+            let current = self.dispatch_epoch.is_some() && data.pause_surface.owns_options(object)
+                && (matches!(data.state, AppState::Menu | AppState::Browser)
+                    || (data.state == AppState::Match && data.menu_open));
+            let close = match (method, args) {
+                ("OnCancel", []) => true,
+                ("OnUnload", [Value::String(handle)]) => handle.strip_prefix("mc:")
+                    .is_some_and(|path| self.roots.get("OptionsMenu").is_some_and(|root| root == path)),
+                _ => false,
+            };
+            let base = if data.state == AppState::Match { "PauseMenu" } else { "MainMenu" };
+            drop(data);
+            if current && close {
+                // Authored Home navigation can close via OnUnload without a
+                // BasePanelRunCommand. Revoke the opening, not just its pixels.
+                self.close_options(calls);
                 if let Some(path) = self.roots.get(base) {
                     calls.set(path, "_visible", true.into());
                     calls.call(path, "showPanel", vec![]);
                 }
             }
+            return Some(Value::Undefined);
+        }
+        // A cached loader proxy cannot identify which opening is closing.
+        if object == "OptionsMenu" && matches!(method, "OnCancel" | "OnUnload") {
             return Some(Value::Undefined);
         }
         if method == "OnReady" {
@@ -750,7 +773,10 @@ impl Engine for Bridge {
                     && (matches!(data.state, AppState::Menu | AppState::Browser)
                         || (data.state == AppState::Match && data.menu_open))
                 {
+                    Self::bind_options(&data, path, calls);
                     self.options.show(path, &data.settings, calls);
+                    drop(data);
+                    self.data.lock().unwrap().pause_surface.require_raster(calls.require_raster());
                 } else {
                     calls.set(path, "_visible", false.into());
                 }
@@ -863,6 +889,7 @@ impl Engine for Bridge {
                     self.lobby.lock().unwrap().cancel();
                     let mut data = self.data.lock().unwrap();
                     data.pause_surface.options_opened();
+                    data.pause_surface.require_raster(calls.require_raster());
                     data.deferred_pause.cancel_pending();
                     if let Some(path) = self.roots.get("PauseMenu") { calls.set(path, "_visible", false.into()); }
                     self.options = crate::frontend_options::Scene::load(
@@ -871,7 +898,10 @@ impl Engine for Bridge {
                         &data.localization,
                     );
                     if data.movie_ready.contains("OptionsMenu") {
-                        if let Some(path) = self.roots.get("OptionsMenu") { self.options.show(path, &data.settings, calls); }
+                        if let Some(path) = self.roots.get("OptionsMenu") {
+                            Self::bind_options(&data, path, calls);
+                            self.options.show(path, &data.settings, calls);
+                        }
                     } else if self.requested.insert("OptionsMenu".into()) {
                         calls.request_element("OptionsMenu");
                     }
@@ -1070,6 +1100,7 @@ pub struct Frontend {
     parked: Option<CachedWorker>,
     next_worker_generation: u64,
     home_show_pending: bool,
+    home_return_started: Option<std::time::Instant>,
     movie: Option<Mutex<scaleform::Menu>>,
     data: Arc<Mutex<Data>>,
     actions: Arc<Mutex<ActionQueue>>,
@@ -1131,6 +1162,7 @@ impl Frontend {
         self.parked = Some(other);
         self.worker_kind = kind;
         self.home_show_pending = kind == WorkerKind::Home;
+        self.home_return_started = (kind == WorkerKind::Home).then(std::time::Instant::now);
         self.performance_ack = None;
         self.pause_presentation.open();
         info!(worker = ?kind, generation = self.worker_generation, "Classic UI selected cached domain");
@@ -1151,16 +1183,24 @@ impl Frontend {
     pub(crate) fn home_bootstrapped(&self) -> bool { self.data.lock().unwrap().home_bootstrapped }
     pub(crate) fn pause_presented(&self) -> bool {
         self.worker_kind == WorkerKind::Match && self.pause_surface_visible()
-            && self.pause_presentation.ready()
+            && self.menu_presented()
     }
     pub(crate) fn home_presented(&self) -> bool {
         self.worker_kind == WorkerKind::Home && !self.home_show_pending
-            && self.movie_ready("MainMenu") && self.pause_presentation.ready()
+            && self.movie_ready("MainMenu") && self.menu_presented()
+    }
+    fn menu_presented(&self) -> bool {
+        self.pause_presentation.ready(self.data.lock().unwrap().pause_surface.raster_fence())
     }
     pub(crate) fn take_performance_ack(&mut self) -> Option<(u64, std::time::Instant)> { self.performance_ack.take() }
     pub(crate) fn camera(&self) -> Entity { self.camera }
     pub(crate) fn pause_surface_visible(&self) -> bool { self.data.lock().unwrap().pause_surface.visible() }
     pub(crate) fn options_requested(&self) -> bool { self.data.lock().unwrap().pause_surface.options_requested() }
+    pub(crate) fn cancel_options(&self) {
+        let receiver = self.data.lock().unwrap().pause_surface.options_receiver();
+        self.send(Input::Call { path: "_global.csrBindings".into(),
+            function: "cancelOwnedOptions".into(), args: vec![receiver.into()] });
+    }
     pub(crate) fn pause_root(&self) -> Option<String> { self.data.lock().unwrap().pause_surface.pause_root().map(str::to_owned) }
     pub(crate) fn loaded(&self, name: &str) -> bool { self.loaded.contains(name) }
     /// Authored OnReady received for the current cached movie; Loaded alone is earlier.
@@ -1366,6 +1406,7 @@ pub(crate) fn setup(
         parked: None,
         next_worker_generation: 0,
         home_show_pending: true,
+        home_return_started: None,
         movie: None,
         data: shared,
         actions,
@@ -1564,6 +1605,10 @@ pub(crate) fn update(
     }
     if switched {
         front.resume_worker(window.focused, window.physical_width(), window.physical_height());
+        if let Some(started) = front.home_return_started {
+            info!(generation = front.worker_generation, cached = front.movie.is_some(),
+                elapsed_ms = started.elapsed().as_secs_f64() * 1000., "Home restoration resume queued");
+        }
         // An unbooted Loading domain must not show the parked Home raster.
         if scene == AppState::Loading {
             if let Some(mut image) = images.get_mut(&front.image) {
@@ -1656,6 +1701,10 @@ pub(crate) fn update(
             scaleform::Command::Call { path: "_global.MainMenuMovie".into(), function: "showPanel".into(), args: vec![] },
         ], revision: front.pause_presentation.revision() });
         info!(generation = front.worker_generation, "Classic UI Home Ready; awaiting fresh presentation");
+        if let Some(started) = front.home_return_started {
+            info!(generation = front.worker_generation,
+                elapsed_ms = started.elapsed().as_secs_f64() * 1000., "Home restoration Ready transaction queued");
+        }
     }
     // Load the first Pause while the map loads, rather than making Escape pay
     // for its movies/fonts. A closed late load stays hidden in the bridge.
@@ -1880,7 +1929,7 @@ pub(crate) fn update(
         };
     }
     if let Ok(mut root) = nodes.get_mut(front.root) {
-        root.display = if !menu.classic_controls && ((visible && front.failed.is_none() && front.pause_presentation.ready()) || loading) {
+        root.display = if !menu.classic_controls && ((visible && front.failed.is_none() && front.menu_presented()) || loading) {
             Display::Flex
         } else {
             Display::None
@@ -1944,19 +1993,32 @@ pub(crate) fn update(
     }
     let frame = front.frame();
     if let Some(frame) = frame {
-        if let Some(mut image) = images.get_mut(&front.image) {
-            image.texture_descriptor.size = Extent3d {
-                width: frame.width,
-                height: frame.height,
-                depth_or_array_layers: 1,
-            };
-            image.data = Some(frame.rgba);
-            front.pause_presentation.presented(frame.presentation_revision);
-            if front.loading_presentation.assigned(frame.presentation_revision, app_frame.0) {
-                info!(generation = ?loader.generation(), revision = frame.presentation_revision,
-                    app_frame = app_frame.0, "Loading post-Init raster assigned to main image");
+        let required = front.data.lock().unwrap().pause_surface.raster_fence();
+        // A local authored close can change ownership without another Present.
+        // Never assign a pre-callback readback, even after a newer one was shown.
+        let admitted = front.pause_presentation.accepts(frame.presentation_revision, frame.raster_fence, required);
+        if admitted || loading {
+            if let Some(mut image) = images.get_mut(&front.image) {
+                image.texture_descriptor.size = Extent3d {
+                    width: frame.width,
+                    height: frame.height,
+                    depth_or_array_layers: 1,
+                };
+                image.data = Some(frame.rgba);
+                if admitted { front.pause_presentation.presented(frame.presentation_revision, frame.raster_fence); }
+                if front.loading_presentation.assigned(frame.presentation_revision, app_frame.0) {
+                    info!(generation = ?loader.generation(), revision = frame.presentation_revision,
+                        app_frame = app_frame.0, "Loading post-Init raster assigned to main image");
+                }
+                front.presented_serial = front.presented_serial.saturating_add(1);
+                if admitted && front.worker_kind == WorkerKind::Home && !front.home_show_pending {
+                    if let Some(started) = front.home_return_started.take() {
+                        info!(generation = front.worker_generation, revision = frame.presentation_revision,
+                            raster_fence = frame.raster_fence, elapsed_ms = started.elapsed().as_secs_f64() * 1000.,
+                            "Home restoration fresh raster assigned");
+                    }
+                }
             }
-            front.presented_serial = front.presented_serial.saturating_add(1);
         }
     }
     let actions = front.actions.lock().unwrap().take();
@@ -2032,6 +2094,7 @@ pub(crate) fn update(
                     exit.write(AppExit::Success);
                 }
                 "disconnect" => {
+                    info!(generation = front.worker_generation, "Home transition requested; awaiting scene teardown");
                     next.set(AppState::Menu);
                 }
                 "resume" | "resumegame" => menu.page = None,
@@ -2154,7 +2217,9 @@ pub(crate) fn input(
     let control = buttons.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]);
     let shift = buttons.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]);
     for event in keys.read() {
-        if event.key_code == KeyCode::Escape && *state.get() == AppState::Match && !menu.open() {
+        // Match Escape belongs entirely to menu::input. Sending the opening
+        // press to the newly visible movie immediately closes it again.
+        if event.key_code == KeyCode::Escape && *state.get() == AppState::Match {
             continue;
         }
         if let Some((name, vkey)) = key(event.key_code) {
@@ -2511,6 +2576,61 @@ mod tests {
                 assert!(matches!(bridge.actions.lock().unwrap().take().as_slice(), [Action::Controls]));
             }
         }
+    }
+
+    #[test]
+    fn cached_options_unload_revokes_the_opening_and_stale_closes_cannot_resume_match() {
+        let fs = Arc::new(vfs::Vfs::new());
+        let data = Arc::new(Mutex::new(Data {
+            inventory: InventoryView::new(&fs), fs, settings: Settings::default(),
+            localization: Default::default(), game_modes: Default::default(),
+            state: AppState::Menu, menu_open: true, controls_open: false, loading: String::new(),
+            loading_map: None, player_name: "You".into(), movie_ready: Default::default(),
+            home_bootstrapped: true, home_retired: false,
+            pause_surface: Default::default(), deferred_pause: Default::default(),
+        }));
+        let mut bridge = Bridge {
+            dispatch_epoch: None, data: data.clone(), actions: Default::default(),
+            seen: Default::default(), roots: HashMap::from([
+                ("MainMenu".into(), "_level31".into()),
+                ("PauseMenu".into(), "_level100".into()),
+                ("OptionsMenu".into(), "_level21".into()),
+            ]), requested: Default::default(), options: Default::default(),
+            offline: Default::default(), offline_open: false, quit: Default::default(),
+            lobby: Arc::new(Mutex::new(crate::frontend_lobby::Scene::new(
+                crate::frontend_lobby::Catalog::installed(&crate::ClientOptions::default(), &[])))),
+        };
+        let mut calls = Calls::default();
+        bridge.call("MainMenu", "BasePanelRunCommand", &["OpenAudioSettingsDialog".into()], &mut calls);
+        let home_options = data.lock().unwrap().pause_surface.options_receiver();
+        let before = data.lock().unwrap().pause_surface.raster_fence();
+        bridge.call(&home_options, "OnUnload", &["mc:_level99".into()], &mut calls);
+        assert!(data.lock().unwrap().pause_surface.options_requested());
+        // Home can unload the cached settings movie without an engine command.
+        bridge.call(&home_options, "OnUnload", &["mc:_level21".into()], &mut calls);
+        assert!(!data.lock().unwrap().pause_surface.options_requested());
+        assert!(data.lock().unwrap().pause_surface.raster_fence() > before);
+        bridge.call("OptionsMenu", "OnReady", &[], &mut calls);
+        assert!(!data.lock().unwrap().pause_surface.options_requested());
+        {
+            let mut d = data.lock().unwrap();
+            d.state = AppState::Match;
+            d.menu_open = true;
+        }
+        bridge.call("PauseMenu", "BasePanelRunCommand", &["OpenAudioSettingsDialog".into()], &mut calls);
+        let match_options = data.lock().unwrap().pause_surface.options_receiver();
+        for receiver in [home_options.as_str(), "OptionsMenu"] {
+            bridge.call(receiver, "OnCancel", &[], &mut calls);
+            bridge.call(receiver, "OnUnload", &["mc:_level21".into()], &mut calls);
+            assert!(data.lock().unwrap().pause_surface.options_requested());
+        }
+        bridge.call(&match_options, "OnCancel", &[], &mut calls);
+        assert!(!data.lock().unwrap().pause_surface.options_requested());
+        assert!(data.lock().unwrap().menu_open, "Options cancellation retains the host Pause owner");
+        assert!(bridge.actions.lock().unwrap().take().is_empty(), "a child close cannot queue Resume");
+        bridge.lifecycle(false, &mut calls);
+        bridge.call(&match_options, "OnCancel", &[], &mut calls);
+        assert!(!data.lock().unwrap().pause_surface.options_requested());
     }
 
     #[test]

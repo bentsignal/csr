@@ -67,6 +67,18 @@ impl Menu {
     pub fn open(&self) -> bool {
         self.page.is_some()
     }
+    /// Return true when the movie's owned child must cancel instead of the
+    /// host closing Pause. One physical Escape must have exactly one owner.
+    fn escape(&mut self, movie_options: bool) -> bool {
+        if self.in_match && self.open() && movie_options { return true; }
+        self.page = match self.page {
+            None => Some(Page::Pause),
+            Some(Page::Pause) => None,
+            Some(Page::Main) => Some(Page::Main),
+            _ => Some(if self.in_match { Page::Pause } else { Page::Main }),
+        };
+        false
+    }
     pub(crate) fn reset_match(&mut self) {
         self.root = None;
         self.in_match = false;
@@ -181,7 +193,7 @@ pub(crate) fn input(
     keys: Res<ButtonInput<KeyCode>>,
     actions: Query<(&Interaction, &Action), Changed<Interaction>>,
     mut exit: MessageWriter<AppExit>,
-    (load_request, opts, remote): (Res<LoadRequest>, Res<crate::Options>, Option<Res<crate::remote::RemoteClient>>),
+    (load_request, opts, remote, front): (Res<LoadRequest>, Res<crate::Options>, Option<Res<crate::remote::RemoteClient>>, Option<Res<crate::frontend::Frontend>>),
     mut local: ResMut<LocalPlayer>,
     mut buy: ResMut<crate::buymenu::BuyMenu>,
     mut clock: ResMut<Time<Virtual>>,
@@ -213,16 +225,12 @@ pub(crate) fn input(
     } else if keys.just_pressed(KeyCode::Escape) && menu.classic_controls {
         menu.close_classic_controls();
     } else if keys.just_pressed(KeyCode::Escape) && !buy.open {
-        menu.page = match menu.page {
-            None => Some(Page::Pause),
-            Some(Page::Pause) => None,
-            Some(Page::Main) => Some(Page::Main),
-            _ => Some(if menu.in_match {
-                Page::Pause
-            } else {
-                Page::Main
-            }),
-        };
+        let movie_options = front.as_ref().is_some_and(|front| front.options_requested());
+        if menu.escape(movie_options) {
+            // Options is a child of Pause, although the host page remains
+            // Pause. Cancel only that owned child and keep the match paused.
+            front.as_ref().unwrap().cancel_options();
+        }
         menu.dirty = true;
     }
     if menu.open() && menu.capture.is_none() {
@@ -1842,6 +1850,24 @@ mod tests {
         }
     }
 
+    #[test]
+    fn options_escape_returns_to_pause_then_each_press_toggles_once() {
+        let mut menu = Menu::default();
+        assert!(!menu.escape(false));
+        assert_eq!(menu.page, Some(Page::Pause));
+        // Native Options does not change the host's Page::Pause.
+        assert!(menu.escape(true));
+        assert_eq!(menu.page, Some(Page::Pause));
+        // The owned Options callback closes the child; the next press resumes.
+        assert!(!menu.escape(false));
+        assert_eq!(menu.page, None);
+        for _ in 0..4 {
+            assert!(!menu.escape(false));
+            assert_eq!(menu.page, Some(Page::Pause));
+            assert!(!menu.escape(false));
+            assert_eq!(menu.page, None);
+        }
+    }
     fn harness() -> App {
         let mut a = App::new();
         a.init_resource::<Menu>()
