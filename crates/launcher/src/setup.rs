@@ -397,6 +397,10 @@ pub fn prepare(force_ask: bool) -> Result<(), String> {
     if matches!(layout, Layout::Installed(_)) && !force_ask {
         crate::steam::offer(&data, false);
     }
+    if let Err(error) = crate::cs2_config::first_run(&data) {
+        // Missing/unreadable source preferences must never block playing.
+        eprintln!("CS2 controls import skipped: {error}");
+    }
     Ok(())
 }
 
