@@ -133,7 +133,7 @@ fn retained_scoped_gain_and_noclip_use_counts_without_tick_multiplication() {
     // Independent fixture from the installed AWP schema's two FOVs. This tests
     // the existing FOV/90 policy; native zoom ratio/transition timing is UNVERIFIED.
     let catalog = weapons::Catalog::from_items_game(r#"items_game { items {
-        9 { name weapon_awp attributes { "zoom levels" 2 "zoom fov 1" 40 "zoom fov 2" 10 } }
+        9 { name weapon_awp baseitem 1 attributes { "zoom levels" 2 "zoom fov 1" 40 "zoom fov 2" 10 } }
     } }"#).unwrap();
     for (level, fov) in [(0, 90.), (1, 40.), (2, 10.)] {
         for noclip in [false, true] {
