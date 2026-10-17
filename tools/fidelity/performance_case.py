@@ -25,6 +25,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import perf_report as perf
 
 WINDOWS = ((30, 60), (300, 330), (600, 630))
+EXPERIMENTS = ('sustained', 'hud-baseline', 'hud-no-notices', 'hud-no-classic', 'hud-render-trace')
+EXPERIMENT_ENV = {
+    'sustained': {}, 'hud-baseline': {},
+    'hud-no-notices': {'CSR_NO_CLASSIC_KILL_FEED': '1'},
+    'hud-no-classic': {'CSR_NO_CLASSIC_KILL_FEED': '1', 'CSR_NO_CLASSIC_COMBAT_HUD': '1'},
+    'hud-render-trace': {'CSR_UI_RENDER_TRACE': '1', 'CSR_COMBAT_HUD_TRACE': '1', 'CSR_KILL_FEED_TRACE': '1'},
+}
 MISSING = ['whole_interval_camera_pose', 'independent_window_coverage_and_focus_input_validation']
 REQUESTED_SIZE = (1920, 1080)
 BUILD_NAMES = {'cargo.exe', 'rustc.exe', 'rust-lld.exe', 'link.exe', 'cl.exe',
@@ -139,16 +146,50 @@ def command(executable, map_name, bots):
             '--bots', str(bots), '--size', *map(str, REQUESTED_SIZE)]
 
 
-def environment(data, game):
+def experiment_policy(experiment='sustained', max_seconds=None):
+    if experiment not in EXPERIMENTS:
+        raise ValueError('Unsupported experiment')
+    diagnostic = experiment != 'sustained'
+    deadline = (180 if diagnostic else 900) if max_seconds is None else max_seconds
+    low, high = (120, 300) if diagnostic else (660, 1200)
+    if type(deadline) is not int or not low <= deadline <= high:
+        raise ValueError('Deadline outside experiment bounded range')
+    return {
+        'mode': experiment,
+        'scope': 'DIAGNOSTIC_ABLATION' if diagnostic else 'NORMAL_SUSTAINED',
+        'normal_gameplay_fidelity_acceptance': False, 'auto_admission': False,
+        'measurement_windows_sim_seconds': [list(w) for w in (WINDOWS[:1] if diagnostic else WINDOWS)],
+        'stop_sim_seconds': 90 if diagnostic else WINDOWS[-1][1],
+        'stop_comparison': '>=' if diagnostic else '>',
+        'max_wall_seconds': deadline,
+        'trace': {
+            'enabled': experiment == 'hud-render-trace',
+            'render_submissions_per_host': 1024 if experiment == 'hud-render-trace' else 0,
+            'review_first_post_ready_completions_with_drawable_notices': 128,
+            'limits': ['startup consumes budget; no rearm or exhaustion marker',
+                       'discarded captures may consume budget without completion records',
+                       'timings are partial wall scopes, not GPU latency',
+                       'poll_ms omits prior unsuccessful polls',
+                       'component traces do not count every top-image upload',
+                       'combat/kill-feed trace volume has no helper-enforced event cap',
+                       'worker phase trace is disabled; no late-window trace coverage assumed'],
+        },
+    }
+
+
+def environment(data, game, experiment='sustained'):
+    experiment_policy(experiment)  # Reject unknown modes even outside the CLI.
     env = {k: v for k, v in os.environ.items() if not k.upper().startswith('CSR_')}
     env.update(CSR_DATA_DIR=str(data), CSR_GAME_DIR=str(game), CSR_NO_UPDATE='1',
                CSR_PERF_REPORT='1', CSR_STEAM_DIR=str(data / 'no-steam'))
     env['RUST_LOG'] = 'info'
+    env.update(EXPERIMENT_ENV[experiment])
     # No CSR_FRAME_LOG, screenshot, camera, autofire, watch-bot or noclip flags.
     return env
 
 
 def validate(args):
+    experiment_policy(getattr(args, 'experiment', 'sustained'), args.max_seconds)
     expected = getattr(args, 'expected_resolution', None)
     if expected is not None and (len(expected) != 2 or any(type(v) is not int or not 0 < v <= 16384 for v in expected)):
         raise ValueError('Expected physical resolution needs two positive dimensions <= 16384')
@@ -157,7 +198,7 @@ def validate(args):
     exe, private = paths['executable'], paths['private_root']
     if not re.fullmatch(r'[0-9a-fA-F]{64}', args.sha256) or not re.fullmatch(r'[0-9a-fA-F]{40}', args.head):
         raise ValueError('Full expected SHA256 and source commit required')
-    if not 660 <= args.max_seconds <= 1200 or not 12 <= args.min_free_gib <= 128:
+    if not 12 <= args.min_free_gib <= 128:
         raise ValueError('Deadline or free-RAM floor outside bounded range')
     if private.exists():
         raise ValueError('PrivateRoot must be new; existing evidence is never reused')
@@ -225,8 +266,9 @@ def seed_data(paths, map_name, data):
 
 class Reports:
     """Retain whole cadence records only; never reconstruct 30s quantiles."""
-    def __init__(self, map_name, expected_resolution=None):
+    def __init__(self, map_name, expected_resolution=None, policy=None):
         self.map = map_name
+        self.policy = policy if policy is not None else experiment_policy()
         self.expected_resolution = list(expected_resolution) if expected_resolution is not None else None
         self.offset = 0
         self.partial = b''
@@ -337,7 +379,7 @@ class Reports:
     def windows(self, contaminated):
         windows = []
         previous = None
-        for start, end in WINDOWS:
+        for start, end in self.policy['measurement_windows_sim_seconds']:
             rows = []
             previous = None
             # The prior census bounds the whole reported interval conservatively;
@@ -347,6 +389,7 @@ class Reports:
                     rows.append(record)
                 previous = record['sim']
             windows.append({'sim_seconds': [start, end], 'records': rows, 'admitted': False,
+                            'experiment': self.policy,
                             'contaminated': contaminated or self.sim_regressed,
                             'unbounded_report_count': len(self.reports_without_simulation),
                             'simulation_clock_regressed': self.sim_regressed,
@@ -354,19 +397,26 @@ class Reports:
                             'observed_physical_resolutions': [list(size) for size in sorted({tuple(r['actual_physical_resolution']) for r in rows if r['actual_physical_resolution']})],
                             'missing_endpoint_fields': sorted({field for r in rows for field in r['endpoint_metadata']['missing_fields']}),
                             'invalid_context_records': sum(not r['context_valid_without_camera_alive'] for r in rows),
-                            'reason': 'Whole-interval pose, external validation and coverage review required; never auto-admitted'})
+                            'reason': ('DIAGNOSTIC_ABLATION: never normal gameplay/fidelity acceptance; never auto-admitted'
+                                       if self.policy['mode'] != 'sustained' else
+                                       'Whole-interval pose, external validation and coverage review required; never auto-admitted')})
         return windows
 
 
 def run(args, adapter, clock=time):
     paths, manifest, checks_path = validate(args)
     root = paths['private_root']
+    policy = experiment_policy(getattr(args, 'experiment', 'sustained'), args.max_seconds)
+    child_env = environment(root / 'userdata', paths['game_dir'], policy['mode'])
+    controlled_env = {k: v for k, v in child_env.items() if k.startswith('CSR_') or k == 'RUST_LOG'}
+    policy.update(environment=controlled_env, inherited_csr_removed=True, CSR_FRAME_LOG=None)
     roots = protection_roots(paths['owner_data'], paths['steam_root'])
     if args.map == 'de_dust2_2017':
         roots += [paths['owner_data'] / 'workshop' / 'maps' / (args.map + suffix) for suffix in ('.bsp', '.nav')]
     before = snapshot(roots)
     root.mkdir(parents=True, exist_ok=False)
     state = {'schema': 1, 'phase': 'started', 'utc': utc(), 'admitted': False,
+             'experiment': policy, 'environment': controlled_env,
              'contaminated': False, 'contamination': [], 'needed_metadata': MISSING,
              'cancel_marker': str(root / 'CANCEL'), 'command': command(paths['executable'], args.map, args.bots),
              'bots_argument': args.bots, 'expected_bot_total': 0 if args.bots == 0 else 5,
@@ -375,10 +425,10 @@ def run(args, adapter, clock=time):
     expected = getattr(args, 'expected_resolution', None)
     state.update(requested_cli_resolution=list(REQUESTED_SIZE), expected_physical_resolution=expected,
                  resolution_policy='explicit_expected_physical' if expected else 'observe_actual_physical')
-    reports = Reports(args.map, expected)
+    reports = Reports(args.map, expected, policy)
     child = None
     reason = 'error'
-    deadline = clock.monotonic() + args.max_seconds
+    deadline = clock.monotonic() + policy['max_wall_seconds']
 
     def status(phase):
         state.update(phase=phase, utc=utc(), sim_seconds=reports.sim,
@@ -392,8 +442,6 @@ def run(args, adapter, clock=time):
     write_json(root / 'protected-before.json', before)
     try:
         state['copied'] = seed_data(paths, args.map, root / 'userdata')
-        state['environment'] = {k: v for k, v in environment(root / 'userdata', paths['game_dir']).items()
-                                if k.startswith('CSR_') or k == 'RUST_LOG'}
         last_guard = -math.inf
         last_counters = -math.inf
         with (root / 'game.log').open('wb') as log, (root / 'telemetry.jsonl').open('a', encoding='utf-8') as telemetry:
@@ -425,7 +473,7 @@ def run(args, adapter, clock=time):
                     if (digest(paths['manifest']) != state['manifest_sha256'] or
                             digest(checks_path) != state['checks_sha256']):
                         raise RuntimeError('Build verification receipts changed before launch')
-                    child = adapter.launch(state['command'], root / 'userdata', environment(root / 'userdata', paths['game_dir']), log)
+                    child = adapter.launch(state['command'], root / 'userdata', child_env, log)
                     state['process_identity'] = child.identity
                     state['launched_utc'] = utc()
                 if child.poll() is not None:
@@ -437,7 +485,7 @@ def run(args, adapter, clock=time):
                         status('ready')
                         status('warmup')
                     sim = reports.sim
-                    phase = 'measurement' if any(a <= sim <= b for a, b in WINDOWS) else 'warmup'
+                    phase = 'measurement' if any(a <= sim <= b for a, b in policy['measurement_windows_sim_seconds']) else 'warmup'
                     if phase != state['phase']:
                         status(phase)
                 if now - last_counters >= 5:
@@ -452,7 +500,8 @@ def run(args, adapter, clock=time):
                     write_json(root / 'windows.json', reports.windows(state['contaminated']))
                     write_json(root / 'status.json', {**state, 'utc': utc(), 'sim_seconds': reports.sim,
                                'observed_physical_resolutions': reports.observed_resolutions})
-                if reports.sim is not None and reports.sim > WINDOWS[-1][1]:
+                if reports.sim is not None and (reports.sim >= policy['stop_sim_seconds'] if policy['mode'] != 'sustained'
+                                                else reports.sim > policy['stop_sim_seconds']):
                     reason = 'windows_recorded_unadmitted'
                     break
                 clock.sleep(0.5)
@@ -471,6 +520,13 @@ def run(args, adapter, clock=time):
                 state['contaminated'] = True
                 state['preservation_error'] = 'Protected hashes changed externally; no restoration writes attempted'
                 reason = 'failed'
+                changes = [{'path': path, 'before': before.get(path, 'missing'), 'after': after.get(path, 'missing')}
+                           for path in sorted(before.keys() | after.keys()) if before.get(path) != after.get(path)]
+                write_json(root / 'protected-changes.json', changes)
+                state['protected_change_count'] = len(changes)
+                state['protected_changes_receipt'] = str(root / 'protected-changes.json')
+                state['protected_changes'] = changes[:32]
+                state['protected_changes_truncated'] = len(changes) > 32
             state['binary_unchanged'] = digest(paths['executable']) == args.sha256.lower()
             if not state['binary_unchanged']:
                 reason = 'failed'
@@ -480,6 +536,7 @@ def run(args, adapter, clock=time):
         state['close_reason'] = reason
         write_json(root / 'windows.json', reports.windows(state['contaminated']))
         status('closed')
+        write_json(root / 'case-receipt.json', state)
     return 0 if reason == 'windows_recorded_unadmitted' else (2 if reason == 'cancelled' else 1)
 
 
@@ -573,7 +630,9 @@ def main():
         parser.add_argument('--' + name, required=True)
     parser.add_argument('--map', required=True, choices=('de_dust2_2017', 'de_nuke'))
     parser.add_argument('--bots', type=int, required=True, choices=(0, 3))
-    parser.add_argument('--max-seconds', type=int, default=900)
+    parser.add_argument('--experiment', choices=EXPERIMENTS, default='sustained')
+    parser.add_argument('--max-seconds', type=int, default=None,
+                        help='wall guard: sustained 660..1200 (default 900); HUD diagnostics 120..300 (default 180)')
     parser.add_argument('--min-free-gib', type=int, default=12)
     parser.add_argument('--expected-resolution', type=int, nargs=2, metavar=('WIDTH', 'HEIGHT'),
                         help='optional actual physical WindowContext size contract; CLI request remains 1920x1080')

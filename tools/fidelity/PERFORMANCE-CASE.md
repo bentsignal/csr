@@ -78,6 +78,80 @@ noclip or input injection flags are accepted. Only the private data directory,
 explicit Legacy source directory, no-update and private dummy Steam directory
 are passed alongside the performance flag.
 
+`-Experiment` is an explicit enum (Python `--experiment`), never an arbitrary
+environment override. Default `sustained` keeps the command, settings, three
+30..60 / 300..330 / 600..630 simulation windows, stop after 630, and 660..1200
+wall guard (default 900) unchanged. The following short modes are
+**DIAGNOSTIC_ABLATION** cases, never normal gameplay or fidelity acceptance,
+and never auto-admitted, including the baseline and trace modes:
+
+| Experiment | Additional child environment | Simulation stop | Measurement |
+| --- | --- | --- | --- |
+| `hud-baseline` | none; default classic HUD | >=90 seconds | 30..60 only |
+| `hud-no-notices` | `CSR_NO_CLASSIC_KILL_FEED=1` | >=90 seconds | 30..60 only |
+| `hud-no-classic` | `CSR_NO_CLASSIC_KILL_FEED=1`, `CSR_NO_CLASSIC_COMBAT_HUD=1` | >=90 seconds | 30..60 only |
+| `hud-render-trace` | `CSR_UI_RENDER_TRACE=1`, `CSR_COMBAT_HUD_TRACE=1`, `CSR_KILL_FEED_TRACE=1`; default classic HUD | >=90 seconds | 30..60 only |
+
+Short modes default to a 180-second wall guard; explicit `-MaxSeconds` must be
+an integer in 120..300. Both entry points reject unknown modes and invalid
+mode/deadline combinations. A stalled simulation still reaches that finite wall
+guard. Collection/check latency and shutdown retain the bounds below; this is
+not a hard OS watchdog. No inherited `CSR_*` flags survive in any mode.
+`CSR_PERF_REPORT=1` remains set, `CSR_FRAME_LOG` and `CSR_UI_WORKER_TRACE` remain
+absent, and camera/autofire/noclip overrides remain unavailable.
+
+The inspected `kill_feed.rs` creation gate is
+`notice_enabled || CSR_NO_CLASSIC_COMBAT_HUD.is_none()` (using `var_os`). Thus
+no-notices leaves combat HUD enabled; no-classic needs **both** flags to prevent
+creation of the shared `classic-hud` worker. These are existing executable
+flags, requiring no rebuild. Their presence-based enable/disable semantics mean
+even inherited values of `0` must be stripped. Other HUD paths/fallbacks can
+remain: no-classic is specifically an ablation of this shared classic HUD path.
+
+Root comparison protocol, after the active verification/native slot is free:
+
+1. Run **A -> B -> A** with `hud-baseline`, `hud-no-notices`, `hud-baseline`;
+   each run ends at its first observed simulation endpoint >=90. Use the same
+   verified immutable executable/hash/manifest, map, private seeded preferences,
+   bot argument and saved present policy; use a fresh private run directory each
+   time. The audited cc66 immutable SHA256 is
+   `f23427eba7761629522d27df091d05ec81c7506abaf11614580902cce2668bbc`;
+   the root must still verify its actual manifest/checks. No Rust rebuild is
+   required for these flags. Optionally require the observed physical size with
+   `-ExpectedWidth 2560 -ExpectedHeight 1440`; the CLI size request stays unchanged.
+2. Pair independently observed **actual** camera/viewport, actor identity/life
+   and alive state, physical resolution, input/focus, five-bot census, and world
+   geometry/visibility (bodies, skinned meshes, scene counts) over the measurement
+   windows. Endpoint metadata alone does not prove whole-interval equality.
+   If the reversible notice ablation is material, follow with the both-flag
+   `hud-no-classic` case under the same conditions. Reversibility implicates a
+   path collectively; it does not prove a particular CPU/GPU cause.
+3. Run `hud-render-trace` separately from the cadence comparison. Review the
+   first **128 post-readiness `classic-hud` completions with drawable notices**,
+   or all available if the remaining budget is smaller. Record the actual
+   reviewed count, startup consumption, notice evidence, missing records and
+   budget limits externally; the helper saves raw logs and does not infer this
+   selection. The producer budget is **1,024 submissions per Host**, starts at
+   Host creation, has no runtime rearm/exhaustion marker, and discarded captures
+   can spend budget without completion logs. No trace coverage of late sustained
+   windows is implied. Combat/kill-feed receipt/activity logs have no additional
+   event cap enforced by this helper; the run wall guard bounds their duration.
+4. Keep submission/copy/alpha and completion-age distributions worker-labelled
+   and separate from cadence. `submit_ms` measures synchronous render/submission
+   preparation; `completion_age_ms` includes intervening input, movie work,
+   scheduling and copying/conversion. `poll_ms` omits earlier unsuccessful polls.
+   These are **partial wall scopes, not GPU execution/readback latency**. Notice
+   admission logs do not count every later top-image upload. Worker phase tracing
+   is deliberately excluded as too noisy. Do not pool per-window p95 values or
+   claim CPU causality from aggregate process CPU/cadence. Distinguishing driver
+   readback, Bevy uploads and compositing requires separate queue/thread evidence.
+
+Status, every window and the final `case-receipt.json` retain the experiment
+policy: scope, simulation stop/comparison, exact measurement windows, wall bound,
+exact controlled `CSR_*`/`RUST_LOG` environment (other inherited OS variables are
+not copied into receipts), trace budget/limits and no-admission labels. The same
+prepared environment is used for launch and recorded even if preflight fails.
+
 `build.json` uses the existing root baseline receipt schema: full `head`,
 `sha256`, absolute `exe`, `profile: "release"`, `source_clean: true`,
 `owner_config_unchanged: true`, and absolute `checks`. `checks` is a nonempty
@@ -108,6 +182,15 @@ expensive; this audit is not part of a cadence window. These are supplied-root
 audits, not a claim to snapshot arbitrary player folders elsewhere on disk or
 every byte of the Steam installation.
 
+On preservation failure, `protected-changes.json` lists every changed protected
+path with before/after hashes or missing/directory markers, never file contents.
+Status and the final case receipt include the count, receipt path and first 32
+changes with an explicit truncation flag. A Steam account `localconfig.vdf`
+change still fails the case even if the owner config is unchanged and the change
+is external. Never exclude or restore that file, or quit Steam to make it pass.
+The retained cc66 runtime case remains failed for precisely that reason; this
+helper change does not reclassify its evidence.
+
 Outputs stay private:
 
 - `status.json` and `phases.jsonl`: started, ready, warmup, measurement and closed,
@@ -129,6 +212,10 @@ Outputs stay private:
   `ordinary_context_endpoint` is a report classification; the existing
   `context_valid_without_camera_alive` key is retained as its compatibility alias.
 - `protected-before.json`, `protected-after.json`: hashes, never config contents.
+- `case-receipt.json`: final status snapshot, including experiment policy,
+  controlled environment, process/build identity, preservation outcome and close
+  reason. Diagnostic completion with exit zero means collection ended normally,
+  never normal-gameplay/fidelity admission.
 
 The guard checks available RAM and inventories processes about every two seconds;
 telemetry is sampled about every five seconds, never per frame. Query durations

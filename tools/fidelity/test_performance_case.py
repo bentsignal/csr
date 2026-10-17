@@ -150,6 +150,113 @@ class CaseFixtures(unittest.TestCase):
         self.assertTrue(adapter.child.closed)
         self.assertEqual(len(adapter.launches), 1)
 
+    def test_explicit_sustained_retains_strictly_after_630_stop(self):
+        self.args.experiment = 'sustained'
+        self.args.max_seconds = None
+        adapter = FakeAdapter(self.exe)
+        self.assertEqual(case.run(self.args, adapter, FakeClock()), 0)
+        self.assertEqual(adapter.child.sim, 631)
+        state = json.loads((Path(self.args.private_root) / 'status.json').read_text(encoding='utf-8'))
+        self.assertEqual(state['experiment']['scope'], 'NORMAL_SUSTAINED')
+        self.assertEqual(state['experiment']['max_wall_seconds'], 900)
+        self.assertEqual(state['experiment']['measurement_windows_sim_seconds'], [[30, 60], [300, 330], [600, 630]])
+
+    def test_experiment_enum_and_finite_mode_specific_deadlines(self):
+        self.assertEqual(case.experiment_policy()['max_wall_seconds'], 900)
+        self.assertEqual(case.experiment_policy()['measurement_windows_sim_seconds'],
+                         [[30, 60], [300, 330], [600, 630]])
+        for mode in ('unknown', 'HUD-baseline', '', 'hud-no-classic=1'):
+            with self.subTest(mode=mode), self.assertRaises(ValueError):
+                case.environment(self.base, self.game, mode)
+        for mode, valid, invalid in (
+                ('sustained', (660, 900, 1200), (120, 659, 1201)),
+                ('hud-baseline', (120, 180, 300), (90, 119, 301, 660))):
+            for deadline in (*invalid, float('nan'), float('inf'), 180.5, True):
+                with self.subTest(mode=mode, deadline=deadline), self.assertRaises(ValueError):
+                    case.experiment_policy(mode, deadline)
+            for deadline in valid:
+                self.assertEqual(case.experiment_policy(mode, deadline)['max_wall_seconds'], deadline)
+
+    def test_cli_rejects_unknown_experiment_before_backend_creation(self):
+        argv = ['performance_case.py', '--experiment', 'hud-arbitrary']
+        for name in ('executable', 'sha256', 'head', 'manifest', 'private_root', 'owner_data', 'steam_root', 'game_dir', 'map', 'bots'):
+            argv.extend(['--' + name.replace('_', '-'), str(getattr(self.args, name))])
+        with patch.object(case.sys, 'argv', argv), patch.object(case, 'WindowsAdapter') as backend:
+            with patch('sys.stderr'), self.assertRaises(SystemExit) as caught:
+                case.main()
+            self.assertEqual(caught.exception.code, 2)
+            backend.assert_not_called()
+
+    def test_exact_experiment_environments_scrub_inherited_flags_even_zero_values(self):
+        expected = {
+            'sustained': {}, 'hud-baseline': {},
+            'hud-no-notices': {'CSR_NO_CLASSIC_KILL_FEED': '1'},
+            'hud-no-classic': {'CSR_NO_CLASSIC_KILL_FEED': '1', 'CSR_NO_CLASSIC_COMBAT_HUD': '1'},
+            'hud-render-trace': {'CSR_UI_RENDER_TRACE': '1', 'CSR_COMBAT_HUD_TRACE': '1', 'CSR_KILL_FEED_TRACE': '1'},
+        }
+        base = {'CSR_DATA_DIR': str(self.base), 'CSR_GAME_DIR': str(self.game),
+                'CSR_NO_UPDATE': '1', 'CSR_PERF_REPORT': '1', 'CSR_STEAM_DIR': str(self.base / 'no-steam')}
+        inherited = {flag: '0' for flags in expected.values() for flag in flags}
+        inherited.update(CSR_FRAME_LOG='1', CSR_UI_WORKER_TRACE='1', CSR_AUTOFIRE='1',
+                         CSR_NOCLIP='1', CSR_WATCH_BOT='2', CSR_CAMERA='bad', CSR_ARBITRARY='1', csr_lowercase='1')
+        for mode, extra in expected.items():
+            with self.subTest(mode=mode), patch.dict(os.environ, inherited):
+                env = case.environment(self.base, self.game, mode)
+                self.assertEqual({k: v for k, v in env.items() if k.upper().startswith('CSR_')}, base | extra)
+                self.assertEqual(env['RUST_LOG'], 'info')
+
+    def test_all_short_modes_stop_at_90_keep_early_window_and_private_receipt_labels(self):
+        for mode in case.EXPERIMENTS[1:]:
+            with self.subTest(mode=mode):
+                self.args.experiment = mode
+                self.args.max_seconds = None
+                self.args.private_root = str(self.base / mode)
+                adapter = FakeAdapter(self.exe)
+                self.assertEqual(case.run(self.args, adapter, FakeClock()), 0)
+                root = Path(self.args.private_root)
+                state = json.loads((root / 'status.json').read_text(encoding='utf-8'))
+                receipt = json.loads((root / 'case-receipt.json').read_text(encoding='utf-8'))
+                windows = json.loads((root / 'windows.json').read_text(encoding='utf-8'))
+                self.assertEqual(adapter.child.sim, 90)
+                self.assertTrue(adapter.child.closed)
+                self.assertEqual([w['sim_seconds'] for w in windows], [[30, 60]])
+                self.assertEqual(len(windows[0]['records']), 30)
+                self.assertFalse(windows[0]['admitted'])
+                self.assertIn('DIAGNOSTIC_ABLATION', windows[0]['reason'])
+                self.assertEqual(state, receipt)
+                self.assertEqual(windows[0]['experiment'], state['experiment'])
+                policy = state['experiment']
+                self.assertEqual(policy['mode'], mode)
+                self.assertEqual(policy['scope'], 'DIAGNOSTIC_ABLATION')
+                self.assertEqual(policy['stop_sim_seconds'], 90)
+                self.assertEqual(policy['max_wall_seconds'], 180)
+                self.assertFalse(policy['auto_admission'])
+                self.assertFalse(policy['normal_gameplay_fidelity_acceptance'])
+                self.assertEqual(policy['environment'], state['environment'])
+                self.assertEqual(state['environment'], {k: v for k, v in adapter.launches[0][2].items()
+                                                       if k.startswith('CSR_') or k == 'RUST_LOG'})
+                self.assertIsNone(policy['CSR_FRAME_LOG'])
+                self.assertEqual(policy['trace']['render_submissions_per_host'], 1024 if mode == 'hud-render-trace' else 0)
+                self.assertEqual(policy['trace']['review_first_post_ready_completions_with_drawable_notices'], 128)
+                self.assertIn('timings are partial wall scopes, not GPU latency', policy['trace']['limits'])
+
+    def test_short_mode_stalled_simulation_hits_wall_guard_and_closes_only_owned_handle(self):
+        self.args.experiment = 'hud-no-classic'
+        self.args.max_seconds = 120
+        adapter = FakeAdapter(self.exe, reporter=lambda sim: report(min(sim, 45)))
+        clock = FakeClock()
+        self.assertEqual(case.run(self.args, adapter, clock), 1)
+        self.assertTrue(adapter.child.closed)
+        self.assertEqual(clock.now, 120)
+        state = json.loads((Path(self.args.private_root) / 'status.json').read_text(encoding='utf-8'))
+        self.assertIn('deadline', state['error'])
+        self.assertFalse(state['admitted'])
+
+    def test_source_gate_requires_both_ablations_to_prevent_hud_worker_creation(self):
+        source = (Path(__file__).resolve().parents[2] / 'crates/client/src/kill_feed.rs').read_text(encoding='utf-8')
+        self.assertIn('let notice_enabled = std::env::var_os("CSR_NO_CLASSIC_KILL_FEED").is_none();', source)
+        self.assertIn('&& (notice_enabled || std::env::var_os("CSR_NO_CLASSIC_COMBAT_HUD").is_none())', source)
+
     def test_full_new_1440_fixture_records_cli_actual_and_preserves_without_admission(self):
         self.args.expected_resolution = [2560, 1440]
         adapter = FakeAdapter(self.exe, reporter=lambda sim: metadata.upgrade(report(sim)))
@@ -186,6 +293,16 @@ class CaseFixtures(unittest.TestCase):
             self.assertEqual(record['actual_physical_resolution'], [2560, 1440])
             self.assertIsNone(record['expected_physical_resolution'])
             self.assertEqual(reports.observed_resolutions, [[2560, 1440]])
+
+    def test_exact_old_dust_display_title_matches_requested_map_without_auto_admission(self):
+        text = metadata.upgrade(report(40)).replace('map=de_nuke ', 'map=Dust II (2017) ')
+        for requested, ready in [('de_dust2_2017', True), ('de_nuke', False), ('de_dust2', False)]:
+            reports = case.Reports(requested)
+            for line in text.splitlines():
+                reports.line(line)
+            self.assertEqual(reports.ready, ready)
+            self.assertEqual(reports.records[0]['parsed']['context']['map_logged'], 'Dust II (2017)')
+            self.assertFalse(any(w['admitted'] for w in reports.windows(False)))
 
     def test_expected_physical_mismatch_missing_and_zero_size_cannot_be_ready(self):
         for text in (metadata.upgrade(report(40)), report(40).replace('size: (1920, 1080)', 'size: (0, 1080)'),
@@ -404,7 +521,40 @@ class CaseFixtures(unittest.TestCase):
         state = json.loads((Path(self.args.private_root) / 'status.json').read_text(encoding='utf-8'))
         self.assertFalse(state['protected_unchanged'])
         self.assertTrue(state['contaminated'])
+        self.assertEqual(state['protected_changes'], [{'path': str(self.owner / 'config' / 'user.cfg'),
+                         'before': case.hashlib.sha256(b'sensitivity=1.2').hexdigest(),
+                         'after': case.hashlib.sha256(b'external edit').hexdigest()}])
         self.assertEqual((self.owner / 'config' / 'user.cfg').read_text(encoding='utf-8'), 'external edit')
+
+    def test_short_mode_external_steam_localconfig_change_still_fails_without_restoration(self):
+        self.args.experiment = 'hud-baseline'
+        self.args.max_seconds = 180
+        localconfig = self.steam / 'userdata' / '1' / 'config' / 'localconfig.vdf'
+        localconfig.write_bytes(b'before')
+        owner_before = case.snapshot([self.owner / 'config'])
+        adapter = FakeAdapter(self.exe)
+        original = adapter.counters
+
+        def counters(child):
+            localconfig.write_bytes(b'external steam change')
+            return original(child)
+
+        adapter.counters = counters
+        self.assertEqual(case.run(self.args, adapter, FakeClock()), 1)
+        root = Path(self.args.private_root)
+        state = json.loads((root / 'status.json').read_text(encoding='utf-8'))
+        self.assertEqual(case.snapshot([self.owner / 'config']), owner_before)
+        self.assertEqual(state['close_reason'], 'failed')
+        self.assertTrue(state['contaminated'])
+        self.assertFalse(state['protected_unchanged'])
+        changes = json.loads((root / 'protected-changes.json').read_text(encoding='utf-8'))
+        self.assertEqual(changes, [{'path': str(localconfig), 'before': case.hashlib.sha256(b'before').hexdigest(),
+                                   'after': case.hashlib.sha256(b'external steam change').hexdigest()}])
+        self.assertEqual(state['protected_changes'], changes)
+        self.assertFalse(state['protected_changes_truncated'])
+        self.assertEqual(localconfig.read_bytes(), b'external steam change')
+        windows = json.loads((root / 'windows.json').read_text(encoding='utf-8'))
+        self.assertTrue(all(w['contaminated'] and not w['admitted'] for w in windows))
 
     def test_deadline_closes_owned_process(self):
         adapter = FakeAdapter(self.exe)
