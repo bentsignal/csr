@@ -6,7 +6,9 @@ concurrently (one agent or worktree per track), and the dependencies between
 them are listed. Every item ends in a verified state (`cargo test`,
 `csr probe`, `csr sim`, and screenshots for anything visual; see AGENTS.md).
 
-## Where we are (assessed 2026-10-16)
+## Where we are (assessed 2026-10-17)
+
+The [October17 follow-up](PLAYTEST-2026-10-17.md) confirms bounded menu overlap/Pause fixes but reports transition flicker, restart binding loss, stale HUD binding hints, AWP cooldown/ammo/audio defects and unacceptable sustained FPS. Current ragdolls are accepted for now; custom ragdolls/death-animation work is deferred. Deliver actual verified fixes before requesting another improvement test.
 
 The October16 owner test is complete. [All new feedback and accepted scopes](PLAYTEST-2026-10-16.md)
 are retained separately from the October14 ledger. **Priority one is sustained,

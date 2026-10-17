@@ -112,7 +112,8 @@ pub fn update(mut commands: Commands, art: Res<UiAssets>, world: Res<SimWorld>, 
         node.left = px(147.0 + offset.x - 5.0); node.top = px(149.0 + offset.y - 5.0);
         *visibility = Visibility::Inherited;
     }
-    let signature = format!("{:?}|{}|{}|{:?}|{:?}", p.id, p.alive, p.active, p.weapons.iter().map(|wp| &wp.def.class_name).collect::<Vec<_>>(), w.players.iter().map(|p| (p.id, p.alive)).collect::<Vec<_>>());
+    let slot_labels: [String; 5] = std::array::from_fn(|i| settings.selection_binding_label(i as u8 + 1));
+    let signature = format!("{:?}|{}|{}|{:?}|{:?}|{:?}", p.id, p.alive, p.active, p.weapons.iter().map(|wp| &wp.def.class_name).collect::<Vec<_>>(), w.players.iter().map(|p| (p.id, p.alive)).collect::<Vec<_>>(), slot_labels);
     if signature == state.signature { return; }
     state.signature = signature;
     if let Some(root) = state.root.take() { commands.entity(root).despawn(); }
@@ -126,7 +127,7 @@ pub fn update(mut commands: Commands, art: Res<UiAssets>, world: Res<SimWorld>, 
                         if let Some(image) = art.image(key).or_else(|| art.image(if key.contains("knife") { "knife_default_ct" } else { "c4" }).filter(|_| key.contains("knife") || key == "c4")) {
                             row.spawn((ImageNode { color, ..ImageNode::new(image) }, Node { width: px(95.0), height: px(30.0), ..default() }));
                         } else { row.spawn((Text::new(key.to_uppercase()), TextColor(color), TextFont { font_size: FontSize::Px(18.0), ..default() })); }
-                        row.spawn((Text::new(sim::weapon::slot(&weapon.def).to_string()), TextColor(color), TextFont { font_size: FontSize::Px(15.0), ..default() }));
+                        row.spawn((Text::new(slot_labels.get(sim::weapon::slot(&weapon.def).saturating_sub(1) as usize).cloned().unwrap_or_default()), TextColor(color), TextFont { font_size: FontSize::Px(15.0), ..default() }));
                     });
                 }
             });
