@@ -102,6 +102,7 @@ this.onEnterFrame = function() {
     csrEI.call("fixture.Assert", "first binding", bindings.bindOwnedOptions("_level21", "OwnedOptions1"));
     var oldCancel = api.OnCancel;
     var oldUnload = api.OnUnload;
+    var oldLayout = api.OnLayoutComplete;
     api.OnCancel();
     api.OnUnload(root);
     csrEI.call("fixture.Assert", "replacement binding", bindings.bindOwnedOptions("_level21", "OwnedOptions2"));
@@ -109,8 +110,10 @@ this.onEnterFrame = function() {
     // OBJECT belongs to B. Neither case proves how installed Options calls it.
     oldCancel();
     oldUnload(root);
+    oldLayout();
     retainedAPI.OnCancel();
     retainedAPI.OnUnload(root);
+    retainedAPI.OnLayoutComplete();
     bindings.cancelOwnedOptions("OwnedOptions1");
     bindings.cancelOwnedOptions("OwnedOptions2");
     api.GetConvarString("fixture_only");
@@ -118,6 +121,7 @@ this.onEnterFrame = function() {
 
     var liveCancel = api.OnCancel;
     var liveUnload = api.OnUnload;
+    var liveLayout = api.OnLayoutComplete;
     var badPaths = ["", "mc:_level21", "_level99", "_level21.Panel", "obj:0", "_global.OptionsMenu", undefined, null, 21, new Object()];
     var i = 0;
     while (i < badPaths.length) {
@@ -137,7 +141,7 @@ this.onEnterFrame = function() {
     root.gameAPI = new Object();
     csrEI.call("fixture.Assert", "wrong API", bindings.bindOwnedOptions("_level21", "OwnedOptions3") == false);
     root.gameAPI = api;
-    csrEI.call("fixture.Assert", "failure leaves live functions intact", api.OnCancel == liveCancel && api.OnUnload == liveUnload);
+    csrEI.call("fixture.Assert", "failure leaves live functions intact", api.OnCancel == liveCancel && api.OnUnload == liveUnload && api.OnLayoutComplete == liveLayout);
     api.OnCancel();
     api.OnUnload(root);
     csrEI.call("fixture.Done");
@@ -176,8 +180,10 @@ stop();
         ("OwnedOptions1.OnUnload".into(), unload.clone()),
         ("OwnedOptions1.OnCancel".into(), vec![]),
         ("OwnedOptions1.OnUnload".into(), unload.clone()),
+        ("OwnedOptions1.OnLayoutComplete".into(), vec![]),
         ("OwnedOptions2.OnCancel".into(), vec![]),
         ("OwnedOptions2.OnUnload".into(), unload.clone()),
+        ("OwnedOptions2.OnLayoutComplete".into(), vec![]),
         ("OwnedOptions1.OnCancel".into(), vec![]),
         ("OwnedOptions2.OnCancel".into(), vec![]),
         ("OptionsMenu.GetConvarString".into(), vec![Value::String("fixture_only".into())]),

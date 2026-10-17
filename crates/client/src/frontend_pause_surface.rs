@@ -4,27 +4,31 @@
 //! reply can restore it. Register every OnLoadFinished, including cached paths.
 use scaleform::Value;
 
-/// Keep the previous raster hidden until the worker has completed the entire
-/// current menu presentation transaction (Pause or return to Home). A late
-/// frame from an earlier open cannot reveal the menu after close/reopen.
+/// A new host opening cannot reuse another opening's raster. Within an opening,
+/// keep the last accepted image visible while a page/callback fence is pending;
+/// readiness of the destination and visibility of that retained image differ.
 #[derive(Default)]
 pub(crate) struct Presentation {
     revision: u64,
     waiting: bool,
     raster_fence: u64,
+    assigned: bool,
 }
 impl Presentation {
     pub(crate) fn open(&mut self) {
         self.revision = self.revision.checked_add(1).expect("menu presentation limit");
         self.waiting = true;
+        self.assigned = false;
+        self.raster_fence = 0;
     }
-    pub(crate) fn close(&mut self) { self.waiting = false; }
+    pub(crate) fn close(&mut self) { self.waiting = false; self.assigned = false; }
+    pub(crate) fn retained(&self) -> bool { self.assigned }
     pub(crate) fn revision(&self) -> u64 { self.revision }
     pub(crate) fn accepts(&self, revision: u64, fence: u64, required: u64) -> bool {
-        revision == self.revision && fence >= required
+        revision == self.revision && fence >= required && fence >= self.raster_fence
     }
     pub(crate) fn presented(&mut self, revision: u64, fence: u64) {
-        if revision == self.revision { self.waiting = false; self.raster_fence = fence; }
+        if revision == self.revision { self.waiting = false; self.raster_fence = fence; self.assigned = true; }
     }
     pub(crate) fn ready(&self, required: u64) -> bool { !self.waiting && self.raster_fence >= required }
 }
@@ -92,6 +96,7 @@ pub(crate) struct Tracker {
     options_opening: bool,
     options_generation: u64,
     raster_fence: u64,
+    awaiting_page: Option<String>,
     pending: Option<Request>,
     last_frame: Option<u64>,
     visible: bool,
@@ -115,6 +120,7 @@ impl Tracker {
             self.pause = None;
             self.options = None;
             self.options_opening = false;
+            self.awaiting_page = None;
             self.last_frame = None;
         }
         self.invalidate();
@@ -156,6 +162,18 @@ impl Tracker {
     }
     pub(crate) fn require_raster(&mut self, fence: u64) { self.raster_fence = fence; }
     pub(crate) fn raster_fence(&self) -> u64 { self.raster_fence }
+    /// Begin before hiding the outgoing page. Mid-load captures belong to an
+    /// unfinished transaction even when they already carry its callback fence.
+    pub(crate) fn await_page(&mut self, page: &str) { self.awaiting_page = Some(page.into()); }
+    pub(crate) fn awaiting_page(&self, page: &str) -> bool { self.awaiting_page.as_deref() == Some(page) }
+    pub(crate) fn page_ready(&mut self, page: &str, fence: u64) {
+        if self.awaiting_page(page) { self.awaiting_page = None; self.require_raster(fence); }
+    }
+    pub(crate) fn raster_ready(&self) -> bool { self.awaiting_page.is_none() }
+    pub(crate) fn cancel_page(&mut self, fence: u64) {
+        self.awaiting_page = None;
+        self.require_raster(fence);
+    }
 
     /// Desired Options lifecycle, independent of this overlay's active scope.
     /// The caller gates late Options OnReady/show on this flag even in Menu.
@@ -169,6 +187,7 @@ impl Tracker {
     pub(crate) fn options_cancelled(&mut self) {
         self.invalidate();
         self.options_opening = false;
+        self.awaiting_page = None;
     }
 
     fn invalidate(&mut self) {
