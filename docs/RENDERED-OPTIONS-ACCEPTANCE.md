@@ -5,6 +5,8 @@ Implementation base: `fix/controls-options-integrated` at
 source reviewed only. No compilation, test execution, installed movie session,
 native run or screenshot review was performed by its implementation agent.
 Root owns all builds, execution, private fixtures, preservation checks and PRs.
+The R9 probe-settlement revision starts from integrated harness commit
+`3852d74`; its added fixtures and callback guards also remain source-only.
 
 Set `CSR_TEST_FLOW=1` and select exactly one `CSR_TEST_FLOW_CASE`:
 
@@ -20,8 +22,11 @@ In particular, no production fix is made for the invalid zero-bot launch fixture
 
 ## Root invocation
 
-Under root's exclusive Cargo/build slot, clean the explicit shared target/profile
-before building from this worktree, as required by AGENTS.md. Copy the resulting
+Root owns the exclusive Cargo/build slot and its fixed warm target directory.
+This harness adds no `cargo clean` or full-target cleanup requirement. When a
+shared target changes build worktrees, follow AGENTS.md's targeted
+`tools/clean-workspace-profile.ps1` handoff with an explicit profile and absolute
+target directory; external dependencies stay warm. Copy the resulting
 executable to an immutable private path and retain the real build cwd/commit.
 Run each case separately with normal menu startup, using that copied executable:
 
@@ -88,12 +93,26 @@ and capture barrier. The next settled Pause/Audio captures show their result.
 
 Each case has a 240-second process bound and 40-second ordinary phase bound;
 the reused match launch retains its own original deadline. Movie observations
-are limited to 32 samples per phase, at most one per fresh raster and no more
-often than 200 ms. Settlement requires a continuously valid predicate across
-three distinct rasters and 350 ms; controls/HUD predicates use application frames
-because the inactive menu worker need not rasterize during gameplay. Late probe
-replies from a previous phase cannot satisfy the next phase. No arbitrary sleep
-loop, per-frame full trace or movie state/capture/Interaction mutation is used.
+are limited to 32 requests per phase, one outstanding request at a time, submitted
+on strictly increasing nonzero image-assignment serials and no more often than
+200 ms. A reply is accepted once, only for the outstanding ID and phase epoch,
+and only after an image assignment newer than the request's serial. Movie
+settlement requires three distinct accepted replies and at least 350 ms from
+the first valid accepted reply. Advancing rasters alone, a duplicate reply or
+elapsed time while a reply is pending cannot admit input. Submitting a request
+clears prior visibility/bounds. An accepted invalid observation resets settlement
+and invalidates the former settled screenshot; missing/incomplete or wrongly
+typed visibility and mismatched Stage dimensions also fail this validation.
+
+Controls/HUD predicates retain three-frame/350-ms settlement because the inactive
+menu worker need not rasterize during gameplay; HUD phases require no movie
+probe. The two Escape pressure phases keep their deliberate immediate-edge
+behavior. All other movie phases require another accepted valid reply after
+settled screenshot readback/save before acting. Screenshot callbacks and queued
+input carry phase epochs; old or duplicate screenshot callbacks cannot release
+a current capture barrier or report its failure. Probe IDs remain monotonic
+across phase/cycle reentry. No arbitrary sleep loop, per-frame full trace or
+movie state/capture/Interaction mutation is used.
 
 The read-only `flow_probe.as` diagnostic samples the registered authored roots'
 public visibility, searches visible display-list text for the exact English
@@ -119,9 +138,22 @@ Scaleform diagnostic fixture, then the repository's full required checks and
 the three actual rendered cases. A runtime `failures: 0` log means these
 synthetic functional assertions completed. Root must inspect PNGs, especially
 waiting/settled transitions, top/bottom editor rows and both final game HUDs.
+The focused `frontend_acceptance::tests` fixtures cover pending/duplicate replies
+under many advancing rasters, one-time post-request-raster acceptance, request
+throttling/exhaustion, invalid-observation restart and capture invalidation,
+phase reentry and late capture completion, typed visibility/resize checks, and
+frame-based settlement without movie replies. These fixtures were authored but
+**not run** by the implementation agent; compilation is also **unrun**.
+
 Natural delayed rasters are observed; this harness does not force GPU/worker
-delays or prove every adversarial raster ordering. The existing synthetic
-ownership tests remain necessary for deterministic stale-callback coverage.
+delays or prove every adversarial raster ordering. An image-assignment serial
+records transfer to Bevy's image, not actual scanout. The existing frontend API
+does not expose a GPU fence tagged with a probe ID, so a newer assignment after
+submission is not proof that those pixels were rasterized after the diagnostic
+executed. Primary-window screenshot readback/save is still required separately.
+The existing synthetic production ownership tests remain necessary for worker,
+receiver and callback lifecycle coverage. The production editor's menu
+input/draw/scroll admission fix is separate root-owned work, outside this file.
 
 Physical input latency, native Legacy behavior, 0.022 sensitivity gain, historical
 audio tone/mixing, full pixel fidelity, in-match controls editing, repeated
