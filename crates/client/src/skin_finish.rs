@@ -86,6 +86,7 @@ pub fn update(
     mut materials: ResMut<Assets<WorldMaterial>>,
     mut parts: Query<(&Target, &mut SkinPart, &MeshMaterial3d<WorldMaterial>)>,
 ) {
+    let _frame_scope = crate::input_latency::frame_scope("skin_finish");
     for (target, mut part, handle) in &mut parts {
         let selected: Option<OwnedSkin> =
             match target {

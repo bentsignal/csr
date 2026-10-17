@@ -17,6 +17,11 @@ authorizes CS2-feel grenade trajectories and read-only CS2 settings/keybind
 import as narrow exceptions to the historical baseline. No new replacement
 test build is requested until fixes have passed their actual verification.
 
+PF01/PF02 offline [diagnostic log analysis](PERFORMANCE-LOG-ANALYZER.md) now
+provides conservative helper-bounded early/late summaries and synthetic
+regressions. Actual immutable-binary run review, matched camera/local-alive
+evidence and performance acceptance remain open.
+
 Owner return-home playtest on 2026-10-14: all reported defects, required
 features, accepted improvements and priorities are retained in
 [PLAYTEST-2026-10-14.md](PLAYTEST-2026-10-14.md). Work continues without another

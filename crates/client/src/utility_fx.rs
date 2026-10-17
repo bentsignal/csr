@@ -208,6 +208,7 @@ pub fn update(
     mut overlay: Query<&mut BackgroundColor, With<FlashOverlay>>,
     fixed: Res<Time<Fixed>>,
 ) {
+    let _frame_scope = crate::input_latency::frame_scope("utility_fx");
     let w = &world.0;
     let time = w.time();
     let reset = time < fx.last_time;

@@ -78,6 +78,7 @@ fn radar_image(bytes: &[u8]) -> Option<Image> {
 
 #[allow(clippy::too_many_arguments)]
 pub fn update(mut commands: Commands, art: Res<UiAssets>, world: Res<SimWorld>, local: Res<LocalPlayer>, radar: Res<Radar>, poses: Res<crate::interpolation::RenderPoses>, time: Res<Time<Fixed>>, settings: Res<crate::settings::Settings>, mut materials: ResMut<Assets<crate::radar_view::RadarMaterial>>, mut state: ResMut<Inventory>, mut armor: Query<&mut ImageNode, With<ArmorIcon>>, mut carts: Query<&mut Visibility, (With<BuyIcon>, Without<RadarDot>)>, mut dots: Query<(Entity, &RadarDot, &mut Node, &mut Visibility), Without<BuyIcon>>) {
+    let _frame_scope = crate::input_latency::frame_scope("hud_art");
     let w = &world.0;
     let Some(p) = w.player(local.view_target()) else { return };
     let to_uv = |pos: glam::Vec3| Vec2::new(pos.x-radar.origin.x, radar.origin.y-pos.y) / (1024.0 * radar.scale);
