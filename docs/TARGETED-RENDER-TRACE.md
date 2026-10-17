@@ -1,4 +1,4 @@
-# Bounded targeted render trace (source-only R18 candidate)
+# Bounded targeted render trace (source-only R20 candidate)
 
 Status: **SOURCE ONLY, UNCOMPILED; all fixtures and commands below UNRUN.**
 This is an attribution instrument for the next root-controlled diagnostic QA,
@@ -26,12 +26,19 @@ rather than silently running an unbounded collector:
 
 | Variable | Meaning / hard bound |
 |---|---|
-| `CSR_RENDER_TRACE_PATH` | Absolute **new** TSV; existing parent, outside current data/workspace directory, GameData.game_dir, CSR_DATA_DIR and existing installed userdata directory. Existing files are never overwritten. |
+| `CSR_RENDER_TRACE_PATH` | Absolute **new** TSV; existing parent, outside the independent build-time source workspace, current directory, GameData.game_dir, CSR_DATA_DIR and existing installed userdata directory. Existing files are never overwritten. |
 | `CSR_RENDER_TRACE_RUN_ID` | 1..64 ASCII letters/digits/`-_.`; join key for the parent's immutable executable/build/context receipt. |
 | `CSR_RENDER_TRACE_START_S`, `CSR_RENDER_TRACE_END_S` | Finite sim-time `[start,end)`, start >= 0, end > start, width <= 120 seconds. |
 | `CSR_RENDER_TRACE_WALL_S` | Finite startup-relative deadline in `(0,300]` seconds, including loading. |
-| `CSR_RENDER_TRACE_MAX_RECORDS` | 1..100000, combined context + sample rows. |
+| `CSR_RENDER_TRACE_MAX_RECORDS` | 1..100000, combined boundary + context + sample rows. |
 | `CSR_RENDER_TRACE_MAX_BYTES` | 4096..16777216, **whole file** including names/header/footer. |
+
+The diagnostic source-workspace boundary is derived from the client package's
+build-time CARGO_MANIFEST_DIR, independently of launcher CWD/CSR_DATA_DIR.
+It is used only as a deny boundary, never as a runtime save base. All protected
+roots and the existing output parent are canonicalized; an unavailable build
+workspace fails closed. Keep that workspace available for a future immutable
+capture. No save-path, launcher setup or config behavior changes.
 
 Unset RUST_LOG and TRACE_CHROME for this capture. RUST_LOG is rejected because
 Bevy's outer EnvFilter can otherwise suppress selected INFO spans. The standard
@@ -51,7 +58,7 @@ frame counter. Root's receipt should preserve map/mode, camera/pose history,
 actual bot/corpse context, executable hash, source SHA, build cwd and wrapper
 identity. No queries or gameplay mutation are added to obtain those counts.
 
-## Root-controlled QA commands (future; not executed for R18)
+## Root-controlled QA commands (future; not executed for R20)
 
 Only after the active controls checks close, resolve Cargo.lock and acquire the
 exclusive Cargo slot. For a shared-target worktree handoff, run the existing
@@ -74,8 +81,8 @@ using a fresh filename/run ID per capture. The private parent directory must
 already exist. This table is an environment recipe, not a launch script:
 
 ```text
-CSR_RENDER_TRACE_PATH=C:\Users\shawn\csr-fidelity\post-playtest-20261016\r18-capture-01.tsv
-CSR_RENDER_TRACE_RUN_ID=r18-capture-01
+CSR_RENDER_TRACE_PATH=C:\Users\shawn\csr-fidelity\post-playtest-20261016\r20-capture-01.tsv
+CSR_RENDER_TRACE_RUN_ID=r20-capture-01
 CSR_RENDER_TRACE_START_S=30
 CSR_RENDER_TRACE_END_S=60
 CSR_RENDER_TRACE_WALL_S=180
@@ -101,19 +108,59 @@ rewind/loss, overlapping instance or mismatched invocation also stops it.
 Offline, with no game process needed:
 
 ```powershell
-python tools/fidelity/summarize-targeted-render-trace.py C:\Users\shawn\csr-fidelity\post-playtest-20261016\r18-capture-01.tsv
+python -B tools/fidelity/summarize-targeted-render-trace.py --structural-only C:\Users\shawn\csr-fidelity\post-playtest-20261016\r20-capture-01.tsv
 ```
 
-This bounded standard-library parser prints per-system count/mean/median/p95/max
-CPU wall ms. Exit 2 means invalid/incomplete coverage. A structurally complete
-capture requires `reason=window_end`, zero open scopes and samples for all five
-systems; `app_exit`, deadline and cap footers are explicitly incomplete. Keep
-raw rows: each has extraction frame/tick/sim time, startup-relative monotonic
-start_ns, duration_ns, selected system index, span ID and thread ID. A reused
-span produces separate invocation rows. IDs are process-local; RUN_ID is the
-cross-artifact join. Context rows record each sampled in-window frame, including
-frames with missing selected invocations. The summary is interval-level only;
-inspect/group raw rows by frame to investigate gaps and correlations.
+This bounded standard-library parser has **only structural-only mode**. The
+explicit flag is mandatory. Exit 0 means structurally complete v2 rows only;
+`evidence_complete=False` is unconditional. Missing or mismatched parent
+receipts cannot receive evidence-qualified success: this tool has no receipt
+join/evidence mode and rejects receipt/expected-run CLI arguments. Root must
+separately preserve and validate run ID, exact source SHA, real build cwd,
+immutable exe hash/path, map/mode/whole-interval pose/history, wrapper/process/
+prefs guard identity and clock/frame joins before using an artifact as evidence.
+A run label or this tool's exit code is not such a validation.
+
+The v2 artifact retains three actual frame/tick/sim_s/start_ns boundary
+observations: `lower_previous` (immediately before start), `lower` (first
+in-window extraction) and `upper` (first extraction at/after end). `lower`
+also acts as the first context. Before crossing, only one predecessor is
+retained in memory. First observation already at/after start, even exactly at
+start, fails `missed_start`; a jump over the whole interval also fails. Context
+loss/rewind, a frame gap (including either crossing), open scopes at a context
+transition, or any selected function missing from the preceding context stops
+collection. No per-frame run-condition exception is assumed. Boundary receipts
+record the actual discrete extraction times, not interpolated samples exactly
+at 30 and 60. The sim tick can advance by multiple ticks between consecutive
+render contexts; the parent must assess actual boundary/cadence history.
+
+A structurally complete interval needs both crossings, contiguous increasing
+frame IDs, monotonic tick/sim/clock, `reason=window_end`, zero open scopes, and
+at least one invocation of **each** function in **each** observed in-window
+context. The parser prints actual observed range and boundaries, frame gaps,
+and per-function covered/observed-context denominator and missing count beside
+invocation mean/median/p95/max wall ms. Missing whole contexts are reported
+separately; they have no invented invocations. A retained incoming context on
+a failure can have no samples because collection stopped there. Any partial,
+capped or invalid artifact exits 2. Preserve raw rows and status even on failure.
+
+Metadata keys must be unique and complete, with exact feature/Bevy/clock values,
+all five exact ordered system names, the exact ten-column schema, and supported
+hard bounds/domains. Context-only fields must be empty. Samples require active
+frame/tick/sim identity, positive process-local span/thread IDs, consistent
+span-to-system mapping, `context_changed=false`, start at/after context, exit
+before the next context/deadline, monotonic completion order and no same-system
+overlap. Different functions may overlap and rows may be interleaved by
+completion order; start timestamps need not be globally sorted. A reused span
+has separate invocation rows. None of these checks authenticates a raw file,
+proves callback delivery, or supplies the missing external identity receipts.
+
+Authored **UNRUN** Python fixtures are in
+`tools/fidelity/test_targeted_render_trace.py`; future parent-only command:
+
+```powershell
+python -B -m unittest discover -s tools/fidelity -p test_targeted_render_trace.py
+```
 
 ## Scope and interpretation
 
@@ -153,7 +200,12 @@ material modifications/retries. It cannot by itself establish those mechanisms,
 causality, a GPU bottleneck, an FPS gain or performance acceptance. The existing
 unadmitted S2/A2 histories remain unadmitted; do not optimize from them.
 
-The new Rust fixtures cover exact engine name drift/collisions, supported
-subscriber routing, reused spans, finite half-open window/deadline, complete
-capped rows/footer, and context/scope failures without files or game execution.
-They and the offline summary helper are authored **UNRUN** pending parent QA.
+Rust fixtures cover a successful complete interval with actual crossing
+receipts and overlapping different functions, missed/late starts, missing
+later functions/contexts/upper receipt, bounds/caps/deadline, context/scope
+failures, and an independent workspace boundary with private CWD/data inputs.
+Existing public engine-name/collision/subscriber fixtures remain. Python
+fixtures include every R19 parser counterexample, missing/mismatched receipt
+attempts rejected by the structural-only interface, and a valid overlapping
+producer-shaped interval. All fixtures and the helper remain **UNRUN**; no
+compilation, feature resolution or runtime verification has occurred in R20.

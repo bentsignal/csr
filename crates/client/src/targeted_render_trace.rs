@@ -62,8 +62,10 @@ struct Capture {
     text: String,
     records: usize,
     current: Option<Frame>,
-    previous: Option<Frame>,
+    previous: Option<(Frame, u64)>,
     entered_window: bool,
+    context_seen: u8,
+    current_at_ns: u64,
     running: [Option<Started>; 5],
     seen: u8,
     reason: Option<&'static str>,
@@ -71,13 +73,14 @@ struct Capture {
 }
 impl Capture {
     fn new(window: Window, run: &str, file: Option<File>) -> Self {
-        let mut text = format!("# csr_targeted_render_trace_v1 run={run} feature=targeted-render-trace bevy=0.19.1 clock=monotonic_cpu_wall_ns start_s={} end_s={} wall_ns={} max_records={} max_bytes={}\n", window.start, window.end, window.wall_ns, window.records, window.bytes);
+        let mut text = format!("# csr_targeted_render_trace_v2 run={run} feature=targeted-render-trace bevy=0.19.1 clock=monotonic_cpu_wall_ns start_s={} end_s={} wall_ns={} max_records={} max_bytes={}\n", window.start, window.end, window.wall_ns, window.records, window.bytes);
         for (index, name) in SYSTEMS.iter().enumerate() {
             writeln!(text, "# system {index} {name}").unwrap();
         }
         text.push_str("kind\tframe\tsim_tick\tsim_s\tstart_ns\tduration_ns\tsystem\tspan\tthread\tcontext_changed\n");
         Self { window, text, records: 0, current: None, previous: None,
-            entered_window: false, running: [None; 5], seen: 0, reason: None, file }
+            entered_window: false, context_seen: 0, current_at_ns: 0,
+            running: [None; 5], seen: 0, reason: None, file }
     }
     fn append(&mut self, line: &str) {
         if self.reason.is_some() { return; }
@@ -107,24 +110,53 @@ impl Capture {
         if at_ns >= self.window.wall_ns { self.close("wall_limit"); return; }
         let Some(frame) = frame else {
             self.current = None;
+            self.previous = None;
             if self.entered_window { self.close("context_lost"); }
             return;
         };
-        if !frame.sim_s.is_finite() { self.close("invalid_sim_time"); return; }
-        if self.previous.is_some_and(|last| frame.tick < last.tick || frame.frame <= last.frame || frame.sim_s < last.sim_s) {
+        if !frame.sim_s.is_finite() || frame.sim_s < 0.0 { self.close("invalid_sim_time"); return; }
+        if self.previous.is_some_and(|(last, at)| frame.tick < last.tick || frame.frame <= last.frame || frame.sim_s < last.sim_s || at_ns < at) {
             self.close("context_rewind"); return;
         }
-        self.previous = Some(frame);
+        if frame.sim_s < self.window.start {
+            self.previous = Some((frame, at_ns));
+            self.current = None;
+            return;
+        }
+        let kind = if self.entered_window { "context" } else { "lower" };
+        if !self.entered_window {
+            let Some((last, at)) = self.previous else { self.close("missed_start"); return; };
+            // A first observation inside the window, even exactly at START,
+            // cannot establish the crossing. Retain only its immediate predecessor.
+            if last.sim_s >= self.window.start || frame.sim_s >= self.window.end {
+                self.close("missed_start"); return;
+            }
+            self.context_row("lower_previous", last, at);
+        }
+        // Retain the incoming observation even when it reveals a gap or the
+        // preceding context was partial. It is diagnostic context, not a sample.
+        self.context_row(if frame.sim_s >= self.window.end { "upper" } else { kind }, frame, at_ns);
+        if self.reason.is_some() { return; }
+        if self.previous.is_some_and(|(last, _)| last.frame.checked_add(1) != Some(frame.frame)) {
+            self.close("context_gap"); return;
+        }
+        if self.running.iter().any(Option::is_some) { self.close("context_changed"); return; }
+        if self.entered_window && self.context_seen != 31 { self.close("missing_function"); return; }
         if frame.sim_s >= self.window.end { self.close("window_end"); return; }
-        if frame.sim_s < self.window.start { self.current = None; return; }
         self.entered_window = true;
+        self.previous = Some((frame, at_ns));
         self.current = Some(frame);
-        self.append(&format!("context\t{}\t{}\t{:.9}\t{at_ns}\t\t\t\t\t\n", frame.frame, frame.tick, frame.sim_s));
+        self.current_at_ns = at_ns;
+        self.context_seen = 0;
+    }
+    fn context_row(&mut self, kind: &str, frame: Frame, at_ns: u64) {
+        self.append(&format!("{kind}\t{}\t{}\t{:.9}\t{at_ns}\t\t\t\t\t\n", frame.frame, frame.tick, frame.sim_s));
     }
     fn enter(&mut self, system: usize, span: u64, thread: ThreadId, at_ns: u64) {
         if self.reason.is_some() { return; }
         if at_ns >= self.window.wall_ns { self.close("wall_limit"); return; }
         let Some(frame) = self.current else { return; };
+        if at_ns < self.current_at_ns || span == 0 { self.close("scope_mismatch"); return; }
         if self.running[system].is_some() { self.close("overlapping_same_system"); return; }
         self.running[system] = Some(Started { at_ns, frame, span, thread });
     }
@@ -137,9 +169,12 @@ impl Capture {
         }
         let changed = self.current.is_none_or(|frame| frame.frame != start.frame.frame);
         if changed { self.close("context_changed"); return; }
-        self.seen |= 1 << system;
         self.append(&format!("sample\t{}\t{}\t{:.9}\t{}\t{}\t{system}\t{span}\t{thread:?}\tfalse\n",
             start.frame.frame, start.frame.tick, start.frame.sim_s, start.at_ns, at_ns - start.at_ns));
+        if self.reason.is_none() {
+            self.seen |= 1 << system;
+            self.context_seen |= 1 << system;
+        }
     }
 }
 
@@ -167,9 +202,8 @@ impl Layer<Registry> for TraceLayer {
         if !self.0.active.load(Ordering::Relaxed) { return; }
         let Some(span) = ctx.span(id) else { return; };
         let Some(system) = span.extensions().get::<Selected>().copied() else { return; };
-        let at_ns = elapsed(&self.0);
         let mut capture = self.0.capture.lock().unwrap();
-        capture.exit(system.0, id.into_u64(), std::thread::current().id(), at_ns);
+        capture.exit(system.0, id.into_u64(), std::thread::current().id(), elapsed(&self.0));
         update_flags(&self.0, &capture);
     }
 }
@@ -185,14 +219,20 @@ fn required(name: &str) -> Result<String, String> {
 fn number<T: std::str::FromStr>(name: &str) -> Result<T, String> {
     required(name)?.parse().map_err(|_| format!("invalid {name}"))
 }
+fn outside_protected(parent: &Path, protected: &[PathBuf]) -> Result<(), String> {
+    if protected.iter().any(|root| parent.starts_with(root)) {
+        return Err("trace must be outside game/data/workspace directories".into());
+    }
+    Ok(())
+}
 fn private_path(path: &Path, protected: &[PathBuf]) -> Result<PathBuf, String> {
     if !path.is_absolute() { return Err("PATH must be absolute".into()); }
     let parent = path.parent().ok_or("PATH needs an existing private parent directory")?
         .canonicalize().map_err(|e| format!("trace parent: {e}"))?;
-    for root in protected {
-        let root = root.canonicalize().map_err(|e| format!("protected path {}: {e}", root.display()))?;
-        if parent.starts_with(root) { return Err("trace must be outside game/data/workspace directories".into()); }
-    }
+    let roots = protected.iter().map(|root| root.canonicalize()
+        .map_err(|e| format!("protected path {}: {e}", root.display())))
+        .collect::<Result<Vec<_>, _>>()?;
+    outside_protected(&parent, &roots)?;
     Ok(parent.join(path.file_name().ok_or("PATH needs a file name")?))
 }
 
@@ -215,7 +255,11 @@ pub(crate) fn configure(app: &mut App, game_dir: &Path) -> Result<Option<TraceGu
     if run.is_empty() || run.len() > 64 || !run.bytes().all(|c| c.is_ascii_alphanumeric() || b"-_.".contains(&c)) {
         return Err("RUN_ID must contain 1..64 ASCII letters/digits/-_.".into());
     }
-    let mut protected = vec![std::env::current_dir().map_err(|e| e.to_string())?, game_dir.to_path_buf()];
+    // Diagnostic deny boundary only. Never a runtime save-path base. This
+    // remains independent when the launcher changes CWD to private CSR_DATA_DIR.
+    let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).parent().and_then(Path::parent)
+        .ok_or("cannot determine diagnostic source workspace")?.to_path_buf();
+    let mut protected = vec![workspace, std::env::current_dir().map_err(|e| e.to_string())?, game_dir.to_path_buf()];
     if let Some(data) = std::env::var_os("CSR_DATA_DIR") { protected.push(data.into()); }
     if let Some(local) = std::env::var_os("LOCALAPPDATA") {
         let userdata = PathBuf::from(local).join("CSGO-Rewrite/userdata");
