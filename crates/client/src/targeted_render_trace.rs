@@ -1,4 +1,4 @@
-//! Private, bounded function-system CPU wall scopes. No engine replacement.
+//! Private, bounded selected CPU wall scopes. No engine replacement.
 //! Compiled only by `targeted-render-trace`; see docs/TARGETED-RENDER-TRACE.md.
 use bevy::{diagnostic::FrameCount, prelude::*, render::{Extract, ExtractSchedule, RenderApp}};
 use std::{
@@ -15,23 +15,56 @@ const SYSTEMS: [&str; 5] = [
     "bevy_pbr::render::mesh::prepare_mesh_bind_groups",
     "bevy_render::renderer::render_system",
 ];
+struct Scope { kind: &'static str, name: &'static str, target: &'static str }
+const PHASE_SCOPES: [Scope; 5] = [
+    Scope { kind: "system", name: "bevy_render::view::window::prepare_windows", target: "bevy_ecs::system::function_system" },
+    Scope { kind: "system", name: "bevy_pbr::material::queue_material_meshes", target: "bevy_ecs::system::function_system" },
+    Scope { kind: "system", name: "bevy_render::view::prepare_view_targets", target: "bevy_ecs::system::function_system" },
+    Scope { kind: "span", name: "queue_submit", target: "bevy_core_pipeline::schedule" },
+    Scope { kind: "span", name: "present_frames", target: "bevy_render::renderer" },
+];
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Profile { Legacy, RenderPhases }
+impl Profile {
+    fn parse(value: Option<&std::ffi::OsStr>) -> Result<Self, String> {
+        match value {
+            None => Ok(Self::Legacy),
+            Some(value) if value == "render-phases" => Ok(Self::RenderPhases),
+            _ => Err("CSR_RENDER_TRACE_SCOPES must be absent or exactly render-phases".into()),
+        }
+    }
+    fn system(self, name: &str) -> Option<usize> {
+        match self {
+            Self::Legacy => SYSTEMS.iter().position(|expected| name == *expected),
+            Self::RenderPhases => PHASE_SCOPES[..3].iter().position(|scope| name == scope.name),
+        }
+    }
+    fn direct(self, meta: &Metadata<'_>) -> Option<usize> {
+        if self != Self::RenderPhases || !meta.is_span() || *meta.level() != tracing::Level::INFO { return None; }
+        PHASE_SCOPES.iter().enumerate().skip(3)
+            .find(|(_, scope)| meta.name() == scope.name && meta.target() == scope.target)
+            .map(|(index, _)| index)
+    }
+    fn metadata(self, meta: &Metadata<'_>) -> bool {
+        (system_metadata(meta) && (self == Self::Legacy || *meta.level() == tracing::Level::INFO))
+            || self.direct(meta).is_some()
+    }
+}
 const FOOTER_RESERVE: usize = 256;
 const MAX_RECORDS: usize = 100_000;
 const MAX_BYTES: usize = 16 * 1024 * 1024;
 
-fn selected(name: &str) -> Option<usize> {
-    SYSTEMS.iter().position(|expected| name == *expected)
-}
+#[cfg(test)]
+fn selected(name: &str) -> Option<usize> { Profile::Legacy.system(name) }
 fn system_metadata(meta: &Metadata<'_>) -> bool {
     meta.is_span() && meta.name() == "system"
         && meta.target() == "bevy_ecs::system::function_system"
 }
 // ExclusiveFunctionSystem uses SystemMeta's same callsite/target.
-#[derive(Default)]
-struct Name(Option<usize>);
+struct Name { profile: Profile, selected: Option<usize> }
 impl Visit for Name {
     fn record_str(&mut self, field: &Field, value: &str) {
-        if field.name() == "name" { self.0 = selected(value); }
+        if field.name() == "name" { self.selected = self.profile.system(value); }
     }
     fn record_debug(&mut self, _: &Field, _: &dyn std::fmt::Debug) {}
 }
@@ -58,6 +91,7 @@ struct Frame { frame: u32, tick: u64, sim_s: f64 }
 struct Started { at_ns: u64, frame: Frame, span: u64, thread: ThreadId }
 
 struct Capture {
+    profile: Profile,
     window: Window,
     text: String,
     records: usize,
@@ -72,13 +106,25 @@ struct Capture {
     file: Option<File>,
 }
 impl Capture {
+    #[cfg(test)]
     fn new(window: Window, run: &str, file: Option<File>) -> Self {
-        let mut text = format!("# csr_targeted_render_trace_v2 run={run} feature=targeted-render-trace bevy=0.19.1 clock=monotonic_cpu_wall_ns start_s={} end_s={} wall_ns={} max_records={} max_bytes={}\n", window.start, window.end, window.wall_ns, window.records, window.bytes);
-        for (index, name) in SYSTEMS.iter().enumerate() {
-            writeln!(text, "# system {index} {name}").unwrap();
+        Self::with_profile(window, run, file, Profile::Legacy)
+    }
+    fn with_profile(window: Window, run: &str, file: Option<File>, profile: Profile) -> Self {
+        let schema = match profile { Profile::Legacy => "v2", Profile::RenderPhases => "v3" };
+        let scope_set = match profile { Profile::Legacy => "", Profile::RenderPhases => " scope_set=render-phases" };
+        let mut text = format!("# csr_targeted_render_trace_{schema} run={run} feature=targeted-render-trace bevy=0.19.1 clock=monotonic_cpu_wall_ns{scope_set} start_s={} end_s={} wall_ns={} max_records={} max_bytes={}\n", window.start, window.end, window.wall_ns, window.records, window.bytes);
+        match profile {
+            Profile::Legacy => for (index, name) in SYSTEMS.iter().enumerate() {
+                writeln!(text, "# system {index} {name}").unwrap();
+            },
+            Profile::RenderPhases => for (index, scope) in PHASE_SCOPES.iter().enumerate() {
+                writeln!(text, "# scope {index} kind={} name={} target={} level=INFO", scope.kind, scope.name, scope.target).unwrap();
+            },
         }
-        text.push_str("kind\tframe\tsim_tick\tsim_s\tstart_ns\tduration_ns\tsystem\tspan\tthread\tcontext_changed\n");
-        Self { window, text, records: 0, current: None, previous: None,
+        let column = match profile { Profile::Legacy => "system", Profile::RenderPhases => "scope" };
+        writeln!(text, "kind\tframe\tsim_tick\tsim_s\tstart_ns\tduration_ns\t{column}\tspan\tthread\tcontext_changed").unwrap();
+        Self { profile, window, text, records: 0, current: None, previous: None,
             entered_window: false, context_seen: 0, current_at_ns: 0,
             running: [None; 5], seen: 0, reason: None, file }
     }
@@ -182,12 +228,18 @@ impl Capture {
 struct Shared { capture: Mutex<Capture>, born: Instant, active: AtomicBool, closed: AtomicBool }
 #[derive(Resource, Clone)]
 struct Handle(Arc<Shared>);
-struct TraceLayer(Arc<Shared>);
+struct TraceLayer(Arc<Shared>, Profile);
 impl Layer<Registry> for TraceLayer {
     fn on_new_span(&self, attrs: &Attributes<'_>, id: &Id, ctx: Context<'_, Registry>) {
-        let mut name = Name::default();
-        attrs.record(&mut name);
-        if let Some(system) = name.0 {
+        // Recheck exact metadata here as well as in the layer filter. Direct
+        // spans use metadata, never a user-supplied `name` field or suffix.
+        if !self.1.metadata(attrs.metadata()) { return; }
+        let selected = if system_metadata(attrs.metadata()) {
+            let mut name = Name { profile: self.1, selected: None };
+            attrs.record(&mut name);
+            name.selected
+        } else { self.1.direct(attrs.metadata()) };
+        if let Some(system) = selected {
             if let Some(span) = ctx.span(id) { span.extensions_mut().insert(Selected(system)); }
         }
     }
@@ -296,6 +348,7 @@ fn private_path(path: &Path, protected: &[PathBuf]) -> Result<PathBuf, String> {
 
 /// Called before LogPlugin: absent PATH installs no capture resources or clocks.
 pub(crate) fn configure(app: &mut App, game_dir: &Path) -> Result<Option<TraceGuard>, String> {
+    let profile = Profile::parse(std::env::var_os("CSR_RENDER_TRACE_SCOPES").as_deref())?;
     let Some(path) = std::env::var_os("CSR_RENDER_TRACE_PATH") else { return Ok(None); };
     // Bevy's outer EnvFilter must retain INFO system spans. Reject the known
     // full-Chrome environment switch too; QA must not compile Chrome/Tracy.
@@ -325,14 +378,15 @@ pub(crate) fn configure(app: &mut App, game_dir: &Path) -> Result<Option<TraceGu
     }
     let path = private_path(Path::new(&path), &protected)?;
     let file = OpenOptions::new().write(true).create_new(true).open(path).map_err(|e| e.to_string())?;
-    let handle = Handle(Arc::new(Shared { capture: Mutex::new(Capture::new(window, &run, Some(file))),
+    let handle = Handle(Arc::new(Shared { capture: Mutex::new(Capture::with_profile(window, &run, Some(file), profile)),
         born: Instant::now(), active: AtomicBool::new(false), closed: AtomicBool::new(false) }));
     app.insert_resource(handle.clone());
     Ok(Some(TraceGuard(handle)))
 }
 pub(crate) fn layer(app: &mut App) -> Option<bevy::log::BoxedLayer> {
     let handle = app.world().get_resource::<Handle>()?;
-    Some(Box::new(TraceLayer(handle.0.clone()).with_filter(filter_fn(system_metadata))))
+    let profile = handle.0.capture.lock().unwrap().profile;
+    Some(Box::new(TraceLayer(handle.0.clone(), profile).with_filter(filter_fn(move |meta| profile.metadata(meta)))))
 }
 pub(crate) fn install(app: &mut App) {
     let Some(handle) = app.world().get_resource::<Handle>().cloned() else { return; };

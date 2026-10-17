@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Standard-library source fixtures; R23 additions UNRUN. No game, processes or files.
+"""Standard-library source fixtures; R26 additions UNRUN. No game, processes or files.
 Future parent command: python -B -m unittest discover -s tools/fidelity -p test_targeted_render_trace.py
 """
 import contextlib
@@ -22,6 +22,42 @@ MAP = [
     "# system 4 bevy_render::renderer::render_system",
 ]
 COLUMNS = "kind\tframe\tsim_tick\tsim_s\tstart_ns\tduration_ns\tsystem\tspan\tthread\tcontext_changed"
+
+# Independent v3 contract: no parser/producer constants or runtime output used.
+PHASE_HEADER = "# csr_targeted_render_trace_v3 run=r26-fixture feature=targeted-render-trace bevy=0.19.1 clock=monotonic_cpu_wall_ns scope_set=render-phases start_s=30 end_s=60 wall_ns=90000000000 max_records=100 max_bytes=8192"
+PHASE_MAP = [
+    "# scope 0 kind=system name=bevy_render::view::window::prepare_windows target=bevy_ecs::system::function_system level=INFO",
+    "# scope 1 kind=system name=bevy_pbr::material::queue_material_meshes target=bevy_ecs::system::function_system level=INFO",
+    "# scope 2 kind=system name=bevy_render::view::prepare_view_targets target=bevy_ecs::system::function_system level=INFO",
+    "# scope 3 kind=span name=queue_submit target=bevy_core_pipeline::schedule level=INFO",
+    "# scope 4 kind=span name=present_frames target=bevy_render::renderer level=INFO",
+]
+PHASE_COLUMNS = "kind\tframe\tsim_tick\tsim_s\tstart_ns\tduration_ns\tscope\tspan\tthread\tcontext_changed"
+PHASE_BODY = (
+    "lower_previous\t99\t3838\t29.99\t1\t\t\t\t\t\n"
+    "lower\t100\t3840\t30\t10\t\t\t\t\t\n"
+    "sample\t100\t3840\t30\t24\t6\t4\t5\tThreadId(1)\tfalse\n"
+    "sample\t100\t3840\t30\t23\t8\t3\t4\tThreadId(2)\tfalse\n"
+    "sample\t100\t3840\t30\t22\t10\t2\t3\tThreadId(1)\tfalse\n"
+    "sample\t100\t3840\t30\t21\t12\t1\t2\tThreadId(2)\tfalse\n"
+    "sample\t100\t3840\t30\t20\t14\t0\t1\tThreadId(1)\tfalse\n"
+    "context\t101\t7678\t59.99\t50\t\t\t\t\t\n"
+    "sample\t101\t7678\t59.99\t64\t6\t4\t5\tThreadId(1)\tfalse\n"
+    "sample\t101\t7678\t59.99\t63\t8\t3\t4\tThreadId(2)\tfalse\n"
+    "sample\t101\t7678\t59.99\t62\t10\t2\t3\tThreadId(1)\tfalse\n"
+    "sample\t101\t7678\t59.99\t61\t12\t1\t2\tThreadId(2)\tfalse\n"
+    "sample\t101\t7678\t59.99\t60\t14\t0\t1\tThreadId(1)\tfalse\n"
+    "upper\t102\t7680\t60\t100\t\t\t\t\t\n"
+)
+
+
+def phase_artifact(body=None, **changes):
+    # Reuse only the wire-row assembler. Schema/map/body above are independent
+    # literals; they neither consult nor derive from trace.PHASE_* constants.
+    options = dict(header=PHASE_HEADER, mapping=PHASE_MAP, columns=PHASE_COLUMNS)
+    options.update(changes)
+    body = [line.split("\t") for line in PHASE_BODY.splitlines()] if body is None else body
+    return artifact(body, **options)
 
 
 def point(kind, frame, tick, sim, at):
@@ -225,6 +261,88 @@ class TraceStructure(unittest.TestCase):
                     trace.main(arguments)
                 self.assertEqual(error.exception.code, 2)
         self.assertIs(trace.analyze(artifact())["evidence_complete"], False)
+
+    def test_v3_literal_contract_all_five_population_concurrency_and_reused_spans(self):
+        result = trace.analyze(phase_artifact())
+        self.assertTrue(result["structural_complete"])
+        self.assertFalse(result["evidence_complete"])
+        self.assertEqual(result["scope_set"], "render-phases")
+        self.assertEqual(result["labels"], ("prepare_windows (system)", "queue_material_meshes (system)",
+                                           "prepare_view_targets (system)", "queue_submit (span)", "present_frames (span)"))
+        self.assertEqual(result["covered"], [2] * 5)
+        self.assertEqual(result["samples"], [[14 / 1e6] * 2, [12 / 1e6] * 2,
+                                             [10 / 1e6] * 2, [8 / 1e6] * 2, [6 / 1e6] * 2])
+        self.assertEqual(result["gaps"], 0)
+        self.assertEqual(result["upper"], (102, 7680, 60.0, 100))
+        # Existing v2 retains its own schema and population, without scope_set.
+        self.assertIsNone(trace.analyze(artifact())["scope_set"])
+
+    def test_v3_omitted_direct_span_is_incomplete_even_when_seen_earlier(self):
+        for scope in ("3", "4"):
+            body = [line.split("\t") for line in PHASE_BODY.splitlines()]
+            body = [row for row in body if not (row[0] == "sample" and row[1] == "101" and row[6] == scope)]
+            result = trace.analyze(phase_artifact(body))
+            self.assertFalse(result["structural_complete"])
+            self.assertFalse(result["evidence_complete"])
+            expected = [2] * 5
+            expected[int(scope)] = 1
+            self.assertEqual(result["covered"], expected)
+
+    def test_v3_exact_typed_mapping_unknown_profiles_and_mixed_schema_rejected(self):
+        for old, new in [("scope_set=render-phases", "scope_set=legacy"),
+                         ("scope_set=render-phases", "scope_set=render-phases-extra"),
+                         ("_v3 ", "_v4 "), ("_v3 ", "_v2 ")]:
+            self.invalid(phase_artifact(header=PHASE_HEADER.replace(old, new)))
+        self.invalid(phase_artifact(header=PHASE_HEADER.replace(" scope_set=render-phases", "")))
+        self.invalid(phase_artifact(header=PHASE_HEADER + " scope_set=render-phases"))
+        self.invalid(artifact(header=HEADER + " scope_set=render-phases"))
+        self.invalid(phase_artifact(mapping=MAP))
+        self.invalid(artifact(mapping=PHASE_MAP))
+        self.invalid(phase_artifact(columns=COLUMNS))
+        self.invalid(artifact(columns=PHASE_COLUMNS))
+        self.invalid(phase_artifact(mapping=PHASE_MAP[::-1]))
+        self.invalid(phase_artifact(mapping=PHASE_MAP[:4]))
+        self.invalid(phase_artifact(mapping=PHASE_MAP + [PHASE_MAP[4]]))
+        for index, old, new in [(0, "kind=system", "kind=span"),
+                                (1, "queue_material_meshes", "queue_material_meshes<WorldMaterial>"),
+                                (2, "prepare_view_targets", "prepare_view_targets_extra"),
+                                (3, "kind=span", "kind=system"),
+                                (3, "target=bevy_core_pipeline::schedule", "target=other"),
+                                (3, "name=queue_submit", "name=queue_submit_extra"),
+                                (3, "level=INFO", "level=DEBUG"),
+                                (4, "target=bevy_render::renderer", "target=other"),
+                                (4, "name=present_frames", "name=present_frames_extra"),
+                                (4, "level=INFO", "level=WARN")]:
+            mapping = PHASE_MAP.copy()
+            mapping[index] = mapping[index].replace(old, new)
+            self.invalid(phase_artifact(mapping=mapping))
+
+    def test_v3_preserves_domains_chronology_bounds_and_structural_only_limits(self):
+        for column, value in [(1, "4294967296"), (2, "-1"), (3, "nan"), (4, "-1"),
+                              (5, "18446744073709551616"), (6, "5"), (7, "0"),
+                              (8, "ThreadId(0)"), (9, "true")]:
+            body = [line.split("\t") for line in PHASE_BODY.splitlines()]
+            body[2][column] = value
+            self.invalid(phase_artifact(body))
+        self.invalid(phase_artifact().replace(b"start_s=30", b"start_s=0"))
+        self.invalid(phase_artifact().replace(b"max_records=100", b"max_records=100001"))
+        self.invalid(phase_artifact().replace(b"max_bytes=8192", b"max_bytes=4095"))
+        self.invalid(phase_artifact().replace(b"wall_ns=90000000000", b"wall_ns=300000000001"))
+        self.invalid(phase_artifact().replace(b"clock=monotonic_cpu_wall_ns", b"clock=gpu"))
+        self.invalid(phase_artifact()[:-1])
+        body = [line.split("\t") for line in PHASE_BODY.splitlines()]
+        body[2], body[3] = body[3], body[2]
+        self.invalid(phase_artifact(body))  # reversed completion chronology
+        body = [line.split("\t") for line in PHASE_BODY.splitlines()]
+        body[1][4] = "100"
+        self.invalid(phase_artifact(body))  # samples precede active context
+        body = [line.split("\t") for line in PHASE_BODY.splitlines()]
+        body[3][7] = "5"
+        self.invalid(phase_artifact(body))  # direct span identity remapped
+        for reason in ("app_exit", "wall_limit", "record_cap", "byte_cap", "missing_function"):
+            self.assertFalse(trace.analyze(phase_artifact(reason=reason))["structural_complete"])
+        self.assertFalse(trace.analyze(phase_artifact(scopes=1))["structural_complete"])
+        self.assertFalse(trace.analyze(phase_artifact(body=rows()[:-1]))["structural_complete"])
 
 
 if __name__ == "__main__":
