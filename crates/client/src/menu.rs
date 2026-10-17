@@ -2118,6 +2118,236 @@ mod tests {
         // This process exits here. The parent starts a new process for reading;
         // no Apply click or in-memory Settings clone crosses that boundary.
     }
+
+    // Deliberately no WindowPlugin/UI renderer: public Bevy device messages
+    // feed InputPlugin, and the real menu/look/grab systems own the edges in
+    // their production BeforeFixedMainLoop slot. Interaction supplies only
+    // the row hit; physical hit testing/hardware still needs a rendered check.
+    fn public_mouse_controls_app(in_match: bool) -> (App, Entity) {
+        let mut a = App::new();
+        a.add_plugins((MinimalPlugins, bevy::input::InputPlugin))
+            .insert_resource(State::new(if in_match { crate::AppState::Match } else { crate::AppState::Menu }))
+            .init_resource::<Menu>()
+            .init_resource::<Settings>()
+            .init_resource::<LoadRequest>()
+            .init_resource::<crate::inventory::Inventory>()
+            .init_resource::<crate::inventory::Collection>()
+            .init_resource::<crate::buymenu::BuyMenu>()
+            .insert_resource(crate::Options(crate::ClientOptions::default()))
+            .insert_resource(InputEnabled(true));
+        if in_match {
+            let mut simulation = sim::World::new(Arc::new(collision::CollisionWorld::new()));
+            let id = simulation.add_player("Local", sim::Team::CounterTerrorist);
+            simulation.player_mut(id).unwrap().alive = true;
+            a.insert_resource(crate::player::SimWorld(simulation))
+                .insert_resource(LocalPlayer::new(id, glam::Vec3::ZERO, 0.0))
+                .init_resource::<crate::player::InputBlockFrames>()
+                .init_resource::<crate::tracers::InspectRequest>()
+                .add_systems(RunFixedMainLoop, (input, crate::player::look, crate::player::grab_cursor).chain()
+                    .in_set(bevy::app::RunFixedMainLoopSystems::BeforeFixedMainLoop));
+        } else {
+            a.add_systems(RunFixedMainLoop, input.run_if(home_controls)
+                .in_set(bevy::app::RunFixedMainLoopSystems::BeforeFixedMainLoop));
+        }
+        let window = a.world_mut().spawn((PrimaryWindow, CursorOptions::default())).id();
+        {
+            let mut menu = a.world_mut().resource_mut::<Menu>();
+            menu.in_match = in_match;
+            menu.open_classic_controls();
+        }
+        (a, window)
+    }
+
+    fn public_mouse_edge(a: &mut App, window: Entity, button: MouseButton, state: bevy::input::ButtonState) {
+        a.world_mut().write_message(bevy::input::mouse::MouseButtonInput { button, state, window });
+        a.update();
+    }
+
+    fn public_escape_edge(a: &mut App, window: Entity, state: bevy::input::ButtonState) {
+        a.world_mut().write_message(bevy::input::keyboard::KeyboardInput {
+            key_code: KeyCode::Escape, logical_key: bevy::input::keyboard::Key::Escape,
+            state, text: None, repeat: false, window,
+        });
+        a.update();
+    }
+
+    fn open_mouse_row(a: &mut App, window: Entity, index: usize) -> Entity {
+        let row = a.world_mut().spawn((Interaction::Pressed, Action::Bind(index))).id();
+        public_mouse_edge(a, window, MouseButton::Left, bevy::input::ButtonState::Pressed);
+        assert_eq!(a.world().resource::<Menu>().capture, Some(index));
+        a.world_mut().entity_mut(row).insert(Interaction::None);
+        public_mouse_edge(a, window, MouseButton::Left, bevy::input::ButtonState::Released);
+        row
+    }
+
+    fn sample_controls_match(a: &mut App, window: Entity) -> sim::TickInput {
+        let keys = a.world().resource::<ButtonInput<KeyCode>>().clone();
+        let mouse = a.world().resource::<ButtonInput<MouseButton>>().clone();
+        let settings = a.world().resource::<Settings>().clone();
+        let blocked = a.world().resource::<crate::player::InputBlockFrames>().0 != 0;
+        let captured = a.world().get::<CursorOptions>(window).unwrap().grab_mode != CursorGrabMode::None;
+        crate::player::sample_tick_input(&mut a.world_mut().resource_mut::<LocalPlayer>(), &crate::player::Controls {
+            keys: &keys, mouse: &mouse, settings: &settings, enabled: true, blocked, captured, buy_menu: false,
+        })
+    }
+
+    #[test]
+    fn action_rows_capture_public_mouse_edges_and_persist_across_processes() {
+        use bevy::input::ButtonState::{Pressed, Released};
+        use crate::settings::{KEY_ATTACK, KEY_SELECTION_FIRST, MOUSE_BUTTONS, MouseAction};
+        const CHILD: &str = "CSR_ACTION_ROW_MOUSE_PHASE";
+        let phase = std::env::var(CHILD).unwrap_or_default();
+        if phase.is_empty() {
+            let base = std::env::temp_dir().join(format!("csr-action-row-mouse-{}-{}", std::process::id(),
+                std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+            for in_match in [false, true] {
+                let data = base.join(if in_match { "match" } else { "home" });
+                std::fs::create_dir_all(&data).unwrap();
+                for stage in ["write", "read"] {
+                    let result = std::process::Command::new(std::env::current_exe().unwrap())
+                        .args(["--exact", "menu::tests::action_rows_capture_public_mouse_edges_and_persist_across_processes", "--nocapture"])
+                        .env(CHILD, stage).env("CSR_ACTION_ROW_MOUSE_MATCH", if in_match { "1" } else { "0" })
+                        .env_remove("CSR_DATA_DIR").current_dir(&data).output().unwrap();
+                    assert!(result.status.success(), "{stage}: {}\n{}", String::from_utf8_lossy(&result.stdout), String::from_utf8_lossy(&result.stderr));
+                }
+            }
+            return;
+        }
+        let knife = KEY_SELECTION_FIRST + 3;
+        if phase == "read" {
+            // A new process reads the ordinary relative settings path. No Apply,
+            // Settings clone, global cwd mutation or owner userdata is involved.
+            let loaded = Settings::load();
+            assert_eq!(loaded.mouse_binds[3], MouseAction::Action(knife));
+            assert_eq!(loaded.mouse_binds[4], MouseAction::Action(4));
+            assert_eq!(loaded.binds[knife], Some(KeyCode::Digit3));
+            assert_eq!(loaded.selection_binding_label(3), "3 / Mouse 4");
+            assert_eq!(loaded.volume, 0.13);
+            assert_eq!(loaded.sensitivity, 2.375);
+            assert_eq!(loaded.wheel_up, crate::settings::WheelAction::Previous);
+            assert_eq!(loaded.wheel_down, crate::settings::WheelAction::Next);
+            let mut rendered = App::new();
+            rendered.insert_resource(Menu::default()).insert_resource(loaded)
+                .add_systems(Update, |mut commands: Commands, menu: Res<Menu>, settings: Res<Settings>| {
+                    draw_classic_controls(&mut commands, &menu, &settings);
+                });
+            rendered.update();
+            let world = rendered.world_mut();
+            assert!(world.query::<&Text>().iter(world).any(|text| text.0 == "3 / Mouse 4"),
+                "the action row must expose the persisted effective mouse binding");
+            return;
+        }
+        let in_match = std::env::var("CSR_ACTION_ROW_MOUSE_MATCH").unwrap() == "1";
+        let (mut a, window) = public_mouse_controls_app(in_match);
+        assert_eq!(a.world().contains_resource::<LocalPlayer>(), in_match);
+        // All five public variants use the same path. A fresh left click on
+        // the opener's own row must complete capture exactly once.
+        for button in MOUSE_BUTTONS {
+            a.insert_resource(Settings::default());
+            let row = open_mouse_row(&mut a, window, KEY_ATTACK);
+            if button == MouseButton::Left { a.world_mut().entity_mut(row).insert(Interaction::Pressed); }
+            public_mouse_edge(&mut a, window, button, Pressed);
+            assert_eq!(a.world().resource::<Menu>().capture, None);
+            let position = MOUSE_BUTTONS.iter().position(|candidate| *candidate == button).unwrap();
+            assert_eq!(a.world().resource::<Settings>().mouse_binds[position], MouseAction::Attack);
+            if in_match { assert_eq!(sample_controls_match(&mut a, window).buttons, 0, "binding must not attack"); }
+            a.world_mut().entity_mut(row).insert(Interaction::None);
+            public_mouse_edge(&mut a, window, button, Released);
+        }
+        let mut settings = Settings::default();
+        settings.volume = 0.13;
+        settings.sensitivity = 2.375;
+        a.insert_resource(settings);
+        // Console-created bindings and captured bindings share exact storage.
+        crate::console::command_fixture(a.world_mut(), "bind mouse4 +use").unwrap();
+        crate::console::command_fixture(a.world_mut(), "bind mouse5 +jump").unwrap();
+        let row = a.world_mut().spawn((Interaction::Pressed, Action::Bind(knife))).id();
+        public_mouse_edge(&mut a, window, MouseButton::Left, Pressed);
+        a.update(); // The opener remains held; there is no new press edge.
+        assert_eq!(a.world().resource::<Menu>().capture, Some(knife));
+        assert_eq!(a.world().resource::<Settings>().mouse_binds[0], MouseAction::Attack);
+        a.world_mut().entity_mut(row).insert(Interaction::None);
+        public_mouse_edge(&mut a, window, MouseButton::Back, Pressed); // Left can stay held.
+        assert_eq!(a.world().resource::<Menu>().capture, None);
+        assert_eq!(a.world().resource::<Settings>().selection_binding_label(3), "3 / Mouse 4");
+        assert_eq!(crate::console::command_fixture(a.world_mut(), "bind mouse4").unwrap(), "mouse4 = \"slot3\"");
+        public_mouse_edge(&mut a, window, MouseButton::Back, Released);
+        public_mouse_edge(&mut a, window, MouseButton::Left, Released);
+        // Reassign onto an occupied button and back: both actions survive.
+        for button in [MouseButton::Forward, MouseButton::Back] {
+            open_mouse_row(&mut a, window, knife);
+            public_mouse_edge(&mut a, window, button, Pressed);
+            public_mouse_edge(&mut a, window, button, Released);
+        }
+        assert_eq!(a.world().resource::<Settings>().mouse_binds[4], MouseAction::Action(4));
+        let clear = a.world_mut().spawn((Interaction::Pressed, Action::ClearBind(knife))).id();
+        a.update();
+        assert_eq!(a.world().resource::<Settings>().action_binding_label(knife), "");
+        a.world_mut().entity_mut(clear).insert(Interaction::None);
+        open_mouse_row(&mut a, window, knife);
+        a.world_mut().write_message(bevy::input::keyboard::KeyboardInput {
+            key_code: KeyCode::Digit3, logical_key: bevy::input::keyboard::Key::Character("3".into()),
+            state: Pressed, text: None, repeat: false, window,
+        });
+        a.update();
+        a.world_mut().write_message(bevy::input::keyboard::KeyboardInput {
+            key_code: KeyCode::Digit3, logical_key: bevy::input::keyboard::Key::Character("3".into()),
+            state: Released, text: None, repeat: false, window,
+        });
+        a.update();
+        open_mouse_row(&mut a, window, knife);
+        public_mouse_edge(&mut a, window, MouseButton::Back, Pressed);
+        public_mouse_edge(&mut a, window, MouseButton::Back, Released);
+        let saved = a.world().resource::<Settings>().clone();
+        let row = open_mouse_row(&mut a, window, knife);
+        // Escape owns the whole frame, including a competing mouse/UI click.
+        a.world_mut().entity_mut(row).insert((Interaction::Pressed, Action::ClearBind(knife)));
+        a.world_mut().write_message(bevy::input::mouse::MouseButtonInput { button: MouseButton::Right, state: Pressed, window });
+        public_escape_edge(&mut a, window, Pressed);
+        assert_eq!(a.world().resource::<Menu>().capture, None);
+        assert!(a.world().resource::<Menu>().classic_controls);
+        assert_eq!(*a.world().resource::<Settings>(), saved);
+        a.world_mut().entity_mut(row).insert(Interaction::None);
+        public_mouse_edge(&mut a, window, MouseButton::Right, Released);
+        public_escape_edge(&mut a, window, Released);
+        // The local console toggle stays keyboard-only rather than corrupting
+        // an out-of-range gameplay action. Unsupported button numbers do too.
+        open_mouse_row(&mut a, window, ACTIONS.len());
+        public_mouse_edge(&mut a, window, MouseButton::Back, Pressed);
+        assert_eq!(a.world().resource::<Menu>().capture, Some(ACTIONS.len()));
+        public_mouse_edge(&mut a, window, MouseButton::Back, Released);
+        public_escape_edge(&mut a, window, Pressed);
+        public_escape_edge(&mut a, window, Released);
+        open_mouse_row(&mut a, window, knife);
+        public_mouse_edge(&mut a, window, MouseButton::Other(4), Pressed);
+        assert_eq!(a.world().resource::<Menu>().capture, Some(knife));
+        public_mouse_edge(&mut a, window, MouseButton::Other(4), Released);
+        public_escape_edge(&mut a, window, Pressed);
+        public_escape_edge(&mut a, window, Released);
+        assert_eq!(Settings::load(), saved, "accepted edits save without Apply; cancellation changes nothing");
+        if in_match {
+            a.world_mut().spawn((Interaction::Pressed, Action::ControlsBack));
+            a.update();
+            let resume = a.world_mut().spawn((Interaction::Pressed, Action::Resume)).id();
+            public_mouse_edge(&mut a, window, MouseButton::Left, Pressed);
+            a.world_mut().entity_mut(resume).insert(Interaction::None);
+            for _ in 0..3 {
+                a.update();
+                assert_eq!(sample_controls_match(&mut a, window).buttons, 0, "held resume click cannot attack");
+            }
+            public_mouse_edge(&mut a, window, MouseButton::Left, Released);
+            public_mouse_edge(&mut a, window, MouseButton::Back, Pressed);
+            assert_eq!(sample_controls_match(&mut a, window).weapon_slot, 3, "fresh Mouse4 selects Knife");
+            public_mouse_edge(&mut a, window, MouseButton::Back, Released);
+            public_mouse_edge(&mut a, window, MouseButton::Forward, Pressed);
+            assert_ne!(sample_controls_match(&mut a, window).buttons & movement::buttons::JUMP, 0);
+            public_mouse_edge(&mut a, window, MouseButton::Forward, Released);
+            public_mouse_edge(&mut a, window, MouseButton::Left, Pressed);
+            assert_ne!(sample_controls_match(&mut a, window).buttons & movement::buttons::ATTACK, 0,
+                "a fresh gameplay click still attacks after opener suppression");
+        }
+    }
+
     #[test]
     fn classic_controls_apply_reopen_capture_and_back_use_private_preferences() {
         const CHILD: &str = "CSR_CONTROLS_MENU_FIXTURE_CHILD";

@@ -255,6 +255,10 @@ byte-identical to 2018.
       latency and the remaining Video page remain open. PR161.
 - [ ] Complete the game API bridge for inventory/cases and the remaining
       classic panels. Original reset defaults still need verified evidence.
+- [ ] Verify ordinary action-row Mouse4/Mouse5 capture from Home and Pause,
+      immediate persistence across restart, effective HUD hints and opener-click
+      suppression. Source fix and public-input regressions authored; root-run
+      compilation/tests and rendered hardware checks remain pending.
 - [x] Bound recognized Legacy weapon cases and rare knives to the documented
       2015 subset: 17 cases, nine families and 177 supported model/paint pairs,
       preserving raw catalog indices, owned later records and custom identities.
