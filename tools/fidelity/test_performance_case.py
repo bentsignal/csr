@@ -11,6 +11,10 @@ from unittest.mock import patch
 spec = importlib.util.spec_from_file_location('performance_case', Path(__file__).with_name('performance_case.py'))
 case = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(case)
+fixture_spec = importlib.util.spec_from_file_location(
+    'perf_metadata_fixtures', Path(__file__).resolve().parents[1] / 'tests' / 'perf_metadata_fixtures.py')
+metadata = importlib.util.module_from_spec(fixture_spec)
+fixture_spec.loader.exec_module(metadata)
 
 HEAD = 'a' * 40
 
@@ -20,12 +24,16 @@ def row(pid, name, parent=0, path=None, created='stable'):
 
 
 def report(sim, extra=''):
-    return ('perf interval: elapsed_real_s=1 report_wall_s=1 frames=100 mixed_context=false\n'
+    return (f'perf interval: elapsed_real_s={sim + 1} report_wall_s=1 sampled_real_s=1.000000 frames=100 '
+            'mean_ms=10.0000 p50_p95_p99_ms=Some([10.0, 10.0, 10.0]) max_ms=10.0000 '
+            'overflow=0 rejected=0 mixed_context=false context_changes=0\n'
             'perf context: endpoint_only=true map=de_nuke mixed_context=false observed=Some(FrameContext { '
             'state: Match, page: None, in_match: true, window: Some(WindowContext { size: (1920, 1080), '
-            'focused: true }), screenshot: false, input_enabled: true, local: Some(LocalContext { '
-            'spectating: None, noclip: false }) })' + extra + '\n'
-            f'perf simulation census: sim_seconds={sim:.3f} players=6 bots=5 alive=6\n')
+            'focused: true, present_requested: Immediate, frame_latency_hint: Some(1) }), '
+            'screenshot: false, input_enabled: true, local: Some(LocalContext { '
+            'id: 1, spectating: None, noclip: false }) })' + extra + '\n'
+            f'perf simulation census: tick={round(sim * 128)} tick_rate=128 sim_seconds={sim:.3f} '
+            'competitive=false round=1 players=6 bots=5 alive=6 items=0 projectiles=0 fields=0\n')
 
 
 class FakeClock:
@@ -40,15 +48,16 @@ class FakeClock:
 
 
 class FakeChild:
-    def __init__(self, log, exe):
+    def __init__(self, log, exe, reporter=report):
         self.identity = (42, 'stable', str(exe))
         self.closed = False
         self.log = log
         self.sim = -1
+        self.reporter = reporter
 
     def poll(self):
         self.sim += 1
-        self.log.write(report(self.sim).encode())
+        self.log.write(self.reporter(self.sim).encode())
         self.log.flush()
         return None
 
@@ -57,9 +66,10 @@ class FakeChild:
 
 
 class FakeAdapter:
-    def __init__(self, exe, additional=None, ram=20 * 1024**3, cancel=None):
+    def __init__(self, exe, additional=None, ram=20 * 1024**3, cancel=None, reporter=report):
         self.exe, self.additional, self.ram = exe, additional or [], ram
         self.child, self.launches, self.samples, self.cancel = None, [], [], cancel
+        self.reporter = reporter
 
     def free_ram(self):
         return self.ram
@@ -74,7 +84,7 @@ class FakeAdapter:
 
     def launch(self, argv, cwd, env, log):
         self.launches.append((argv, cwd, env))
-        self.child = FakeChild(log, self.exe)
+        self.child = FakeChild(log, self.exe, self.reporter)
         return self.child
 
     def counters(self, child):
@@ -139,6 +149,125 @@ class CaseFixtures(unittest.TestCase):
         self.assertEqual(case.run(self.args, adapter, FakeClock()), 2)
         self.assertTrue(adapter.child.closed)
         self.assertEqual(len(adapter.launches), 1)
+
+    def test_full_new_1440_fixture_records_cli_actual_and_preserves_without_admission(self):
+        self.args.expected_resolution = [2560, 1440]
+        adapter = FakeAdapter(self.exe, reporter=lambda sim: metadata.upgrade(report(sim)))
+        self.assertEqual(case.run(self.args, adapter, FakeClock()), 0)
+        root = Path(self.args.private_root)
+        state = json.loads((root / 'status.json').read_text(encoding='utf-8'))
+        self.assertEqual(state['requested_cli_resolution'], [1920, 1080])
+        self.assertEqual(state['expected_physical_resolution'], [2560, 1440])
+        self.assertEqual(state['observed_physical_resolutions'], [[2560, 1440]])
+        self.assertTrue(state['protected_unchanged'])
+        self.assertTrue(adapter.child.closed)
+        self.assertIn('ready', (root / 'phases.jsonl').read_text(encoding='utf-8'))
+        windows = json.loads((root / 'windows.json').read_text(encoding='utf-8'))
+        self.assertTrue(all(not w['admitted'] and w['invalid_context_records'] == 0 for w in windows))
+        self.assertTrue(all(not w['missing_endpoint_fields'] for w in windows))
+        self.assertEqual(windows[0]['records'][0]['parsed']['world_camera_endpoint'][
+            'raw_debug_fields']['physical_viewport_rect'], metadata.RECT)
+
+    def test_expected_resolution_contract_validation(self):
+        for value in ([1920], [-1, 1080], [0, 1080], [1920, 16385], [True, 1080]):
+            self.args.expected_resolution = value
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                case.validate(self.args)
+
+    def test_default_observes_actual_old_and_new_resolution_without_cli_relabel(self):
+        for text in (report(40).replace('size: (1920, 1080)', 'size: (2560, 1440)'),
+                     metadata.upgrade(report(40))):
+            reports = case.Reports('de_nuke')
+            for line in text.splitlines():
+                reports.line(line)
+            self.assertTrue(reports.ready)
+            record = reports.records[0]
+            self.assertEqual(record['requested_cli_resolution'], [1920, 1080])
+            self.assertEqual(record['actual_physical_resolution'], [2560, 1440])
+            self.assertIsNone(record['expected_physical_resolution'])
+            self.assertEqual(reports.observed_resolutions, [[2560, 1440]])
+
+    def test_expected_physical_mismatch_missing_and_zero_size_cannot_be_ready(self):
+        for text in (metadata.upgrade(report(40)), report(40).replace('size: (1920, 1080)', 'size: (0, 1080)'),
+                     report(40).replace('size: (1920, 1080), ', '')):
+            reports = case.Reports('de_nuke', (1920, 1080))
+            for line in text.splitlines():
+                reports.line(line)
+            self.assertFalse(reports.ready)
+            self.assertTrue(reports.records[0]['errors'])
+
+    def test_old_missing_and_new_endpoint_availability_are_distinct_from_pose_evidence(self):
+        for text, missing in ((report(40), True), (metadata.upgrade(report(40)), False)):
+            reports = case.Reports('de_nuke')
+            for line in text.splitlines():
+                reports.line(line)
+            record = reports.records[0]
+            self.assertEqual(bool(record['endpoint_metadata']['missing_fields']), missing)
+            self.assertFalse(record['endpoint_metadata']['whole_interval_camera_pose_proven'])
+            self.assertFalse(any(w['admitted'] for w in reports.windows(False)))
+
+    def test_new_missing_and_partial_metadata_are_explicit(self):
+        for text in (metadata.upgrade(report(40), endpoints=False),
+                     metadata.upgrade(report(40)).replace(' origin_source_inches=Some([-128.0, 64.5, 32.0])', '')):
+            reports = case.Reports('de_nuke')
+            for line in text.splitlines():
+                reports.line(line)
+            self.assertTrue(reports.records[0]['endpoint_metadata']['missing_fields'])
+            self.assertFalse(any(w['admitted'] for w in reports.windows(False)))
+
+    def test_new_mixed_dead_unavailable_and_inconsistent_endpoints_cannot_be_ready(self):
+        text = metadata.upgrade(report(40))
+        for old, new in [('mixed_context=false', 'mixed_context=true'), ('alive: true', 'alive: false'),
+                         ('role_valid=true', 'role_valid=false'), ('requested_id=1', 'requested_id=2'),
+                         ('render_eye_source_inches=[-128.0', 'render_eye_source_inches=[NaN'),
+                         (', authoritative_view_target: ' + metadata.ACTOR, ''),
+                         ('authoritative_local: ' + metadata.ACTOR, 'authoritative_local: None')]:
+            with self.subTest(change=new):
+                reports = case.Reports('de_nuke')
+                for line in text.replace(old, new).splitlines():
+                    reports.line(line)
+                self.assertFalse(reports.ready)
+                self.assertTrue(reports.records[0]['errors'])
+
+    def test_incremental_new_log_keeps_whole_reports_and_resolution_changes(self):
+        log = self.base / 'synthetic.log'
+        first = metadata.upgrade(report(30)).encode()
+        log.write_bytes(first[:len(first) // 2])
+        reports = case.Reports('de_nuke')
+        reports.read(log)
+        self.assertFalse(reports.records)
+        with log.open('ab') as stream:
+            stream.write(first[len(first) // 2:] + metadata.upgrade(report(31)).encode() + report(32).encode())
+        reports.read(log)
+        self.assertEqual(len(reports.records), 3)
+        self.assertEqual(reports.observed_resolutions, [[2560, 1440], [1920, 1080]])
+        self.assertEqual([r['sim'] for r in reports.windows(False)[0]['records']], [31, 32])
+        self.assertFalse(reports.windows(False)[0]['admitted'])
+
+    def test_startup_without_simulation_census_remains_explicit_and_unbounded(self):
+        reports = case.Reports('de_nuke')
+        startup = '\n'.join(line for line in report(1).replace('state: Match', 'state: Loading').splitlines()
+                            if 'perf simulation census:' not in line)
+        for line in (startup + '\n' + report(30) + report(31)).splitlines():
+            reports.line(line)
+        self.assertEqual(len(reports.reports_without_simulation), 1)
+        self.assertIsNone(reports.reports_without_simulation[0]['sim'])
+        self.assertIn('unbounded report', reports.reports_without_simulation[0]['errors'][-1])
+        window = reports.windows(False)[0]
+        self.assertEqual(window['unbounded_report_count'], 1)
+        self.assertEqual([r['sim'] for r in window['records']], [31])
+        self.assertFalse(window['admitted'])
+
+    def test_corrupt_interval_or_duplicate_endpoints_cannot_be_ready(self):
+        text = metadata.upgrade(report(40))
+        for changed in (text.replace('frames=100', 'frames=99'),
+                        text.replace(metadata.endpoint_lines()[2], '\n'.join([metadata.endpoint_lines()[2]] * 2)),
+                        text.replace('context_changes=0', 'context_changes=1')):
+            reports = case.Reports('de_nuke')
+            for line in changed.splitlines():
+                reports.line(line)
+            self.assertFalse(reports.ready)
+            self.assertTrue(reports.records[0]['errors'])
 
     def test_preflight_other_game_and_non_ci_build_never_launch(self):
         for name in ('csgo.exe', 'cs2.exe', 'csr.exe', 'rustc.exe', 'cargo.exe', 'link.exe'):

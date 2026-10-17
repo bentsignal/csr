@@ -41,6 +41,33 @@ The exact launch command is recorded in `status.json`:
 csr.exe play de_nuke --direct --deathmatch --bots 3 --size 1920 1080
 ```
 
+`--size` is a **CLI request**, not an observed physical resolution. Copied
+fullscreen preferences can override it: the retained `0e9aa51` Nuke run reported
+2560×1440 despite this request. The helper never edits those preferences to
+force a size. By default it recognizes an ordinary startup endpoint at any
+positive logged `WindowContext.size`, recording `requested_cli_resolution`
+separately from `actual_physical_resolution` in each record and
+`observed_physical_resolutions` in status/windows. It never labels an observed
+1440p run as 1080p.
+
+To require a particular physical size, add **both** `-ExpectedWidth 2560
+-ExpectedHeight 1440` to the wrapper invocation (Python receives
+`--expected-resolution 2560 1440`). A mismatch prevents that report from
+qualifying as ready/ordinary; its actual size and error remain recorded. This
+does not change the CLI request. Pair only independently reviewed windows with
+matching actual sizes. Resolution changes remain visible per record and in each
+window's distinct-size list; ready is a startup milestone, not a continuing
+validation of every later interval.
+
+WindowContext reports the physical **window** size. New camera endpoints also
+retain `viewport` and `physical_viewport_rect` as raw Bevy Debug values under
+`parsed.world_camera_endpoint.raw_debug_fields`. The parsed rectangle is also in
+`endpoint_metadata.actual_camera_viewport_pixels` as min/max/size in pixels
+(null when unavailable). Window size is not proof of a
+camera viewport. Old logs have no camera viewport observation; the missing field
+is explicit. `viewport=None` is a logged default, distinct from an omitted field;
+review `physical_viewport_rect` rather than inventing dimensions from CLI intent.
+
 Cases are `de_dust2_2017` or `de_nuke`, each with `--bots 0` or `--bots 3`.
 The latter requests three enemies and two teammates: **five bots**, not three
 total. The runtime census remains the authority for actual players/bots.
@@ -85,7 +112,10 @@ Outputs stay private:
 
 - `status.json` and `phases.jsonl`: started, ready, warmup, measurement and closed,
   with timestamps, stable process identity, exact CLI and close reason. Ready
-  means a reported ordinary Match endpoint was seen, not camera/life admission.
+  means a reported ordinary Match endpoint satisfying the optional physical-size
+  contract was seen, never interval/camera admission. Status retains startup
+  reports without a simulation census under `reports_without_simulation`; these
+  are unbounded and cannot be assigned to simulation windows.
 - `game.log`: unaltered merged stdout/stderr, including per-second diagnostics.
 - `telemetry.jsonl`: wall/monotonic timestamps, latest simulation time, process
   private/working bytes, cumulative process CPU seconds, and per-engine GPU
@@ -96,6 +126,8 @@ Outputs stay private:
   successive simulation endpoints inside 30–60, 300–330 and 600–630 seconds.
   Boundary-straddling intervals are excluded. No pooled percentiles are derived
   from per-second percentiles. Check coverage/gaps and all raw context flags.
+  `ordinary_context_endpoint` is a report classification; the existing
+  `context_valid_without_camera_alive` key is retained as its compatibility alias.
 - `protected-before.json`, `protected-after.json`: hashes, never config contents.
 
 The guard checks available RAM and inventories processes about every two seconds;
@@ -110,7 +142,7 @@ Shutdown has a further eight-second wait bound. Prelaunch and final hash audits
 are outside the game loop deadline. A forced close may lose the buffered tail
 of the log; captured full report records are retained.
 
-Known game executable names, any process under `steamapps/common`, the selected
+Known game executable names, unknown processes under `steamapps/common`, the selected
 binary name and non-CI compiler/build executables block launch or stop only the
 owned case. CI ancestry is established from `Runner.Worker.exe` through parent
 PIDs; an idle `Runner.Listener.exe` alone does not contaminate. Observed CI work
@@ -119,14 +151,38 @@ case as other games. This inventory is not universal identification of games
 outside known names/Steam paths; the root must also ensure no other game is
 running. Short activity between guard samples and inaccessible process paths
 cannot be ruled out. Unknown telemetry errors stay explicit.
+The narrowly recognized Wallpaper Engine `wallpaper32.exe`/`wallpaper64.exe`
+under its own `steamapps/common/wallpaper_engine` directory are desktop utilities;
+the guard recognizes them without stopping them or treating them as another game.
 
-All windows have `admitted: false`. At diagnostics commit `5dc2b50`, reports
-cover focus, app state/page, input enabled, screenshot mode, map, viewport,
-spectating/noclip and mixed context. They **lack camera origin, camera angles
-and local-player alive state**. The helper flags `needed_metadata` for these
-fields. External root evidence and/or added diagnostics must establish camera,
-life state, actual focus/Match/input and window coverage before admitting any
-comparison. Simulation-clock regression also contaminates every window.
+All windows have `admitted: false`. Parsing is shared with `../perf_report.py`;
+keep that module beside this helper's parent directory when copying the tools.
+Both old `0e9aa51` and new `cc66e5e` FrameContext shapes are supported. Old logs
+lack actor alive/weapon/life metadata and camera pose. New contexts include
+`authoritative_local` and `authoritative_view_target` discrete actor fields
+(id, life epoch, alive, team, active slot, weapon def index). They participate in
+the producer's mixed-context detection; mixed or rejected samples still prevent
+ordinary classification. New context actor absence, death or identity mismatch
+also prevents it. Missing old observations are never filled from aggregate counts.
+
+New separate player records contain **local and view-target endpoints only**,
+including authoritative actor, weapon class/ContentId and Source-space
+origin/angles. They are not per-bot pose records. View intent is a separate
+endpoint. The world-camera endpoint retains Bevy transform/global matrix,
+projection, FOV, target, layers and viewport debug fields; it is explicitly
+`source=main_world_last interval_camera_stability=unproven`. The helper validates
+numeric arrays/roles and rejects conflicting or malformed known records. Raw
+Debug fields remain available without guessed coordinate conversions.
+
+Each record has `endpoint_metadata.missing_fields`; missing keys and explicit
+`None` values are also distinguished by each parsed endpoint's `missing_fields`
+and `none_fields`. New fields can be absent even in a new-format context. All
+windows still require `whole_interval_camera_pose` and independent coverage /
+focus / input validation in `needed_metadata`. An endpoint camera is **never**
+whole-interval pose evidence. External root review of full-interval integrity,
+life/identity, camera, actual focus/Match/input and coverage remains necessary.
+Simulation-clock regression still contaminates every window. This runner does
+not replace the offline analyzer's stricter UTC/real-clock and window checks.
 
 Fixture verification (no games/builds/Windows backend/owner data):
 
@@ -134,8 +190,10 @@ Fixture verification (no games/builds/Windows backend/owner data):
 python -B -m unittest discover -s tools/fidelity -p test_performance_case.py -v
 ```
 
-The fixtures verify orchestration, path scoping, guards, report classification,
-cancel/deadline cleanup, read-only preservation and missing-metadata behavior.
+The fixtures verify orchestration, path scoping, guards, old/new report parsing,
+physical-vs-requested resolution, endpoint absence/conflicts, mixed contexts,
+cancel/deadline cleanup, read-only preservation and no admission even with complete
+endpoint metadata. They share synthetic format text with the analyzer tests.
 They do not validate Windows CIM availability, real game startup/input/rendering,
 the native slot under contention, runtime map/config consumption, or actual
 CPU/GPU counters. Root must validate those using one granted native slot.

@@ -1,4 +1,4 @@
-"""Synthetic clean-room fixtures for the 5dc2b50 log contract; no game data."""
+"""Synthetic clean-room fixtures for old 0e9/new cc66e5e contracts; no game data."""
 import copy
 from datetime import datetime, timedelta, timezone
 import hashlib
@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from perf_metadata_fixtures import ACTOR, RECT, endpoint_lines, upgrade
 
 
 SPEC = importlib.util.spec_from_file_location("perf_report", Path(__file__).resolve().parents[1] / "perf_report.py")
@@ -75,6 +76,154 @@ def analyze(raw=None, rec=None):
     return perf.analyze(raw, receipt(raw) if rec is None else rec)
 
 
+class EndpointFormatTests(unittest.TestCase):
+    def new_report(self, text=None, resolution=(2560, 1440)):
+        raw = (upgrade(fixture().decode()) if text is None else text).encode()
+        rec = receipt(raw)
+        rec['case']['resolution'] = list(resolution)
+        rec['requested_cli_resolution'] = [1920, 1080]
+        return perf.analyze(raw, rec)
+
+    def test_new_actor_camera_format_retains_exact_endpoint_data_without_admission(self):
+        report = self.new_report()
+        self.assertEqual(report['log_errors'], [])
+        self.assertEqual(report['eligible_interval_count'], 6)
+        self.assertTrue(all(w['valid_descriptive_window'] for w in report['windows']))
+        row = report['intervals'][0]
+        self.assertEqual(row['context']['authoritative_local'], dict(
+            id=1, life_epoch=2, alive=True, team='CounterTerrorist', active_slot=0, weapon_def_index=7))
+        self.assertEqual(set(row['player_endpoints']), {'local', 'view_target'})
+        self.assertEqual(row['player_endpoints']['local']['origin_source_inches'], [-128, 64.5, 32])
+        camera = row['world_camera_endpoint']
+        self.assertEqual(camera['raw_debug_fields']['physical_viewport_rect'], RECT)
+        self.assertEqual(row['endpoint_metadata']['actual_camera_viewport_pixels'],
+                         dict(min=[0, 0], max=[2560, 1440], size=[2560, 1440]))
+        self.assertEqual(camera['fov_vertical_horizontal_degrees'], [73.7398, 106.2602])
+        self.assertEqual(camera['missing_fields'], [])
+        self.assertIn('viewport', camera['none_fields'])  # None is an explicit default, not an omitted key
+        self.assertEqual(row['endpoint_metadata']['missing_fields'], [])
+        self.assertTrue(row['endpoint_metadata']['local_alive_at_context_endpoint'])
+        self.assertFalse(row['endpoint_metadata']['whole_interval_camera_pose_proven'])
+        self.assertFalse(report['paired_admission'])
+        self.assertFalse(perf.compare(report, copy.deepcopy(report))['paired_admission'])
+
+    def test_observed_1440_and_cli_1080_are_separate_receipt_contracts(self):
+        report = self.new_report()
+        resolution = report['resolution_metadata']
+        self.assertEqual(resolution['requested_cli_resolution'], [1920, 1080])
+        self.assertEqual(resolution['observed_window_physical_resolutions'], [[2560, 1440]])
+        self.assertEqual(resolution['camera_physical_viewport_rects_debug'], [RECT])
+        bad = self.new_report(resolution=(1920, 1080))
+        self.assertEqual(bad['eligible_interval_count'], 0)
+        self.assertIn('case.resolution', str(bad['intervals'][0]['exclusion_reasons']))
+        self.assertIn('actual physical resolution', perf.markdown(report))
+        self.assertIsNone(analyze()['resolution_metadata']['requested_cli_resolution'])
+
+    def test_new_context_without_endpoint_lines_keeps_missing_observations_explicit(self):
+        report = self.new_report(upgrade(fixture().decode(), endpoints=False))
+        row = report['intervals'][0]
+        self.assertTrue(row['context']['actor_metadata_logged'])
+        self.assertTrue(row['endpoint_metadata']['local_alive_at_context_endpoint'])
+        self.assertEqual(row['endpoint_metadata']['missing_fields'], [
+            'player_endpoint.local', 'player_endpoint.view_target', 'view_intent_endpoint', 'world_camera_endpoint'])
+        self.assertFalse(report['paired_admission'])
+
+    def test_missing_actor_context_and_unavailable_camera_are_not_invented(self):
+        text = upgrade(fixture().decode(), actor='None')
+        text = '\n'.join(line.split('perf world camera endpoint:')[0] +
+                         'perf world camera endpoint: endpoint_only=true source=main_world_last '
+                         'interval_camera_stability=unproven candidates=0 selection=unavailable'
+                         if 'perf world camera endpoint:' in line else line for line in text.splitlines())
+        report = self.new_report(text)
+        row = report['intervals'][0]
+        self.assertEqual(report['log_errors'], [])
+        self.assertEqual(report['eligible_interval_count'], 0)
+        self.assertIn('context.authoritative_local', row['endpoint_metadata']['missing_fields'])
+        self.assertIn('world_camera_endpoint.physical_viewport_rect', row['endpoint_metadata']['missing_fields'])
+        self.assertIsNone(row['endpoint_metadata']['local_alive_at_context_endpoint'])
+
+    def test_mixed_actor_lifecycle_and_weapon_changes_exclude_complete_intervals(self):
+        for old, new in [('life_epoch: 2', 'life_epoch: 3'), ('alive: true', 'alive: false'),
+                         ('team: CounterTerrorist', 'team: Terrorist'), ('active_slot: 0', 'active_slot: 1'),
+                         ('weapon_def_index: Some(7)', 'weapon_def_index: Some(16)')]:
+            with self.subTest(change=new):
+                text = ''.join(upgrade(block(n, mixed=n == 2)).replace(old, new) if n == 2
+                               else upgrade(block(n)) for n in range(1, 7))
+                report = self.new_report(text)
+                self.assertFalse(report['intervals'][1]['eligible_context'])
+                self.assertFalse(report['windows'][0]['valid_descriptive_window'])
+
+    def test_context_actor_boundary_changes_and_format_changes_have_no_stable_boundary(self):
+        for text in (upgrade(block(1)) + upgrade(block(2)).replace('life_epoch: 2', 'life_epoch: 3'),
+                     block(1).replace('size: (1920, 1080)', 'size: (2560, 1440)') + upgrade(block(2))):
+            report = self.new_report(text)
+            self.assertFalse(report['intervals'][1]['boundary_stable'])
+
+    def test_missing_partial_endpoint_fields_are_explicit(self):
+        report = self.new_report(upgrade(fixture().decode()).replace(
+            ' origin_source_inches=Some([-128.0, 64.5, 32.0])', ''))
+        self.assertIn('player_endpoint.local.origin_source_inches',
+                      report['intervals'][0]['endpoint_metadata']['missing_fields'])
+        self.assertFalse(report['paired_admission'])
+
+    def test_bad_endpoint_values_roles_duplicates_and_context_disagreement_exclude(self):
+        text = upgrade(fixture().decode())
+        for old, new in [('role_valid=true', 'role_valid=false'), ('candidates=1', 'candidates=2'),
+                         ('is_active=true', 'is_active=false'), ('requested_id=1', 'requested_id=99'),
+                         ('global_matrix_bevy_cols=[1.0', 'global_matrix_bevy_cols=[NaN'),
+                         ('render_eye_source_inches=[-128.0', 'render_eye_source_inches=[Infinity'),
+                         ('render_eye_source_inches=[-128.0', 'render_eye_source_inches=[' + '9' * 400),
+                         ('render_eye_source_inches=[-128.0, 64.5, 96.0]', 'render_eye_source_inches=[1, 2]'),
+                         ('role=local', 'role=bot'), ('endpoint_only=true source=', 'endpoint_only=false source='),
+                         ('candidates=1', 'candidates=1 candidates=1')]:
+            with self.subTest(change=new):
+                self.assertEqual(self.new_report(text.replace(old, new))['eligible_interval_count'], 0)
+        # Context is unchanged while a single reported authoritative player disagrees.
+        changed = text.replace('requested_id=1 authoritative=' + ACTOR,
+                               'requested_id=1 authoritative=' + ACTOR.replace('life_epoch: 2', 'life_epoch: 3'))
+        self.assertEqual(self.new_report(changed)['eligible_interval_count'], 0)
+        lines = text.splitlines(keepends=True)
+        lines.insert(4, lines[4])
+        self.assertTrue(any(r['errors'] for r in self.new_report(''.join(lines))['intervals']))
+
+    def test_physical_camera_viewport_is_independent_of_window_and_checks_bounds(self):
+        text = upgrade(fixture().decode()).replace(RECT,
+            'Some(URect { min: UVec2(10, 20), max: UVec2(1930, 1100) })')
+        row = self.new_report(text)['intervals'][0]
+        self.assertEqual(row['context']['resolution'], [2560, 1440])
+        self.assertEqual(row['endpoint_metadata']['actual_camera_viewport_pixels'],
+                         dict(min=[10, 20], max=[1930, 1100], size=[1920, 1080]))
+        self.assertIsNone(analyze()['intervals'][0]['endpoint_metadata']['actual_camera_viewport_pixels'])
+        for value in ('Some(URect { min: UVec2(2560, 0), max: UVec2(2560, 1440) })',
+                      'Some(URect { min: UVec2(0, 0), max: UVec2(4294967296, 1440) })', 'bad'):
+            self.assertEqual(self.new_report(upgrade(fixture().decode()).replace(RECT, value))['eligible_interval_count'], 0)
+
+    def test_resolution_change_inside_window_is_excluded_even_without_mixed_flag(self):
+        text = ''.join(upgrade(block(n), resolution=(1920, 1080) if n == 2 else (2560, 1440))
+                       for n in range(1, 7))
+        report = self.new_report(text)
+        self.assertFalse(report['windows'][0]['valid_descriptive_window'])
+        self.assertFalse(report['intervals'][1]['eligible_context'])
+        self.assertFalse(report['intervals'][2]['boundary_stable'])
+
+    def test_truncated_debug_missing_context_field_and_absent_local_resource_fail_closed(self):
+        text = upgrade(fixture().decode())
+        for old, new in [('sub_camera_view=None', 'sub_camera_view=Some('),
+                         (', authoritative_view_target: ' + ACTOR, ''),
+                         (endpoint_lines()[0], 'perf player endpoint: endpoint_only=true local_resource=false')]:
+            with self.subTest(change=new):
+                report = self.new_report(text.replace(old, new))
+                self.assertEqual(report['eligible_interval_count'], 0)
+                self.assertFalse(report['paired_admission'])
+
+    def test_moving_camera_endpoints_never_prove_interval_pose(self):
+        text = ''.join(upgrade(block(n)).replace('Vec3(-3.2512', f'Vec3({n}.0') for n in range(1, 7))
+        report = self.new_report(text)
+        self.assertTrue(all(w['valid_descriptive_window'] for w in report['windows']))
+        self.assertTrue(all(not r['endpoint_metadata']['whole_interval_camera_pose_proven'] for r in report['intervals']))
+        self.assertFalse(report['paired_admission'])
+
+
 class ActualFormatTests(unittest.TestCase):
     def test_actual_debug_contract_ansi_utc_census_stages_history(self):
         report = analyze()
@@ -90,7 +239,8 @@ class ActualFormatTests(unittest.TestCase):
         self.assertEqual(summary["gpu_retained_history_ranges"]["render/primary/opaque/gpu"]["samples_range"], [20, 20])
         self.assertIsNone(summary["overall_quantiles_ms"])
         self.assertFalse(report["paired_admission"])
-        self.assertIn("NOT LOGGED", " ".join(report["admission_missing"]))
+        self.assertIn("unproven", " ".join(report["admission_missing"]))
+        self.assertIn("context.authoritative_local", report["intervals"][0]["endpoint_metadata"]["missing_fields"])
 
     def test_count_weighted_mean_and_sampled_seconds_not_report_wall(self):
         raw = (block(1) + block(2, mean=4, frames=250) + block(3, mean=20, frames=100)).encode()
@@ -227,7 +377,7 @@ class AdmissionTests(unittest.TestCase):
         self.assertTrue(pair["metadata_aligned_descriptive_only"])
         self.assertFalse(pair["paired_admission"])
         self.assertEqual(len(pair["admission_missing"]), 2)
-        self.assertIn("Local player alive", pair["admission_missing"][1])
+        self.assertIn("Local alive/identity", pair["admission_missing"][1])
 
     def test_pair_profile_camera_phase_and_case_mismatch(self):
         base = analyze()

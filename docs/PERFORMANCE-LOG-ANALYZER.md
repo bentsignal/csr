@@ -1,8 +1,9 @@
 # Offline gameplay performance log analysis
 
 `tools/perf_report.py` reads the **actual diagnostic text contract** in
-`5dc2b5064aa6914eb83e49b060f7d8645fe2c607:crates/client/src/frame_report.rs`
-and `input_latency.rs` (included in diagnostics baseline `0e9aa51`). It uses
+`0e9aa51:crates/client/src/frame_report.rs` and the expanded actor/camera
+endpoint format in `cc66e5e:crates/client/src/frame_report.rs`, alongside
+`input_latency.rs`. It uses
 only Python's standard library. It never launches a game, queries Steam,
 changes configuration, builds Rust, or inspects a running process. Fixtures
 are synthetic text, with no third-party assets or source.
@@ -56,6 +57,7 @@ all example values, including hash strings, with actual recorded values.
 {
   "schema_version": 1,
   "log_sha256": "<64 hex characters: SHA-256 of final raw log bytes>",
+  "requested_cli_resolution": [1920, 1080],
   "build": {
     "head": "<40 hex characters: source commit>",
     "sha256": "<64 hex characters: executed immutable executable>",
@@ -71,7 +73,7 @@ all example values, including hash strings, with actual recorded values.
     "players": 3,
     "tick_rate": 128,
     "competitive": false,
-    "resolution": [1920, 1080],
+    "resolution": [2560, 1440],
     "present_requested": "Immediate",
     "frame_latency_hint": 1,
     "camera": {"position": [1, 2, 3], "pitch": 0, "yaw": 90}
@@ -105,6 +107,23 @@ for review. Each case's actual map, bots/players, tick rate, competitive mode,
 physical resolution, requested present mode, and latency hint must agree with
 its logged observations. Present mode/hint are engine policy, not evidence of
 actual OS presentation, compositor behavior, scanout, or external latency.
+
+`case.resolution` is the expected actual **physical window size**, never the
+CLI `--size` request. The optional top-level `requested_cli_resolution` records
+CLI intent separately; it is null in output when not supplied, never inferred
+from the log. The example deliberately shows a 1920×1080 request and an actual
+2560×1440 case, which copied fullscreen preferences can produce. The analyzer
+still excludes any actual size that disagrees with `case.resolution`.
+`resolution_metadata` reports requested/expected/observed sizes separately and
+retains new camera `physical_viewport_rect` Debug observations. Window size
+alone does not establish the camera viewport. Each interval also exposes parsed
+camera min/max/size in pixels under `endpoint_metadata.actual_camera_viewport_pixels`,
+null when unavailable. Old logs have no viewport record.
+
+The runner's `status.json` and `windows.json` are collection evidence, **not**
+this analyzer receipt schema. An operator must still supply independently
+reviewed `stable_match` UTC/simulation bounds and the required build/case receipt;
+the runner's ready milestone never supplies that approval automatically.
 
 Collector phase rules:
 
@@ -167,16 +186,37 @@ checked against actual `sim_seconds` within 2 ms of printed/f32 precision.
   simulation second, and correlation with mean frame time describe drift.
   A constant count has undefined correlation (null). Early/late deltas and
   correlations establish co-occurrence, not causation, leak proof or a fix.
-- **Camera pose/aim and local-player alive state are NOT LOGGED.** Aggregate
-  `alive`, a stable local id and a receipt's intended camera do not supply
-  those observations. They remain explicit missing paired-admission
-  requirements. Later instrumentation/independent aligned evidence needs a
-  separately reviewed admission contract; this analyzer never silently
-  accepts receipt intentions as actual camera/local-alive measurements.
+- **Whole-interval camera pose/aim stability remains unproven.** Old `0e9aa51`
+  logs lack camera and authoritative actor metadata. New `cc66e5e` contexts
+  contain local/view-target actor id, life epoch, alive, team, active slot and
+  weapon def index. Those discrete fields participate in producer mixed-context
+  detection and in this analyzer's boundary equality checks. Actor absence,
+  death, identity mismatch or disagreement with separate player endpoints
+  excludes ordinary local play; aggregate `alive` never supplies local alive.
+- New `perf player endpoint` records describe only `local` and `view_target`,
+  with authoritative actor, weapon class/ContentId, Source origin and angles.
+  They are not per-bot pose records. `perf view intent endpoint` is separate.
+  `perf world camera endpoint` records main-world camera components in Last,
+  with role checks, transform/global matrix, projection/FOV, target/layers and
+  viewport. Arrays are checked for finite dimensions; nested Debug values remain
+  raw text without guessed Source coordinate conversions. Missing keys and
+  explicit `None` values are distinguished in `missing_fields` / `none_fields`.
+  Camera selection unavailable/invalid/inactive, conflicting endpoints,
+  duplicates, malformed values and truncated Debug records exclude the interval.
+- Each interval's `endpoint_metadata` lists missing observations and the local
+  alive value at the context endpoint (null for old/missing actor metadata).
+  A new context need not have separate endpoint lines; missing observations
+  remain explicit. Even complete matching endpoints leave
+  `whole_interval_camera_pose_proven: false` and `paired_admission: false`.
+  Camera movement between endpoints never becomes stability proof. Receipts
+  describe intended poses; independent aligned full-interval evidence still
+  needs a separately reviewed admission contract.
 - No external presentation trace is available here. Merely finding `wpr.exe`
   does not create one. These reports cannot establish mouse-to-display latency.
 
-Synthetic tests cover the actual Rust debug spelling, ANSI/UTC byte retention,
+Synthetic tests cover old/new Rust debug spelling, separate CLI/actual physical
+sizes, missing/partial endpoints, actor changes and mixed contexts, camera role
+validation and the unchanged no-admission gate, plus ANSI/UTC byte retention,
 sample math/nearest rank/overflow, nested scopes, render-history semantics,
 context/receipt rejection, clock reordering/reset/drift, phase boundaries,
 body/asset plateaus followed by retained-count and frame-mean drift, and

@@ -14,11 +14,19 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import sys
 import time
 from datetime import datetime, timezone
 
+# Share the exact old/new text parsers with offline analysis. No process or I/O
+# happens on import; the analyzer is standard-library-only.
+sys.dont_write_bytecode = True  # All helper output belongs in the private run, never __pycache__.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import perf_report as perf
+
 WINDOWS = ((30, 60), (300, 330), (600, 630))
-MISSING = ['camera_origin', 'camera_angles', 'local_alive']
+MISSING = ['whole_interval_camera_pose', 'independent_window_coverage_and_focus_input_validation']
+REQUESTED_SIZE = (1920, 1080)
 BUILD_NAMES = {'cargo.exe', 'rustc.exe', 'rust-lld.exe', 'link.exe', 'cl.exe',
                'cmake.exe', 'ninja.exe', 'msbuild.exe', 'build-script-build.exe'}
 GAME_NAMES = {'csr.exe', 'csgo.exe', 'cs2.exe', 'hl2.exe', 'iw4sp.exe', 'iw4mp.exe',
@@ -128,7 +136,7 @@ def command(executable, map_name, bots):
     if map_name not in {'de_dust2_2017', 'de_nuke'} or bots not in {0, 3}:
         raise ValueError('Unsupported case')
     return [str(executable), 'play', map_name, '--direct', '--deathmatch',
-            '--bots', str(bots), '--size', '1920', '1080']
+            '--bots', str(bots), '--size', *map(str, REQUESTED_SIZE)]
 
 
 def environment(data, game):
@@ -141,6 +149,9 @@ def environment(data, game):
 
 
 def validate(args):
+    expected = getattr(args, 'expected_resolution', None)
+    if expected is not None and (len(expected) != 2 or any(type(v) is not int or not 0 < v <= 16384 for v in expected)):
+        raise ValueError('Expected physical resolution needs two positive dimensions <= 16384')
     paths = {name: absolute(getattr(args, name)) for name in
              ('executable', 'manifest', 'private_root', 'owner_data', 'steam_root', 'game_dir')}
     exe, private = paths['executable'], paths['private_root']
@@ -214,8 +225,9 @@ def seed_data(paths, map_name, data):
 
 class Reports:
     """Retain whole cadence records only; never reconstruct 30s quantiles."""
-    def __init__(self, map_name):
+    def __init__(self, map_name, expected_resolution=None):
         self.map = map_name
+        self.expected_resolution = list(expected_resolution) if expected_resolution is not None else None
         self.offset = 0
         self.partial = b''
         self.pending = None
@@ -223,6 +235,8 @@ class Reports:
         self.sim = None
         self.ready = False
         self.sim_regressed = False
+        self.observed_resolutions = []
+        self.reports_without_simulation = []
 
     def read(self, path):
         with path.open('rb') as stream:
@@ -236,27 +250,86 @@ class Reports:
 
     def line(self, line):
         if 'perf interval:' in line:
-            self.pending = {'interval': line, 'context': None, 'sim': None, 'observed_utc': utc()}
+            if self.pending:
+                # Startup can legitimately lack SimWorld: preserve that absence
+                # explicitly without assigning it invented simulation bounds.
+                self.pending['errors'].append('no simulation census before next interval; unbounded report')
+                self.reports_without_simulation.append(self.pending)
+            self.pending = {'interval': line, 'context': None, 'sim': None, 'observed_utc': utc(),
+                            'parsed': {}, 'errors': []}
+            try:
+                self.pending['parsed']['interval'] = perf.parse_interval(line.split('perf interval:', 1)[1].strip())
+            except (ValueError, KeyError) as error:
+                self.pending['errors'].append(f'invalid interval: {error}')
         elif self.pending and 'perf context:' in line:
+            if self.pending['context'] is not None:
+                self.pending['errors'].append('duplicate context')
             self.pending['context'] = line
+            try:
+                self.pending['parsed']['context'] = perf.parse_context(line.split('perf context:', 1)[1].strip())
+            except (ValueError, KeyError) as error:
+                self.pending['errors'].append(f'invalid context: {error}')
+        elif self.pending and any(marker in line for marker in (
+                'perf player endpoint:', 'perf view intent endpoint:', 'perf world camera endpoint:')):
+            for marker, kind in perf.MARKERS.items():
+                if kind in perf.ENDPOINT_KEYS and marker in line:
+                    try:
+                        endpoint = perf.parse_endpoint(kind, line.split(marker, 1)[1].strip())
+                        parsed = self.pending['parsed']
+                        if kind == 'player_endpoint' and endpoint.get('local_resource') is not False:
+                            endpoints = parsed.setdefault('player_endpoints', {})
+                            if endpoint['role'] in endpoints or 'player_resource_endpoint' in parsed:
+                                raise ValueError('duplicate/conflicting player endpoint')
+                            endpoints[endpoint['role']] = endpoint
+                        else:
+                            key = 'player_resource_endpoint' if kind == 'player_endpoint' else kind
+                            if key in parsed or (key == 'player_resource_endpoint' and parsed.get('player_endpoints')):
+                                raise ValueError('duplicate/conflicting endpoint')
+                            parsed[key] = endpoint
+                    except (ValueError, KeyError) as error:
+                        self.pending['errors'].append(f'invalid {kind}: {error}')
+                    break
         elif self.pending and 'perf simulation census:' in line:
-            match = re.search(r'sim_seconds=([0-9.]+)', line)
-            if not match:
-                return
-            sim = float(match[1])
-            if not math.isfinite(sim):
+            try:
+                census = perf.parse_census('simulation', line.split('perf simulation census:', 1)[1].strip())
+                sim = census['sim_seconds']
+            except (ValueError, KeyError) as error:
+                self.pending['errors'].append(f'invalid simulation census: {error}')
                 return
             if self.sim is not None and sim < self.sim:
                 self.sim_regressed = True
             self.sim = sim
             self.pending.update(sim=sim, census=line)
-            context = self.pending['context'] or ''
-            necessary = [f'map={self.map} ', 'state: Match', 'page: None', 'in_match: true',
-                         'size: (1920, 1080)', 'focused: true', 'screenshot: false',
-                         'input_enabled: true', 'local: Some(', 'spectating: None', 'noclip: false']
-            self.pending['context_valid_without_camera_alive'] = (
-                all(field in context for field in necessary) and 'mixed_context=false' in context
-                and 'mixed_context=false' in self.pending['interval'])
+            parsed = self.pending['parsed']
+            context, interval = parsed.get('context', {}), parsed.get('interval', {})
+            resolution = context.get('resolution')
+            if resolution and resolution not in self.observed_resolutions:
+                self.observed_resolutions.append(resolution)
+            errors = self.pending['errors']
+            errors.extend(perf.endpoint_exclusions(parsed))
+            necessary = dict(map=self.map, state='Match', page='None', in_match=True,
+                             focused=True, screenshot=False, input_enabled=True,
+                             spectating='None', noclip=False, mixed_context=False)
+            if not all(context.get(key) == value for key, value in necessary.items()):
+                errors.append('missing/nonordinary/mixed Match context')
+            if not interval or interval.get('mixed_context') or interval.get('rejected'):
+                errors.append('missing/mixed/rejected interval samples')
+            if not resolution or min(resolution) <= 0:
+                errors.append('missing/invalid actual physical resolution')
+            if self.expected_resolution is not None and resolution != self.expected_resolution:
+                errors.append('actual physical resolution differs from expected physical resolution')
+            if not census['tick_rate'] or abs(census['tick'] / max(census['tick_rate'], 1) - sim) > .002:
+                errors.append('tick/tick_rate disagrees with actual sim_seconds')
+            if census['bots'] > census['players'] or census['alive'] > census['players']:
+                errors.append('invalid simulation counts')
+            self.pending.update(actual_physical_resolution=resolution,
+                                requested_cli_resolution=list(REQUESTED_SIZE),
+                                expected_physical_resolution=self.expected_resolution,
+                                endpoint_metadata=perf.endpoint_metadata(parsed))
+            self.pending['ordinary_context_endpoint'] = not errors
+            # Retain the old JSON key for existing root consumers. This is an
+            # endpoint startup classification, never whole-interval admission.
+            self.pending['context_valid_without_camera_alive'] = not errors
             self.ready |= self.pending['context_valid_without_camera_alive']
             self.records.append(self.pending)
             self.pending = None
@@ -275,10 +348,13 @@ class Reports:
                 previous = record['sim']
             windows.append({'sim_seconds': [start, end], 'records': rows, 'admitted': False,
                             'contaminated': contaminated or self.sim_regressed,
+                            'unbounded_report_count': len(self.reports_without_simulation),
                             'simulation_clock_regressed': self.sim_regressed,
                             'needed_metadata': MISSING,
+                            'observed_physical_resolutions': [list(size) for size in sorted({tuple(r['actual_physical_resolution']) for r in rows if r['actual_physical_resolution']})],
+                            'missing_endpoint_fields': sorted({field for r in rows for field in r['endpoint_metadata']['missing_fields']}),
                             'invalid_context_records': sum(not r['context_valid_without_camera_alive'] for r in rows),
-                            'reason': 'External focus/Match/input/camera validation and missing metadata required; never auto-admitted'})
+                            'reason': 'Whole-interval pose, external validation and coverage review required; never auto-admitted'})
         return windows
 
 
@@ -296,13 +372,18 @@ def run(args, adapter, clock=time):
              'bots_argument': args.bots, 'expected_bot_total': 0 if args.bots == 0 else 5,
              'head': args.head, 'sha256': args.sha256, 'manifest': manifest,
              'manifest_sha256': digest(paths['manifest']), 'checks_sha256': digest(checks_path)}
-    reports = Reports(args.map)
+    expected = getattr(args, 'expected_resolution', None)
+    state.update(requested_cli_resolution=list(REQUESTED_SIZE), expected_physical_resolution=expected,
+                 resolution_policy='explicit_expected_physical' if expected else 'observe_actual_physical')
+    reports = Reports(args.map, expected)
     child = None
     reason = 'error'
     deadline = clock.monotonic() + args.max_seconds
 
     def status(phase):
-        state.update(phase=phase, utc=utc(), sim_seconds=reports.sim)
+        state.update(phase=phase, utc=utc(), sim_seconds=reports.sim,
+                     observed_physical_resolutions=reports.observed_resolutions.copy(),
+                     reports_without_simulation=reports.reports_without_simulation)
         write_json(root / 'status.json', state)
         with (root / 'phases.jsonl').open('a', encoding='utf-8') as stream:
             stream.write(json.dumps({'phase': phase, 'utc': state['utc'], 'sim_seconds': reports.sim}) + '\n')
@@ -369,7 +450,8 @@ def run(args, adapter, clock=time):
                     telemetry.write(json.dumps(sample, allow_nan=False) + '\n')
                     telemetry.flush()
                     write_json(root / 'windows.json', reports.windows(state['contaminated']))
-                    write_json(root / 'status.json', {**state, 'utc': utc(), 'sim_seconds': reports.sim})
+                    write_json(root / 'status.json', {**state, 'utc': utc(), 'sim_seconds': reports.sim,
+                               'observed_physical_resolutions': reports.observed_resolutions})
                 if reports.sim is not None and reports.sim > WINDOWS[-1][1]:
                     reason = 'windows_recorded_unadmitted'
                     break
@@ -493,6 +575,8 @@ def main():
     parser.add_argument('--bots', type=int, required=True, choices=(0, 3))
     parser.add_argument('--max-seconds', type=int, default=900)
     parser.add_argument('--min-free-gib', type=int, default=12)
+    parser.add_argument('--expected-resolution', type=int, nargs=2, metavar=('WIDTH', 'HEIGHT'),
+                        help='optional actual physical WindowContext size contract; CLI request remains 1920x1080')
     parser.add_argument('--execute', action='store_true')
     parser.add_argument('--native-slot-granted', action='store_true')
     args = parser.parse_args()

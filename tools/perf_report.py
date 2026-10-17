@@ -17,6 +17,8 @@ STAMP = re.compile(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?(?:Z|[+-]\d\d:\d\d)
 NUMBER = r"(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?"
 MARKERS = {
     "perf interval: ": "interval", "perf context: ": "context",
+    "perf player endpoint: ": "player_endpoint", "perf view intent endpoint: ": "view_intent_endpoint",
+    "perf world camera endpoint: ": "world_camera_endpoint",
     "perf simulation census: ": "simulation", "perf scene census: ": "scene",
     "perf asset census: ": "assets", "perf character census: ": "characters",
 }
@@ -28,8 +30,8 @@ COUNTS = {
 }
 CASE_KEYS = "map bots players tick_rate resolution present_requested frame_latency_hint competitive camera".split()
 LIMITS = [
-    "Camera pose/aim is NOT LOGGED by this diagnostics format; actual matched camera evidence is a missing admission requirement.",
-    "Local player alive state is NOT LOGGED (aggregate alive is insufficient); this is a missing admission requirement.",
+    "Whole-interval camera pose/aim stability is unproven; endpoint camera/intent observations never supply matched-camera admission.",
+    "Local alive/identity evidence is format-dependent and must be reviewed across the full interval; missing actor fields are explicit (aggregate alive is insufficient).",
     "No external presentation trace is supplied or measured here. wpr.exe availability alone is not presentation evidence.",
     "Time<Real> cadence and nested CPU wall scopes do not measure input-to-display latency or GPU execution time.",
     "GPU diagnostics are retained-history means with sample counts, not interval totals or frame quantiles.",
@@ -107,6 +109,8 @@ def parse_interval(body):
     return result
 
 
+ACTOR = (r"(?:None|Some\(ActorContext \{ id: \d+, life_epoch: \d+, alive: (?:true|false), "
+         r"team: \w+, active_slot: \d+, weapon_def_index: (?:None|Some\(\d+\)) \}\))")
 CONTEXT = re.compile(
     r"endpoint_only=true map=(?P<map>\S+) mixed_context=(?P<mixed>true|false) "
     r"observed=Some\(FrameContext \{ state: (?P<state>\w+), page: (?P<page>None|Some\(\w+\)), "
@@ -115,8 +119,21 @@ CONTEXT = re.compile(
     r"present_requested: (?P<present>\w+), frame_latency_hint: (?P<latency>None|Some\(\d+\)) \}\), "
     r"screenshot: (?P<screenshot>true|false), input_enabled: (?P<input_enabled>true|false), "
     r"local: Some\(LocalContext \{ id: (?P<local_id>\d+), spectating: (?P<spectating>None|Some\(\d+\)), "
-    r"noclip: (?P<noclip>true|false) \}\) \}\)"
+    r"noclip: (?P<noclip>true|false)"
+    rf"(?:, authoritative_local: (?P<actor_local>{ACTOR}), authoritative_view_target: (?P<actor_view>{ACTOR}))?"
+    r" \}\) \}\)"
 )
+
+
+def parse_actor(value):
+    if value == "None":
+        return None
+    if not re.fullmatch(ACTOR, value):
+        raise ValueError("unrecognized ActorContext")
+    f = dict(re.findall(r"(\w+): (None|Some\(\d+\)|\w+)", value))
+    return {k: boolean(v) if k == "alive" else v if k == "team" else
+            None if v == "None" else numeric(re.search(r"\d+", v)[0], integer=True)
+            for k, v in f.items()}
 
 
 def parse_context(body):
@@ -131,7 +148,183 @@ def parse_context(body):
         "spectating": f["spectating"], "resolution": [int(f["width"]), int(f["height"])],
         "present_requested": f["present"],
         "frame_latency_hint": None if f["latency"] == "None" else int(re.search(r"\d+", f["latency"])[0]),
+        "actor_metadata_logged": f["actor_local"] is not None,
+        "authoritative_local": parse_actor(f["actor_local"]) if f["actor_local"] is not None else None,
+        "authoritative_view_target": parse_actor(f["actor_view"]) if f["actor_view"] is not None else None,
     }
+
+
+def debug_fields(body):
+    """Split key=Debug values without splitting nested structs, arrays or strings.
+
+    Camera transforms/projection/targets remain explicitly raw Rust Debug, not
+    guessed Source-space poses. Reject malformed/duplicate fields fail-closed.
+    """
+    result, stack, quoted, escaped, start = {}, [], False, False, 0
+    pieces = []
+    for n, char in enumerate(body):
+        if quoted:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                quoted = False
+        elif char == '"':
+            quoted = True
+        elif char in "([{":
+            stack.append(char)
+        elif char in ")]}":
+            if not stack or stack.pop() != {")": "(", "]": "[", "}": "{"}[char]:
+                raise ValueError("unbalanced Debug metadata")
+        elif char == " " and not stack and re.match(r"[a-z_]+=", body[n + 1:]):
+            if n > start:
+                pieces.append(body[start:n])
+            start = n + 1
+    if quoted or stack:
+        raise ValueError("truncated Debug metadata")
+    pieces.append(body[start:])
+    for piece in pieces:
+        key, sep, value = piece.partition("=")
+        if not sep or not re.fullmatch(r"[a-z_]+", key) or not value or key in result:
+            raise ValueError("invalid/duplicate endpoint field")
+        result[key] = value
+    return result
+
+
+def vector(value, length, optional=False):
+    if optional and value == "None":
+        return None
+    if optional:
+        if not (value.startswith("Some(") and value.endswith(")")):
+            raise ValueError("invalid optional vector")
+        value = value[5:-1]
+    result = json.loads(value)
+    try:
+        valid = isinstance(result, list) and len(result) == length and all(
+            type(v) in (int, float) and math.isfinite(v) for v in result)
+    except OverflowError:
+        valid = False
+    if not valid:
+        raise ValueError("invalid finite endpoint vector")
+    return result
+
+
+def viewport_rect(value):
+    if value == "None":
+        return None
+    match = re.fullmatch(r"Some\(URect \{ min: UVec2\((\d+), (\d+)\), max: UVec2\((\d+), (\d+)\) \}\)", value)
+    if not match:
+        raise ValueError("unrecognized physical viewport rectangle")
+    x0, y0, x1, y1 = (numeric(v, integer=True) for v in match.groups())
+    if not (x0 < x1 <= 2**32 - 1 and y0 < y1 <= 2**32 - 1):
+        raise ValueError("invalid physical viewport bounds")
+    return {"min": [x0, y0], "max": [x1, y1], "size": [x1 - x0, y1 - y0]}
+
+
+ENDPOINT_KEYS = {
+    "player_endpoint": "requested_id authoritative weapon_class weapon_content_id origin_source_inches view_angles_source_degrees".split(),
+    "view_intent_endpoint": "render_eye_source_inches render_angles_source_degrees".split(),
+    "world_camera_endpoint": "source interval_camera_stability candidates entity role_valid player_camera viewmodel_camera is_active order transform_bevy global_matrix_bevy_cols projection fov_vertical_horizontal_degrees computed_clip_from_view_cols target render_layers viewport physical_viewport_rect sub_camera_view".split(),
+}
+
+
+def parse_endpoint(kind, body):
+    f = debug_fields(body)
+    if f.get("endpoint_only") != "true":
+        raise ValueError("endpoint_only=true required")
+    result = {"endpoint_only": True, "raw_debug_fields": f,
+              "missing_fields": [k for k in ENDPOINT_KEYS[kind] if k not in f],
+              "none_fields": [k for k in ENDPOINT_KEYS[kind] if f.get(k) == "None"]}
+    if kind == "player_endpoint":
+        if f.get("local_resource") == "false":
+            result["local_resource"] = False
+            return result
+        if f.get("role") not in ("local", "view_target"):
+            raise ValueError("unrecognized endpoint actor role")
+        result["role"] = f["role"]
+        if "requested_id" in f:
+            result["requested_id"] = numeric(f["requested_id"], integer=True)
+        if "authoritative" in f:
+            result["authoritative"] = parse_actor(f["authoritative"])
+        for key in ("origin_source_inches", "view_angles_source_degrees"):
+            if key in f:
+                result[key] = vector(f[key], 3, optional=True)
+    elif kind == "view_intent_endpoint":
+        for key in ENDPOINT_KEYS[kind]:
+            if key in f:
+                result[key] = vector(f[key], 3)
+    else:
+        for key in ("role_valid", "player_camera", "viewmodel_camera", "is_active"):
+            if key in f:
+                result[key] = boolean(f[key])
+        if "candidates" in f:
+            result["candidates"] = numeric(f["candidates"], integer=True)
+        for key, length, optional in (("global_matrix_bevy_cols", 16, False),
+                                      ("computed_clip_from_view_cols", 16, False),
+                                      ("fov_vertical_horizontal_degrees", 2, True)):
+            if key in f:
+                result[key] = vector(f[key], length, optional)
+        result["interval_camera_stability"] = f.get("interval_camera_stability")
+        if "physical_viewport_rect" in f:
+            result["physical_viewport_rect_pixels"] = viewport_rect(f["physical_viewport_rect"])
+        if f.get("source") != "main_world_last" or f.get("interval_camera_stability") != "unproven":
+            raise ValueError("unrecognized world camera source/stability contract")
+    return result
+
+
+def endpoint_metadata(row):
+    """Availability is distinct from interval eligibility and admission."""
+    missing = []
+    c = row.get("context", {})
+    for role, key in (("local", "authoritative_local"), ("view_target", "authoritative_view_target")):
+        if not c.get("actor_metadata_logged") or c.get(key) is None:
+            missing.append(f"context.{key}")
+        endpoint = row.get("player_endpoints", {}).get(role)
+        if endpoint is None:
+            missing.append(f"player_endpoint.{role}")
+        else:
+            missing.extend(f"player_endpoint.{role}.{k}" for k in endpoint["missing_fields"])
+    for kind in ("view_intent_endpoint", "world_camera_endpoint"):
+        endpoint = row.get(kind)
+        if endpoint is None:
+            missing.append(kind)
+        else:
+            missing.extend(f"{kind}.{k}" for k in endpoint["missing_fields"])
+    return {"missing_fields": missing, "whole_interval_camera_pose_proven": False,
+            "actual_camera_viewport_pixels": row.get("world_camera_endpoint", {}).get("physical_viewport_rect_pixels"),
+            "local_alive_at_context_endpoint": (c.get("authoritative_local") or {}).get("alive")}
+
+
+def endpoint_exclusions(row):
+    reasons = []
+    c = row.get("context", {})
+    target = c.get("local_id") if c.get("spectating") == "None" else None
+    if target is None and c.get("spectating", "None") != "None":
+        target = int(re.search(r"\d+", c["spectating"])[0])
+    for role, key, expected in (("local", "authoritative_local", c.get("local_id")),
+                                ("view_target", "authoritative_view_target", target)):
+        actor = c.get(key)
+        if c.get("actor_metadata_logged"):
+            if actor is None:
+                reasons.append(f"context {key} unavailable")
+            elif actor["id"] != expected or not actor["alive"]:
+                reasons.append(f"context {key} identity mismatch or dead")
+        endpoint = row.get("player_endpoints", {}).get(role)
+        if endpoint and (endpoint.get("requested_id") != expected or
+                         (c.get("actor_metadata_logged") and endpoint.get("authoritative") != actor)):
+            reasons.append(f"{role} player endpoint disagrees with context")
+        observed_actor = endpoint.get("authoritative") if endpoint else None
+        if observed_actor and (observed_actor['id'] != expected or not observed_actor['alive']):
+            reasons.append(f"{role} player endpoint identity mismatch or dead")
+    camera = row.get("world_camera_endpoint")
+    if camera and (camera.get("candidates") != 1 or camera.get("role_valid") is not True or
+                   camera.get("player_camera") is not True or camera.get("viewmodel_camera") is not False or
+                   camera.get("is_active") is not True):
+        reasons.append("world camera endpoint unavailable/inactive/invalid role")
+    if row.get("player_resource_endpoint"):
+        reasons.append("local player endpoint resource unavailable")
+    return reasons
 
 
 def parse_census(kind, body):
@@ -193,7 +386,25 @@ def parse_log(raw):
             errors.append(f"line {line_no}: orphan {kind} record before interval")
             continue
         try:
-            if kind in ("stages", "gpu_history"):
+            if kind in ENDPOINT_KEYS:
+                endpoint = parse_endpoint(kind, body)
+                if kind == "player_endpoint":
+                    if endpoint.get("local_resource") is False:
+                        key = "player_resource_endpoint"
+                        if key in current or current.get("player_endpoints"):
+                            raise ValueError("duplicate/conflicting player endpoint")
+                        current[key] = endpoint
+                    else:
+                        endpoints = current.setdefault("player_endpoints", {})
+                        role = endpoint["role"]
+                        if role in endpoints or "player_resource_endpoint" in current:
+                            raise ValueError(f"duplicate/conflicting player endpoint {role}")
+                        endpoints[role] = endpoint
+                else:
+                    if kind in current:
+                        raise ValueError(f"duplicate {kind} record")
+                    current[kind] = endpoint
+            elif kind in ("stages", "gpu_history"):
                 name, value = parse_stage(body) if kind == "stages" else parse_gpu(body)
                 if name in current[kind]:
                     raise ValueError(f"duplicate {kind} {name}")
@@ -215,6 +426,8 @@ def parse_log(raw):
             if key not in row:
                 reasons.append(f"missing {key} metadata")
         c, i, sim = row.get("context", {}), row.get("interval", {}), row.get("simulation", {})
+        row["endpoint_metadata"] = endpoint_metadata(row)
+        reasons.extend(endpoint_exclusions(row))
         if i.get("mixed_context") or c.get("mixed_context"):
             reasons.append("mixed_context=true")
         if i.get("rejected", 0):
@@ -333,6 +546,10 @@ def validate_receipt(receipt, raw_sha):
         reasons.append("unsupported/missing receipt schema_version")
     if receipt.get("log_sha256") != raw_sha:
         reasons.append("receipt log_sha256 does not match retained raw log")
+    requested = receipt.get("requested_cli_resolution")
+    if requested is not None and (not isinstance(requested, list) or len(requested) != 2 or
+                                  any(type(v) is not int or v <= 0 for v in requested)):
+        reasons.append("invalid requested_cli_resolution (CLI intent, not actual resolution)")
     build = receipt.get("build", {})
     if not isinstance(build, dict):
         build = {}
@@ -453,6 +670,12 @@ def analyze(raw, receipt=None, source="<bytes>", receipt_raw=None):
             window["exclusion_reasons"] = list(dict.fromkeys(window["exclusion_reasons"] + errors))
     return {"schema_version": 1, "source": {"path": source, "sha256": sha, "bytes": len(raw), "receipt_sha256": digest(receipt_raw) if receipt_raw is not None else None},
             "receipt": receipt, "log_errors": errors, "receipt_errors": receipt_reasons,
+            "resolution_metadata": {
+                "requested_cli_resolution": receipt.get("requested_cli_resolution") if isinstance(receipt, dict) else None,
+                "expected_physical_resolution": case.get("resolution"),
+                "observed_window_physical_resolutions": [list(size) for size in sorted({tuple(r.get("context", {}).get("resolution", [])) for r in rows if r.get("context", {}).get("resolution")})],
+                "camera_physical_viewport_rects_debug": list(dict.fromkeys(r.get("world_camera_endpoint", {}).get("raw_debug_fields", {}).get("physical_viewport_rect") for r in rows)),
+            },
             "limitations": LIMITS, "paired_admission": False,
             "admission_missing": LIMITS[:2], "intervals": rows, "windows": windows, "early_late": early_late,
             "eligible_interval_count": len(eligible), "excluded_interval_count": len(rows) - len(eligible),
@@ -484,7 +707,7 @@ def compare(baseline, candidate):
         windows[name] = {"baseline": x["summary"], "candidate": y["summary"], "weighted_mean_ms_delta": y["summary"]["weighted_mean_ms"] - x["summary"]["weighted_mean_ms"], "max_ms_delta": y["summary"]["max_ms"] - x["summary"]["max_ms"]}
     return {"paired_admission": False, "metadata_aligned_descriptive_only": not reasons,
             "rejection_reasons": reasons, "admission_missing": LIMITS[:2], "windows": windows,
-            "interpretation": "Descriptive deltas only. Current logs cannot admit a matched-camera/local-alive performance claim or latency claim."}
+            "interpretation": "Descriptive deltas only. Endpoint metadata cannot admit a whole-interval matched-camera performance claim or latency claim."}
 
 
 def markdown(report):
@@ -516,6 +739,10 @@ def markdown(report):
     for row in report["intervals"]:
         if row["exclusion_reasons"]:
             lines.append(f"- Line {row['line']}, UTC {row['utc']}: {'; '.join(row['exclusion_reasons'])}.")
+    lines += ["", "## Endpoint metadata availability", "",
+              "Physical resolution below comes from WindowContext; CLI intent is separate receipt metadata. Camera components remain endpoint-only; whole-interval pose is unproven.", ""]
+    for row in report["intervals"]:
+        lines.append(f"- Line {row['line']}: actual physical resolution `{row.get('context', {}).get('resolution')}`; camera viewport pixels `{row['endpoint_metadata']['actual_camera_viewport_pixels']}`; local alive at context endpoint `{row['endpoint_metadata']['local_alive_at_context_endpoint']}`; missing `{json.dumps(row['endpoint_metadata']['missing_fields'])}`.")
     return "\n".join(lines) + "\n"
 
 
