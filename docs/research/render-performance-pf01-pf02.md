@@ -112,6 +112,7 @@ Every interval of at least one wall second reports:
   is reused, and overflow suppresses quantiles rather than hiding later spikes.
 - Context: map, app/menu state, physical size, focus, requested present mode,
   latency hint, screenshot/input/noclip flags and local/spectator target IDs;
+  local/view-target life epoch, alive/team and active inventory slot/weapon index;
   simulation tick/rate/time,
   round/mode and actual players/bots/alive/items/projectiles/fields.
 - Main-world entities, mesh entities, locally hidden meshes, meshes visible to
@@ -148,6 +149,10 @@ clones, hashes or extra locks). App state, menu page/in-match flag, window
 size/focus/requested present/latency hint, screenshot/input flags, and local
 player/noclip/spectator target changes increment `context_changes`. Bevy resource
 change detection also marks map replacements, including the same map name.
+Local and view-target authoritative life epoch, alive/team, active inventory slot
+and weapon definition index also participate, including a missing actor. The key
+does not include continuous coordinates, angles, recoil or interpolated camera
+pose; moving frames are not automatically rejected as mixed.
 Any observed change sets `mixed_context=true` for that whole report. The context
 line is explicitly `endpoint_only=true`, even for mixed windows; it never labels
 all earlier Loading/paused/unfocused/other-target samples as Match. Returning
@@ -158,6 +163,42 @@ for transition analysis. Observations happen once per report-system invocation:
 unobserved transitions within a frame and every gameplay-state mutation are
 not tracked. Census values remain endpoint snapshots. This does not alter
 simulation, rendering/input policy or default-off diagnostic behavior.
+
+### Endpoint camera evidence
+
+Once per summary, `perf player endpoint` reports both the requested local actor
+and `LocalPlayer::view_target()` from `SimWorld`: life epoch, alive/team, active
+slot/definition index, weapon class/content ID, Source origin (inches), and Source
+view angles (pitch/yaw/roll degrees). A missing actor is explicit `None`; the local
+resource being absent is also explicit. In a network session these are the local
+simulation's current values, not an independent server receipt. `perf view intent
+endpoint` separately records interpolated render eye/angles and is not camera
+component proof, particularly in noclip/spectator cases.
+
+`WorldPlayerCamera` marks only the main playable-world camera at spawn. Sky and
+viewmodel cameras also have `PlayerCamera`, so neither that component, iteration
+order nor the current FOV identifies the world view alone. `perf world camera
+endpoint` requires a unique marked candidate, reports candidate count and role
+flags, and emits `selection=unavailable` for zero/multiple candidates. Admit its
+endpoint only with `candidates=1`, `role_valid=true`, `is_active=true` and the
+expected target/layers/viewport. The record includes actual `Transform` (Bevy
+axes/inches, quaternion rotation), propagated global matrix (column-major), full
+projection parameters, perspective vertical/horizontal FOV degrees, computed
+clip-from-view matrix, order, target, layers, viewport and sub-camera view. Absent
+`RenderLayers` means Bevy's default layer 0. Perspective FOV conversion assumes
+the standard full perspective view; sub-camera/custom/orthographic projection
+comparisons must use their explicit parameters/matrices.
+
+These are `endpoint_only=true`, `source=main_world_last` observations, after
+camera update/transform propagation. They are inputs to render extraction, not
+readback from the render sub-app, proof of a presented frame or a camera trace.
+`interval_camera_stability=unproven` is explicit. Matching endpoints and
+`mixed_context=false` cannot establish paired same-view intervals: motion,
+camera activation/FOV changes, same-index content replacement and transitions
+between invocations can still occur within the interval. Root's admission tools
+must require independent full-interval camera/presentation proof before admitting
+that comparison. No per-frame precise-camera logging, allocation, mutex or
+gameplay/presentation timing change is added by this metadata follow-up.
 
 Counts are snapshots, not peaks; `hidden_local` is local `Visibility`, and
 `view_visible_any` can include sky/viewmodel/other cameras. They are not occlusion,
@@ -253,3 +294,19 @@ denominator model. It has not been parsed or compiled. Root must run focused
 Compilation, the frame-report regressions, full workspace/release/installed-data checks,
 instrumentation overhead, actual screenshots and the paired sustained runs
 remain required. PF01/PF02 stay open; no FPS or fidelity acceptance is claimed.
+
+Parent reports the prerequisite four `FrameWindow` tests and workspace checks
+passed, with its frozen-source release build in progress. That result does not
+validate this new endpoint commit.
+
+The endpoint follow-up adds two unrun fixtures: authoritative actor death/life,
+team and weapon/slot transitions mark either local/view-target context mixed,
+while movement/angles do not; a numeric 90-degree vertical, 16:9 projection
+reports 121.28449-degree horizontal FOV. Root must rerun
+`cargo test -p client input_latency::frame_report::tests` after integration (six
+tests including these two), plus `cargo test -p client input_latency::tests`,
+`cargo test --workspace`, release Dust II `probe`/`sim` and the asset guard.
+Runtime verification must inspect an ordinary-input summary for unique active
+world-camera selection, exact metadata and discrete transitions. The endpoint
+follow-up was only source-reviewed/formatted and checked with `git diff --check`;
+no Cargo/rustc, game, native, GUI or shared-target operation was run here.

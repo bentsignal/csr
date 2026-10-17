@@ -669,6 +669,7 @@ fn spawn_level(
         start,
         PlayerCamera,
         audio::spatial_listener(),
+        player::WorldPlayerCamera,
     ));
     // Viewmodel camera: drawn last with its own depth buffer and FOV.
     commands.spawn((

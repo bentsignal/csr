@@ -1,7 +1,9 @@
 //! Opt-in, bounded cadence samples and once-per-second main-world census.
 //! Counts describe retained CPU assets/entities, not GPU memory or draw calls.
 use bevy::{
-    camera::visibility::NoFrustumCulling, mesh::skinning::SkinnedMesh, prelude::*,
+    camera::visibility::NoFrustumCulling,
+    mesh::skinning::SkinnedMesh,
+    prelude::*,
     window::{PresentMode, PrimaryWindow},
 };
 use std::{num::NonZeroU32, time::Instant};
@@ -38,6 +40,59 @@ struct LocalContext {
     id: sim::PlayerId,
     spectating: Option<sim::PlayerId>,
     noclip: bool,
+    authoritative_local: Option<ActorContext>,
+    authoritative_view_target: Option<ActorContext>,
+}
+
+/// Discrete authoritative changes belong in mixed-context detection. Continuous
+/// movement/aim and interpolated camera pose are deliberately endpoint-only.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ActorContext {
+    id: sim::PlayerId,
+    life_epoch: u64,
+    alive: bool,
+    team: sim::Team,
+    active_slot: usize,
+    weapon_def_index: Option<u32>,
+}
+
+impl ActorContext {
+    fn observe(player: &sim::Player) -> Self {
+        Self {
+            id: player.id,
+            life_epoch: player.life_epoch,
+            alive: player.alive,
+            team: player.team,
+            active_slot: player.active,
+            weapon_def_index: player.active_weapon().map(|weapon| weapon.def.def_index),
+        }
+    }
+}
+
+fn report_player(role: &str, id: sim::PlayerId, world: Option<&sim::World>) {
+    let player = world.and_then(|world| world.player(id));
+    info!(
+        "perf player endpoint: endpoint_only=true role={role} requested_id={id} authoritative={:?} weapon_class={:?} weapon_content_id={:?} origin_source_inches={:?} view_angles_source_degrees={:?}",
+        player.map(ActorContext::observe),
+        player
+            .and_then(|p| p.active_weapon())
+            .map(|w| w.def.class_name.as_str()),
+        player.and_then(|p| p.active_weapon()).map(|w| &w.def.id),
+        player.map(|p| p.movement.origin.to_array()),
+        player.map(|p| p.view_angles.to_array()),
+    );
+}
+
+/// Bevy perspective FOV is vertical radians; horizontal FOV depends on the
+/// actual aspect ratio, rather than Source's nominal 4:3 horizontal setting.
+fn perspective_fov_degrees(projection: &Projection) -> Option<[f32; 2]> {
+    let Projection::Perspective(p) = projection else {
+        return None;
+    };
+    Some([
+        p.fov.to_degrees(),
+        (2. * ((p.fov * 0.5).tan() * p.aspect_ratio).atan()).to_degrees(),
+    ])
 }
 
 #[derive(Default)]
@@ -135,6 +190,20 @@ pub(super) fn report(
         Query<Entity, With<bevy::audio::AudioPlayer>>,
         Query<Entity, With<crate::feedback::ImpactFx>>,
         Query<&Camera>,
+        Query<
+            (
+                Entity,
+                &Camera,
+                &Transform,
+                &GlobalTransform,
+                &Projection,
+                &bevy::camera::RenderTarget,
+                Option<&bevy::camera::visibility::RenderLayers>,
+                Has<crate::player::PlayerCamera>,
+                Has<crate::player::ViewModelCamera>,
+            ),
+            With<crate::player::WorldPlayerCamera>,
+        >,
     ),
     characters: Res<crate::characters::Characters>,
 ) {
@@ -156,6 +225,14 @@ pub(super) fn report(
                 id: player.id,
                 spectating: player.spectating,
                 noclip: player.noclip,
+                authoritative_local: sim
+                    .as_ref()
+                    .and_then(|s| s.0.player(player.id))
+                    .map(ActorContext::observe),
+                authoritative_view_target: sim
+                    .as_ref()
+                    .and_then(|s| s.0.player(player.view_target()))
+                    .map(ActorContext::observe),
             }),
         },
         // Resource change detection also catches map replacement with the same
@@ -191,9 +268,53 @@ pub(super) fn report(
     samples.clear();
     info!(
         "perf context: endpoint_only=true map={} mixed_context={mixed_context} observed={:?}",
-        level_name.name,
-        samples.previous_context,
+        level_name.name, samples.previous_context,
     );
+    if let Some(local) = &local {
+        let world = sim.as_ref().map(|s| &s.0);
+        report_player("local", local.id, world);
+        report_player("view_target", local.view_target(), world);
+        info!(
+            "perf view intent endpoint: endpoint_only=true render_eye_source_inches={:?} render_angles_source_degrees={:?}",
+            local.render_eye.to_array(),
+            local.render_angles.to_array(),
+        );
+    } else {
+        info!("perf player endpoint: endpoint_only=true local_resource=false");
+    }
+    // Read the actual main-world camera components in Last, after camera update
+    // and transform propagation. Never infer the world view from camera order,
+    // FOV or PlayerCamera alone (sky and viewmodel also have PlayerCamera).
+    let candidates = scene.6.iter().count();
+    if let Ok((
+        entity,
+        camera,
+        transform,
+        global,
+        projection,
+        target,
+        layers,
+        player_camera,
+        viewmodel_camera,
+    )) = scene.6.single()
+    {
+        let role_valid = player_camera && !viewmodel_camera;
+        info!(
+            "perf world camera endpoint: endpoint_only=true source=main_world_last interval_camera_stability=unproven candidates={candidates} entity={entity:?} role_valid={role_valid} player_camera={player_camera} viewmodel_camera={viewmodel_camera} is_active={} order={} transform_bevy={transform:?} global_matrix_bevy_cols={:?} projection={projection:?} fov_vertical_horizontal_degrees={:?} computed_clip_from_view_cols={:?} target={target:?} render_layers={layers:?} viewport={:?} physical_viewport_rect={:?} sub_camera_view={:?}",
+            camera.is_active,
+            camera.order,
+            global.to_matrix().to_cols_array(),
+            perspective_fov_degrees(projection),
+            camera.clip_from_view().to_cols_array(),
+            camera.viewport,
+            camera.physical_viewport_rect(),
+            camera.sub_camera_view,
+        );
+    } else {
+        info!(
+            "perf world camera endpoint: endpoint_only=true source=main_world_last interval_camera_stability=unproven candidates={candidates} selection=unavailable"
+        );
+    }
     if let Some(world) = sim {
         let world = &world.0;
         info!(
@@ -266,8 +387,90 @@ mod tests {
                 id: 1,
                 spectating: Some(2),
                 noclip: false,
+                authoritative_local: None,
+                authoritative_view_target: None,
             }),
         }
+    }
+
+    #[test]
+    fn actor_lifecycle_and_weapon_changes_mix_context_but_motion_does_not() {
+        let mut world = sim::World::new(std::sync::Arc::new(collision::CollisionWorld::new()));
+        let id = world.add_player("fixture", sim::Team::CounterTerrorist);
+        let catalog = weapons::Catalog::from_items_game(
+            r#"
+            "items_game" { "items" {
+                "7" { "name" "weapon_ak47" "item_class" "weapon_ak47" "baseitem" "1" }
+                "16" { "name" "weapon_m4a1" "item_class" "weapon_m4a1" "baseitem" "1" }
+            } }
+        "#,
+        )
+        .unwrap();
+        let player = world.player_mut(id).unwrap();
+        player.weapons = ["weapon_ak47", "weapon_m4a1"]
+            .map(|name| {
+                sim::weapon::WeaponState::new(std::sync::Arc::new(
+                    catalog.get(name).unwrap().clone(),
+                ))
+            })
+            .to_vec();
+        player.active = 0;
+        let original = ActorContext::observe(player);
+        assert_eq!(original.weapon_def_index, Some(7));
+        player.movement.origin = glam::Vec3::new(128., -64., 32.);
+        player.view_angles = glam::Vec3::new(-15., 90., 0.);
+        assert_eq!(
+            ActorContext::observe(player),
+            original,
+            "motion is endpoint-only"
+        );
+        let mut context = match_context();
+        context.local.as_mut().unwrap().authoritative_local = Some(original);
+        context.local.as_mut().unwrap().authoritative_view_target = Some(original);
+        let mut changed = [original; 5];
+        player.alive = !original.alive;
+        changed[0] = ActorContext::observe(player);
+        player.alive = original.alive;
+        player.life_epoch += 1;
+        changed[1] = ActorContext::observe(player);
+        player.life_epoch = original.life_epoch;
+        player.team = sim::Team::Terrorist;
+        changed[2] = ActorContext::observe(player);
+        player.team = original.team;
+        player.active = 1;
+        changed[3] = ActorContext::observe(player);
+        assert_eq!(changed[3].weapon_def_index, Some(16));
+        // Same-slot replacement must still be observed.
+        player.weapons.swap(0, 1);
+        player.active = 0;
+        changed[4] = ActorContext::observe(player);
+        for actor in changed.into_iter().map(Some).chain(std::iter::once(None)) {
+            for view_target in [false, true] {
+                let mut endpoint = context;
+                let local = endpoint.local.as_mut().unwrap();
+                if view_target {
+                    local.authoritative_view_target = actor;
+                } else {
+                    local.authoritative_local = actor;
+                }
+                let mut window = FrameWindow::default();
+                window.observe_context(context, false);
+                window.observe_context(endpoint, false);
+                assert_eq!(window.context_changes, 1);
+            }
+        }
+    }
+
+    #[test]
+    fn perspective_endpoint_fov_uses_vertical_radians_and_actual_aspect() {
+        let projection = Projection::Perspective(PerspectiveProjection {
+            fov: std::f32::consts::FRAC_PI_2,
+            aspect_ratio: 16. / 9.,
+            ..default()
+        });
+        let [vertical, horizontal] = perspective_fov_degrees(&projection).unwrap();
+        assert!((vertical - 90.).abs() < 0.0001);
+        assert!((horizontal - 121.28449).abs() < 0.0001);
     }
 
     #[test]

@@ -185,6 +185,11 @@ pub(crate) fn carried_utility(world: &sim::World, id: PlayerId, name: &str) -> O
 #[derive(Component)]
 pub struct PlayerCamera;
 
+/// Main playable-world view, excluding the sky and viewmodel cameras.
+/// Metadata only: camera updates/rendering continue to use their existing roles.
+#[derive(Component)]
+pub struct WorldPlayerCamera;
+
 #[derive(Component)]
 pub struct ViewModelCamera;
 
