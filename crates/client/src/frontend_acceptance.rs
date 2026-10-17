@@ -333,7 +333,7 @@ fn update(mut proof: ResMut<Proof>, front: Res<Frontend>, options: Res<crate::Op
         ("home-options", 0 | 4) | ("controls", 0 | 18) => ("MainMenu", "OPTIONS"),
         ("home-options", 1 | 5) => ("MainMenu", "AUDIO SETTINGS"),
         ("home-options", 7) => ("MainMenu", "OFFLINE WITH BOTS"),
-        ("home-options", 8) => ("StartSinglePlayer", "BACK"),
+        ("home-options", 8) => ("StartSinglePlayer", ""),
         ("controls", 1 | 19) => ("MainMenu", "KEYBOARD / MOUSE"),
         ("match-options", 1 | 8 | 13) => ("PauseMenu", "OPTIONS"),
         ("match-options", 2 | 9 | 14) => ("PauseMenu", "AUDIO SETTINGS"),
@@ -356,11 +356,16 @@ fn update(mut proof: ResMut<Proof>, front: Res<Frontend>, options: Res<crate::Op
             && inherited.get() && node.display != Display::None && computed.size().min_element() > 0.);
     let point = movie_point(&proof.probes.sample, &window);
     let (valid, action) = match (proof.case.as_str(), phase) {
-        ("home-options", 0 | 1 | 4 | 5 | 7 | 8) => {
-            let valid = if phase == 8 { visible(&proof.probes.sample, 2) && !visible(&proof.probes.sample, 1) && front.options_receiver().is_none() }
-                else if phase == 7 { front.movie_ready("MainMenu") } else { home || (phase == 1 || phase == 5) && visible(&proof.probes.sample, 0) };
+        ("home-options", 0 | 1 | 4 | 5 | 7) => {
+            let valid = if phase == 7 { front.movie_ready("MainMenu") } else { home || (phase == 1 || phase == 5) && visible(&proof.probes.sample, 0) };
             (valid && point.is_some(), point)
         }
+        // The observed picker has no BACK label. Use the same visible Home
+        // topbar icon as phase 2, after the picker and MainMenu settle together.
+        ("home-options", 8) => (*state.get() == AppState::Menu && front.home_presented()
+            && front.movie_ready("StartSinglePlayer") && visible(&proof.probes.sample, 0)
+            && visible(&proof.probes.sample, 2) && !visible(&proof.probes.sample, 1)
+            && front.options_receiver().is_none(), Some(reference_point(&window, 333., 26.))),
         ("home-options", 2 | 6) => (audio, Some(reference_point(&window, if phase == 2 { 333. } else { 486. }, 26.))),
         ("home-options", 3 | 9) => (home, None),
         ("controls", 0 | 1 | 18 | 19) => (home && point.is_some(), point),

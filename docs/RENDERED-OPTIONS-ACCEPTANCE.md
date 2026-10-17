@@ -1,18 +1,22 @@
 # Opt-in rendered Options and controls acceptance
 
 Implementation base: `fix/controls-options-integrated` at
-`0d08dad80ad0d679b24505d4cbe7f9aeed49b3f1`. This harness has been authored and
-source reviewed only. No compilation, test execution, installed movie session,
-native run or screenshot review was performed by its implementation agent.
+`0d08dad80ad0d679b24505d4cbe7f9aeed49b3f1`. The original implementation was
+authored and source reviewed only. No compilation, test execution, installed
+movie session, native run or screenshot review was performed by that agent.
 Root owns all builds, execution, private fixtures, preservation checks and PRs.
 The R9 probe-settlement revision starts from integrated harness commit
 `3852d74`; its added fixtures and callback guards also remain source-only.
+The R15 picker-navigation revision starts from `b11fa5a`. Its implementation
+agent reviewed existing private logs and static PNGs only; no new session,
+compilation or tests were run. The corrected picker return still needs root's
+actual public-input execution and settled screenshot review.
 
 Set `CSR_TEST_FLOW=1` and select exactly one `CSR_TEST_FLOW_CASE`:
 
 | Case | Authored acceptance route |
 | --- | --- |
-| `home-options` | Home -> Options -> Audio -> Home, then Audio -> Play -> Offline with Bots -> Back -> Home. Repeat twice in the same process, including cached Options/picker opens. |
+| `home-options` | Home -> Options -> Audio -> Home icon -> Home, then Audio -> Play -> Offline with Bots -> Home icon -> Home. Repeat twice in the same process, including cached Options/picker opens. |
 | `match-options` | Existing authored Dust II launch, public Escape -> Pause -> Audio -> Escape -> Pause -> Escape -> game with both installed HUD surfaces visible and simulation advancing. Repeat Escape/Pause/game, then cancel Audio and close/reopen Pause on consecutive key edges before waiting for its raster; reopen Audio -> authored Back -> Pause -> Escape -> game. |
 | `controls` | Home's authored Keyboard / Mouse route -> actual Bevy panel at 1920x1080 -> capture first binding -> F11 -> Clear -> recapture -> Escape cancel -> mouse button and wheel choice buttons -> wheel scroll -> End -> bottom row -> resize through public Window state to 1280x720 -> End -> bottom row -> Home key -> top row -> Restore -> Apply -> disk reload comparison -> Back -> authored route reopens panel with saved defaults. |
 
@@ -123,6 +127,20 @@ The only reference coordinates are the measured 1920x1080 Home and Play topbar
 centers already used by the original harness/reference. If an installed label
 differs, the bounded sample reports up to 24 observed labels for correction;
 there is no fallback controller call that could turn a missed click into a pass.
+
+`home-options` phase 8 uses the Home icon at reference coordinate `(333, 26)`,
+after settled observations require Menu state, presented/ready MainMenu and
+ready StartSinglePlayer, both roots visible, Options hidden and no Options
+receiver. It does not search the picker for `BACK`: the prior bounded B11 run's
+complete probe reported zero matches. The existing early `08-waiting` PNG shows
+the topbar before the picker content appears; it does not establish a fully
+rendered picker. Root must review the new phase-8 settled picker capture before
+claiming this route is verified. Phase 9 retains the Home predicate requiring
+StartSinglePlayer hidden as well as Options hidden and no Options receiver.
+The same probe epochs, repeated valid replies, capture/save barrier and
+post-capture observation apply before the Home pointer click; there is no
+forced movie close. Audio's authored Back proof remains in `match-options`
+phase 15 and is not supplied by this picker-to-Home route.
 
 Bevy input follows the pinned 0.19.1 sources: First writes KeyboardInput,
 MouseButtonInput and MouseWheel; InputPlugin processes these in PreUpdate before
