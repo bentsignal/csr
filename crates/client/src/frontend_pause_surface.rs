@@ -147,6 +147,10 @@ impl Tracker {
     }
 
     pub(crate) fn options_receiver(&self) -> String { format!("OwnedOptions{}", self.options_generation) }
+    /// Capture presence and identity together while the caller holds its lock.
+    pub(crate) fn requested_options_receiver(&self) -> Option<String> {
+        self.options_requested().then(|| self.options_receiver())
+    }
     pub(crate) fn owns_options(&self, receiver: &str) -> bool {
         self.options_requested() && receiver == self.options_receiver()
     }

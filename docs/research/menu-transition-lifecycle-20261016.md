@@ -33,10 +33,12 @@ later. No gameplay/HUD geometry needs to change to correct that ownership.
 
 ## Resulting invariants
 
-- Each cached Options opening binds OnCancel and OnUnload to an immutable
-  OwnedOptions generation. Only the current generation may close; unload also
-  requires the exact registered root. Late/raw callbacks cannot restore a
-  previous base page over a replacement destination.
+- Each cached Options opening replaces OnCancel and OnUnload properties on our
+  shared cached API with functions carrying its OwnedOptions generation. A
+  retained old function keeps the old receiver; a retained API object doing a
+  new property lookup sees the replacement receiver. Only the current receiver
+  may close; unload also requires the exact registered root. This does not
+  establish which reference pattern the installed movie uses asynchronously.
 - Closing revokes pending Ready/show, performs the original public HidePanel
   cleanup, hides the cached root and restores the current Home/Pause base.
   This applies to every supported settings page, rather than a Home-only hide.
@@ -107,3 +109,67 @@ No new latency coefficient, timeout, fade duration or speculative optimization
 was introduced. Runtime validation must also check that original HidePanel and
 the owned proxy binding preserve navigation across immediate settings reopen;
 standalone shim parsing/typecheck cannot establish this.
+
+## Review r1 follow-up (unbuilt; root validation pending)
+
+The original candidate's match Escape decision checked a boolean under one
+lock, then cancellation acquired a second lock and reread the current receiver.
+If the worker closed opening A and reopened B between those locks, Escape for A
+cancelled B. The decision now captures `Option<String>` under one lock, and
+`cancel_options(receiver)` passes that captured identity without rereading it.
+The Bridge regression captures through `Frontend::options_receiver()`, replaces
+A with B before dispatch, then requires B to survive the captured cancellation.
+It also rejects malformed current-generation unload/cancel argument shapes.
+The shim rejects a non-string/foreign path or malformed receiver before resolving
+it, then requires the actual registered level MovieClip, element and API identity.
+
+Added executable fixtures (authored here, **not executed by this child**):
+
+- `crates/scaleform/tests/options_lifecycle.rs` compiles the actual `shim.as`
+  plus a small independently authored driver and Options movie. It loads the
+  generated movie at the real `_level21` through a memory-only navigator and
+  ordinary `loadMovieNum`; it does not replace `csrResolve`, `csrMakeProxy` or
+  the bindings. Null render/audio backends are used. Exact ExternalInterface
+  receipts cover current cancel/unload, retained old function calls after
+  rebind, new lookups on a retained API object, host cancellation for A/B,
+  untouched ordinary getters and failed bindings (not-yet-loaded root, bad
+  string/non-string paths, names, element
+  and API identity). Failed bindings must preserve the current functions.
+- `fresh_and_adopted_workers_reject_delayed_readbacks_below_their_callback_floor`
+  exercises real `Frontend::select_worker` fresh/adopted swaps, worker-local
+  callback floors and the presentation admission gate. It rejects outgoing
+  worker revisions, pre-callback pixels and stale completion after admission.
+  It does not execute GPU readback or image assignment.
+- `actual_escape_edges_keep_cold_options_in_pause_and_ignore_repeat` feeds real
+  `KeyboardInput` press/repeat/release messages through Bevy `InputPlugin` and
+  `menu::input` with Options requested but not Ready. It checks one child-cancel
+  decision and subsequent Pause toggles only after release/repress. There is no
+  movie worker in this fixture; the child acknowledgement is simulated. It
+  does not prove the frontend movie input suppression or installed key delivery.
+
+Root's focused checks, in addition to the original required checks above:
+
+```text
+cargo test -p scaleform --test options_lifecycle -- --nocapture
+cargo test -p client cached_options_unload_revokes_the_opening_and_stale_closes_cannot_resume_match
+cargo test -p client fresh_and_adopted_workers_reject_delayed_readbacks_below_their_callback_floor
+cargo test -p client actual_escape_edges_keep_cold_options_in_pause_and_ignore_repeat
+```
+
+This child ran only `git diff --check` for the follow-up. No Cargo, rustc,
+runtime fixture, native/game/GUI, shared-target operation, owner data or Steam
+write, push, PR or delegated child was performed. Compilation of the new test
+and its generated ActionScript is pending root. Public Ruffle interfaces were
+read locally; the fixture is independent of game code/assets and uses no
+bytecode/profiler/introspection interface.
+
+Remaining root checks: ordinary 1920x1080 Home/Audio/Home and the already-correct
+Audio/Play/Offline Bots route; current cancel/unload and immediate reopen on the
+installed movie, including a retained API object's callback lookup behavior;
+real keyboard press/release/OS repeat before OptionsReady, subsequent HUD/Pause
+cycles; actual delayed GPU readback admission in fresh and adopted workers;
+and the existing return-Home stage timings plus inspected intermediate/settled
+images. UI16-01/02 are not accepted by this source patch. UI16-03 remains open;
+no route-specific concealment or latency tuning was added. The frozen owner
+candidate/settings are unchanged. The independent input follow-up is not
+included and must be integrated/checked separately by root.

@@ -225,11 +225,11 @@ pub(crate) fn input(
     } else if keys.just_pressed(KeyCode::Escape) && menu.classic_controls {
         menu.close_classic_controls();
     } else if keys.just_pressed(KeyCode::Escape) && !buy.open {
-        let movie_options = front.as_ref().is_some_and(|front| front.options_requested());
-        if menu.escape(movie_options) {
+        let movie_options = front.as_ref().and_then(|front| front.options_receiver());
+        if menu.escape(movie_options.is_some()) {
             // Options is a child of Pause, although the host page remains
             // Pause. Cancel only that owned child and keep the match paused.
-            front.as_ref().unwrap().cancel_options();
+            front.as_ref().unwrap().cancel_options(movie_options.unwrap());
         }
         menu.dirty = true;
     }

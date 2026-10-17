@@ -181,14 +181,17 @@ _global.csrBindings.releaseOwnedQuit = function(path) {
     return true;
 };
 
-// Options is cached just like MessageBox. Its authored Home/Back paths emit
-// OnUnload/OnCancel through the loader API; bind both to this exact opening.
-// Retained callbacks keep their old receiver instead of closing a later page.
+// Bind the observed Options close callback names on our cached loader proxy.
+// Retained function references keep their old receiver. A retained API object
+// reading these properties after rebind sees the NEW receiver; synthetic tests
+// distinguish both cases, but do not establish the installed movie's pattern.
 _global.csrBindings.bindOwnedOptions = function(path, name) {
+    if (typeof path != "string" || path != "_level21" ||
+        !_global.csrBindings.validOwnedName(name, "OwnedOptions")) { return false; }
     var root = _global.csrResolve(path);
     var api = _global.csrApi("OptionsMenu");
-    if (path != "_level21" || root == undefined || root.elementName != "OptionsMenu" ||
-        root.gameAPI != api || !_global.csrBindings.validOwnedName(name, "OwnedOptions")) { return false; }
+    if (typeof root != "movieclip" || String(root) != path ||
+        root.elementName != "OptionsMenu" || root.gameAPI != api) { return false; }
     var owned = _global.csrMakeProxy(name);
     api.OnCancel = owned.OnCancel;
     api.OnUnload = owned.OnUnload;

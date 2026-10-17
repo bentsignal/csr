@@ -1195,11 +1195,15 @@ impl Frontend {
     pub(crate) fn take_performance_ack(&mut self) -> Option<(u64, std::time::Instant)> { self.performance_ack.take() }
     pub(crate) fn camera(&self) -> Entity { self.camera }
     pub(crate) fn pause_surface_visible(&self) -> bool { self.data.lock().unwrap().pause_surface.visible() }
-    pub(crate) fn options_requested(&self) -> bool { self.data.lock().unwrap().pause_surface.options_requested() }
-    pub(crate) fn cancel_options(&self) {
-        let receiver = self.data.lock().unwrap().pause_surface.options_receiver();
-        self.send(Input::Call { path: "_global.csrBindings".into(),
-            function: "cancelOwnedOptions".into(), args: vec![receiver.into()] });
+    pub(crate) fn options_receiver(&self) -> Option<String> {
+        self.data.lock().unwrap().pause_surface.requested_options_receiver()
+    }
+    pub(crate) fn cancel_options(&self, receiver: String) {
+        self.send(Self::options_cancel_input(receiver));
+    }
+    fn options_cancel_input(receiver: String) -> Input {
+        Input::Call { path: "_global.csrBindings".into(),
+            function: "cancelOwnedOptions".into(), args: vec![receiver.into()] }
     }
     pub(crate) fn pause_root(&self) -> Option<String> { self.data.lock().unwrap().pause_surface.pause_root().map(str::to_owned) }
     pub(crate) fn loaded(&self, name: &str) -> bool { self.loaded.contains(name) }
@@ -2394,6 +2398,130 @@ pub(crate) fn capture_menu(
 mod tests {
     use super::*;
 
+    fn fixture_frontend() -> Frontend {
+        let fs = Arc::new(vfs::Vfs::new());
+        let catalog = crate::frontend_lobby::Catalog::installed(&crate::ClientOptions::default(), &[]);
+        let worker = CachedWorker::new(Data {
+            inventory: InventoryView::new(&fs), fs, settings: Settings::default(),
+            localization: Default::default(), game_modes: Default::default(),
+            state: AppState::Match, menu_open: true, controls_open: false, loading: String::new(),
+            loading_map: None, player_name: "Fixture".into(), movie_ready: Default::default(),
+            home_bootstrapped: false, home_retired: false,
+            pause_surface: Default::default(), deferred_pause: Default::default(),
+        }, catalog);
+        Frontend {
+            worker_kind: WorkerKind::Home, parked: None, next_worker_generation: 12,
+            home_show_pending: false, home_return_started: None, movie: None,
+            data: worker.data, actions: worker.actions, image: Default::default(),
+            presented_serial: 0, loading_presentation: Default::default(),
+            pause_presentation: Default::default(), performance_ack: None, worker_generation: 11,
+            root: Entity::PLACEHOLDER, camera: Entity::PLACEHOLDER, visible: true,
+            active: true, ready: false, failed: None, viewport: (1920, 1080),
+            requested: Default::default(), loaded: Default::default(), scene: None,
+            loading_text: String::new(), loading_map: None, loading_selection: None,
+            lobby: worker.lobby, notice: Entity::PLACEHOLDER,
+            notice_text: Entity::PLACEHOLDER, cancel: Entity::PLACEHOLDER,
+        }
+    }
+
+    #[test]
+    fn fresh_and_adopted_workers_reject_delayed_readbacks_below_their_callback_floor() {
+        let mut front = fixture_frontend();
+        let home = front.data.clone();
+        front.data.lock().unwrap().pause_surface.require_raster(10);
+        front.pause_presentation.open();
+        let old_home_revision = front.pause_presentation.revision();
+        front.pause_presentation.presented(old_home_revision, 10);
+        assert!(front.menu_presented());
+        let catalog = || crate::frontend_lobby::Catalog::installed(&crate::ClientOptions::default(), &[]);
+        assert!(front.select_worker(WorkerKind::Match, catalog()));
+        let match_worker = front.data.clone();
+        assert!(!Arc::ptr_eq(&home, &match_worker));
+        assert_eq!(match_worker.lock().unwrap().pause_surface.raster_fence(), 0,
+            "fresh worker must not inherit another worker's callback counter");
+        assert!(!front.menu_presented());
+        let match_revision = front.pause_presentation.revision();
+        // Delayed completion from the previously selected worker cannot satisfy
+        // a fresh worker's transaction even with a numerically larger fence.
+        assert!(!front.pause_presentation.accepts(old_home_revision, 10, 0));
+        match_worker.lock().unwrap().pause_surface.require_raster(2);
+        assert!(!front.pause_presentation.accepts(match_revision, 1, 2));
+        assert!(front.pause_presentation.accepts(match_revision, 2, 2));
+        front.pause_presentation.presented(match_revision, 2);
+        assert!(front.menu_presented());
+        assert!(!front.pause_presentation.accepts(match_revision, 1, 2),
+            "late stale pixels cannot replace a fresh accepted frame");
+
+        assert!(front.select_worker(WorkerKind::Home, catalog()));
+        assert!(Arc::ptr_eq(&home, &front.data), "adopt the original cached worker");
+        let home_revision = front.pause_presentation.revision();
+        assert_eq!(front.data.lock().unwrap().pause_surface.raster_fence(), 10);
+        assert!(!front.menu_presented());
+        assert!(!front.pause_presentation.accepts(match_revision, 20, 10));
+        assert!(!front.pause_presentation.accepts(old_home_revision, 10, 10));
+        assert!(!front.pause_presentation.accepts(home_revision, 9, 10));
+        assert!(front.pause_presentation.accepts(home_revision, 10, 10));
+        front.pause_presentation.presented(home_revision, 10);
+        assert!(front.menu_presented());
+        // Another close can raise the floor without changing Present revision.
+        front.data.lock().unwrap().pause_surface.require_raster(11);
+        assert!(!front.menu_presented());
+        assert!(!front.pause_presentation.accepts(home_revision, 10, 11));
+        front.pause_presentation.presented(home_revision, 11);
+        assert!(front.menu_presented());
+        assert!(front.select_worker(WorkerKind::Match, catalog()));
+        assert!(Arc::ptr_eq(&match_worker, &front.data));
+        assert_eq!(front.data.lock().unwrap().pause_surface.raster_fence(), 2);
+        assert!(!front.menu_presented());
+    }
+
+    #[test]
+    fn actual_escape_edges_keep_cold_options_in_pause_and_ignore_repeat() {
+        // Actual KeyboardInput -> InputPlugin -> menu::input path, without a
+        // window runner or movie worker. Shim dispatch is tested separately;
+        // this fixture does not claim delivery to an installed Options movie.
+        let front = fixture_frontend();
+        let data = front.data.clone();
+        data.lock().unwrap().pause_surface.options_opened();
+        assert!(!data.lock().unwrap().movie_ready.contains("OptionsMenu"));
+        let mut menu = crate::menu::Menu::default();
+        menu.page = Some(crate::menu::Page::Pause);
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, bevy::input::InputPlugin))
+            .insert_resource(front)
+            .insert_resource(menu)
+            .init_resource::<Settings>()
+            .init_resource::<crate::menu::LoadRequest>()
+            .init_resource::<crate::inventory::Inventory>()
+            .init_resource::<crate::inventory::Collection>()
+            .init_resource::<crate::buymenu::BuyMenu>()
+            .insert_resource(Options(crate::ClientOptions::default()))
+            .insert_resource(crate::player::LocalPlayer::new(1, glam::Vec3::ZERO, 0.))
+            .insert_resource(crate::player::InputEnabled(true))
+            .add_systems(Update, crate::menu::input);
+        let window = app.world_mut().spawn((PrimaryWindow, CursorOptions::default())).id();
+        let mut edge = |state, repeat| {
+            app.world_mut().write_message(KeyboardInput {
+                key_code: KeyCode::Escape, logical_key: bevy::input::keyboard::Key::Escape,
+                state, text: None, repeat, window,
+            });
+            app.update();
+            app.world().resource::<crate::menu::Menu>().page
+        };
+        assert_eq!(edge(ButtonState::Pressed, false), Some(crate::menu::Page::Pause));
+        // The worker's eventual acknowledgement closes only the child, before
+        // its OnReady. A held key must not then resume the host Pause.
+        data.lock().unwrap().pause_surface.options_cancelled();
+        for _ in 0..3 {
+            assert_eq!(edge(ButtonState::Pressed, true), Some(crate::menu::Page::Pause));
+        }
+        assert_eq!(edge(ButtonState::Released, false), Some(crate::menu::Page::Pause));
+        assert_eq!(edge(ButtonState::Pressed, false), None);
+        assert_eq!(edge(ButtonState::Pressed, true), None);
+        assert_eq!(edge(ButtonState::Released, false), None);
+        assert_eq!(edge(ButtonState::Pressed, false), Some(crate::menu::Page::Pause));
+    }
+
     #[test]
     fn fitted_radar_status_accepts_current_installed_art_without_weakening_archive_proof() {
         let mut context = LoadingContext {
@@ -2619,12 +2747,43 @@ mod tests {
         }
         bridge.call("PauseMenu", "BasePanelRunCommand", &["OpenAudioSettingsDialog".into()], &mut calls);
         let match_options = data.lock().unwrap().pause_surface.options_receiver();
+        // Match menu::input's single-lock decision, then let the worker close A
+        // and reopen B before the queued Escape cancellation is dispatched.
+        let mut front = fixture_frontend();
+        front.data = data.clone();
+        let captured = front.options_receiver().unwrap();
+        assert_eq!(captured, match_options);
+        bridge.call(&match_options, "OnCancel", &[], &mut calls);
+        bridge.call("PauseMenu", "BasePanelRunCommand", &["OpenAudioSettingsDialog".into()], &mut calls);
+        let replacement = data.lock().unwrap().pause_surface.options_receiver();
+        assert_ne!(replacement, captured);
+        let Input::Call { path, function, args } = Frontend::options_cancel_input(captured.clone()) else {
+            panic!("Options cancellation must use the shim callback adapter");
+        };
+        assert_eq!(path, "_global.csrBindings");
+        assert_eq!(function, "cancelOwnedOptions");
+        assert_eq!(args, vec![Value::String(captured)]);
+        // The real adapter's receiver -> OnCancel mapping is separately
+        // executed against shim.as by scaleform/tests/options_lifecycle.rs.
+        bridge.call(&args[0].str(), "OnCancel", &[], &mut calls);
+        assert!(data.lock().unwrap().pause_surface.owns_options(&replacement),
+            "Escape captured for A must not cancel replacement B before dispatch");
+        assert!(data.lock().unwrap().menu_open);
+        for args in [
+            vec![], vec![Value::Null], vec!["_level21".into()],
+            vec!["mc:_level21.child".into()], vec!["mc:_level21".into(), "extra".into()],
+        ] {
+            bridge.call(&replacement, "OnUnload", &args, &mut calls);
+            assert!(data.lock().unwrap().pause_surface.owns_options(&replacement));
+        }
+        bridge.call(&replacement, "OnCancel", &[true.into()], &mut calls);
+        assert!(data.lock().unwrap().pause_surface.owns_options(&replacement));
         for receiver in [home_options.as_str(), "OptionsMenu"] {
             bridge.call(receiver, "OnCancel", &[], &mut calls);
             bridge.call(receiver, "OnUnload", &["mc:_level21".into()], &mut calls);
             assert!(data.lock().unwrap().pause_surface.options_requested());
         }
-        bridge.call(&match_options, "OnCancel", &[], &mut calls);
+        bridge.call(&replacement, "OnCancel", &[], &mut calls);
         assert!(!data.lock().unwrap().pause_surface.options_requested());
         assert!(data.lock().unwrap().menu_open, "Options cancellation retains the host Pause owner");
         assert!(bridge.actions.lock().unwrap().take().is_empty(), "a child close cannot queue Resume");
