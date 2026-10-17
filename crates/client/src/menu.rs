@@ -198,6 +198,16 @@ pub(crate) fn home_controls(state: Res<State<crate::AppState>>, menu: Res<Menu>)
 #[derive(Component)]
 pub(crate) struct ClassicControlsRoot(crate::AppState);
 
+// Both Home and Match register draw. Order by an explicit shared set rather
+// than its ambiguous SystemTypeSet, even though their run conditions differ.
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct ControlsDraw;
+
+pub(crate) fn install_controls_retirement(app: &mut App) {
+    app.add_systems(Update, retire_classic_controls
+        .after(crate::frontend::cancel_loading).before(ControlsDraw));
+}
+
 pub(crate) fn retire_classic_controls(
     mut commands: Commands,
     mut menu: ResMut<Menu>,
@@ -1811,6 +1821,20 @@ pub(crate) fn apply(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn controls_retirement_schedule_accepts_both_actual_draw_registrations() {
+        let mut app = App::new();
+        install_controls_retirement(&mut app);
+        app.add_systems(Update, draw.in_set(ControlsDraw).run_if(home_controls))
+            .add_systems(Update, draw.in_set(ControlsDraw).run_if(crate::remote_join::ready));
+        app.world_mut().resource_scope(|world, mut schedules: Mut<Schedules>| {
+            // Build actual system metadata and ordering without executing draw
+            // or requiring a renderer. Before(draw) used to fail initialization
+            // because these two instances share one SystemTypeSet.
+            schedules.get_mut(Update).unwrap().initialize(world).unwrap();
+        });
+    }
 
     // Build the actual controls hierarchy without layout, assets, a movie,
     // renderer or map loading. Console dispatch and request_load are real;

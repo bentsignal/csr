@@ -236,12 +236,8 @@ impl Plugin for CsgoPlugin {
             .add_systems(RunFixedMainLoop, menu::input
                 .run_if(console::allows_input).run_if(menu::home_controls)
                 .in_set(bevy::app::RunFixedMainLoopSystems::BeforeFixedMainLoop))
-            .add_systems(Update, (menu::draw, menu::scroll_controls, menu::hover, ui_assets::fonts)
+            .add_systems(Update, (menu::draw.in_set(menu::ControlsDraw), menu::scroll_controls, menu::hover, ui_assets::fonts)
                 .chain().after(frontend::update).run_if(menu::home_controls))
-            // Console commands precede frontend input; retire even when reset
-            // forgot the handle or the scene/readiness gates now reject draw.
-            .add_systems(Update, menu::retire_classic_controls
-                .after(frontend::cancel_loading).before(menu::draw))
             .add_systems(Update, player::update_camera.run_if(remote_join::ready))
             .init_resource::<interpolation::RenderPoses>()
             .init_resource::<tracers::Muzzles>()
@@ -280,7 +276,7 @@ impl Plugin for CsgoPlugin {
                     scoreboard::draw,
                     hud_art::update.run_if(|| std::env::var_os("CSR_NO_HUD").is_none()),
                     (menu_scene::update.run_if(frontend::native_enabled),skin_finish::update,decorations::update).chain(),
-                    (menu::draw.after(frontend::update), (case_ui::input, case_ui::draw, case_ui::animate).chain().run_if(frontend::native_enabled)).chain(),
+                    (menu::draw.in_set(menu::ControlsDraw).after(frontend::update), (case_ui::input, case_ui::draw, case_ui::animate).chain().run_if(frontend::native_enabled)).chain(),
                     (menu::scroll_controls, menu::cards).chain().run_if(frontend::engine_menu_enabled),
                     menu::hover.run_if(frontend::engine_menu_enabled),
                     ui_assets::fonts,
@@ -293,6 +289,7 @@ impl Plugin for CsgoPlugin {
             .add_systems(FixedUpdate, (player::tick, foley::update).chain().run_if(remote_join::ready).run_if(remote_join::offline))
             .add_systems(Update, hud::menu_visibility.run_if(in_state(AppState::Match)).after(remote_join::update))
             .add_systems(Update, foley::update.run_if(remote_join::ready).run_if(resource_exists::<remote::RemoteClient>).after(remote_join::update));
+        menu::install_controls_retirement(app);
         if let Err(error) = remote_render_gate::install(app) { error!("Remote render preparation unavailable: {error:?}"); }
         shadow_diagnostic::install(app);
         console::install(app);
