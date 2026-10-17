@@ -193,6 +193,33 @@ pub(crate) fn home_controls(state: Res<State<crate::AppState>>, menu: Res<Menu>)
         && (menu.classic_controls || menu.controls_just_closed || menu.root.is_some())
 }
 
+/// Unlike match entities, a Home editor must survive without match ownership
+/// until its explicit retirement pass, even if reset_match forgets its handle.
+#[derive(Component)]
+pub(crate) struct ClassicControlsRoot(crate::AppState);
+
+pub(crate) fn retire_classic_controls(
+    mut commands: Commands,
+    mut menu: ResMut<Menu>,
+    state: Res<State<crate::AppState>>,
+    roots: Query<(Entity, &ClassicControlsRoot)>,
+) {
+    let scene = if menu.in_match { crate::AppState::Match } else { crate::AppState::Menu };
+    for (root, owner) in &roots {
+        let tracked = menu.root == Some(root);
+        if tracked && menu.classic_controls && owner.0 == scene && owner.0 == *state.get() {
+            continue;
+        }
+        commands.entity(root).despawn();
+        // A forgotten root must never clear a replacement's handle. Draw runs
+        // after these commands are applied and cannot despawn this root twice.
+        if tracked {
+            menu.root = None;
+            menu.dirty = true;
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn input(
     mut commands: Commands,
@@ -1481,7 +1508,8 @@ fn draw_classic_controls(commands: &mut Commands, menu: &Menu, settings: &Settin
         position_type: PositionType::Absolute, width: percent(100), height: percent(100),
         padding: UiRect::axes(px(32.0), px(24.0)), flex_direction: FlexDirection::Column,
         row_gap: px(12.0), ..default()
-    }, BackgroundColor(Color::srgb(0.035, 0.055, 0.072)), GlobalZIndex(100))).id();
+    }, BackgroundColor(Color::srgb(0.035, 0.055, 0.072)), GlobalZIndex(100),
+        ClassicControlsRoot(if menu.in_match { crate::AppState::Match } else { crate::AppState::Menu }))).id();
     label(commands, root, "KEYBOARD / MOUSE", 30.0, Color::WHITE);
     label(commands, root, "Scroll to see all controls. Select a key to change it; Escape cancels capture.",
         17.0, Color::srgb(0.8, 0.85, 0.89));
@@ -1783,6 +1811,128 @@ pub(crate) fn apply(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Build the actual controls hierarchy without layout, assets, a movie,
+    // renderer or map loading. Console dispatch and request_load are real;
+    // keyboard-to-console delivery and production draw scheduling are outside
+    // this entity-lifetime fixture.
+    fn controls_lifetime_app() -> App {
+        let mut a = harness();
+        a.add_plugins((MinimalPlugins, bevy::state::app::StatesPlugin))
+            .init_state::<crate::AppState>()
+            .init_resource::<crate::session::Loader>()
+            .init_resource::<crate::hosting::Hosting>()
+            .add_observer(crate::session::own_entity::<Node>)
+            .add_systems(Update, crate::session::request_load)
+            .add_systems(Update, retire_classic_controls.after(input).after(crate::session::request_load));
+        {
+            let mut menu = a.world_mut().resource_mut::<Menu>();
+            menu.in_match = false;
+            menu.page = Some(Page::Main);
+            menu.maps = vec!["de_dust2".into()];
+        }
+        a.update(); // Consume initial state entry before dispatching requests.
+        a
+    }
+
+    fn spawn_controls_tree(world: &mut World) -> Vec<Entity> {
+        world.resource_mut::<Menu>().open_classic_controls();
+        let mut queue = bevy::ecs::world::CommandQueue::default();
+        let root = draw_classic_controls(&mut Commands::new(&mut queue, world),
+            world.resource::<Menu>(), world.resource::<Settings>());
+        queue.apply(world);
+        world.resource_mut::<Menu>().root = Some(root);
+        let mut tree = vec![root];
+        let mut at = 0;
+        while at < tree.len() {
+            if let Some(children) = world.get::<Children>(tree[at]) {
+                tree.extend(children.iter().copied());
+            }
+            at += 1;
+        }
+        assert!(tree.len() > ACTIONS.len(), "fixture must contain the real controls widgets");
+        tree
+    }
+
+    fn assert_controls_tree_gone(world: &World, tree: &[Entity]) {
+        for entity in tree {
+            assert!(world.get_entity(*entity).is_err(), "old controls entity {entity:?} survived");
+        }
+    }
+
+    #[test]
+    fn home_console_disconnect_retires_the_forgotten_controls_tree() {
+        let mut a = controls_lifetime_app();
+        let old = spawn_controls_tree(a.world_mut());
+        assert!(a.world().get::<crate::session::MatchEntity>(old[0]).is_none());
+        assert_eq!(crate::console::command_fixture(a.world_mut(), "disconnect").unwrap(), "Disconnected.");
+        assert!(a.world().resource::<Menu>().root.is_none(), "exercise the lost-handle reset");
+        assert!(!a.world().resource::<Menu>().classic_controls);
+        assert!(!a.world().resource::<Menu>().controls_just_closed);
+        assert!(a.world().get_entity(old[0]).is_ok(), "reset alone cannot retire a Home entity");
+        a.update();
+        assert_controls_tree_gone(a.world(), &old);
+        let reopened = spawn_controls_tree(a.world_mut());
+        a.update();
+        assert_eq!(a.world().resource::<Menu>().root, Some(reopened[0]));
+        assert!(reopened.iter().all(|entity| a.world().get_entity(*entity).is_ok()));
+    }
+
+    #[test]
+    fn home_console_map_retires_controls_on_loading_even_before_flag_cleanup() {
+        let mut a = controls_lifetime_app();
+        let old = spawn_controls_tree(a.world_mut());
+        crate::console::command_fixture(a.world_mut(), "map de_dust2").unwrap();
+        assert!(a.world().resource::<LoadRequest>().0.lock().unwrap().is_some());
+        a.update(); // The supported loader request queues the state transition.
+        assert_eq!(*a.world().resource::<State<crate::AppState>>().get(), crate::AppState::Menu);
+        assert!(matches!(a.world().resource::<NextState<crate::AppState>>(),
+            NextState::Pending(crate::AppState::Loading)));
+        a.update(); // No begin_load is installed: no game data or worker needed.
+        assert_eq!(*a.world().resource::<State<crate::AppState>>().get(), crate::AppState::Loading);
+        assert!(a.world().resource::<Menu>().classic_controls,
+            "scene retirement must work independently of frontend flag cleanup");
+        assert!(a.world().resource::<Menu>().root.is_none());
+        assert_controls_tree_gone(a.world(), &old);
+    }
+
+    #[test]
+    fn classic_controls_back_retires_children_and_keeps_the_reopened_tree() {
+        for in_match in [false, true] {
+            let mut a = controls_lifetime_app();
+            a.insert_state(if in_match { crate::AppState::Match } else { crate::AppState::Menu });
+            a.world_mut().resource_mut::<Menu>().in_match = in_match;
+            let old = spawn_controls_tree(a.world_mut());
+            let back = old.iter().copied().find(|entity|
+                matches!(a.world().get::<Action>(*entity), Some(Action::ControlsBack))).unwrap();
+            a.world_mut().entity_mut(back).insert(Interaction::Pressed);
+            a.update(); // Real ControlsBack handling, then unconditional retirement.
+            assert_eq!(a.world().resource::<Menu>().page,
+                Some(if in_match { Page::Pause } else { Page::Main }));
+            assert!(a.world().resource::<Menu>().root.is_none());
+            assert_controls_tree_gone(a.world(), &old);
+            let reopened = spawn_controls_tree(a.world_mut());
+            a.update();
+            a.update();
+            assert_eq!(a.world().resource::<Menu>().root, Some(reopened[0]));
+            assert!(reopened.iter().all(|entity| a.world().get_entity(*entity).is_ok()));
+        }
+    }
+
+    #[test]
+    fn retiring_a_forgotten_controls_tree_preserves_its_replacement_handle() {
+        let mut a = controls_lifetime_app();
+        let old = spawn_controls_tree(a.world_mut());
+        crate::console::command_fixture(a.world_mut(), "disconnect").unwrap();
+        // Reopening before the retirement pass leaves both marked roots live.
+        let replacement = spawn_controls_tree(a.world_mut());
+        a.update();
+        assert_controls_tree_gone(a.world(), &old);
+        assert_eq!(a.world().resource::<Menu>().root, Some(replacement[0]));
+        assert!(replacement.iter().all(|entity| a.world().get_entity(*entity).is_ok()));
+        assert_eq!(a.world_mut().query_filtered::<Entity, With<ClassicControlsRoot>>()
+            .iter(a.world()).count(), 1);
+    }
 
     #[test]
     fn home_controls_accept_public_key_edges_before_a_player_exists() {

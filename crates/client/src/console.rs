@@ -571,6 +571,11 @@ fn execute(world: &mut World) {
             .print(result.unwrap_or_else(|error| format!("Error: {error}")));
     }
 }
+#[cfg(test)]
+pub(crate) fn command_fixture(world: &mut World, line: &str) -> Result<String, String> {
+    run(world, line)
+}
+
 fn run(world: &mut World, line: &str) -> Result<String, String> {
     let tokens = words(line)?;
     let Some(command) = tokens.first() else {

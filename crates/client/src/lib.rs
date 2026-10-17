@@ -238,6 +238,10 @@ impl Plugin for CsgoPlugin {
                 .in_set(bevy::app::RunFixedMainLoopSystems::BeforeFixedMainLoop))
             .add_systems(Update, (menu::draw, menu::scroll_controls, menu::hover, ui_assets::fonts)
                 .chain().after(frontend::update).run_if(menu::home_controls))
+            // Console commands precede frontend input; retire even when reset
+            // forgot the handle or the scene/readiness gates now reject draw.
+            .add_systems(Update, menu::retire_classic_controls
+                .after(frontend::cancel_loading).before(menu::draw))
             .add_systems(Update, player::update_camera.run_if(remote_join::ready))
             .init_resource::<interpolation::RenderPoses>()
             .init_resource::<tracers::Muzzles>()
