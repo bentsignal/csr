@@ -7,12 +7,16 @@
 use crate::coords::{to_bevy, view_forward};
 use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll};
 use bevy::prelude::*;
-use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow};
+use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow, WindowFocused};
 use movement::buttons;
 use sim::{PlayerId, Purchase, TickInput};
 
 /// CS:GO's `m_yaw` / `m_pitch`: degrees per mouse count.
 const M_YAW: f32 = 0.022;
+
+#[cfg(test)]
+#[path = "player_mouse_tests.rs"]
+mod mouse_tests;
 
 #[derive(Resource)]
 pub struct SimWorld(pub sim::World);
@@ -203,6 +207,43 @@ fn captured(cursor: &CursorOptions) -> bool {
     cursor.grab_mode != CursorGrabMode::None
 }
 
+/// Raw motion has no window id or ordering relative to focus messages. Reject
+/// the entire transition batch, including a loss/regain within one frame.
+/// Run after InputSystems even while the console/menu owns gameplay input.
+pub fn focus_input(
+    mut focus: MessageReader<WindowFocused>,
+    mut windows: Query<(Entity, &Window, &mut CursorOptions), With<PrimaryWindow>>,
+    mut motion: ResMut<AccumulatedMouseMotion>,
+    mut scroll: ResMut<AccumulatedMouseScroll>,
+    mut local: Option<ResMut<LocalPlayer>>,
+) {
+    let Ok((primary, window, mut cursor)) = windows.single_mut() else { return; };
+    let mut changed = false;
+    let mut lost = false;
+    for event in focus.read() {
+        if event.window == primary {
+            changed = true;
+            lost |= !event.focused;
+        }
+    }
+    if changed || !window.focused {
+        motion.delta = Vec2::ZERO;
+        scroll.delta = Vec2::ZERO;
+    }
+    if lost || !window.focused {
+        cursor.grab_mode = CursorGrabMode::None;
+        cursor.visible = true;
+        if let Some(local) = local.as_mut() {
+            local.latched = 0;
+            local.pointer_attacks = 0;
+            local.keyboard_attacks = 0;
+            local.pending_slot = 0;
+            local.pending_utility = 0;
+            local.pending_drop = false;
+        }
+    }
+}
+
 pub fn grab_cursor(
     mut local: ResMut<LocalPlayer>,
     mut cursor: Single<&mut CursorOptions, With<PrimaryWindow>>,
@@ -211,8 +252,14 @@ pub fn grab_cursor(
     menu: Res<crate::buymenu::BuyMenu>,
     front: Res<crate::menu::Menu>,
     settings: Res<crate::settings::Settings>,
+    windows: Query<&Window, With<PrimaryWindow>>,
 ) {
     local.release_capture_attacks(&mouse);
+    if windows.iter().any(|w| !w.focused) {
+        cursor.grab_mode = CursorGrabMode::None;
+        cursor.visible = true;
+        return;
+    }
     if !enabled.0 {
         return;
     }
@@ -254,8 +301,10 @@ pub fn look(
     mut block: ResMut<InputBlockFrames>,
     mut inspect: ResMut<crate::tracers::InspectRequest>,
     remote: Option<Res<crate::remote::RemoteClient>>,
+    windows: Query<&Window, With<PrimaryWindow>>,
 ) {
     local.release_capture_attacks(&mouse);
+    if windows.iter().any(|w| !w.focused) { return; }
     if front.open() {return;}
     if remote.as_ref().is_some_and(|r| r.status() != &netcode::remote_session::Status::Ready) { return; }
     if block.0 > 0 {
