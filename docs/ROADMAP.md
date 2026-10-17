@@ -1,5 +1,11 @@
 # Roadmap
 
+> **Current owner direction — 2026-10-17:** Work resumed. Consolidated
+> [owner priorities](OWNER-PRIORITIES.md) supersede old work-order statements
+> below. Focus on broad playability: performance across supported maps with
+> 10 players at a 300–500 FPS target, original feel, lighting and HUD. Current
+> bands are rough guidance. Manage priorities through chat; the GUI is retired.
+
 How we get to [VISION.md](VISION.md). Work is organised as **phases with
 parallel tracks**, not calendar estimates: tracks inside a phase run
 concurrently (one agent or worktree per track), and the dependencies between

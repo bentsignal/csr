@@ -1,5 +1,11 @@
 # Notes for agents working on CSGO Rewrite
 
+**Read [docs/OWNER-PRIORITIES.md](docs/OWNER-PRIORITIES.md) before selecting
+work. The owner resumed development on 2026-10-17 around broad playability
+outcomes. Current bands are rough guidance; maintain them through chat,
+consolidate duplicates and remove resolved work. The priority GUI is retired.
+Historical map/symptom examples do not narrow an outcome's scope.**
+
 **If [docs/HANDOFF.md](docs/HANDOFF.md) says `Status: OPEN`, start there.**
 **Read [docs/VISION.md](docs/VISION.md) first.** It is the owner's intent.
 [docs/ROADMAP.md](docs/ROADMAP.md) is the plan; tick items off as they land.
