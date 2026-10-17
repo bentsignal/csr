@@ -1,4 +1,4 @@
-//! Source fixtures; R23 additions UNRUN (no Cargo/build/test authorization).
+//! Source fixtures; R26 additions UNRUN (no Cargo/build/test authorization).
 use super::*;
 use bevy::ecs::system::{IntoSystem, System};
 use tracing_subscriber::prelude::*;
@@ -36,13 +36,151 @@ fn names_are_actual_public_bevy_function_system_names() {
 }
 
 #[test]
+fn render_phase_profile_is_explicit_and_uses_actual_public_nongeneric_system_names() {
+    use std::ffi::OsStr;
+    assert_eq!(Profile::parse(None).unwrap(), Profile::Legacy);
+    assert_eq!(Profile::parse(Some(OsStr::new("render-phases"))).unwrap(), Profile::RenderPhases);
+    for value in ["", "legacy", "render-phases ", "Render-phases", "all", "v3"] {
+        assert!(Profile::parse(Some(OsStr::new(value))).is_err());
+    }
+    fn name<M, S: IntoSystem<(), (), M>>(system: S) -> String {
+        IntoSystem::into_system(system).name().to_string()
+    }
+    let actual = [
+        name(bevy::render::view::window::prepare_windows),
+        name(bevy::pbr::queue_material_meshes),
+        name(bevy::render::view::prepare_view_targets),
+    ];
+    for (index, name) in actual.iter().enumerate() {
+        assert_eq!(Profile::RenderPhases.system(name), Some(index), "registry name drift: {name}");
+        assert_eq!(name, PHASE_SCOPES[index].name);
+    }
+    for name in ["prepare_windows", "other::prepare_windows",
+        "bevy_render::view::window::prepare_windows_extra",
+        "bevy_pbr::material::queue_material_meshes<client::material::WorldMaterial>",
+        "queue_submit", "present_frames", SYSTEMS[0]] {
+        assert_eq!(Profile::RenderPhases.system(name), None, "false attribution: {name}");
+    }
+    // Same collector, independently literal wire contract, not derived from the
+    // producer constants. Legacy output must retain its exact v2 header/map.
+    let capture = Capture::with_profile(window(), "r26-fixture", None, Profile::RenderPhases);
+    assert_eq!(capture.text, concat!(
+        "# csr_targeted_render_trace_v3 run=r26-fixture feature=targeted-render-trace bevy=0.19.1 clock=monotonic_cpu_wall_ns scope_set=render-phases start_s=30 end_s=60 wall_ns=90000000000 max_records=100 max_bytes=8192\n",
+        "# scope 0 kind=system name=bevy_render::view::window::prepare_windows target=bevy_ecs::system::function_system level=INFO\n",
+        "# scope 1 kind=system name=bevy_pbr::material::queue_material_meshes target=bevy_ecs::system::function_system level=INFO\n",
+        "# scope 2 kind=system name=bevy_render::view::prepare_view_targets target=bevy_ecs::system::function_system level=INFO\n",
+        "# scope 3 kind=span name=queue_submit target=bevy_core_pipeline::schedule level=INFO\n",
+        "# scope 4 kind=span name=present_frames target=bevy_render::renderer level=INFO\n",
+        "kind\tframe\tsim_tick\tsim_s\tstart_ns\tduration_ns\tscope\tspan\tthread\tcontext_changed\n",
+    ));
+    let legacy = Capture::new(window(), "fixture", None);
+    assert!(legacy.text.starts_with("# csr_targeted_render_trace_v2 run=fixture "));
+    assert!(!legacy.text.contains("scope_set="));
+    assert!(legacy.text.contains("duration_ns\tsystem\tspan"));
+}
+
+#[test]
+fn render_phase_real_layer_routes_exact_metadata_string_names_reuse_and_concurrent_scopes() {
+    let profile = Profile::RenderPhases;
+    let mut capture = Capture::with_profile(window(), "callbacks", None, profile);
+    capture.context(0, frame(99, 29.99));
+    capture.context(0, frame(100, 30.0));
+    let shared = Arc::new(Shared { capture: Mutex::new(capture), born: Instant::now(),
+        active: AtomicBool::new(true), closed: AtomicBool::new(false) });
+    let subscriber = Registry::default().with(TraceLayer(shared.clone(), profile)
+        .with_filter(filter_fn(move |meta| profile.metadata(meta))));
+    tracing::subscriber::with_default(subscriber, || {
+        let systems: Vec<_> = PHASE_SCOPES[..3].iter().map(|scope| {
+            let name = scope.name.to_string(); // actual SystemMeta String field
+            tracing::info_span!(target: "bevy_ecs::system::function_system", "system", name = name)
+        }).collect();
+        let queue = tracing::info_span!(target: "bevy_core_pipeline::schedule", "queue_submit", count = 1);
+        let present = tracing::info_span!(target: "bevy_render::renderer", "present_frames");
+        let dispatch = tracing::dispatcher::get_default(Clone::clone);
+        for (n, sim_s) in [(100, 30.0), (101, 59.99)] {
+            if n != 100 {
+                let mut capture = shared.capture.lock().unwrap();
+                capture.context(elapsed(&shared), frame(n, sim_s));
+                update_flags(&shared, &capture);
+            }
+            // Controlled real callback overlap on separate threads; scope 0
+            // encloses all others, which complete first. All spans are reused.
+            let _outer = systems[0].enter();
+            std::thread::scope(|threads| {
+                threads.spawn(|| tracing::dispatcher::with_default(&dispatch, || {
+                    let _system = systems[1].enter();
+                    let _queue = queue.enter();
+                }));
+                let _system = systems[2].enter();
+                let _present = present.enter();
+            });
+        }
+        // Each direct span rejects wrong target, level and metadata name.
+        let _qt = tracing::info_span!(target: "other", "queue_submit").entered();
+        let _pt = tracing::info_span!(target: "other", "present_frames").entered();
+        let _ql = tracing::debug_span!(target: "bevy_core_pipeline::schedule", "queue_submit").entered();
+        let _pl = tracing::warn_span!(target: "bevy_render::renderer", "present_frames").entered();
+        let _qn = tracing::info_span!(target: "bevy_core_pipeline::schedule", "queue_submit_extra").entered();
+        let _pn = tracing::info_span!(target: "bevy_render::renderer", "present_frames_extra").entered();
+        let _field = tracing::info_span!(target: "bevy_ecs::system::function_system", "system", name = "queue_submit").entered();
+        let _old = tracing::info_span!(target: "bevy_ecs::system::function_system", "system", name = SYSTEMS[0].to_string()).entered();
+        let _commands = tracing::info_span!(target: "bevy_ecs::system::function_system", "system_commands", name = PHASE_SCOPES[0].name.to_string()).entered();
+        let _target = tracing::info_span!(target: "other", "system", name = PHASE_SCOPES[0].name.to_string()).entered();
+        let _generic = tracing::info_span!(target: "bevy_ecs::system::function_system", "system", name = "bevy_pbr::material::queue_material_meshes<client::material::WorldMaterial>".to_string()).entered();
+        tracing::info!(target: "bevy_core_pipeline::schedule", name = "queue_submit", "not a span");
+        tracing::info!(target: "bevy_render::renderer", name = "present_frames", "not a span");
+        let mut capture = shared.capture.lock().unwrap();
+        capture.context(elapsed(&shared), frame(102, 60.0));
+        update_flags(&shared, &capture);
+    });
+    let capture = shared.capture.lock().unwrap();
+    assert_eq!(capture.reason, Some("window_end"));
+    assert_eq!(capture.records, 14);
+    assert_eq!(capture.seen, 31);
+    let mut counts = [[0; 5]; 2];
+    let mut identities = [None; 5];
+    for row in capture.text.lines().filter(|row| row.starts_with("sample\t")) {
+        let fields: Vec<_> = row.split('\t').collect();
+        let frame = fields[1].parse::<usize>().unwrap() - 100;
+        let scope = fields[6].parse::<usize>().unwrap();
+        counts[frame][scope] += 1;
+        if frame == 0 { identities[scope] = Some(fields[7]); }
+        else { assert_eq!(identities[scope], Some(fields[7])); }
+        assert_eq!(fields[9], "false");
+    }
+    assert_eq!(counts, [[1; 5]; 2]);
+    assert!(capture.text.ends_with("reason=window_end records=14 seen_mask=31 open_scopes=0\n"));
+}
+
+#[test]
+fn render_phases_require_both_direct_spans_in_every_context_without_cadence_waivers() {
+    for omitted in [3, 4] {
+        let mut capture = Capture::with_profile(window(), "missing-direct", None, Profile::RenderPhases);
+        capture.context(1, frame(99, 29.99));
+        capture.context(10, frame(100, 30.0));
+        all_functions(&mut capture, 20);
+        capture.context(50, frame(101, 59.99));
+        let thread = std::thread::current().id();
+        for scope in 0..5 {
+            if scope == omitted { continue; }
+            capture.enter(scope, scope as u64 + 1, thread, 60 + scope as u64);
+            capture.exit(scope, scope as u64 + 1, thread, 60 + scope as u64);
+        }
+        capture.context(100, frame(102, 60.0));
+        assert_eq!(capture.seen, 31); // earlier coverage cannot mask omission
+        assert_eq!(capture.reason, Some("missing_function"));
+        assert!(capture.text.contains("upper\t102\t"));
+    }
+}
+
+#[test]
 fn real_subscriber_routes_only_exact_selected_system_spans_without_file_io() {
     let mut capture = Capture::new(window(), "fixture", None);
     capture.context(0, frame(99, 29.99));
     capture.context(0, frame(100, 30.0));
     let shared = Arc::new(Shared { capture: Mutex::new(capture), born: Instant::now(),
         active: AtomicBool::new(true), closed: AtomicBool::new(false) });
-    let subscriber = Registry::default().with(TraceLayer(shared.clone()).with_filter(filter_fn(system_metadata)));
+    let subscriber = Registry::default().with(TraceLayer(shared.clone(), Profile::Legacy).with_filter(filter_fn(system_metadata)));
     tracing::subscriber::with_default(subscriber, || {
         // String follows the exact `name = name.clone().to_string()` engine path.
         let selected_name = SYSTEMS[0].to_string();
@@ -52,6 +190,9 @@ fn real_subscriber_routes_only_exact_selected_system_spans_without_file_io() {
         let _wrong_name = tracing::info_span!(target: "bevy_ecs::system::function_system", "system", name = "other::extract_skins").entered();
         let _wrong_kind = tracing::info_span!(target: "bevy_ecs::system::function_system", "system_commands", name = SYSTEMS[0]).entered();
         let _wrong_target = tracing::info_span!(target: "other", "system", name = SYSTEMS[0]).entered();
+        // The new profile's correct direct metadata stays excluded by default.
+        let _queue = tracing::info_span!(target: "bevy_core_pipeline::schedule", "queue_submit", count = 1).entered();
+        let _present = tracing::info_span!(target: "bevy_render::renderer", "present_frames").entered();
         tracing::info!("events must not become records");
     });
     let capture = shared.capture.lock().unwrap();

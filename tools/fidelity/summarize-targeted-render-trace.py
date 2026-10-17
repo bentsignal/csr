@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bounded v2 trace STRUCTURE ONLY. Authored UNRUN in R20.
+"""Bounded v2/v3 trace STRUCTURE ONLY. R26 additions authored UNRUN.
 No executable/build/context receipt reader exists here; evidence_complete is
 always False, even on exit 0. Parent evidence review remains mandatory.
 """
@@ -23,6 +23,16 @@ SYSTEMS = (
 LABELS = ("extract_skins", "prepare_skins", "WorldMaterial prepare_erased_assets",
           "prepare_mesh_bind_groups", "render_system (combined)")
 COLUMNS = "kind frame sim_tick sim_s start_ns duration_ns system span thread context_changed".split()
+PHASE_SCOPES = (
+    ("system", "bevy_render::view::window::prepare_windows", "bevy_ecs::system::function_system"),
+    ("system", "bevy_pbr::material::queue_material_meshes", "bevy_ecs::system::function_system"),
+    ("system", "bevy_render::view::prepare_view_targets", "bevy_ecs::system::function_system"),
+    ("span", "queue_submit", "bevy_core_pipeline::schedule"),
+    ("span", "present_frames", "bevy_render::renderer"),
+)
+PHASE_LABELS = ("prepare_windows (system)", "queue_material_meshes (system)",
+                "prepare_view_targets (system)", "queue_submit (span)", "present_frames (span)")
+PHASE_COLUMNS = "kind frame sim_tick sim_s start_ns duration_ns scope span thread context_changed".split()
 REASONS = set("window_end record_cap byte_cap wall_limit context_lost invalid_sim_time context_rewind missed_start context_gap context_changed missing_function overlapping_same_system scope_mismatch missing_render_app app_exit".split())
 
 
@@ -63,13 +73,22 @@ def analyze(raw):
     require(text.endswith("\n") and "\r" not in text, "incomplete/noncanonical artifact")
     lines = text.splitlines()
     require(8 <= len(lines) <= MAX_RECORDS + 8, "line bound")
-    meta = fields(lines[0], "# csr_targeted_render_trace_v2 ",
-                  "run feature bevy clock start_s end_s wall_ns max_records max_bytes".split())
+    keys = "run feature bevy clock start_s end_s wall_ns max_records max_bytes".split()
+    if lines[0].startswith("# csr_targeted_render_trace_v2 "):
+        meta = fields(lines[0], "# csr_targeted_render_trace_v2 ", keys)
+        mapping = [f"# system {i} {name}" for i, name in enumerate(SYSTEMS)]
+        columns, labels, scope_set = COLUMNS, LABELS, None
+    else:
+        meta = fields(lines[0], "# csr_targeted_render_trace_v3 ", keys + ["scope_set"])
+        require(meta["scope_set"] == "render-phases", "unsupported scope_set")
+        mapping = [f"# scope {i} kind={kind} name={name} target={target} level=INFO"
+                   for i, (kind, name, target) in enumerate(PHASE_SCOPES)]
+        columns, labels, scope_set = PHASE_COLUMNS, PHASE_LABELS, "render-phases"
     require(re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", meta["run"]) is not None, "invalid run identity")
     require((meta["feature"], meta["bevy"], meta["clock"]) ==
             ("targeted-render-trace", "0.19.1", "monotonic_cpu_wall_ns"), "unsupported feature/bevy/clock")
-    require(lines[1:6] == [f"# system {i} {name}" for i, name in enumerate(SYSTEMS)], "exact ordered system map required")
-    require(lines[6].split("\t") == COLUMNS, "exact unique ten-column schema required")
+    require(lines[1:6] == mapping, "exact ordered typed scope map required" if scope_set else "exact ordered system map required")
+    require(lines[6].split("\t") == columns, "exact unique ten-column schema required")
     footer = fields(lines[-1], "# end ", "reason records seen_mask open_scopes".split())
     require(footer["reason"] in REASONS, "unknown terminal reason")
     start, end = finite(meta["start_s"]), finite(meta["end_s"])
@@ -92,7 +111,7 @@ def analyze(raw):
     seen = 0
     for line in rows:
         values = line.split("\t")
-        require(len(values) == len(COLUMNS), "partial/wide row")
+        require(len(values) == len(columns), "partial/wide row")
         kind, frame_s, tick_s, sim_text, at_s, duration_s, system_s, span_s, thread, changed = values
         frame, tick, sim, at = uint(frame_s, (1 << 32) - 1), uint(tick_s), finite(sim_text), uint(at_s, wall - 1)
         identity = (frame, tick, sim)
@@ -153,6 +172,7 @@ def analyze(raw):
                            and lower_previous is not None and lower is not None and upper is not None
                            and gaps == 0 and bool(contexts) and all(n == len(contexts) for n in covered))
     return dict(run=meta["run"], start=start, end=end, reason=footer["reason"],
+                scope_set=scope_set, labels=labels,
                 structural_complete=structural_complete, evidence_complete=False,
                 contexts=contexts, gaps=gaps, covered=covered, samples=samples,
                 lower_previous=lower_previous, lower=lower, upper=upper)
@@ -168,8 +188,12 @@ def summarize(path, *, structural_only=False):
           f"observed_range={result['contexts'][0] if result['contexts'] else None}.."
           f"{result['contexts'][-1] if result['contexts'] else None}")
     print(f"lower_previous={result['lower_previous']} lower={result['lower']} upper={result['upper']}")
-    print("Inclusive function-system wall milliseconds; concurrent scopes must never be summed as frame/GPU time.")
-    for label, values, covered in zip(LABELS, result["samples"], result["covered"]):
+    if result["scope_set"] == "render-phases":
+        print("scope_set=render-phases: inclusive system/span CPU wall milliseconds; never sum as frame/GPU time.")
+        print("queue_submit excludes encoder.finish and other direct submits; present_frames is the window-iteration group, not display/GPU time.")
+    else:
+        print("Inclusive function-system wall milliseconds; concurrent scopes must never be summed as frame/GPU time.")
+    for label, values, covered in zip(result["labels"], result["samples"], result["covered"]):
         denominator = len(result["contexts"])
         population = f"covered_contexts={covered}/{denominator} missing_observed_contexts={denominator-covered}"
         if not values:
