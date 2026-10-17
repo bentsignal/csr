@@ -379,6 +379,14 @@ impl Settings {
         }
         s
     }
+    /// The weapon list describes an effective direct selection binding, never
+    /// a slot number that may no longer be bound to that key.
+    pub(crate) fn selection_binding_label(&self, slot: u8) -> String {
+        let Some(index) = (1..=5).contains(&slot).then_some(KEY_SELECTION_FIRST + slot as usize) else { return String::new(); };
+        if let Some(key) = self.binds[index] { return key_name(key); }
+        self.mouse_binds.iter().position(|action| *action == MouseAction::Action(index))
+            .map(|index| format!("Mouse {}", index + 1)).unwrap_or_default()
+    }
     pub fn encode(&self) -> String {
         let mut text = format!(
             "volume={}\nsensitivity={}\ninvert_y={}\nexposure={}\nvsync={}\nfullscreen={}\nresolution={}\nmsaa={}\nblood={}\nhitmarker={}\ncross_color={}\ncross_size={}\ncross_gap={}\ncross_thickness={}\ncross_dot={}\n",
@@ -539,6 +547,23 @@ pub fn key_name(key: KeyCode) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn weapon_hints_follow_rebinds_unbinds_and_mouse_selection_after_reload() {
+        let mut s = Settings::default();
+        assert_eq!(s.selection_binding_label(2), "2");
+        s.rebind(KEY_SELECTION_FIRST + 2, KeyCode::KeyK);
+        s.rebind(KEY_SELECTION_FIRST + 3, KeyCode::KeyV);
+        let s = Settings::parse(&s.encode());
+        assert_eq!(s.selection_binding_label(2), "K");
+        assert_eq!(s.selection_binding_label(3), "V");
+        let mut s = s;
+        s.binds[KEY_SELECTION_FIRST + 2] = None;
+        assert_eq!(s.selection_binding_label(2), "");
+        s.mouse_binds[3] = MouseAction::Action(KEY_SELECTION_FIRST + 2);
+        assert_eq!(s.selection_binding_label(2), "Mouse 4");
+        assert_eq!(s.selection_binding_label(0), "");
+        assert_eq!(s.selection_binding_label(6), "");
+    }
     #[test]
     fn settings_round_trip_and_rebind_swap() {
         let mut s = Settings::default();

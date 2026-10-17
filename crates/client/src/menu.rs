@@ -251,6 +251,7 @@ pub(crate) fn input(
     if !enabled.0 {
         return;
     }
+    let mut save_controls = false;
     menu.controls_just_closed = false;
     // Native movie callbacks may close the menu between input passes.
     let was_open = menu.open() || *previous_open;
@@ -264,6 +265,7 @@ pub(crate) fn input(
         {
             if index == ACTIONS.len() { settings.set_console_key(*key); }
             else { settings.rebind(index, *key); }
+            save_controls = menu.classic_controls;
             menu.capture = None;
             menu.dirty = true;
         }
@@ -355,6 +357,7 @@ pub(crate) fn input(
                 Action::ClearBind(i) => {
                     if i == ACTIONS.len() { settings.console_key = None; }
                     else if let Some(binding) = settings.binds.get_mut(i) { *binding = None; }
+                    save_controls |= menu.classic_controls;
                 }
                 Action::ControlsBack => menu.close_classic_controls(),
                 Action::ControlsDefaults => {
@@ -385,7 +388,9 @@ pub(crate) fn input(
                         *load_request.0.lock().unwrap() = Some(next.into());
                     }
                 },
-                Action::Adjust(id, delta) => match id {
+                Action::Adjust(id, delta) => {
+                    save_controls |= menu.classic_controls && matches!(id, 1 | 9 | 25..=31);
+                    match id {
                     0 => settings.volume = (settings.volume + delta).clamp(0.0, 1.0),
                     1 => {
                         settings.sensitivity = ((settings.sensitivity + delta) * 1000.0)
@@ -419,9 +424,20 @@ pub(crate) fn input(
                     25..=29 => settings.cycle_mouse_binding((id - 25) as usize, delta.signum() as i32),
                     30..=31 => settings.cycle_wheel_binding(id == 30, delta.signum() as i32),
                     _ => {}
+                    }
                 },
             }
         }
+    }
+    if save_controls {
+        // Accepted edits already affect live input. Persist the same state now,
+        // so Back, Escape or closing the window cannot silently discard them.
+        // Restore Defaults remains an explicit Apply operation.
+        menu.status = match settings.save() {
+            Ok(()) => "Controls saved.".into(),
+            Err(error) => format!("Could not save controls: {error}"),
+        };
+        menu.dirty = true;
     }
     if menu.open() {
         buy.open = false;
@@ -1960,6 +1976,17 @@ mod tests {
 
     #[test]
     fn home_controls_accept_public_key_edges_before_a_player_exists() {
+        const CHILD: &str = "CSR_HOME_KEYS_AUTOSAVE_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let data = std::env::temp_dir().join(format!("csr-home-keys-{}-{}", std::process::id(),
+                std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+            std::fs::create_dir_all(&data).unwrap();
+            let result = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "menu::tests::home_controls_accept_public_key_edges_before_a_player_exists", "--nocapture"])
+                .env(CHILD, "1").current_dir(data).output().unwrap();
+            assert!(result.status.success(), "{}\n{}", String::from_utf8_lossy(&result.stdout), String::from_utf8_lossy(&result.stderr));
+            return;
+        }
         use bevy::input::{ButtonState, keyboard::{Key, KeyboardInput}};
         let mut a = App::new();
         a.add_plugins((MinimalPlugins, bevy::input::InputPlugin))
@@ -1994,6 +2021,7 @@ mod tests {
         edge(KeyCode::F11, ButtonState::Pressed);
         edge(KeyCode::F11, ButtonState::Released);
         assert_eq!(a.world().resource::<Settings>().binds[0], Some(KeyCode::F11));
+        assert_eq!(Settings::load().binds[0], Some(KeyCode::F11));
         assert!(a.world().resource::<Menu>().classic_controls);
         a.world_mut().write_message(KeyboardInput { key_code: KeyCode::Escape,
             logical_key: Key::Escape, state: ButtonState::Pressed, text: None, repeat: false, window });
@@ -2010,6 +2038,60 @@ mod tests {
         assert_eq!(a.world().resource::<Menu>().page, Some(Page::Main), "closed Home editor no longer owns Escape");
     }
 
+    #[test]
+    fn controls_edits_survive_a_separate_process_without_apply() {
+        const CHILD: &str = "CSR_CONTROLS_RESTART_PHASE";
+        let phase = std::env::var(CHILD).unwrap_or_default();
+        if phase.is_empty() {
+            let base = std::env::temp_dir().join(format!("csr-controls-restart-{}-{}", std::process::id(),
+                std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+            for in_match in [false, true] {
+                let data = base.join(if in_match { "match" } else { "home" });
+                std::fs::create_dir_all(&data).unwrap();
+                for stage in ["write", "read"] {
+                    let result = std::process::Command::new(std::env::current_exe().unwrap())
+                        .args(["--exact", "menu::tests::controls_edits_survive_a_separate_process_without_apply", "--nocapture"])
+                        .env(CHILD, stage).env("CSR_CONTROLS_RESTART_MATCH", if in_match { "1" } else { "0" })
+                        .current_dir(&data).output().unwrap();
+                    assert!(result.status.success(), "{stage}: {}\n{}", String::from_utf8_lossy(&result.stdout), String::from_utf8_lossy(&result.stderr));
+                }
+            }
+            return;
+        }
+        if phase == "read" {
+            let loaded = Settings::load();
+            assert_eq!(loaded.binds[23], Some(KeyCode::KeyK));
+            assert_eq!(loaded.binds[24], Some(KeyCode::KeyV));
+            assert_eq!(loaded.mouse_binds[3], crate::settings::MouseAction::Action(0));
+            assert_eq!(loaded.wheel_up, crate::settings::WheelAction::Jump);
+            assert_eq!(loaded.volume, 0.13);
+            assert_eq!(loaded.selection_binding_label(2), "K");
+            assert_eq!(loaded.selection_binding_label(3), "V");
+            return;
+        }
+        let mut a = harness();
+        a.world_mut().resource_mut::<Settings>().volume = 0.13;
+        {
+            let mut menu = a.world_mut().resource_mut::<Menu>();
+            menu.in_match = std::env::var("CSR_CONTROLS_RESTART_MATCH").unwrap() == "1";
+            menu.open_classic_controls();
+        }
+        for (index, key) in [(23, KeyCode::KeyK), (24, KeyCode::KeyV)] {
+            a.world_mut().resource_mut::<Menu>().capture = Some(index);
+            a.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(key);
+            a.update();
+            a.world_mut().resource_mut::<ButtonInput<KeyCode>>().reset_all();
+        }
+        let action = a.world_mut().spawn((Interaction::Pressed, Action::Adjust(28, 1.0))).id();
+        a.update();
+        a.world_mut().entity_mut(action).insert((Interaction::Pressed, Action::Adjust(30, -1.0)));
+        a.update();
+        a.world_mut().entity_mut(action).insert((Interaction::Pressed, Action::ControlsBack));
+        a.update();
+        assert!(!a.world().resource::<Menu>().classic_controls);
+        // This process exits here. The parent starts a new process for reading;
+        // no Apply click or in-memory Settings clone crosses that boundary.
+    }
     #[test]
     fn classic_controls_apply_reopen_capture_and_back_use_private_preferences() {
         const CHILD: &str = "CSR_CONTROLS_MENU_FIXTURE_CHILD";

@@ -421,6 +421,10 @@ fn controls(proof: &mut Proof, settings: &Settings, menu: &Menu, nodes: &Query<L
     let phase = proof.phase;
     let baseline = proof.baseline.as_ref().unwrap();
     let expected = restored(baseline);
+    let mut edits = baseline.clone();
+    edits.binds[0] = None;
+    edits.cycle_mouse_binding(0, 1);
+    edits.cycle_wheel_binding(true, 1);
     let find = |action: fn(&Action) -> bool| control_point(nodes, action, window);
     let bind = find(|a| matches!(a, Action::Bind(0)));
     let clear = find(|a| matches!(a, Action::ClearBind(0)));
@@ -438,18 +442,18 @@ fn controls(proof: &mut Proof, settings: &Settings, menu: &Menu, nodes: &Query<L
     let (valid, input) = match phase {
         2 => (bind.is_some(), bind.map(PublicInput::Click)),
         3 => (menu.capture == Some(0), Some(PublicInput::Key(KeyCode::F11))),
-        4 => (menu.capture.is_none() && settings.binds[0] == Some(KeyCode::F11), clear.map(PublicInput::Click)),
-        5 => (settings.binds[0].is_none(), bind.map(PublicInput::Click)),
+        4 => (menu.capture.is_none() && settings.binds[0] == Some(KeyCode::F11) && Settings::load().binds[0] == Some(KeyCode::F11), clear.map(PublicInput::Click)),
+        5 => (settings.binds[0].is_none() && Settings::load().binds[0].is_none(), bind.map(PublicInput::Click)),
         6 => (menu.capture == Some(0), Some(PublicInput::Key(KeyCode::Escape))),
         7 => (menu.capture.is_none(), mouse.map(PublicInput::Click)),
-        8 => (settings.mouse_binds[0] != baseline.mouse_binds[0], wheel.map(PublicInput::Click)),
-        9 => (settings.wheel_up != baseline.wheel_up, body_center.map(|p| PublicInput::Wheel(p, -4.))),
+        8 => (settings.mouse_binds[0] != baseline.mouse_binds[0] && Settings::load().mouse_binds == settings.mouse_binds, wheel.map(PublicInput::Click)),
+        9 => (settings.wheel_up != baseline.wheel_up && Settings::load().wheel_up == settings.wheel_up, body_center.map(|p| PublicInput::Wheel(p, -4.))),
         10 => (scroll > 0., Some(PublicInput::Key(KeyCode::End))),
         11 => (max > 0. && (scroll - max).abs() < 1. && bottom.is_some(), Some(PublicInput::Resize(1280, 720))),
         12 => (window.physical_width() == 1280 && window.physical_height() == 720, Some(PublicInput::Key(KeyCode::End))),
         13 => (max > 0. && (scroll - max).abs() < 1. && bottom.is_some(), Some(PublicInput::Key(KeyCode::Home))),
         14 => (scroll == 0. && bind.is_some(), restore.map(PublicInput::Click)),
-        15 => (*settings == expected && Settings::load() == *baseline, save.map(PublicInput::Click)),
+        15 => (*settings == expected && Settings::load() == edits, save.map(PublicInput::Click)),
         16 => (*settings == expected && menu.status == "Settings saved." && Settings::load() == expected, back.map(PublicInput::Click)),
         20 => {
             if proof.admitted(menu.classic_controls && footer && *settings == expected && Settings::load() == expected,
