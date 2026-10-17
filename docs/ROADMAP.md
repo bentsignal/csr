@@ -353,6 +353,9 @@ thing is uncanny. Fidelity is measured, never eyeballed:
       with equal-group records. Actual classic north/south renders admit173
       meshes/95,965 vertices and preserve unsupported fallbacks; arches remain
       overbright and complete record/color/lighting fidelity remains open. PR163.
+- [ ] Honor explicit static-prop lighting origins on the ambient fallback path;
+      narrow source candidate prepared, installed/rendered validation pending.
+      [Scope](research/prop-lighting-origin.md).
 - [x] Render ordinary authored detail on the supported world/static-prop subset.
       Actual visible wall grain and selected broad color errors improve; controls
       remain unchanged. Mixed fine-detail metrics, unsupported modes and global
