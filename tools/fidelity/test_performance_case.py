@@ -177,6 +177,14 @@ class CaseFixtures(unittest.TestCase):
         blocked, _, _ = case.guard_processes(rows, self.exe)
         self.assertEqual([p['pid'] for p in blocked], [2, 3])
 
+    def test_wallpaper_engine_background_utility_is_not_a_second_game(self):
+        rows = [row(1, 'wallpaper32.exe', path='C:/Program Files (x86)/Steam/steamapps/common/wallpaper_engine/wallpaper32.exe'),
+                row(2, 'wallpaper64.exe', path='D:/Steam/steamapps/common/wallpaper_engine/wallpaper64.exe'),
+                row(3, 'wallpaper32.exe', path='D:/Steam/steamapps/common/Other/wallpaper32.exe'),
+                row(4, 'csgo.exe', path='D:/Steam/steamapps/common/wallpaper_engine/csgo.exe')]
+        blocked, _, _ = case.guard_processes(rows, self.exe)
+        self.assertEqual([p['pid'] for p in blocked], [3, 4])
+
     def test_protected_paths_and_shared_target_cannot_be_run_roots(self):
         for private in [self.owner, self.owner / 'new', self.steam / 'new', self.game / 'new',
                         self.exe.parent / 'new', self.base, Path(__file__).resolve().parent / 'private']:

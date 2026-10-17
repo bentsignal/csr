@@ -111,7 +111,13 @@ def guard_processes(processes, executable, owned=None):
             continue
         name = p['name'].lower()
         path = (p.get('path') or '').lower().replace('\\', '/')
-        game = name in GAME_NAMES or name == executable.name.lower() or '/steamapps/common/' in path
+        # Steam also distributes desktop utilities. Do not classify the known
+        # Wallpaper Engine background executable as a second game, or stop it.
+        # Other unknown programs under common remain conservatively blocked.
+        wallpaper_utility = (name in {'wallpaper32.exe', 'wallpaper64.exe'} and
+                             path.endswith('/steamapps/common/wallpaper_engine/' + name))
+        game = (name in GAME_NAMES or name == executable.name.lower() or
+                ('/steamapps/common/' in path and not wallpaper_utility))
         if game or (name in BUILD_NAMES and p['pid'] not in active_ci):
             blocked.append({'pid': p['pid'], 'name': p['name'], 'path': p.get('path'),
                             'reason': 'other_game' if game else 'non_ci_build'})
