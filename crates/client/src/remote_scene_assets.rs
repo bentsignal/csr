@@ -166,6 +166,7 @@ mod tests {
             model: Arc::new(mdl::Model::default()),
             parts: vec![(mesh, material)],
             inverse_bindposes: Default::default(),
+            culling: Vec::new(),
         }
     }
 
@@ -321,6 +322,7 @@ mod tests {
                     model: Arc::new(mdl::Model::default()),
                     parts,
                     inverse_bindposes: Default::default(),
+                    culling: Vec::new(),
                 },
             )]),
             sun: None,

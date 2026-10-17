@@ -69,7 +69,7 @@ pub(super) fn update(
         let Some(model)=model else {continue};
         // Reuse the already loaded meshes/textures/skeleton. No weapon remains
         // in hand: the existing authoritative dropped item owns that visual.
-        let instance=skinning::spawn(commands,&model.asset,None,Some(materials));
+        let instance=skinning::spawn_world(commands,&model.asset,Some(materials),crate::skinning_bounds::WorldSkin::Corpse);
         // Explicit ownership supplements the Transform Add observer. Session
         // teardown despawns every joint/mesh and resets Characters together.
         for e in instance.joints.iter().chain(&instance.meshes) {

@@ -52,6 +52,7 @@ mod input_latency;
 pub mod characters;
 pub mod player_anim;
 pub mod skinning;
+pub mod skinning_bounds;
 pub mod viewmodel;
 pub mod coords;
 pub mod effects;
@@ -283,6 +284,7 @@ impl Plugin for CsgoPlugin {
             .add_systems(Update, foley::update.run_if(remote_join::ready).run_if(resource_exists::<remote::RemoteClient>).after(remote_join::update));
         if let Err(error) = remote_render_gate::install(app) { error!("Remote render preparation unavailable: {error:?}"); }
         shadow_diagnostic::install(app);
+        skinning_bounds::install(app);
         console::install(app);
         kill_feed::install(app);
     }
