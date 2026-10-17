@@ -39,6 +39,11 @@ provides conservative helper-bounded early/late summaries and synthetic
 regressions. Actual immutable-binary run review, matched camera/local-alive
 evidence and performance acceptance remain open.
 
+A local [kill-feed exact-pixel upload candidate](research/kill-feed-exact-pixel-reuse.md)
+skips top-image asset mutation only for identical current accepted pixels and
+layout. Notification/admission fixtures and actual HUD/performance checks are
+pending root verification; this is not an established FPS improvement.
+
 Owner return-home playtest on 2026-10-14: all reported defects, required
 features, accepted improvements and priorities are retained in
 [PLAYTEST-2026-10-14.md](PLAYTEST-2026-10-14.md). Work continues without another

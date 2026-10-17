@@ -8,7 +8,7 @@ use crate::{
 use bevy::{
     asset::RenderAssetUsages,
     prelude::*,
-    render::render_resource::{Extent3d, TextureDimension, TextureFormat},
+    render::render_resource::{Extent3d, TextureDataOrder, TextureDimension, TextureFormat},
     window::PrimaryWindow,
 };
 use scaleform::{Calls, Command, Config, Engine, Input, Value};
@@ -41,6 +41,75 @@ pub(crate) struct Presentation {
     active: bool,
     last_alpha: f32,
     pub(crate) combat: crate::combat_hud::Presentation,
+}
+
+impl Presentation {
+    fn admit_frame(
+        &mut self,
+        frame: &scaleform::Frame,
+        snapshot: Option<&crate::combat_hud::Snapshot>,
+        size: (u32, u32),
+        ready: bool,
+        rendered_count: usize,
+        images: &mut Assets<Image>,
+    ) {
+        if frame.presentation_revision != self.revision || (frame.width, frame.height) != size {
+            return;
+        }
+        self.combat.admit(frame, snapshot, images);
+        if !ready {
+            return;
+        }
+        if rendered_count == 0 {
+            // No visible notice pixels changed with a health/ammo update.
+            self.presented = true;
+            return;
+        }
+
+        // The full-width top crop is contiguous. Validate the entire fresh
+        // readback, as crop() does, then compare its borrowed prefix before
+        // allocating or mutably borrowing the asset (which notifies Bevy).
+        let Some(stride) = (frame.width as usize).checked_mul(4) else {
+            return;
+        };
+        let Some(expected) = stride.checked_mul(frame.height as usize) else {
+            return;
+        };
+        if frame.width == 0 || frame.height == 0 || frame.rgba.len() != expected {
+            return;
+        }
+        let extent = Extent3d {
+            width: frame.width,
+            height: frame.height.div_ceil(2),
+            depth_or_array_layers: 1,
+        };
+        let rgba = &frame.rgba[..stride * extent.height as usize];
+        let Some(image) = images.get(&self.image) else {
+            return;
+        };
+        let identical = image.texture_descriptor.size == extent
+            && image.texture_descriptor.dimension == TextureDimension::D2
+            && image.texture_descriptor.format == TextureFormat::Rgba8UnormSrgb
+            && image.texture_descriptor.mip_level_count == 1
+            && image.texture_descriptor.sample_count == 1
+            && image.data_order == TextureDataOrder::default()
+            && image.texture_view_descriptor.is_none()
+            && image.data.as_deref() == Some(rgba);
+        if !identical {
+            let Some(mut image) = images.get_mut(&self.image) else {
+                return;
+            };
+            image.texture_descriptor.size = extent;
+            image.data = Some(rgba.to_vec());
+        }
+        // Equal pixels still belong to this accepted frame/revision. Preserve
+        // first-admission tracing and fallback/visibility transitions on reuse.
+        if !self.presented && std::env::var_os("CSR_KILL_FEED_TRACE").is_some() {
+            info!(revision = self.revision, notices = rendered_count, width = frame.width,
+                height = frame.height, keys = ?self.entries, "Classic kill feed raster admitted");
+        }
+        self.presented = true;
+    }
 }
 
 struct Bridge {
@@ -460,33 +529,15 @@ fn update(
         .iter()
         .filter(|entry| !rejected.contains(&entry.death.key))
         .count();
-    if let Some(frame) = frame.filter(|frame| {
-        frame.presentation_revision == feed.revision && (frame.width, frame.height) == size
-    }) {
-        feed.combat.admit(&frame, snapshot.as_ref(), &mut images);
-        if ready && rendered_count == 0 {
-            // No visible notice pixels changed with a health/ammo update.
-            // Retain the top texture and avoid copying half the viewport.
-            feed.presented = true;
-        } else if ready
-            && let Some(rgba) = crate::combat_hud::crop(
-                &frame,
-                crate::combat_hud::regions(frame.width, frame.height)[0],
-            )
-            && let Some(mut image) = images.get_mut(&feed.image)
-        {
-            if !feed.presented && std::env::var_os("CSR_KILL_FEED_TRACE").is_some() {
-                info!(revision = feed.revision, notices = rendered_count, width = frame.width,
-                    height = frame.height, keys = ?feed.entries, "Classic kill feed raster admitted");
-            }
-            image.texture_descriptor.size = Extent3d {
-                width: size.0,
-                height: size.1.div_ceil(2),
-                depth_or_array_layers: 1,
-            };
-            image.data = Some(rgba);
-            feed.presented = true;
-        }
+    if let Some(frame) = frame {
+        feed.admit_frame(
+            &frame,
+            snapshot.as_ref(),
+            size,
+            ready,
+            rendered_count,
+            &mut images,
+        );
     }
     feed.combat.visibility(snapshot.as_ref(), size);
     if feed.failed.load(Ordering::Acquire) {
@@ -539,6 +590,202 @@ fn update(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bevy::asset::{AssetApp, AssetEvent, AssetPlugin};
+
+    fn notice_fixture() -> (App, Presentation, scaleform::Frame) {
+        // Real asset notification systems, with no renderer, window or worker.
+        let mut app = App::new();
+        app.add_plugins((
+            MinimalPlugins,
+            AssetPlugin {
+                watch_for_changes_override: Some(false),
+                ..default()
+            },
+        ))
+        .init_asset::<Image>();
+        let image = app
+            .world_mut()
+            .resource_mut::<Assets<Image>>()
+            .add(Image::default());
+        let feed = Presentation {
+            image,
+            revision: 8,
+            ..default()
+        };
+        let frame = scaleform::Frame {
+            width: 3,
+            height: 5,
+            rgba: (0..60).collect(),
+            serial: 1,
+            presentation_revision: 8,
+            raster_fence: 0,
+        };
+        (app, feed, frame)
+    }
+
+    fn modified_count(app: &mut App, image: &Handle<Image>) -> usize {
+        app.update();
+        app.world_mut()
+            .resource_mut::<Messages<AssetEvent<Image>>>()
+            .drain()
+            .filter(|event| event.is_modified(image.id()))
+            .count()
+    }
+
+    fn admit_notice(
+        app: &mut App,
+        feed: &mut Presentation,
+        frame: &scaleform::Frame,
+        size: (u32, u32),
+        ready: bool,
+    ) -> usize {
+        feed.admit_frame(
+            frame,
+            None,
+            size,
+            ready,
+            1,
+            &mut app.world_mut().resource_mut::<Assets<Image>>(),
+        );
+        modified_count(app, &feed.image)
+    }
+
+    #[test]
+    fn fresh_notice_frames_only_notify_bevy_when_top_pixels_or_layout_change() {
+        let (mut app, mut feed, mut frame) = notice_fixture();
+        assert_eq!(modified_count(&mut app, &feed.image), 0);
+        assert_eq!(admit_notice(&mut app, &mut feed, &frame, (3, 5), true), 1);
+        assert!(feed.presented);
+        let crop = crate::combat_hud::crop(&frame, crate::combat_hud::regions(3, 5)[0]).unwrap();
+        let images = app.world().resource::<Assets<Image>>();
+        let image = images.get(&feed.image).unwrap();
+        assert_eq!(image.data.as_deref(), Some(crop.as_slice()));
+        assert_eq!(image.texture_descriptor.size.width, 3);
+        assert_eq!(image.texture_descriptor.size.height, 3);
+        let allocation = image.data.as_ref().unwrap().as_ptr();
+
+        // A new revision still needs admission even when all current bytes match.
+        feed.revision += 1;
+        feed.presented = false;
+        frame.presentation_revision = feed.revision;
+        frame.serial += 1;
+        assert_eq!(admit_notice(&mut app, &mut feed, &frame, (3, 5), true), 0);
+        assert!(feed.presented);
+        assert_eq!(
+            app.world()
+                .resource::<Assets<Image>>()
+                .get(&feed.image)
+                .unwrap()
+                .data
+                .as_ref()
+                .unwrap()
+                .as_ptr(),
+            allocation,
+            "reuse must retain the existing owned pixels"
+        );
+
+        frame.rgba[59] ^= 1; // Bottom HUD pixels do not belong to this texture.
+        assert_eq!(admit_notice(&mut app, &mut feed, &frame, (3, 5), true), 0);
+        frame.rgba[35] ^= 1; // Even one alpha bit in the final top pixel matters.
+        assert_eq!(admit_notice(&mut app, &mut feed, &frame, (3, 5), true), 1);
+        assert_eq!(
+            app.world()
+                .resource::<Assets<Image>>()
+                .get(&feed.image)
+                .unwrap()
+                .data
+                .as_ref()
+                .unwrap()[35],
+            frame.rgba[35]
+        );
+
+        // Same bytes and byte length, different physical shape: must upload.
+        frame.width = 9;
+        frame.height = 2;
+        frame.rgba.resize(72, 0);
+        assert_eq!(admit_notice(&mut app, &mut feed, &frame, (9, 2), true), 1);
+        let image = app
+            .world()
+            .resource::<Assets<Image>>()
+            .get(&feed.image)
+            .unwrap();
+        assert_eq!(image.texture_descriptor.size.width, 9);
+        assert_eq!(image.texture_descriptor.size.height, 1);
+
+        app.world_mut()
+            .resource_mut::<Assets<Image>>()
+            .get_mut(&feed.image)
+            .unwrap()
+            .data = None;
+        assert_eq!(modified_count(&mut app, &feed.image), 1);
+        assert_eq!(admit_notice(&mut app, &mut feed, &frame, (9, 2), true), 1);
+
+        // Equal bytes cannot conceal a different texture layout either.
+        app.world_mut()
+            .resource_mut::<Assets<Image>>()
+            .get_mut(&feed.image)
+            .unwrap()
+            .texture_descriptor
+            .size
+            .depth_or_array_layers = 2;
+        assert_eq!(modified_count(&mut app, &feed.image), 1);
+        assert_eq!(admit_notice(&mut app, &mut feed, &frame, (9, 2), true), 1);
+        assert_eq!(
+            app.world()
+                .resource::<Assets<Image>>()
+                .get(&feed.image)
+                .unwrap()
+                .texture_descriptor
+                .size
+                .depth_or_array_layers,
+            1
+        );
+        assert_eq!(admit_notice(&mut app, &mut feed, &frame, (9, 2), true), 0);
+    }
+
+    #[test]
+    fn equal_notice_pixels_cannot_bypass_frame_acceptance_or_readiness() {
+        let (mut app, mut feed, mut frame) = notice_fixture();
+        assert_eq!(admit_notice(&mut app, &mut feed, &frame, (3, 5), true), 1);
+        feed.presented = false;
+        feed.revision = 9;
+        for revision in [8, 10] {
+            frame.presentation_revision = revision;
+            assert_eq!(admit_notice(&mut app, &mut feed, &frame, (3, 5), true), 0);
+            assert!(!feed.presented);
+        }
+        frame.presentation_revision = feed.revision;
+        // Heights 5 and 6 would have the same top crop, but are not the same viewport.
+        assert_eq!(admit_notice(&mut app, &mut feed, &frame, (3, 6), true), 0);
+        assert!(!feed.presented);
+        assert_eq!(admit_notice(&mut app, &mut feed, &frame, (3, 5), false), 0);
+        assert!(!feed.presented);
+        // A valid top prefix never legitimizes a malformed full readback.
+        frame.rgba.pop();
+        assert_eq!(admit_notice(&mut app, &mut feed, &frame, (3, 5), true), 0);
+        assert!(!feed.presented);
+        frame.rgba.push(59);
+        assert_eq!(admit_notice(&mut app, &mut feed, &frame, (3, 5), true), 0);
+        assert!(feed.presented, "fresh equal pixels must finish admission");
+
+        app.world_mut()
+            .resource_mut::<Assets<Image>>()
+            .remove(&feed.image);
+        feed.presented = false;
+        assert_eq!(admit_notice(&mut app, &mut feed, &frame, (3, 5), true), 0);
+        assert!(!feed.presented, "a missing asset cannot be presented");
+        // Keep the existing no-drawable-row completion path, even without an image.
+        feed.admit_frame(
+            &frame,
+            None,
+            (3, 5),
+            true,
+            0,
+            &mut app.world_mut().resource_mut::<Assets<Image>>(),
+        );
+        assert!(feed.presented);
+        assert_eq!(modified_count(&mut app, &feed.image), 0);
+    }
 
     #[test]
     fn rejected_content_is_keyed_bounded_and_does_not_disable_other_notices() {
