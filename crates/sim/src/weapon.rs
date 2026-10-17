@@ -208,7 +208,14 @@ impl WeaponState {
             }
         }
         self.cancel_burst();
-        let cycle = self.alt_stat("cycletime", self.def.cycle_time).max(0.01);
+        // A bolt-action scope is an aiming mode, not an alternate primary
+        // attack. Legacy's shared prefab also supplies a 0.3s `cycletime alt`;
+        // using that for a scoped AWP shortens both fire and resume-zoom to
+        // that inherited default. Keep the primary deadline across all zoom
+        // edges; other weapons retain their alternate attack policy.
+        let cycle = if self.def.attr_f32("unzoom after shot").is_some_and(|v| v != 0.0) {
+            self.def.cycle_time
+        } else { self.alt_stat("cycletime", self.def.cycle_time) }.max(0.01);
         let overdue = time - self.next_attack;
         // A fixed tick may observe a deadline slightly late. Re-anchoring
         // every held automatic shot at that tick accumulates the rounding
