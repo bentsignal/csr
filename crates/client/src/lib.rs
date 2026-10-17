@@ -268,9 +268,9 @@ impl Plugin for CsgoPlugin {
                     scoreboard::draw,
                     hud_art::update.run_if(|| std::env::var_os("CSR_NO_HUD").is_none()),
                     (menu_scene::update.run_if(frontend::native_enabled),skin_finish::update,decorations::update).chain(),
-                    (menu::draw, case_ui::input, case_ui::draw, case_ui::animate).chain().run_if(frontend::native_enabled),
-                    menu::cards.run_if(frontend::native_enabled),
-                    menu::hover.run_if(frontend::native_enabled),
+                    (menu::draw.after(frontend::update), (case_ui::input, case_ui::draw, case_ui::animate).chain().run_if(frontend::native_enabled)).chain(),
+                    (menu::scroll_controls, menu::cards).chain().run_if(frontend::engine_menu_enabled),
+                    menu::hover.run_if(frontend::engine_menu_enabled),
                     ui_assets::fonts,
                     hud::update.run_if(|| std::env::var_os("CSR_NO_HUD").is_none()),
                 )

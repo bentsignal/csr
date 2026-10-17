@@ -452,7 +452,8 @@ mod tests {
             let cfg = steam.join("userdata/123/730/local/cfg");
             let keys = cfg.join("cs2_user_keys_0_slot0.vcfg");
             let convars = cfg.join("cs2_user_convars_0_slot0.vcfg");
-            let sources = [std::fs::read(&keys).unwrap(), std::fs::read(&convars).unwrap()];
+            let defaults = steam.join("steamapps/common/Counter-Strike Global Offensive/game/csgo/cfg/user_keys_default.vcfg");
+            let sources = [std::fs::read(&keys).unwrap(), std::fs::read(&convars).unwrap(), std::fs::read(&defaults).unwrap()];
             prepare(false).unwrap();
             assert_eq!(std::env::current_dir().unwrap(), data);
             let settings = client::settings::Settings::load();
@@ -468,6 +469,7 @@ mod tests {
             assert_eq!(client::settings::Settings::load().sensitivity, 2.625);
             assert_eq!(std::fs::read(keys).unwrap(), sources[0]);
             assert_eq!(std::fs::read(convars).unwrap(), sources[1]);
+            assert_eq!(std::fs::read(defaults).unwrap(), sources[2]);
             return;
         }
         let root = std::env::temp_dir().join(format!("csr-setup-controls-{}-{}", std::process::id(),

@@ -77,22 +77,32 @@ motion and the winit adapter forwards DeviceEvent::MouseMotion delta directly.
   remains available by console command; detailed HUD diagnostics are opt-in
   through CSR_HUD_DEBUG=1. cl_showfps remains available.
 
-## UI integration for root/menu track
+## Controls route and remaining visual verification
 
-The existing engine `Page::Controls` now shows import provenance, sensitivity
-to three decimal places, five mouse button controls, both wheel controls and
-keyboard rebind/Clear buttons. The settings tab says KEYBOARD / MOUSE. This is
-scoped to controls content/actions; no Escape, Pause, Home or movie lifecycle
-ownership was changed.
+The engine controls content is now shared by the fallback page and an explicit
+working-classic route. OpenMouseDialog, OpenKeyboardMouseDialog and
+OpenKeyboardDialog hand ownership to the binding panel, hide movie surfaces,
+block movie input and reject late native options/convar writes. This route
+presents only controls and its fixed Apply / Restore Defaults / Back footer;
+it does not enable the unrelated fallback rail/pages. Back/Escape returns to
+Home or Pause with a new presentation fence, removes the engine root and
+consumes that frame's movie input so the same Escape cannot also resume.
+The menu-lifecycle track touches these files too: root must reconcile this
+explicit ownership/return path with its lifecycle changes, not drop either.
 
-**Discoverability is still pending integration:** the classic bridge routes
-OpenMouseDialog/OpenKeyboardMouseDialog to OptionsMenu, whose supported schema
-only exposes numeric options, while `frontend::native_enabled` gates the engine
-controls page behind classic-worker failure. Root's menu track must expose a
-Keyboard/Mouse route that reaches binding controls using its coherent panel
-ownership model. Do not claim the new bindings page is accessible in a working
-classic menu yet. `OpenKeyboardDialog` should also be checked against actual
-authored callbacks. Do not add another overlay or bypass lifecycle guards.
+The dedicated vertical body scrolls with the pointer wheel or PageUp/PageDown /
+Home/End, keeps offsets across redraws, and does not shrink its rows or footer.
+It contains provenance, sensitivity to three decimal places, invert, all five
+mouse buttons, both wheel actions, 30 gameplay bind/Clear rows and the local
+console toggle bind/Clear row. Capturing the current console key is allowed.
+Incrementing sensitivity preserves an imported fractional offset instead of
+rounding it to tenths. No native calibration coefficient changed.
+
+This panel is a functional candidate using existing engine controls. Its visual
+appearance is NOT claimed to match the historical Scaleform reference; render,
+real click/keyboard use and coherent lifecycle acceptance remain root checks.
+No Cargo/rustc, game, GUI, shared target or owner config was used by this review
+follow-up. The frozen owner candidate/settings remain unchanged.
 
 Root should visually inspect 1920x1080 and a smaller supported resolution,
 including all scrolled rows, long provenance, imported sensitivity 1.375,
@@ -105,7 +115,11 @@ Run focused tests first, then the mandatory complete checks from AGENTS.md:
 
 ```text
 cargo test -p launcher cs2_config::tests
+cargo test -p launcher setup::tests::first_run_setup_imports_fake_steam_controls_then_loads_saved_settings
 cargo test -p client settings::tests
+cargo test -p client console::tests
+cargo test -p client menu::tests
+cargo test -p client frontend::tests
 cargo test -p client player::remote_input_tests
 cargo test --workspace
 cargo run --release -p launcher -- probe de_dust2
@@ -115,6 +129,10 @@ cargo run --release -p launcher -- sim de_dust2
 Focused tests cover sparse/default merging, explicit unbinding, unknown command
 retention, source byte preservation, existing-file preservation, repeated runs,
 MostRecent account selection without mixed-account preferences, malformed files,
+fully quoted literal-backslash/unbind/console fixtures, interrupted publication
+and publication races, full setup followed by Settings::load, source/default
+byte preservation, console focus/close/unbind, classic routing and late writes,
+controls capture/Clear/Apply/reopen/Back/Escape in a private subprocess,
 nonfinite/unsupported values, no interactive rebind swapping during import,
 pointer option persistence, carried team fire-grenade requests, V conflicts,
 and equal unscoped counts split across different numbers of render samples.

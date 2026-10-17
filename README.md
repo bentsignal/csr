@@ -147,8 +147,7 @@ Use **Resume** or **Esc** to continue; the menu click cannot fire your weapon.
 | E (hold) | Defuse while looking at a nearby bomb |
 | Tab (hold) | Scoreboard; also shown at match end |
 | Left mouse while dead | Cycle spectated players |
-| V | Toggle noclip |
-| F3 | Toggle FPS/position diagnostics (hidden by default) |
+| Backquote (default; rebindable) | Open/close developer console |
 | Alt+F4 | Close game |
 
 Other commands:

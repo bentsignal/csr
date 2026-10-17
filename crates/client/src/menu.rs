@@ -32,6 +32,10 @@ pub struct Menu {
     pub terrorist: bool,
     pub bots: u32,
     pub capture: Option<usize>,
+    /// The working classic menu explicitly hands keyboard/mouse ownership to
+    /// this shared controls panel. Other fallback pages stay disabled.
+    pub(crate) classic_controls: bool,
+    pub(crate) controls_just_closed: bool,
     pub status: String,
     dirty: bool,
     scroll: f32,
@@ -49,6 +53,8 @@ impl Default for Menu {
             terrorist: false,
             bots: 5,
             capture: None,
+            classic_controls: false,
+            controls_just_closed: false,
             status: String::new(),
             dirty: true,
             scroll: 0.0,
@@ -67,6 +73,25 @@ impl Menu {
         self.page = Some(Page::Main);
         self.dirty = true;
         self.capture = None;
+        self.classic_controls = false;
+        self.controls_just_closed = false;
+    }
+    pub(crate) fn open_classic_controls(&mut self) {
+        self.classic_controls = true;
+        self.controls_just_closed = false;
+        self.page = Some(Page::Controls);
+        self.capture = None;
+        self.scroll = 0.0;
+        self.status.clear();
+        self.dirty = true;
+    }
+    fn close_classic_controls(&mut self) {
+        self.classic_controls = false;
+        self.controls_just_closed = true;
+        self.page = Some(if self.in_match { Page::Pause } else { Page::Main });
+        self.capture = None;
+        self.status.clear();
+        self.dirty = true;
     }
 }
 /// A catalog selection retains its immutable archive identity through loading.
@@ -108,6 +133,7 @@ pub enum Action {
     ClearBind(usize),
     Save,
     Defaults,
+    ControlsBack,
 }
 
 pub(crate) fn setup(
@@ -168,6 +194,7 @@ pub(crate) fn input(
     if !enabled.0 {
         return;
     }
+    menu.controls_just_closed = false;
     // Native movie callbacks may close the menu between input passes.
     let was_open = menu.open() || *previous_open;
     if let Some(index) = menu.capture {
@@ -178,10 +205,13 @@ pub(crate) fn input(
             .get_just_pressed()
             .find(|k| crate::settings::KEYS.contains(k))
         {
-            settings.rebind(index, *key);
+            if index == ACTIONS.len() { settings.set_console_key(*key); }
+            else { settings.rebind(index, *key); }
             menu.capture = None;
             menu.dirty = true;
         }
+    } else if keys.just_pressed(KeyCode::Escape) && menu.classic_controls {
+        menu.close_classic_controls();
     } else if keys.just_pressed(KeyCode::Escape) && !buy.open {
         menu.page = match menu.page {
             None => Some(Page::Pause),
@@ -270,8 +300,10 @@ pub(crate) fn input(
                         "Press a keyboard key. Esc cancels. Existing bindings swap.".into();
                 }
                 Action::ClearBind(i) => {
-                    if let Some(binding) = settings.binds.get_mut(i) { *binding = None; }
+                    if i == ACTIONS.len() { settings.console_key = None; }
+                    else if let Some(binding) = settings.binds.get_mut(i) { *binding = None; }
                 }
+                Action::ControlsBack => menu.close_classic_controls(),
                 Action::Defaults => {
                     *settings = Settings::default();
                     menu.status = "Defaults restored. Apply to save.".into();
@@ -299,10 +331,10 @@ pub(crate) fn input(
                 Action::Adjust(id, delta) => match id {
                     0 => settings.volume = (settings.volume + delta).clamp(0.0, 1.0),
                     1 => {
-                        settings.sensitivity = ((settings.sensitivity + delta) * 10.0)
+                        settings.sensitivity = ((settings.sensitivity + delta) * 1000.0)
                             .round()
-                            .clamp(1.0, 100.0)
-                            / 10.0
+                            .clamp(100.0, 10000.0)
+                            / 1000.0
                     }
                     2 => settings.exposure = (settings.exposure + delta).clamp(0.5, 4.0),
                     3 => settings.vsync = !settings.vsync,
@@ -415,6 +447,7 @@ fn row(commands: &mut Commands, parent: Entity, name: &str, value: String, id: u
         Node {
             width: percent(100),
             height: px(38.0),
+            flex_shrink: 0.0,
             align_items: AlignItems::Center,
             column_gap: px(10.0),
             ..default()
@@ -453,7 +486,15 @@ pub fn draw(
     preview: Res<crate::menu_scene::Preview>,
     loc: Res<crate::localize::Localization>,
     window: Single<&Window, With<PrimaryWindow>>,
+    front: Option<Res<crate::frontend::Frontend>>,
 ) {
+    // Cleanup must also run on the frame the explicit controls route closes;
+    // gating the whole draw system would strand its former root on screen.
+    if front.as_ref().is_some_and(|front| front.has_classic_menu()) && !menu.classic_controls {
+        if let Some(root) = menu.root.take() { commands.entity(root).despawn(); }
+        menu.dirty = true;
+        return;
+    }
     let size = Vec2::new(window.width(), window.height());
     if menu.size != size {
         menu.size = size;
@@ -469,6 +510,12 @@ pub fn draw(
     let Some(page) = menu.page else {
         return;
     };
+    if menu.classic_controls {
+        let root = draw_classic_controls(&mut commands, &menu, &settings);
+        if let Some(front) = &front { commands.entity(root).insert(UiTargetCamera(front.camera())); }
+        menu.root = Some(root);
+        return;
+    }
     let root = commands
         .spawn((
             Node {
@@ -1193,72 +1240,8 @@ pub fn draw(
             );
         }
         Page::Controls => {
-            if !settings.controls_source.is_empty() {
-                label(&mut commands, body, &settings.controls_source, 16.0, Color::srgb(0.7, 0.76, 0.8));
-            }
-            row(
-                &mut commands,
-                body,
-                "Mouse sensitivity",
-                format!("{:.3}", settings.sensitivity),
-                1,
-                0.1,
-            );
-            row(
-                &mut commands,
-                body,
-                "Invert mouse",
-                on(settings.invert_y),
-                9,
-                1.0,
-            );
-            for (index, action) in settings.mouse_binds.iter().enumerate() {
-                row(&mut commands, body, &format!("Mouse button {}", index + 1), action.label().into(), 25 + index as u8, 1.0);
-            }
-            row(&mut commands, body, "Mouse wheel up", settings.wheel_up.label().into(), 30, 1.0);
-            row(&mut commands, body, "Mouse wheel down", settings.wheel_down.label().into(), 31, 1.0);
-            label(&mut commands, body, "Keyboard bindings", 18.0, Color::srgb(0.8, 0.85, 0.89));
-            for (i, name) in ACTIONS.iter().enumerate() {
-                let r = column(
-                    &mut commands,
-                    body,
-                    Node {
-                        height: px(28.0),
-                        column_gap: px(20.0),
-                        align_items: AlignItems::Center,
-                        ..default()
-                    },
-                );
-                let l = column(
-                    &mut commands,
-                    r,
-                    Node {
-                        width: px(260.0),
-                        ..default()
-                    },
-                );
-                label(&mut commands, l, *name, 17.0, Color::srgb(0.8, 0.85, 0.89));
-                let binding = button(
-                    &mut commands,
-                    r,
-                    if menu.capture == Some(i) {
-                        "Press a key…".into()
-                    } else {
-                        settings.binds[i].map(crate::settings::key_name).unwrap_or_else(|| "Unbound".into())
-                    },
-                    Action::Bind(i),
-                    px(180.0),
-                );
-                commands.entity(binding).insert(Node {
-                    width: px(180.0),
-                    min_height: px(26.0),
-                    padding: UiRect::axes(px(12.0), px(2.0)),
-                    justify_content: JustifyContent::Center,
-                    align_items: AlignItems::Center,
-                    ..default()
-                });
-                button(&mut commands, r, "Clear", Action::ClearBind(i), px(74.0));
-            }
+            controls_scroll(&mut commands, body, menu.scroll);
+            controls_content(&mut commands, body, &menu, &settings);
         }
         Page::Crosshair => {
             row(
@@ -1363,6 +1346,7 @@ pub fn draw(
             content,
             Node {
                 column_gap: px(12.0),
+                flex_shrink: 0.0,
                 ..default()
             },
         );
@@ -1382,6 +1366,142 @@ pub fn draw(
         );
     }
 }
+#[derive(Component)]
+pub(crate) struct ControlsScroll;
+
+fn controls_scroll(commands: &mut Commands, body: Entity, scroll: f32) {
+    commands.entity(body).insert((ControlsScroll, RelativeCursorPosition::default(),
+        ScrollPosition(Vec2::new(0.0, scroll))));
+    // Keep the same flex sizing as the common body, with dedicated vertical
+    // scrolling. CardGrid wraps cards and is deliberately not reused here.
+    commands.entity(body).insert(Node {
+        flex_grow: 1.0, flex_basis: px(0.0), min_height: px(0.0), min_width: px(0.0),
+        width: percent(100), flex_direction: FlexDirection::Column, row_gap: px(5.0),
+        overflow: Overflow::scroll_y(), padding: UiRect::all(px(10.0)), ..default()
+    });
+}
+
+fn controls_content(commands: &mut Commands, body: Entity, menu: &Menu, settings: &Settings) {
+    let on = |v: bool| if v { "Enabled" } else { "Disabled" }.to_string();
+    if !settings.controls_source.is_empty() {
+        label(commands, body, &settings.controls_source, 16.0, Color::srgb(0.7, 0.76, 0.8));
+    }
+    row(
+        commands,
+        body,
+        "Mouse sensitivity",
+        format!("{:.3}", settings.sensitivity),
+        1,
+        0.1,
+    );
+    row(
+        commands,
+        body,
+        "Invert mouse",
+        on(settings.invert_y),
+        9,
+        1.0,
+    );
+    for (index, action) in settings.mouse_binds.iter().enumerate() {
+        row(commands, body, &format!("Mouse button {}", index + 1), action.label().into(), 25 + index as u8, 1.0);
+    }
+    row(commands, body, "Mouse wheel up", settings.wheel_up.label().into(), 30, 1.0);
+    row(commands, body, "Mouse wheel down", settings.wheel_down.label().into(), 31, 1.0);
+    label(commands, body, "Keyboard bindings", 18.0, Color::srgb(0.8, 0.85, 0.89));
+    for (i, name) in ACTIONS.iter().chain(std::iter::once(&"Toggle developer console")).enumerate() {
+        let r = column(
+            commands,
+            body,
+            Node {
+                min_height: px(36.0),
+                flex_shrink: 0.0,
+                column_gap: px(20.0),
+                align_items: AlignItems::Center,
+                ..default()
+            },
+        );
+        let l = column(
+            commands,
+            r,
+            Node {
+                width: px(260.0),
+                ..default()
+            },
+        );
+        label(commands, l, *name, 17.0, Color::srgb(0.8, 0.85, 0.89));
+        let binding = button(
+            commands,
+            r,
+            if menu.capture == Some(i) {
+                "Press a key…".into()
+            } else {
+                (if i == ACTIONS.len() { settings.console_key } else { settings.binds[i] }).map(crate::settings::key_name).unwrap_or_else(|| "Unbound".into())
+            },
+            Action::Bind(i),
+            px(180.0),
+        );
+        commands.entity(binding).insert(Node {
+            width: px(180.0),
+            min_height: px(26.0),
+            padding: UiRect::axes(px(12.0), px(2.0)),
+            justify_content: JustifyContent::Center,
+            align_items: AlignItems::Center,
+            ..default()
+        });
+        button(commands, r, "Clear", Action::ClearBind(i), px(74.0));
+    }
+}
+
+/// Functional controls route shared with the fallback settings page. Its
+/// appearance still requires reference work; this does not claim Scaleform parity.
+fn draw_classic_controls(commands: &mut Commands, menu: &Menu, settings: &Settings) -> Entity {
+    let root = commands.spawn((Node {
+        position_type: PositionType::Absolute, width: percent(100), height: percent(100),
+        padding: UiRect::axes(px(32.0), px(24.0)), flex_direction: FlexDirection::Column,
+        row_gap: px(12.0), ..default()
+    }, BackgroundColor(Color::srgb(0.035, 0.055, 0.072)), GlobalZIndex(100))).id();
+    label(commands, root, "KEYBOARD / MOUSE", 30.0, Color::WHITE);
+    label(commands, root, "Scroll to see all controls. Select a key to change it; Escape cancels capture.",
+        17.0, Color::srgb(0.8, 0.85, 0.89));
+    let body = column(commands, root, Node::default());
+    controls_scroll(commands, body, menu.scroll);
+    controls_content(commands, body, menu, settings);
+    label(commands, root, &menu.status, 17.0, Color::srgb(0.83, 0.83, 0.63));
+    let footer = column(commands, root, Node {
+        column_gap: px(12.0), flex_shrink: 0.0, flex_wrap: FlexWrap::Wrap, row_gap: px(8.0), ..default()
+    });
+    button(commands, footer, "APPLY / SAVE", Action::Save, px(180.0));
+    button(commands, footer, "RESTORE DEFAULTS", Action::Defaults, px(200.0));
+    button(commands, footer, "BACK", Action::ControlsBack, px(120.0));
+    root
+}
+
+pub(crate) fn scroll_controls(
+    mut areas: Query<(&RelativeCursorPosition, &ComputedNode, &mut ScrollPosition), With<ControlsScroll>>,
+    mut wheel: MessageReader<bevy::input::mouse::MouseWheel>,
+    keys: Res<ButtonInput<KeyCode>>,
+    mut menu: ResMut<Menu>,
+) {
+    let dy = wheel.read().map(|event| event.y *
+        if event.unit == bevy::input::mouse::MouseScrollUnit::Line { 42.0 } else { 1.0 }).sum::<f32>();
+    for (cursor, node, mut scroll) in &mut areas {
+        // A redraw has not reached PostUpdate layout yet. Retain its saved
+        // offset until there is a measured viewport/content size to clamp to.
+        if node.size().y <= 0.0 { continue; }
+        let max = ((node.content_size().y - node.size().y) * node.inverse_scale_factor()).max(0.0);
+        let page = node.size().y * node.inverse_scale_factor() * 0.8;
+        if cursor.cursor_over { scroll.y -= dy; }
+        if menu.capture.is_none() {
+            if keys.just_pressed(KeyCode::PageDown) { scroll.y += page; }
+            if keys.just_pressed(KeyCode::PageUp) { scroll.y -= page; }
+            if keys.just_pressed(KeyCode::Home) { scroll.y = 0.0; }
+            if keys.just_pressed(KeyCode::End) { scroll.y = max; }
+        }
+        scroll.y = scroll.y.clamp(0.0, max);
+        menu.scroll = scroll.y;
+    }
+}
+
 pub fn cross_bar(s: &Settings, i: u8) -> (f32, f32, f32, f32) {
     let (l, t, g) = (s.cross_size, s.cross_thickness, s.cross_gap);
     match i {
@@ -1641,6 +1761,87 @@ pub(crate) fn apply(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn classic_controls_apply_reopen_capture_and_back_use_private_preferences() {
+        const CHILD: &str = "CSR_CONTROLS_MENU_FIXTURE_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let data = std::env::temp_dir().join(format!("csr-menu-controls-{}-{}", std::process::id(),
+                std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+            std::fs::create_dir_all(&data).unwrap();
+            let result = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "menu::tests::classic_controls_apply_reopen_capture_and_back_use_private_preferences", "--nocapture"])
+                .env(CHILD, "1").current_dir(data).output().unwrap();
+            assert!(result.status.success(), "{}\n{}", String::from_utf8_lossy(&result.stdout), String::from_utf8_lossy(&result.stderr));
+            return;
+        }
+        for in_match in [false, true] {
+            let mut a = harness();
+            a.world_mut().resource_mut::<Menu>().in_match = in_match;
+            a.world_mut().resource_mut::<Menu>().open_classic_controls();
+            let action = a.world_mut().spawn((Interaction::Pressed, Action::Bind(ACTIONS.len()))).id();
+            a.update();
+            assert_eq!(a.world().resource::<Menu>().capture, Some(ACTIONS.len()));
+            a.world_mut().entity_mut(action).insert(Interaction::None);
+            a.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::Backslash);
+            a.update();
+            assert_eq!(a.world().resource::<Settings>().console_key, Some(KeyCode::Backslash));
+            a.world_mut().resource_mut::<ButtonInput<KeyCode>>().reset_all();
+            a.world_mut().entity_mut(action).insert((Interaction::Pressed, Action::ClearBind(4)));
+            a.update();
+            a.world_mut().entity_mut(action).insert((Interaction::Pressed, Action::Adjust(25, 1.0)));
+            a.update();
+            a.world_mut().entity_mut(action).insert((Interaction::Pressed, Action::Adjust(30, 1.0)));
+            a.update();
+            a.world_mut().resource_mut::<Settings>().sensitivity = 1.375;
+            a.world_mut().entity_mut(action).insert((Interaction::Pressed, Action::Save));
+            a.update();
+            assert_eq!(a.world().resource::<Menu>().status, "Settings saved.");
+            let expected = a.world().resource::<Settings>().clone();
+            assert_eq!(Settings::load(), expected);
+            a.world_mut().entity_mut(action).insert((Interaction::Pressed, Action::ControlsBack));
+            a.update();
+            assert!(!a.world().resource::<Menu>().classic_controls);
+            assert!(a.world().resource::<Menu>().controls_just_closed);
+            assert_eq!(a.world().resource::<Menu>().page, Some(if in_match { Page::Pause } else { Page::Main }));
+            a.world_mut().entity_mut(action).insert(Interaction::None);
+            a.world_mut().resource_mut::<Menu>().open_classic_controls();
+            assert_eq!(*a.world().resource::<Settings>(), expected);
+            a.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::Escape);
+            a.update();
+            assert!(!a.world().resource::<Menu>().classic_controls);
+            assert_eq!(a.world().resource::<Menu>().page, Some(if in_match { Page::Pause } else { Page::Main }));
+            // Return keeps the menu/cursor open; the same Escape does not resume.
+            assert!(a.world().resource::<Menu>().open());
+        }
+    }
+
+    #[test]
+    fn controls_body_scrolls_independently_of_footer_and_keeps_every_binding_row() {
+        let mut a = App::new();
+        a.init_resource::<Menu>().init_resource::<Settings>().add_systems(Update,
+            |mut commands: Commands, menu: Res<Menu>, settings: Res<Settings>| {
+                draw_classic_controls(&mut commands, &menu, &settings);
+            });
+        a.update();
+        let world = a.world_mut();
+        let mut query = world.query_filtered::<(Entity, &ChildOf, &Node), With<ControlsScroll>>();
+        let (body, root) = {
+            let (body, parent, node) = query.single(world).unwrap();
+            assert_eq!(node.overflow, Overflow::scroll_y());
+            assert_eq!(node.min_height, px(0.0));
+            (body, parent.parent())
+        };
+        let buttons: Vec<_> = world.query::<(&Action, &ChildOf)>().iter(world)
+            .map(|(action, parent)| (*action, parent.parent())).collect();
+        assert_eq!(buttons.iter().filter(|(action, _)| matches!(action, Action::Bind(_))).count(), ACTIONS.len() + 1);
+        for (_, parent) in buttons.iter().filter(|(action, _)| matches!(action, Action::Save | Action::ControlsBack)) {
+            assert_ne!(*parent, body);
+            assert_eq!(world.get::<ChildOf>(*parent).unwrap().parent(), root);
+            assert_eq!(world.get::<Node>(*parent).unwrap().flex_shrink, 0.0);
+        }
+    }
+
     fn harness() -> App {
         let mut a = App::new();
         a.init_resource::<Menu>()

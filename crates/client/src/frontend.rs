@@ -31,6 +31,7 @@ struct Data {
     game_modes: kv::Block,
     state: AppState,
     menu_open: bool,
+    controls_open: bool,
     loading: String,
     loading_map: Option<LoadingContext>,
     player_name: String,
@@ -45,7 +46,7 @@ impl Data {
     fn fork_worker(&self) -> Self {
         Self { fs: self.fs.clone(), settings: self.settings.clone(), inventory: self.inventory.clone(),
             localization: self.localization.clone(), game_modes: self.game_modes.clone(),
-            state: self.state, menu_open: self.menu_open, loading: self.loading.clone(),
+            state: self.state, menu_open: self.menu_open, controls_open: false, loading: self.loading.clone(),
             loading_map: self.loading_map.clone(), player_name: self.player_name.clone(),
             movie_ready: HashSet::new(), home_bootstrapped: false, home_retired: false,
             pause_surface: Default::default(), deferred_pause: Default::default() }
@@ -138,6 +139,7 @@ enum Action {
     Notice(String),
     Host(crate::frontend_lobby::Start, String),
     LobbyHome,
+    Controls,
 }
 /// Park immediately rejects in-flight old actions. Worker-ordered resume
 /// advances the epoch only after old queued input has been cancelled.
@@ -785,6 +787,7 @@ impl Engine for Bridge {
             return None;
         }
         if method == "BasePanelRunCommand" {
+            if self.dispatch_epoch.is_none() || self.data.lock().unwrap().controls_open { return None; }
             let command = arg(0);
             // The installed Home power button emits Quit. Confirmation must
             // precede generic navigation teardown so Cancel keeps the picker.
@@ -840,12 +843,23 @@ impl Engine for Bridge {
                         calls.request_element("StartSinglePlayer");
                     }
                 }
+                "OpenMouseDialog" | "OpenKeyboardMouseDialog" | "OpenKeyboardDialog" => {
+                    // A working classic movie explicitly transfers ownership;
+                    // the numeric OptionsMenu schema cannot represent binds.
+                    self.data.lock().unwrap().controls_open = true;
+                    for element in ["MainMenu", "PauseMenu", "OptionsMenu", "LobbyBrowser", "LobbyScreen", "StartSinglePlayer"] {
+                        if let Some(path) = self.roots.get(element) {
+                            calls.call("_global.csrBindings", "releaseOwnedLifecycle", vec![path.clone().into()]);
+                            calls.set(path, "_visible", false.into());
+                        }
+                    }
+                    self.push_action(Action::Controls);
+                }
                 "OpenVideoSettingsDialog"
                 | "OpenAudioSettingsDialog"
                 | "OpenGameSettingsDialog"
                 | "OpenSettingsDialog"
-                | "OpenMouseDialog"
-                | "OpenKeyboardMouseDialog" => {
+                => {
                     self.lobby.lock().unwrap().cancel();
                     let mut data = self.data.lock().unwrap();
                     data.pause_surface.options_opened();
@@ -880,6 +894,10 @@ impl Engine for Bridge {
         }
         // The original movie's native widget API is shared by dropdowns,
         // choices and sliders. Cached/hidden pages cannot publish changes.
+        if data.controls_open && (method.starts_with("SetConvar")
+            || (object == "OptionsMenu" && matches!(method, "OnCancel" | "OnUpdateValue" | "OnRefreshValues"))) {
+            return Some(Value::Undefined);
+        }
         if object == "OptionsMenu"
             && matches!(method, "OnUpdateValue" | "OnHighlightWidget" | "OnRefreshValues" | "OnLayoutComplete")
             && !(data.pause_surface.options_requested()
@@ -1129,6 +1147,7 @@ impl Frontend {
         }
     }
 
+    pub(crate) fn has_classic_menu(&self) -> bool { self.failed.is_none() }
     pub(crate) fn home_bootstrapped(&self) -> bool { self.data.lock().unwrap().home_bootstrapped }
     pub(crate) fn pause_presented(&self) -> bool {
         self.worker_kind == WorkerKind::Match && self.pause_surface_visible()
@@ -1211,6 +1230,10 @@ pub fn native_enabled(front: Option<Res<Frontend>>) -> bool {
     front.is_none_or(|front| front.failed.is_some())
 }
 
+pub(crate) fn engine_menu_enabled(front: Option<Res<Frontend>>, menu: Res<crate::menu::Menu>) -> bool {
+    menu.classic_controls || front.is_none_or(|front| front.failed.is_some())
+}
+
 pub(crate) fn setup(
     mut commands: Commands,
     data: Res<GameData>,
@@ -1229,6 +1252,7 @@ pub(crate) fn setup(
         game_modes: crate::frontend_game::load(&data.vfs, &installed),
         state: AppState::Menu,
         menu_open: menu.open(),
+        controls_open: false,
         loading: String::new(),
         loading_map: None,
         player_name: "You".into(),
@@ -1394,9 +1418,10 @@ pub(crate) fn update(
         Res<bevy::diagnostic::FrameCount>,
     ),
     loc: Res<crate::localize::Localization>,
-    (inventory, practice): (
+    (inventory, practice, mut previous_controls): (
         Res<crate::cosmetics::Inventory>,
         Res<crate::inventory::Inventory>,
+        Local<bool>,
     ),
     catalog: Res<crate::cosmetics::Catalog>,
     mut next: ResMut<NextState<AppState>>,
@@ -1414,6 +1439,35 @@ pub(crate) fn update(
         let catalog = crate::frontend_lobby::Catalog::installed(&options.0, &menu.maps);
         front.select_worker(kind, catalog)
     } else { false };
+    if !matches!(scene, AppState::Menu | AppState::Match) {
+        menu.classic_controls = false;
+        menu.capture = None;
+    }
+    let controls_closed = *previous_controls && !menu.classic_controls;
+    *previous_controls = menu.classic_controls;
+    if controls_closed || switched || !matches!(scene, AppState::Menu | AppState::Match) {
+        front.data.lock().unwrap().controls_open = false;
+    }
+    if controls_closed && menu.open() && matches!(scene, AppState::Menu | AppState::Match) && front.failed.is_none() {
+        // Return from the one explicit engine-owned route through a fresh
+        // presentation. Stale native options never regain ownership on return.
+        let (base, stale_options) = {
+            let mut data = front.data.lock().unwrap();
+            data.pause_surface.options_cancelled();
+            data.deferred_pause.cancel_pending();
+            let base = if scene == AppState::Match { data.pause_surface.pause_root().map(str::to_owned)
+                .unwrap_or_else(|| "_level100".into()) } else { "_global.MainMenuMovie".into() };
+            (base, data.pause_surface.options_root().map(str::to_owned))
+        };
+        front.pause_presentation.open();
+        let mut restore = vec![];
+        if let Some(path) = stale_options { restore.push(scaleform::Command::Set {
+            path, property: "_visible".into(), value: false.into(),
+        }); }
+        restore.push(scaleform::Command::Set { path: base.clone(), property: "_visible".into(), value: true.into() });
+        restore.push(scaleform::Command::Call { path: base, function: "showPanel".into(), args: vec![] });
+        front.send(Input::Present { commands: restore, revision: front.pause_presentation.revision() });
+    }
     let loading_selection = if scene == AppState::Loading { loader.loading_map() } else { None };
     let loading_selection_changed = front.loading_selection != loading_selection;
     front.loading_selection = loading_selection.clone();
@@ -1798,7 +1852,7 @@ pub(crate) fn update(
         // between the 55px navigation bar and 155px panels holds our notice.
         node.top = if owned_lobby_notice { percent(7) } else { Val::Auto };
         node.bottom = if owned_lobby_notice { Val::Auto } else { px(24.0) };
-        node.display = if loading || (visible && !menu.status.is_empty()) {
+        node.display = if !menu.classic_controls && (loading || (visible && !menu.status.is_empty())) {
             Display::Flex
         } else {
             Display::None
@@ -1826,7 +1880,7 @@ pub(crate) fn update(
         };
     }
     if let Ok(mut root) = nodes.get_mut(front.root) {
-        root.display = if (visible && front.failed.is_none() && front.pause_presentation.ready()) || loading {
+        root.display = if !menu.classic_controls && ((visible && front.failed.is_none() && front.pause_presentation.ready()) || loading) {
             Display::Flex
         } else {
             Display::None
@@ -1913,7 +1967,16 @@ pub(crate) fn update(
         *host_request.0.lock().unwrap() = None;
     }
     for action in actions {
+        if menu.classic_controls { continue; }
         match action {
+            Action::Controls => {
+                menu.open_classic_controls();
+                *previous_controls = true;
+                // Update runs after the menu input pass: block movie input and
+                // presentation immediately, including the opening mouse click.
+                if let Ok(mut root) = nodes.get_mut(front.root) { root.display = Display::None; }
+                if let Ok(mut notice) = nodes.get_mut(front.notice) { notice.display = Display::None; }
+            }
             Action::Host(start, name) => {
                 if scene == AppState::Menu {
                     let mut map = start.map;
@@ -2030,7 +2093,7 @@ pub(crate) fn input(
     remote: Option<Res<crate::remote::RemoteClient>>,
 ) {
     let (window_entity, window) = *window;
-    let blocked = console.is_some_and(|console| console.blocks_input()) || *state.get() == AppState::Browser || crate::remote_join::loading(remote.as_deref()) || packs.is_some_and(|packs| packs.blocks_movie()) || sharing.is_some_and(|sharing| sharing.blocks_movie()) || crate::frontend_flow::enabled() || !enabled.0 || !front.visible || front.home_show_pending || front.failed.is_some() || !window.focused;
+    let blocked = menu.classic_controls || menu.controls_just_closed || console.is_some_and(|console| console.blocks_input()) || *state.get() == AppState::Browser || crate::remote_join::loading(remote.as_deref()) || packs.is_some_and(|packs| packs.blocks_movie()) || sharing.is_some_and(|sharing| sharing.blocks_movie()) || crate::frontend_flow::enabled() || !enabled.0 || !front.visible || front.home_show_pending || front.failed.is_some() || !window.focused;
     for input in ownership.transition(blocked, window.focused) { front.send(input); }
     if blocked {
         keys.clear();
@@ -2318,7 +2381,7 @@ mod tests {
         let data = Arc::new(Mutex::new(Data {
             inventory: InventoryView::new(&fs), fs, settings: Settings::default(),
             localization: Default::default(), game_modes: modes.clone(),
-            state: AppState::Menu, menu_open: true, loading: String::new(), loading_map: None, player_name: "You".into(), movie_ready: HashSet::new(), home_bootstrapped: false, home_retired: false, pause_surface: Default::default(),
+            state: AppState::Menu, menu_open: true, controls_open: false, loading: String::new(), loading_map: None, player_name: "You".into(), movie_ready: HashSet::new(), home_bootstrapped: false, home_retired: false, pause_surface: Default::default(),
         deferred_pause: Default::default(),
         }));
         let mut scene = Scene::new(Catalog::installed(&crate::ClientOptions::default(), &["de_dust2".into()]));
@@ -2402,12 +2465,61 @@ mod tests {
     }
 
     #[test]
+    fn classic_controls_commands_transfer_ownership_and_reject_late_options_writes() {
+        for state in [AppState::Menu, AppState::Match] {
+            for command in ["OpenMouseDialog", "OpenKeyboardMouseDialog", "OpenKeyboardDialog"] {
+                let fs = Arc::new(vfs::Vfs::new());
+                let data = Arc::new(Mutex::new(Data {
+                    inventory: InventoryView::new(&fs), fs, settings: Settings::default(),
+                    localization: Default::default(), game_modes: Default::default(),
+                    state, menu_open: true, controls_open: false, loading: String::new(), loading_map: None,
+                    player_name: "Fixture".into(), movie_ready: Default::default(),
+                    home_bootstrapped: false, home_retired: false,
+                    pause_surface: Default::default(), deferred_pause: Default::default(),
+                }));
+                let mut bridge = Bridge { dispatch_epoch: None,
+                    data: data.clone(), actions: Default::default(), seen: Default::default(),
+                    roots: HashMap::from([("OptionsMenu".into(), "_level12".into()),
+                        ("MainMenu".into(), "_level0".into()), ("PauseMenu".into(), "_level100".into())]),
+                    requested: Default::default(), options: Default::default(),
+                    offline: Default::default(), offline_open: false, quit: Default::default(),
+                    lobby: Arc::new(Mutex::new(crate::frontend_lobby::Scene::new(
+                        crate::frontend_lobby::Catalog::installed(&crate::ClientOptions::default(), &[])))),
+                };
+                let mut calls = Calls::default();
+                bridge.call("MainMenu", "BasePanelRunCommand", &["OpenAudioSettingsDialog".into()], &mut calls);
+                assert!(data.lock().unwrap().pause_surface.options_requested());
+                bridge.call("MainMenu", "BasePanelRunCommand", &[command.into()], &mut calls);
+                assert!(data.lock().unwrap().controls_open);
+                assert!(!data.lock().unwrap().pause_surface.options_requested());
+                assert!(matches!(bridge.actions.lock().unwrap().take().as_slice(), [Action::Controls]));
+                let before = data.lock().unwrap().settings.clone();
+                bridge.call("OptionsMenu", "OnReady", &[], &mut calls);
+                bridge.call("OptionsMenu", "OnCancel", &[], &mut calls);
+                for method in ["SetConvar", "SetConvarNumber", "SetConvarString", "SetConvarBoolean"] {
+                    bridge.call("GameInterface", method, &["sensitivity".into(), "9".into()], &mut calls);
+                }
+                bridge.call("MainMenu", "BasePanelRunCommand", &["OpenAudioSettingsDialog".into()], &mut calls);
+                assert!(data.lock().unwrap().controls_open);
+                assert!(!data.lock().unwrap().pause_surface.options_requested());
+                assert_eq!(data.lock().unwrap().settings, before);
+                assert!(bridge.actions.lock().unwrap().is_empty());
+                // Host closes the engine route; the same classic command can
+                // acquire a fresh controls visit after Apply/Back.
+                data.lock().unwrap().controls_open = false;
+                bridge.call("MainMenu", "BasePanelRunCommand", &[command.into()], &mut calls);
+                assert!(matches!(bridge.actions.lock().unwrap().take().as_slice(), [Action::Controls]));
+            }
+        }
+    }
+
+    #[test]
     fn offline_navigation_revokes_audio_even_if_options_becomes_ready_late() {
         let fs = Arc::new(vfs::Vfs::new());
         let data = Arc::new(Mutex::new(Data {
             inventory: InventoryView::new(&fs), fs, settings: Settings::default(),
             localization: Default::default(), game_modes: Default::default(),
-            state: AppState::Menu, menu_open: true, loading: String::new(),
+            state: AppState::Menu, menu_open: true, controls_open: false, loading: String::new(),
             loading_map: None, player_name: "You".into(), movie_ready: Default::default(), home_bootstrapped: false, home_retired: false,
             pause_surface: Default::default(), deferred_pause: Default::default(),
         }));
@@ -2443,7 +2555,7 @@ mod tests {
         let data = Arc::new(Mutex::new(Data {
             inventory: InventoryView::new(&fs), fs, settings: Settings::default(),
             localization: Default::default(), game_modes: Default::default(),
-            state: AppState::Menu, menu_open: true, loading: String::new(),
+            state: AppState::Menu, menu_open: true, controls_open: false, loading: String::new(),
             loading_map: None, player_name: "You".into(), movie_ready: Default::default(),
             home_bootstrapped: false, home_retired: false,
             pause_surface: Default::default(), deferred_pause: Default::default(),
@@ -2502,7 +2614,7 @@ mod tests {
             localization: crate::localize::Localization::default().into(),
             game_modes: kv::Block::new(),
             state: AppState::Menu,
-            menu_open: false,
+            menu_open: false, controls_open: false,
             loading: String::new(),
             loading_map: None,
             player_name: "You".into(),

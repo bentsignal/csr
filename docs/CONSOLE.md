@@ -1,7 +1,10 @@
 # Developer console and controls
 
-Open or close the console with the backquote key (`), above Tab on a US
-keyboard. Escape closes it without opening the pause menu. The console works
+Open or close the console with its saved toggle binding (backquote above Tab
+on a US keyboard by default). A first-run CS2 import honors a different console
+key or explicit unbinding. Change it in Keyboard / Mouse, or with
+`bind backslash toggleconsole`; `unbind backquote` clears the old default.
+Escape closes it without opening the pause menu. The console works
 on Home, during loading and in matches. It captures new movement, shooting, weapon-switch and menu device input while
 open. The match continues, so already committed gameplay actions may finish.
 Closing clears queued local controls and recaptures the cursor when appropriate.
@@ -38,12 +41,18 @@ closeonbuy 1
 ```
 
 A setting without a value prints its current value. `cl_showfps 1` adds a
-compact FPS/frame-time readout to the existing match diagnostics area. F3 still
-toggles the full diagnostic HUD. The open console also displays FPS, including
+compact FPS/frame-time readout to the existing match diagnostics area. Detailed
+startup diagnostics are available with `CSR_HUD_DEBUG=1`; F3 remains available
+for ordinary bindings. The open console also displays FPS, including
 on the pause and Home screens. These are smoothed rendered-frame measurements,
 not input-to-photon latency measurements. Crosshair values use the existing
 renderer/settings ranges; command support does not establish Source pixel
 parity for every cvar.
+
+The classic menu's Keyboard / Mouse route also offers sensitivity, inversion,
+mouse/wheel actions and keyboard/console rebind or Clear controls. Scroll with
+the wheel or PageUp/PageDown; Apply saves, and Back or Escape returns to Home
+or Pause. Its current functional panel still needs historical visual matching.
 
 ## Keyboard, mouse buttons and mouse wheel
 
@@ -80,7 +89,10 @@ support the configurable actions shown by `bindlist`: movement,
 jump, crouch, walk, use, reload, buy, drop, scoreboard, inspect and primary/secondary attack. For example,
 `bind f +use` uses the existing key-swapping behavior: if F already belongs to
 inspect, inspect takes Use's former key. Letters and the existing modifier,
-space, tab, arrow/navigation keys are supported.
+space, tab, arrow/navigation, punctuation and F1-F12 keys are supported. The
+console binding owns its physical key; assigning that key to gameplay clears
+the console binding. The old unconditional V noclip shortcut is removed;
+`noclip` remains an offline console command.
 
 `mouse1` through `mouse5` mean left, right, middle, back and forward buttons.
 Each accepts any of those actions, `+attack`, `+attack2`, `invprev`, `invnext`
