@@ -1095,5 +1095,8 @@ mod suppressors;
 #[path = "tests/burst.rs"]
 mod burst;
 
+#[path = "tests/scope_hold.rs"]
+mod scope_hold;
+
 #[path = "tests/model_hitboxes.rs"]
 mod model_hitboxes;
