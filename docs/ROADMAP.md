@@ -39,6 +39,11 @@ provides conservative helper-bounded early/late summaries and synthetic
 regressions. Actual immutable-binary run review, matched camera/local-alive
 evidence and performance acceptance remain open.
 
+A local [kill-feed exact-pixel upload candidate](research/kill-feed-exact-pixel-reuse.md)
+skips top-image asset mutation only for identical current accepted pixels and
+layout. Notification/admission fixtures and actual HUD/performance checks are
+pending root verification; this is not an established FPS improvement.
+
 Owner return-home playtest on 2026-10-14: all reported defects, required
 features, accepted improvements and priorities are retained in
 [PLAYTEST-2026-10-14.md](PLAYTEST-2026-10-14.md). Work continues without another
@@ -696,8 +701,9 @@ parity and the gameplay gaps listed above remain unfinished.
   expiry behaviour remain unmeasured. [Evidence](research/decoy-expiry-audio.md).
 - [x] Authoritative grenade contact audio uses installed HE/flash/smoke/incendiary
   entries at the projectile position, with resting chatter and contact-fire
-  duplication suppressed. October18 source candidate adds the observed decoy
-  flashbang binding and final soft settling taps; validation UNRUN.
+  duplication suppressed. [PR #230](https://github.com/bentsignal/global-offensive/pull/230)
+  adds the observed decoy flashbang binding and final soft settling taps;
+  workspace and installed sound decoding checks passed.
   Molotov binding and native cadence/mix parity remain unmeasured.
 - [x] Retain bounded Rapier death bodies with installed MDL/PHY convex rigs,
   captured live poses, velocity and hit context, with asynchronous nearby
@@ -718,16 +724,19 @@ parity and the gameplay gaps listed above remain unfinished.
   currently drawn centers. Absent flags retain the prior enabled behavior;
   rendered validation and smoke/fire material parity remain pending.
 - [x] Preserve the throw-time primary/pistol ContentId for positional decoy
-  playback through inventory changes, death and snapshots. October18 source
-  candidate replaces AK/AWP 2 Hz timing with deterministic sampling of observed
-  irregular intervals; validation UNRUN. Native scheduling law is not established,
+  playback through inventory changes, death and snapshots.
+  [PR #230](https://github.com/bentsignal/global-offensive/pull/230) replaces
+  AK/AWP 2 Hz timing with deterministic sampling of observed irregular intervals;
+  workspace checks passed. Native scheduling law is not established,
   and other weapons retain provisional 2 Hz timing.
   [PR #90](https://github.com/bentsignal/global-offensive/pull/90).
 - [x] Remove look-driven viewmodel lag; retain authored weapon animations.
 - [ ] Validate the shared accepted M4 look/speed-settling presentation across
   weapons and utility, including airborne continuity and authored absolute
-  animation tracks. Source candidate reuses accepted coefficients and the held
-  compressed-track sampler; all compilation/tests/render checks remain UNRUN.
+  animation tracks. [PR #230](https://github.com/bentsignal/global-offensive/pull/230)
+  reuses accepted coefficients and the held compressed-track sampler. Workspace,
+  all installed viewmodel checks (42-model coverage), and Release renders with
+  AK/M4A1-S/AWP passed. Full-arsenal native motion/airborne parity remains open.
   [Scope and preserved measured evidence](VIEWMODEL_MOTION.md).
 - [x] Tick-authoritative M4A1-S/USP-S suppressor toggling, installed transition
   clips and cues, shot-time sound routing and held/dropped bodypart visibility;

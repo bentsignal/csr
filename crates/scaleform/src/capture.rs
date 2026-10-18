@@ -20,6 +20,12 @@ pub(crate) fn copy_rows(
     if width == 0 || height == 0 || stride < row || mapped.len() < mapped_bytes {
         return Err("invalid capture dimensions or mapped buffer");
     }
+    // Aligned RGBA widths (including 1920 and 2560) have no padding to
+    // strip. Copy their requested rows together instead of extending once
+    // per row. The mapped buffer may also contain unrequested rows.
+    if stride == row {
+        return Ok(mapped[..bytes].to_vec());
+    }
     let mut out = Vec::with_capacity(bytes);
     for source in mapped[..mapped_bytes].chunks_exact(stride) {
         out.extend_from_slice(&source[..row]);
@@ -90,11 +96,31 @@ mod tests {
     }
 
     #[test]
+    fn contiguous_transfer_preserves_full_frame_and_top_prefix_bytes() {
+        // Ruffle aligns rows to 256 bytes; these RGBA widths need no padding.
+        // Include odd height and all byte values, including arbitrary alpha.
+        for width in [64u32, 128, 1920, 2560] {
+            let stride = width as usize * 4;
+            let mapped: Vec<u8> = (0..stride * 5)
+                .map(|i| (i / 4 + i % 4) as u8)
+                .collect();
+            for height in [5u32, 5u32.div_ceil(2)] {
+                let pixels = copy_rows(&mapped, width, height, stride).unwrap();
+                assert_eq!(pixels, mapped[..stride * height as usize]);
+            }
+        }
+    }
+
+    #[test]
     fn truncated_or_inconsistent_transfer_layout_fails_without_partial_image() {
         assert!(copy_rows(&[0; 511], 2, 2, 256).is_err());
         assert!(copy_rows(&[0; 512], 2, 2, 4).is_err());
         assert!(copy_rows(&[0; 512], 0, 2, 256).is_err());
         assert!(copy_rows(&[0; 512], 2, 0, 256).is_err());
         assert!(copy_rows(&[0; 512], 2, 2, usize::MAX).is_err());
+        // The contiguous path must not bypass length or dimension checks.
+        assert!(copy_rows(&[0; 511], 64, 2, 256).is_err());
+        assert!(copy_rows(&[], 64, 0, 256).is_err());
+        assert!(copy_rows(&[], 0, 2, 0).is_err());
     }
 }
