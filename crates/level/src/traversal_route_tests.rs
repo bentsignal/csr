@@ -314,3 +314,47 @@ fn mirage_small_ct_window_hole(bytes: Option<Vec<u8>>) {
         }
     }
 }
+
+
+#[test]
+#[ignore = "requires private cached old Vertigo and read-only Legacy dependencies; no native process"]
+fn cached_classic_vertigo_parented_doors_open_and_admit_full_player_hulls() {
+    let (game, fs) = mount_game(None).expect("installed Legacy dependencies");
+    let id = workshop::find("de_vertigo_2017").unwrap().content_id();
+    let level = Level::load_local_id_from_vfs(&id, game, fs, &workshop::Store::current())
+        .expect("private cached Vertigo BSP; no download");
+    let brush_doors: Vec<_> = level.collision.doors.iter().enumerate()
+        .filter(|(_, door)| door.brush_model.is_some()).map(|(i, _)| i).collect();
+    assert_eq!(brush_doors.len(), 3, "all three authored paired leaves");
+    for rate in [64, 128] { for &index in &brush_doors {
+        let mut world = sim::World::with_catalog(level.collision.clone(), level.catalog.clone());
+        world.set_character_profiles(level.character_profiles.clone());
+        world.set_tick_rate(rate); world.load_spawns(&level.bsp);
+        let actor = world.add_player("traversal", sim::Team::CounterTerrorist);
+        let def = &world.collision.doors[index];
+        let entity = def.entity;
+        let center = def.center_at(0.);
+        let outside = Vec3::Y * if def.center.x < 0. { 1. } else { -1. };
+        let start = Vec3::new(center.x, center.y, def.origin.z - 49.) + outside * 60.;
+        world.player_mut(actor).unwrap().movement.origin = start;
+        world.player_mut(actor).unwrap().movement.velocity = Vec3::ZERO;
+        let eye = world.player(actor).unwrap().eye();
+        let delta = center - eye;
+        let yaw = delta.y.atan2(delta.x).to_degrees();
+        let pitch = (-delta.z).atan2(delta.truncate().length()).to_degrees();
+        world.step(&[(actor, sim::TickInput { buttons: movement::buttons::USE,
+            view_angles: Vec3::new(pitch,yaw,0.), ..Default::default() })]);
+        for _ in 0..rate * 2 { world.step(&[(actor, sim::TickInput::default())]); }
+        assert!((world.doors[index].angle.abs()-90.).abs()<0.01,
+            "{rate}Hz entity{} failed to open: {:?} from{start:?}", entity, world.doors[index]);
+        let player = world.player(actor).unwrap(); let (mins,maxs)=player.movement.hull();
+        let inside = start - outside * 97.;
+        let trace = world.collision.trace_box(start, inside, mins, maxs, collision::contents::MASK_PLAYERSOLID);
+        assert!(!trace.hit() && !trace.start_solid,
+            "{rate}Hz entity{} open leaf must admit full hull: {trace:?}", entity);
+        for _ in 0..rate { world.step(&[(actor, sim::TickInput {
+            view_angles: Vec3::new(0.,yaw,0.), forward_move: 450., ..Default::default() })]); }
+        assert!((world.player(actor).unwrap().movement.origin-start).dot(-outside)>70.,
+            "{rate}Hz entity{} player did not enter", entity);
+    } }
+}
