@@ -181,6 +181,18 @@ mod tests {
     const TOY_SVG: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" width="16" height="32" viewBox="0 0 16 32"><path fill="white" fill-opacity="0.5" d="M4 4H12V28H4Z"/></svg>"#;
 
     #[test]
+    #[ignore = "requires the selected installed Legacy equipment art"]
+    fn installed_incendiary_equipment_silhouette_decodes() {
+        let (_, fs) = level::mount_game(None).expect("selected Legacy install");
+        let image = equipment_image(&fs, "incgrenade").expect("authored equipment silhouette");
+        assert!(image.width() > 0 && image.width() <= EQUIPMENT_RASTER_EDGE);
+        assert!(image.height() > 0 && image.height() <= EQUIPMENT_RASTER_EDGE);
+        let rgba = image.data.expect("in-memory raster");
+        assert!(rgba.chunks_exact(4).any(|pixel| pixel[3] != 0));
+        assert!(rgba.chunks_exact(4).any(|pixel| pixel[3] == 0));
+    }
+
+    #[test]
     fn equipment_silhouette_preserves_aspect_alpha_and_selected_vfs() {
         let mut fs = vfs::Vfs::new();
         let path = "materials/panorama/images/icons/equipment/fixture_tool.svg";
