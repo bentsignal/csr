@@ -45,6 +45,7 @@ pub struct SkinnedAsset {
     pub model: Arc<mdl::Model>,
     pub parts: Vec<(Handle<Mesh>, Handle<WorldMaterial>)>,
     pub inverse_bindposes: Handle<SkinnedMeshInverseBindposes>,
+    pub(crate) culling: Vec<Option<Arc<crate::skinning_bounds::Certificate>>>,
 }
 
 /// The default imported bodygroup contains the authored suppressor geometry.
@@ -76,6 +77,10 @@ pub fn build_asset(
     dynamic_lit: bool,
 ) -> SkinnedAsset {
     let read = |p: &str| fs.read_string(p);
+    let s = axis_change();
+    let s_inv = s.inverse();
+    let inverse: Vec<Mat4> = model.bones.iter().map(|b| s * to_bevy_mat(b.pose_to_bone) * s_inv).collect();
+    let mut culling = Vec::with_capacity(model.meshes.len());
     let joint_limit = model.bones.len().saturating_sub(1).min(255) as u16;
     let parts = model
         .meshes
@@ -137,16 +142,15 @@ pub fn build_asset(
                 // preserve existing weapon/character presentation this pass.
                 mat.params.self_illum = Vec4::ZERO;
             }
+            culling.push(crate::skinning_bounds::certify(&mut m, &inverse));
             (meshes.add(m), materials.add(mat))
         })
         .collect();
-    let s = axis_change();
-    let s_inv = s.inverse();
-    let inverse: Vec<Mat4> = model.bones.iter().map(|b| s * to_bevy_mat(b.pose_to_bone) * s_inv).collect();
     SkinnedAsset {
         model,
         parts,
         inverse_bindposes: bindposes.add(SkinnedMeshInverseBindposes::from(inverse)),
+        culling,
     }
 }
 
@@ -157,6 +161,27 @@ pub fn spawn(
     asset: &SkinnedAsset,
     layer: Option<RenderLayers>,
     materials: Option<&mut Assets<WorldMaterial>>,
+) -> SkinnedInstance {
+    spawn_inner(commands, asset, layer, materials, None)
+}
+
+/// Explicit opt-in for world bodies, held weapons and corpses. Other callers
+/// keep the original uncullable behavior regardless of their render layer.
+pub(crate) fn spawn_world(
+    commands: &mut Commands,
+    asset: &SkinnedAsset,
+    materials: Option<&mut Assets<WorldMaterial>>,
+    kind: crate::skinning_bounds::WorldSkin,
+) -> SkinnedInstance {
+    spawn_inner(commands, asset, None, materials, Some(kind))
+}
+
+fn spawn_inner(
+    commands: &mut Commands,
+    asset: &SkinnedAsset,
+    layer: Option<RenderLayers>,
+    materials: Option<&mut Assets<WorldMaterial>>,
+    world: Option<crate::skinning_bounds::WorldSkin>,
 ) -> SkinnedInstance {
     let joints: Vec<Entity> = asset
         .model
@@ -191,6 +216,11 @@ pub fn spawn(
             ));
             if let Some(l) = &layer {
                 e.insert(l.clone());
+            }
+            if let Some(kind) = world
+                && let Some(certificate) = asset.culling.get(index)
+            {
+                crate::skinning_bounds::enable(&mut e, mesh, certificate, kind);
             }
             e.id()
         })
