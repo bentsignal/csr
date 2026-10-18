@@ -2,11 +2,12 @@
 use serde::{Deserialize, Serialize};
 use sim::{GameEvent, PlayerId, Snapshot, Team, TickInput};
 
+// v28 adds bounded door-local cosmetic bullet contacts to the v27 events.
 // v27 combines authoritative door poses/cues, brush-breakable health/removal,
 // and replicated BSP ladder contact for prediction and foley.
 // Older peers must reject the session before attempting snapshot decoding.
-pub const VERSION: u32 = 27;
-pub const PROTOCOL_ID: u64 = 0x4353_5257_0000_001b;
+pub const VERSION: u32 = 28;
+pub const PROTOCOL_ID: u64 = 0x4353_5257_0000_001c;
 pub const CONTROL: u8 = 0;
 pub const INPUT: u8 = 1;
 pub const SNAPSHOT: u8 = 2;
@@ -64,8 +65,10 @@ pub(crate) fn validate_events(batch: &EventBatch) -> Result<(), String> {
                 player,
                 pos,
                 normal,
+                door,
                 ..
-            } => *player != 0 && position(*pos) && position(*normal),
+            } => *player != 0 && position(*pos) && position(*normal)
+                && door.is_none_or(|impact| impact.valid()),
             Damage {
                 victim,
                 health,
@@ -614,6 +617,27 @@ mod death_tests;
 mod tests {
     use super::*;
     #[test]
+    fn door_impact_local_frame_roundtrips_and_rejects_unbounded_contacts() {
+        use glam::Vec3;
+        let impact = sim::doors::Impact { door: 0, pos: Vec3::new(-2., 24., 64.), normal: -Vec3::X };
+        let batch = |door| EventBatch { tick: 200, events: vec![GameEvent::Impact {
+            player: 1, pos: Vec3::new(100., 24., 64.), normal: Vec3::Y, surface: 3, door,
+        }] };
+        for contact in [None, Some(impact)] {
+            let events = batch(contact); validate_events(&events).unwrap();
+            assert_eq!(decode::<EventBatch>(&encode(&events).unwrap()).unwrap(), events);
+        }
+        for bad in [sim::doors::Impact { door: sim::doors::MAX_DOORS as u32, ..impact },
+            sim::doors::Impact { pos: Vec3::NAN, ..impact },
+            sim::doors::Impact { pos: Vec3::X * 4097., ..impact },
+            sim::doors::Impact { normal: Vec3::ZERO, ..impact },
+            sim::doors::Impact { normal: Vec3::INFINITY, ..impact },
+            sim::doors::Impact { normal: Vec3::X * 2., ..impact }] {
+            assert!(validate_events(&batch(Some(bad))).is_err());
+        }
+    }
+
+    #[test]
     fn door_cues_roundtrip_and_reject_nonfinite_or_unbounded_payloads() {
         use sim::doors::{Cue, State};
         let batch = EventBatch { tick: 200, events: [Cue::Move, Cue::Open, Cue::Close, Cue::Unlock]
@@ -828,6 +852,7 @@ mod tests {
                 pos: Vec3::ZERO,
                 normal: Vec3::INFINITY,
                 surface: 0,
+                door: None,
             },
             GameEvent::Tracer {
                 player: 1,

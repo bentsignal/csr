@@ -192,3 +192,49 @@ fn door_use_and_ladder_climbing_survive_combined_snapshot_prediction_64_128() {
         assert!(!blocked(&world));
     }
 }
+
+#[test]
+fn tick_input_impacts_capture_shot_pose_and_survive_prediction_restore_and_death() {
+    for angle in [0., -37., -90.] {
+        let (mut world, id) = fixture(128, "");
+        let catalog = weapons::Catalog::from_items_game(r##"items_game { items {
+            999 { name weapon_fixture item_class weapon_fixture baseitem 1 item_type_name "#CSGO_Type_Rifle"
+                attributes { damage 20 "range modifier" 1 "primary clip size" 30 cycletime 0.1 } }
+        } }"##).unwrap();
+        world.players[0].weapons = vec![crate::weapon::WeaponState::new(Arc::new(catalog.get("weapon_fixture").unwrap().clone()))];
+        world.players[0].active = 0;
+        world.catalog = Arc::new(catalog);
+        world.doors[0].angle = angle; world.doors[0].target = angle;
+        let def = &world.collision.doors[0];
+        world.players[0].movement.origin = def.origin + def.rotation(angle) * Vec3::new(-60., 24., 1.);
+        world.rebuild_door_collision();
+        let mut predicted = world.clone();
+        let input = [(id, TickInput { buttons: buttons::ATTACK,
+            view_angles: Vec3::new(0., angle, 0.), ..Default::default() })];
+        world.step(&input); predicted.step_prediction(&input);
+        assert_eq!(world.state(), predicted.state()); assert!(predicted.events.is_empty());
+        let (pos, normal, impact) = world.events.iter().find_map(|event| match event {
+            GameEvent::Impact { pos, normal, door: Some(impact), .. } => Some((*pos, *normal, *impact)),
+            _ => None,
+        }).expect("the real bullet hit the moving door");
+        assert!(impact.valid()); assert_eq!(impact.door, 0);
+        let def = &world.collision.doors[0];
+        assert!((def.origin + def.rotation(angle) * impact.pos - pos).length() < 0.001);
+        assert!((def.rotation(angle) * impact.normal - normal).length() < 0.001);
+        let state: crate::WorldState = world.decode(&world.encode_state()).unwrap();
+        predicted.restore(state); assert_eq!(predicted.state(), world.state());
+        let before = world.doors.clone();
+        world.damage_environment(id, 1000, "fixture");
+        assert_eq!(world.doors, before, "shooter death must not relocate a map-owned mark");
+        world.start_round(false);
+        assert_eq!(world.doors[0].angle, 0.);
+        let eye = Vec3::new(-60., 24., 64.);
+        let (tr, owner) = world.collision.trace_owned_ray(eye, eye + Vec3::X * 120., contents::MASK_SHOT);
+        assert_eq!(owner, Some(collision::HitOwner::Door(0)));
+        assert!(world.door_impact(owner, &tr).is_some());
+        assert!(world.door_impact(None, &tr).is_none());
+        let inside = Vec3::new(0., 24., 64.);
+        let (tr, owner) = world.collision.trace_owned_ray(inside, inside, contents::MASK_SHOT);
+        assert!(world.door_impact(owner, &tr).is_none(), "no decal for an undefined start-solid contact");
+    }
+}

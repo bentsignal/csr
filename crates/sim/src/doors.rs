@@ -10,6 +10,23 @@ use serde::{Deserialize, Serialize};
 pub const USE_DISTANCE: f32 = 96.0;
 pub use collision::doors::MAX_DOORS;
 
+/// Cosmetic contact in the authored model/hinge frame, captured at the shot's
+/// authoritative pose. The door ordinal is scoped by the session map ContentId.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Impact {
+    pub door: u32,
+    pub pos: Vec3,
+    pub normal: Vec3,
+}
+
+impl Impact {
+    pub fn valid(&self) -> bool {
+        (self.door as usize) < MAX_DOORS && self.pos.is_finite()
+            && self.pos.length() <= 4096.25
+            && self.normal.is_finite() && (self.normal.length_squared() - 1.0).abs() <= 0.01
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Cue { Move, Open, Close, Unlock }
 
@@ -49,21 +66,34 @@ impl World {
     }
 
     pub(crate) fn rebuild_door_collision(&mut self) {
-        let mut solids: Vec<_> = self.collision.doors.iter().zip(&self.doors)
-            .flat_map(|(def, state)| def.solids(state.angle)).collect();
-        let mut owners = vec![None; solids.len()];
+        let mut solids = Vec::new();
+        let mut owners = Vec::new();
+        for (index, (def, state)) in self.collision.doors.iter().zip(&self.doors).enumerate() {
+            solids.extend(def.solids(state.angle));
+            owners.resize(solids.len(), Some(collision::HitOwner::Door(index)));
+        }
         for (index, (def, state)) in self.collision.breakables.iter().zip(&self.breakables).enumerate() {
             if state.broken() { continue; }
             solids.extend(def.solids.iter().cloned());
-            owners.resize(solids.len(), Some(index));
+            owners.resize(solids.len(), Some(collision::HitOwner::Breakable(index)));
         }
         for dep in self.collision.breakable_dependencies.iter() {
             if dep.killed_by.iter().any(|&index| self.breakables[index].broken()) { continue; }
             solids.extend(dep.solids.iter().cloned());
             owners.resize(solids.len(), None);
         }
-        self.collision = collision::CollisionWorld::with_runtime_solids(
+        self.collision = collision::CollisionWorld::with_runtime_owners(
             collision::CollisionWorld::map_arc(&self.collision), solids, owners);
+    }
+
+    pub(crate) fn door_impact(&self, owner: Option<collision::HitOwner>, tr: &collision::Trace) -> Option<Impact> {
+        if !tr.hit() || tr.start_solid || tr.all_solid { return None; }
+        let collision::HitOwner::Door(index) = owner? else { return None; };
+        let def = self.collision.doors.get(index)?;
+        let rotation = def.rotation(self.doors.get(index)?.angle).transpose();
+        let impact = Impact { door: index as u32, pos: rotation * (tr.end - def.origin),
+            normal: (rotation * tr.normal).normalize_or_zero() };
+        impact.valid().then_some(impact)
     }
 
     fn door_cue(&mut self, index: usize, cue: Cue) {

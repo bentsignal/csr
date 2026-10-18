@@ -401,7 +401,7 @@ pub enum GameEvent {
     Fire { player: PlayerId, weapon: String, origin: Vec3, suppressed: bool },
     Tracer { player: PlayerId, start: Vec3, end: Vec3 },
     /// A bullet hit the world. `player` fired it.
-    Impact { player: PlayerId, pos: Vec3, normal: Vec3, surface: u32 },
+    Impact { player: PlayerId, pos: Vec3, normal: Vec3, surface: u32, door: Option<doors::Impact> },
     Damage { attacker: PlayerId, victim: PlayerId, health: i32, group: HitGroup, pos: Vec3 },
     /// `attacker` is [`WORLD`] for the bomb.
     Kill { attacker: PlayerId, victim: PlayerId, weapon: String, headshot: bool, death: death::DeathReceipt },
@@ -1795,7 +1795,7 @@ impl World {
             let oy = a1.sin() * r1 * inacc + a2.sin() * r2 * spread;
             let dir = (fwd + right * ox + up * oy).normalize();
             let end = eye + dir * range;
-            let (tr, breakable) = self.collision.trace_breakable_ray(eye, end, contents::MASK_SHOT);
+            let (tr, owner) = self.collision.trace_owned_ray(eye, end, contents::MASK_SHOT);
             let world_dist = tr.fraction * range;
 
             // The movement hull is broad phase only when authored shapes exist.
@@ -1854,7 +1854,8 @@ impl World {
                 None => {
                     self.events.push(GameEvent::Tracer { player: id, start: eye, end: tr.end });
                     if tr.fraction < 1.0 && !self.collision.is_sky(tr.surface) {
-                        self.damage_breakable(breakable, &tr,
+                        let door = self.door_impact(owner, &tr);
+                        self.damage_breakable(owner.and_then(collision::HitOwner::breakable), &tr,
                             def.damage * def.range_modifier.powf(world_dist / 500.0), breakables::DamageKind::Bullet);
                         if let Some(dynamic)=&self.collision.dynamic {dynamic.damage_block(tr.end,tr.normal,def.damage as f32 * def.range_modifier.powf(world_dist/500.0));}
                         self.events.push(GameEvent::Impact {
@@ -1862,6 +1863,7 @@ impl World {
                             pos: tr.end,
                             normal: tr.normal,
                             surface: tr.surface,
+                            door,
                         });
                     }
                 }

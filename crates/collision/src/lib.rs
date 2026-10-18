@@ -154,6 +154,16 @@ pub fn clip_bounds(start: Vec3, end: Vec3, mins: Vec3, maxs: Vec3, low: Vec3, hi
     tr.end=if tr.all_solid {start} else {start.lerp(end,tr.fraction)};
 }
 
+/// Map ordinal of the runtime solid that won the ordinary masked clip query.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HitOwner { Door(usize), Breakable(usize) }
+
+impl HitOwner {
+    pub fn breakable(self) -> Option<usize> {
+        match self { Self::Breakable(index) => Some(index), Self::Door(_) => None }
+    }
+}
+
 /// Names for surface ids (materials / surface props), index = surface id.
 #[derive(Default)]
 pub struct CollisionWorld {
@@ -168,8 +178,8 @@ pub struct CollisionWorld {
     /// A session-owned, immutable pose overlay shares the heavy map/grid.
     base: Option<std::sync::Arc<CollisionWorld>>,
     /// Per-overlay convex ownership, in the same order as `convexes`.
-    /// Static geometry and door leaves have no breakable owner.
-    runtime_breakables: Vec<Option<usize>>,
+    /// Static geometry has no runtime owner.
+    runtime_owners: Vec<Option<HitOwner>>,
     grid: Grid,
     /// Convex indices per BSP static-prop ordinal, including empty entries.
     /// Built alongside the placed hulls; world geometry is never in a range.
@@ -326,7 +336,7 @@ impl CollisionWorld {
     fn trace_box_owned(
         &self, start: Vec3, end: Vec3, mins: Vec3, maxs: Vec3, mask: i32,
         excluded_convexes: Option<&std::ops::Range<usize>>,
-    ) -> (Trace, Option<usize>) {
+    ) -> (Trace, Option<HitOwner>) {
         if let Some(base) = &self.base {
             let mut tr = base.trace_box_excluding(start, end, mins, maxs, mask, excluded_convexes);
             let mut owner = None;
@@ -337,7 +347,7 @@ impl CollisionWorld {
             for (index, solid) in self.convexes.iter().enumerate() {
                 if solid.contents & mask != 0 && swept_bounds_overlap(s, e, ext, solid.mins, solid.maxs) {
                     if clip_convex(&solid.planes, s, e, ext, solid.contents, solid.surface, &mut tr) {
-                        owner = self.runtime_breakables.get(index).copied().flatten();
+                        owner = self.runtime_owners.get(index).copied().flatten();
                     }
                 }
             }
@@ -431,6 +441,13 @@ impl CollisionWorld {
     /// The exact first-hit owner from the same ordered, masked collision query.
     /// Combat must not infer ownership by approximately matching ray fractions.
     pub fn trace_breakable_ray(&self, start: Vec3, end: Vec3, mask: i32) -> (Trace, Option<usize>) {
+        let (tr, owner) = self.trace_owned_ray(start, end, mask);
+        (tr, owner.and_then(HitOwner::breakable))
+    }
+
+    /// Shares the same winner, ordering, masks and start-solid semantics as
+    /// `trace_ray` and `trace_breakable_ray`; never a second proximity query.
+    pub fn trace_owned_ray(&self, start: Vec3, end: Vec3, mask: i32) -> (Trace, Option<HitOwner>) {
         self.trace_box_owned(start, end, Vec3::ZERO, Vec3::ZERO, mask, None)
     }
 

@@ -847,7 +847,7 @@ fn smoke_test(
             let (forward,_,_)=movement::angle_vectors(l.render_angles);
             let start=l.render_eye;
             let tr=level.0.collision.trace_ray(start,start+forward*500.0,collision::contents::MASK_SOLID);
-            if tr.hit() {events.0.push(sim::GameEvent::Impact{player:l.id,pos:tr.end,normal:tr.normal,surface:tr.surface});}
+            if tr.hit() {events.0.push(sim::GameEvent::Impact{player:l.id,pos:tr.end,normal:tr.normal,surface:tr.surface,door:None});}
             if std::env::var("CSR_TEST_FEEDBACK").as_deref() != Ok("impact") {
                 let pos=start+forward*70.0;
                 events.0.push(sim::GameEvent::Damage{attacker:l.id,victim:l.id,health:25,group:sim::weapon::HitGroup::Chest,pos});

@@ -171,6 +171,13 @@ impl CollisionWorld {
     /// Preserve each intact breakable's owner through the ordinary clipper,
     /// including masks and static/door/brush ties. Owners are map ordinals.
     pub fn with_runtime_solids(base: Arc<Self>, solids: Vec<Convex>, owners: Vec<Option<usize>>) -> Arc<Self> {
+        Self::with_runtime_owners(base, solids, owners.into_iter()
+            .map(|owner| owner.map(crate::HitOwner::Breakable)).collect())
+    }
+
+    /// Door and breakable owners travel with their convexes through one
+    /// ordered clip. The legacy breakable-only constructor remains unchanged.
+    pub fn with_runtime_owners(base: Arc<Self>, solids: Vec<Convex>, owners: Vec<Option<crate::HitOwner>>) -> Arc<Self> {
         assert_eq!(solids.len(), owners.len());
         if base.doors.is_empty() && base.breakables.is_empty() { return base; }
         Arc::new(Self {
@@ -178,7 +185,7 @@ impl CollisionWorld {
             breakables: base.breakables.clone(),
             breakable_dependencies: base.breakable_dependencies.clone(),
             dynamic: base.dynamic.clone(),
-            convexes: solids, runtime_breakables: owners, base: Some(base), ..Default::default()
+            convexes: solids, runtime_owners: owners, base: Some(base), ..Default::default()
         })
     }
 }

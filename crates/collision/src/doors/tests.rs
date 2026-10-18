@@ -163,3 +163,45 @@ fn runtime_hit_ownership_preserves_door_ties_and_start_solid_flags() {
     assert_eq!(owner, None, "start-solid contents alone do not replace a hit surface");
     assert_eq!(owned.trace_breakable_ray(start, end, contents::WATER).1, None);
 }
+
+#[test]
+fn exact_door_owner_obeys_static_flush_ties_runtime_order_and_masks() {
+    use crate::HitOwner;
+    let start = Vec3::new(-16., 24., 64.);
+    let end = Vec3::new(16., 24., 64.);
+    // A wall in front by less than the old surface-matching tolerance, or
+    // exactly flush, must never donate its impact to the door behind it.
+    for shift in [-0.01, 0.0] {
+        let mut base = fixture();
+        let leaf = base.doors[0].solids(0.);
+        let wall = hull(Vec3::new(-0.25 + shift, 0., 0.), Vec3::new(0.25 + shift, 48., 96.));
+        let map = Arc::get_mut(&mut base).unwrap();
+        map.add_convex(convex_from_hull(&wall.points, &wall.triangles, contents::SOLID, 0).unwrap());
+        map.finalize();
+        let world = CollisionWorld::with_runtime_owners(base, leaf.clone(), vec![Some(HitOwner::Door(0)); leaf.len()]);
+        let (tr, owner) = world.trace_owned_ray(start, end, contents::MASK_SHOT);
+        assert!(tr.hit());
+        assert_eq!(owner, None, "static winner at offset {shift}");
+        assert_eq!(tr.end, world.trace_ray(start, end, contents::MASK_SHOT).end);
+    }
+    let base = fixture();
+    let leaf = base.doors[0].solids(0.);
+    for first in [HitOwner::Door(0), HitOwner::Breakable(0)] {
+        let second = if first == HitOwner::Door(0) { HitOwner::Breakable(0) } else { HitOwner::Door(0) };
+        let mut solids = leaf.clone(); solids.extend(leaf.clone());
+        let mut owners = vec![Some(first); leaf.len()]; owners.resize(solids.len(), Some(second));
+        let world = CollisionWorld::with_runtime_owners(base.clone(), solids, owners);
+        let (tr, owner) = world.trace_owned_ray(start, end, contents::MASK_SHOT);
+        assert!(tr.hit()); assert_eq!(owner, Some(first));
+        assert_eq!(world.trace_breakable_ray(start, end, contents::MASK_SHOT).1, first.breakable());
+        assert_eq!(world.trace_owned_ray(start, end, contents::WATER).1, None);
+    }
+    let mut masked = leaf.clone();
+    for solid in &mut masked { solid.contents = contents::WATER; }
+    masked.extend(leaf.clone());
+    let mut owners = vec![Some(HitOwner::Door(0)); leaf.len()];
+    owners.resize(masked.len(), Some(HitOwner::Breakable(0)));
+    let world = CollisionWorld::with_runtime_owners(base, masked, owners);
+    assert_eq!(world.trace_owned_ray(start, end, contents::MASK_SHOT).1, Some(HitOwner::Breakable(0)));
+    assert_eq!(world.trace_owned_ray(start, end, contents::WATER).1, Some(HitOwner::Door(0)));
+}
