@@ -13,7 +13,7 @@ use crate::world_mesh::{material_from_vmt, SharedHandles};
 use bevy::asset::RenderAssetUsages;
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
-use collision::{contents, CollisionWorld};
+use collision::CollisionWorld;
 use std::collections::HashMap;
 
 #[path = "prop_vertex_lighting.rs"]
@@ -85,14 +85,15 @@ impl PropLight {
     }
 }
 
-/// Map ambient cube at the prop, plus the sun if a ray towards it reaches the sky.
+/// Map ambient cube at the prop, plus the sun if its center ray reaches sky.
+/// This one-sample fallback remains approximate for large/combined models.
 fn prop_light(
     bsp: &bsp::Bsp,
     collision: &CollisionWorld,
     sun: Option<Sun>,
     center: glam::Vec3,
     origin: glam::Vec3,
-    radius: f32,
+    prop_ordinal: usize,
 ) -> PropLight {
     let cube = bsp
         .ambient_cube(center + glam::Vec3::Z * 4.0)
@@ -101,9 +102,12 @@ fn prop_light(
         .map(glam::Vec3::from);
     match sun {
         Some(s) => {
-            let start = center + s.to_sun * (radius + 4.0);
-            let tr = collision.trace_ray(start, start + s.to_sun * 16384.0, contents::MASK_SOLID);
-            let lit = !tr.hit() || collision.is_sky(tr.surface);
+            // Exclude this placed prop's own hulls instead of jumping beyond
+            // its radius, which can skip intervening ceilings and walls.
+            let tr = collision.trace_prop_lighting_ray(center, center + s.to_sun * 16384.0, prop_ordinal);
+            // A center inside any remaining solid is not a valid sky sample,
+            // even if the ray exits it and subsequently hits a sky brush.
+            let lit = !tr.start_solid && !tr.all_solid && (!tr.hit() || collision.is_sky(tr.surface));
             PropLight {
                 cube,
                 to_sun: s.to_sun,
@@ -249,8 +253,7 @@ pub fn spawn(
         let rot = mdl::angles_to_mat3(prop.angles);
         let scale = if prop.scale > 0.0 { prop.scale } else { 1.0 };
         let center = prop.origin + rot * ((model.hull_min + model.hull_max) * 0.5 * scale);
-        let radius = (model.hull_max - model.hull_min).length() * 0.5 * scale;
-        let light = prop_light(bsp, collision, sun, center, prop.origin, radius);
+        let light = prop_light(bsp, collision, sun, center, prop.origin, prop_index);
         let cube = [0, 1, 4, 5, 3, 2].map(|i| light.cube[i].extend(1.0));
         // Opacity changes need separate native admission and material modes.
         // Unsupported layouts/alpha retain the previous identity modulation.
@@ -368,4 +371,136 @@ pub fn spawn(
     info!("Authored static-prop diffuse tint: nonwhite_instances={tinted_instances}");
     info!("Authored ordinary static-prop detail: meshes={detail_meshes}; unsupported layers retain base material");
     stats
+}
+
+#[cfg(test)]
+mod lighting_tests {
+    use super::*;
+    use glam::Vec3 as SourceVec3;
+
+    const SUN: Sun = Sun {
+        to_sun: SourceVec3::Z,
+        color: SourceVec3::ONE,
+        ambient: SourceVec3::ZERO,
+    };
+
+    // Synthetic long, thin solid: the old bounding-sphere start would be
+    // over 173 units above its center and skip a roof at z=33..44.
+    fn fixture(second_instance: bool) -> (bsp::Bsp, CollisionWorld) {
+        let prop = bsp::StaticProp {
+            origin: SourceVec3::ZERO, angles: SourceVec3::ZERO, model: 0,
+            solid: 6, flags: 0, skin: 0, fade_min: 0.0, fade_max: 0.0,
+            scale: 1.0, diffuse_modulation: None,
+        };
+        let mut map = bsp::Bsp::default();
+        map.static_props.models.push("synthetic_long_prop".into());
+        map.static_props.props.push(prop.clone());
+        if second_instance {
+            map.static_props.props.push(bsp::StaticProp {
+                origin: SourceVec3::Z * 60.0, ..prop
+            });
+        }
+        let hull = mdl::ConvexHull {
+            points: vec![
+                SourceVec3::new(-169.0, -1.0, -1.0), SourceVec3::new(169.0, -1.0, -1.0),
+                SourceVec3::new(169.0, 1.0, -1.0), SourceVec3::new(-169.0, 1.0, -1.0),
+                SourceVec3::new(-169.0, -1.0, 1.0), SourceVec3::new(169.0, -1.0, 1.0),
+                SourceVec3::new(169.0, 1.0, 1.0), SourceVec3::new(-169.0, 1.0, 1.0),
+            ],
+            triangles: vec![
+                [0, 2, 1], [0, 3, 2], [4, 5, 6], [4, 6, 7],
+                [0, 1, 5], [0, 5, 4], [1, 2, 6], [1, 6, 5],
+                [2, 3, 7], [2, 7, 6], [3, 0, 4], [3, 4, 7],
+            ],
+        };
+        let w = CollisionWorld::from_bsp(&map, &collision::MapCollisionOptions::default(), &|_| Some(vec![hull.clone()]));
+        (map, w)
+    }
+
+    fn add_world_box(w: &mut CollisionWorld, bottom: f32, top: f32, material: &str) {
+        let surface = w.surface_id(material);
+        assert!(w.add_convex(collision::Convex {
+            planes: vec![
+                collision::Plane { normal: SourceVec3::X, dist: 256.0 },
+                collision::Plane { normal: -SourceVec3::X, dist: 256.0 },
+                collision::Plane { normal: SourceVec3::Y, dist: 256.0 },
+                collision::Plane { normal: -SourceVec3::Y, dist: 256.0 },
+                collision::Plane { normal: SourceVec3::Z, dist: top },
+                collision::Plane { normal: -SourceVec3::Z, dist: -bottom },
+            ],
+            mins: SourceVec3::new(-256.0, -256.0, bottom),
+            maxs: SourceVec3::new(256.0, 256.0, top),
+            contents: collision::contents::SOLID,
+            surface,
+        }));
+    }
+
+    fn fallback(map: &bsp::Bsp, w: &CollisionWorld) -> PropLight {
+        prop_light(map, w, Some(SUN), SourceVec3::ZERO, SourceVec3::ZERO, 0)
+    }
+
+    #[test]
+    fn owning_solid_prop_below_roof_does_not_skip_to_sky() {
+        let (map, mut w) = fixture(false);
+        add_world_box(&mut w, 33.0, 44.0, "synthetic_roof");
+        add_world_box(&mut w, 1000.0, 1010.0, "tools/toolsskybox");
+        w.finalize();
+        let old_start = SourceVec3::Z * (SourceVec3::new(169.0, 1.0, 1.0).length() + 4.0);
+        let old = w.trace_ray(old_start, old_start + SUN.to_sun * 16384.0, collision::contents::MASK_SOLID);
+        assert!(!old.start_solid && w.is_sky(old.surface), "fixture must reproduce skipped roof");
+        let corrected = w.trace_prop_lighting_ray(SourceVec3::ZERO, SUN.to_sun * 16384.0, 0);
+        assert_eq!(w.surface_name(corrected.surface), "synthetic_roof");
+        assert!(!corrected.start_solid);
+        assert_eq!(fallback(&map, &w).sun, SourceVec3::ZERO);
+    }
+
+    #[test]
+    fn exterior_owning_solid_prop_gets_sun_with_open_or_brush_sky() {
+        for sky_brush in [false, true] {
+            let (map, mut w) = fixture(false);
+            if sky_brush { add_world_box(&mut w, 1000.0, 1010.0, "tools/toolsskybox"); }
+            w.finalize();
+            assert!(w.trace_ray(SourceVec3::ZERO, SUN.to_sun * 16384.0, collision::contents::MASK_SOLID).start_solid);
+            assert_eq!(fallback(&map, &w).sun, SUN.color);
+        }
+    }
+
+    #[test]
+    fn separate_same_model_instance_still_shadows_owner() {
+        let (map, mut w) = fixture(true);
+        add_world_box(&mut w, 1000.0, 1010.0, "tools/toolsskybox");
+        w.finalize();
+        let tr = w.trace_prop_lighting_ray(SourceVec3::ZERO, SUN.to_sun * 16384.0, 0);
+        assert!(!tr.start_solid && tr.hit());
+        assert_eq!(w.surface_name(tr.surface), "synthetic_long_prop");
+        assert!((tr.end.z - 59.0).abs() < 0.1, "{tr:?}");
+        assert_eq!(fallback(&map, &w).sun, SourceVec3::ZERO);
+    }
+
+    #[test]
+    fn center_inside_world_solid_stays_shadowed_after_exit_to_sky() {
+        let (map, mut w) = fixture(false);
+        add_world_box(&mut w, -8.0, 8.0, "synthetic_world_solid");
+        add_world_box(&mut w, 1000.0, 1010.0, "tools/toolsskybox");
+        w.finalize();
+        let tr = w.trace_prop_lighting_ray(SourceVec3::ZERO, SUN.to_sun * 16384.0, 0);
+        assert!(tr.start_solid && !tr.all_solid);
+        assert!(w.is_sky(tr.surface), "ray exits the solid then hits sky");
+        assert_eq!(fallback(&map, &w).sun, SourceVec3::ZERO);
+    }
+
+    #[test]
+    fn displacement_triangle_still_shadows_owner() {
+        let (map, mut w) = fixture(false);
+        w.add_triangle([
+            SourceVec3::new(-100.0, -100.0, 40.0),
+            SourceVec3::new(0.0, 100.0, 40.0),
+            SourceVec3::new(100.0, -100.0, 40.0),
+        ], collision::contents::SOLID, 0);
+        w.finalize();
+        let tr = w.trace_prop_lighting_ray(SourceVec3::ZERO, SUN.to_sun * 16384.0, 0);
+        assert!(!tr.start_solid && tr.hit());
+        assert!((tr.end.z - 40.0).abs() < 0.1, "{tr:?}");
+        assert_eq!(fallback(&map, &w).sun, SourceVec3::ZERO);
+    }
 }
