@@ -20,6 +20,7 @@ pub use bsp::contents;
 mod prop_lighting;
 pub use prop_lighting::PropLightingQuery;
 mod ladders;
+pub mod doors;
 
 /// Distance kept between a sweep's end position and the surface it hit.
 pub const DIST_EPSILON: f32 = 0.03125;
@@ -159,6 +160,10 @@ pub struct CollisionWorld {
     pub convexes: Vec<Convex>,
     pub triangles: Vec<Triangle>,
     pub surfaces: Vec<String>,
+    /// Authored prop doors, separate from the immutable map solids.
+    pub doors: std::sync::Arc<[doors::Door]>,
+    /// A session-owned, immutable pose overlay shares the heavy map/grid.
+    base: Option<std::sync::Arc<CollisionWorld>>,
     grid: Grid,
     /// Convex indices per BSP static-prop ordinal, including empty entries.
     /// Built alongside the placed hulls; world geometry is never in a range.
@@ -189,6 +194,7 @@ impl CollisionWorld {
     }
 
     pub fn surface_name(&self, id: u32) -> &str {
+        if let Some(base) = &self.base { return base.surface_name(id); }
         self.surfaces.get(id as usize).map_or("", String::as_str)
     }
 
@@ -308,6 +314,18 @@ impl CollisionWorld {
         &self, start: Vec3, end: Vec3, mins: Vec3, maxs: Vec3, mask: i32,
         excluded_convexes: Option<&std::ops::Range<usize>>,
     ) -> Trace {
+        if let Some(base) = &self.base {
+            let mut tr = base.trace_box_excluding(start, end, mins, maxs, mask, excluded_convexes);
+            let offset = (mins + maxs) * 0.5;
+            let ext = (maxs - mins) * 0.5;
+            for solid in &self.convexes {
+                if solid.contents & mask != 0 {
+                    clip_convex(&solid.planes, start + offset, end + offset, ext, solid.contents, solid.surface, &mut tr);
+                }
+            }
+            tr.end = if tr.all_solid { start } else { start.lerp(end, tr.fraction) };
+            return tr;
+        }
         if let Some(world)=&self.dynamic { return world.trace_box(start,end,mins,maxs,mask); }
         let offset = (mins + maxs) * 0.5;
         let ext = (maxs - mins) * 0.5;
@@ -412,6 +430,15 @@ impl CollisionWorld {
 
     /// Contents at a point (union of all shapes containing it).
     pub fn point_contents(&self, p: Vec3, mask: i32) -> i32 {
+        if let Some(base) = &self.base {
+            let mut out = base.point_contents(p, mask);
+            for solid in &self.convexes {
+                if solid.contents & mask != 0 && solid.planes.iter().all(|pl| pl.normal.dot(p) <= pl.dist) {
+                    out |= solid.contents;
+                }
+            }
+            return out;
+        }
         if let Some(world)=&self.dynamic {return world.point_contents(p,mask);}
         let mut cands = Vec::new();
         self.candidates(p - Vec3::ONE, p + Vec3::ONE, &mut cands);
@@ -787,6 +814,7 @@ impl CollisionWorld {
             }
             w.static_prop_convexes[prop_ordinal].end = w.convexes.len();
         }
+        w.doors = doors::load(map, prop_hulls, &mut w.surfaces).into();
         w.finalize();
         w
     }

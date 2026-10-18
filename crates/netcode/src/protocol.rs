@@ -2,10 +2,11 @@
 use serde::{Deserialize, Serialize};
 use sim::{GameEvent, PlayerId, Snapshot, Team, TickInput};
 
-// v25 replicates BSP ladder contact in PlayerMove for prediction and foley.
+// v26 adds authoritative rotating-door state and door sound cues. The held
+// ladder candidate uses v25; integrating both must retain this v26 wire gate.
 // Older peers must reject the session before attempting snapshot decoding.
-pub const VERSION: u32 = 25;
-pub const PROTOCOL_ID: u64 = 0x4353_5257_0000_0019;
+pub const VERSION: u32 = 26;
+pub const PROTOCOL_ID: u64 = 0x4353_5257_0000_001a;
 pub const CONTROL: u8 = 0;
 pub const INPUT: u8 = 1;
 pub const SNAPSHOT: u8 = 2;
@@ -91,6 +92,7 @@ pub(crate) fn validate_events(batch: &EventBatch) -> Result<(), String> {
                 *player != 0 && site.is_ascii_uppercase() && position(*pos)
             }
             BombExploded { pos } => position(*pos),
+            DoorSound { door, pos, .. } => (*door as usize) < sim::doors::MAX_DOORS && position(*pos),
             StatTrakKill { owner: player, .. }
             | Reload { player }
             | Jump { player }
@@ -386,8 +388,12 @@ pub(crate) fn validate_state(
         || world.items.len() > 4096
         || world.projectiles.len() > 4096
         || world.utility_fields.len() > 4096
+        || world.doors.len() > sim::doors::MAX_DOORS
     {
         return Err("snapshot entity limit exceeded".into());
+    }
+    if world.doors.iter().any(|door| !door.valid()) {
+        return Err("invalid snapshot door state".into());
     }
     let c = &world.config;
     let r = &world.rules;
@@ -603,6 +609,25 @@ mod death_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn door_cues_roundtrip_and_reject_nonfinite_or_unbounded_payloads() {
+        use sim::doors::{Cue, State};
+        let batch = EventBatch { tick: 200, events: [Cue::Move, Cue::Open, Cue::Close, Cue::Unlock]
+            .into_iter().map(|cue| GameEvent::DoorSound { door: 0, cue, pos: glam::Vec3::Z * 48.0 }).collect() };
+        validate_events(&batch).unwrap();
+        assert_eq!(decode::<EventBatch>(&encode(&batch).unwrap()).unwrap(), batch);
+        for (door, pos) in [(sim::doors::MAX_DOORS as u32, glam::Vec3::ZERO), (0, glam::Vec3::NAN)] {
+            assert!(validate_events(&EventBatch { tick: 200,
+                events: vec![GameEvent::DoorSound { door, cue: Cue::Open, pos }] }).is_err());
+        }
+        let state = State { angle: -45.0, target: -90.0, return_at: None };
+        assert!(state.valid());
+        for bad in [State { angle: f32::NAN, ..state }, State { target: 181.0, ..state },
+            State { return_at: Some(f32::INFINITY), ..state }, State { return_at: Some(-1.0), ..state }] {
+            assert!(!bad.valid());
+        }
+    }
+
     #[test]
     fn recoil_motion_rejects_nonfinite_future_and_wrong_content_state() {
         let catalog = weapons::Catalog::from_items_game(r##"

@@ -183,6 +183,17 @@ pub fn process(
                     if !sound.is_empty() { sounds.play_with(&mut commands, fs, &mut sources, sound, emit(player, origin)); }
                 }
             }
+            GameEvent::DoorSound { door, cue, pos } => {
+                if let Some(def) = level.0.collision.doors.get(door as usize) {
+                    let name = match cue {
+                        sim::doors::Cue::Move => &def.move_sound,
+                        sim::doors::Cue::Open => &def.open_sound,
+                        sim::doors::Cue::Close => &def.close_sound,
+                        sim::doors::Cue::Unlock => &def.unlock_sound,
+                    };
+                    if !name.is_empty() { sounds.play(&mut commands, fs, &mut sources, name, Some(pos)); }
+                }
+            }
             GameEvent::EmptyTrigger { player, weapon, origin } => {
                 if let Some(profile) = world.0.catalog.get(&weapon).and_then(|def| def.empty_trigger.as_ref()) {
                     if std::env::var_os("CSR_WEAPON_TRACE").is_some() {

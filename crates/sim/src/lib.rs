@@ -24,6 +24,7 @@
 pub mod bots;
 pub mod model_pose;
 pub mod death;
+pub mod doors;
 pub mod loadout;
 pub mod objectives;
 pub mod rewind;
@@ -430,6 +431,7 @@ pub enum GameEvent {
     /// Fully depleted primary-trigger feedback; no live shot or ammo change.
     /// Appended so earlier event discriminants retain their meaning.
     EmptyTrigger { player: PlayerId, weapon: String, origin: Vec3 },
+    DoorSound { door: u32, cue: doors::Cue, pos: Vec3 },
 }
 
 /// The whole game: map data shared by every copy (`Arc`s), the replicated
@@ -438,6 +440,8 @@ pub enum GameEvent {
 #[derive(Clone)]
 pub struct World {
     pub collision: Arc<CollisionWorld>,
+    /// Replicated pose/lifecycle; immutable definitions stay with the map.
+    pub doors: Vec<doors::State>,
     pub catalog: Arc<weapons::Catalog>,
     pub config: MoveConfig,
     pub mode: GameMode,
@@ -498,8 +502,9 @@ impl World {
 
     pub fn with_catalog(collision: Arc<CollisionWorld>, catalog: Arc<weapons::Catalog>) -> Self {
         let rules = RulesConfig::default();
-        Self {
+        let mut world = Self {
             collision,
+            doors: Vec::new(),
             catalog,
             config: MoveConfig::default(),
             mode: GameMode::Deathmatch,
@@ -521,7 +526,9 @@ impl World {
             character_hitboxes: Default::default(),
             next_id: 1,
             next_item: 1,
-        }
+        };
+        world.reset_doors();
+        world
     }
 
     /// Sim time in seconds.
@@ -592,6 +599,7 @@ impl World {
     pub fn set_mode(&mut self, mode: GameMode, rules: RulesConfig) {
         self.mode = mode;
         self.rules = rules;
+        self.reset_doors();
         if mode == GameMode::Special { self.players.retain(|p|!p.is_bot); for p in &mut self.players {p.money=0;} }
         match mode {
             GameMode::Competitive => self.start_match(),
@@ -846,6 +854,7 @@ impl World {
 
     fn start_round(&mut self, keep_survivors: bool) {
         let now = self.time();
+        self.reset_doors();
         self.items.clear();
         self.projectiles.clear();
         self.utility_fields.clear();
@@ -1382,7 +1391,6 @@ impl World {
         self.events.clear();
         let time = self.time();
         let dt = self.dt();
-        let collision = self.collision.clone();
 
         match self.mode {
             GameMode::Deathmatch | GameMode::Special => {
@@ -1402,6 +1410,8 @@ impl World {
         // very first attack, before processing this tick's input.
         self.dress_weapons();
         let frozen = self.competitive() && self.round.phase == Phase::Freeze;
+        self.step_doors(inputs, frozen);
+        let collision = self.collision.clone();
 
         // Motion continues on release, while holstered, and on the ground;
         // render frames never advance authoritative recoil.

@@ -638,6 +638,7 @@ pub(crate) fn clear_match(world: &mut World) {
     world.remove_resource::<crate::characters::CharacterModels>();
     world.remove_resource::<crate::viewmodel::ViewModels>();
     world.remove_resource::<crate::items::GroundModels>();
+    world.remove_resource::<crate::doors::DoorScene>();
     world.remove_resource::<crate::feedback::FeedbackAssets>();
     world.remove_resource::<crate::utility_fx::AssetsFx>();
     world.remove_resource::<crate::hud_art::Radar>();

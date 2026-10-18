@@ -68,6 +68,7 @@ impl Predictor {
         let player = *player;
         let ack = initial.acknowledged_input;
         validate_state(&initial, Some(&welcome), ack, ack)?;
+        world.validate_door_state(&initial.snapshot.state.doors)?;
         let authoritative = initial.snapshot.state;
         world.restore(authoritative.clone());
         world.events.clear();
@@ -159,6 +160,7 @@ impl Predictor {
             return Ok(Reconciliation::IgnoredStale);
         }
         validate_state(&state, Some(&self.welcome), self.last_sent, self.last_ack)?;
+        self.world.validate_door_state(&state.snapshot.state.doors)?;
         let before = self
             .world
             .player(self.player)

@@ -125,9 +125,9 @@ fn tracked_receipt_must_already_satisfy_existing_admission_limits() {
 }
 
 #[test]
-fn older_protocol_versions_cannot_admit_a_peer_to_bsp_ladder_policy_v25() {
-    assert_eq!(VERSION, 25);
-    assert_eq!(PROTOCOL_ID, 0x4353_5257_0000_0019);
+fn older_protocol_versions_cannot_admit_a_peer_to_door_state_v26() {
+    assert_eq!(VERSION, 26);
+    assert_eq!(PROTOCOL_ID, 0x4353_5257_0000_001a);
     let content = ContentManifest {
         map_id: "csgo_map_test".into(),
         map_name: "test".into(),

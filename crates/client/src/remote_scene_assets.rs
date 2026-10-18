@@ -96,6 +96,9 @@ pub fn gather(world: &mut World) -> Result<SceneAssets, GatherError> {
             owners.model(asset)?;
         }
     }
+    if let Some(doors) = world.get_resource::<crate::doors::DoorScene>() {
+        for asset in doors.assets() { owners.model(asset)?; }
+    }
     let materials = world
         .get_resource::<Assets<WorldMaterial>>()
         .ok_or(GatherError::MissingMaterials)?;

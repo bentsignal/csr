@@ -88,6 +88,7 @@ mod remote_flow;
 mod bot_performance;
 pub mod xr_input;
 pub mod props;
+mod doors;
 pub mod scoreboard;
 pub mod scope;
 pub mod sky;
@@ -273,6 +274,7 @@ impl Plugin for CsgoPlugin {
                     effects::draw,
                     characters::sync,
                     items::sync,
+                    doors::sync,
                     (viewmodel::update, utility_fx::update_wick).chain(),
                     tracers::draw,
                     scope::update,
@@ -565,6 +567,8 @@ fn spawn_level(
         &mut bindposes,
         opts.exposure,
     );
+    doors::spawn(&mut commands, &level, &mut meshes, &mut materials, &mut images,
+        &mut textures, &world_shared, &mut bindposes, opts.exposure);
     info!("characters and viewmodels loaded in {:.2}s", t_chars.elapsed().as_secs_f32());
     let localization = localize::Localization::load(&level.vfs);
     let sounds = audio::SoundLibrary::load(&level.vfs);
