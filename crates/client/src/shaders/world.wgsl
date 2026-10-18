@@ -7,6 +7,10 @@
 
 #import bevy_pbr::forward_io::VertexOutput
 #import bevy_pbr::mesh_view_bindings::view
+#ifdef BINDLESS
+#import bevy_pbr::mesh_bindings::mesh
+#import bevy_render::bindless::{bindless_samplers_filtering, bindless_textures_2d, bindless_textures_2d_array}
+#endif
 #ifdef CSR_SPATIAL_PROP
 #import bevy_pbr::{mesh_functions, view_transformations::position_world_to_clip}
 
@@ -172,9 +176,6 @@ fn ambient_light(n: vec3<f32>) -> vec3<f32> {
 }
 
 #ifdef BINDLESS
-#import bevy_pbr::mesh_bindings::mesh
-#import bevy_render::bindless::{bindless_samplers_filtering, bindless_textures_2d, bindless_textures_2d_array}
-
 // Field order is the original binding number, shared by forward and shadow.
 struct WorldMaterialBindings {
     params: u32, // 0
