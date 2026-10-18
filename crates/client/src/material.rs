@@ -406,13 +406,13 @@ mod uniform_tests {
                 ..default()
             },
         ];
-        let mut expected = Vec::new();
+        let mut expected = Vec::<u8>::new();
         for params in &slots {
-            let mut uniform = UniformBuffer::new(Vec::new());
+            let mut uniform = UniformBuffer::new(Vec::<u8>::new());
             uniform.write(params).unwrap();
             expected.extend(uniform.into_inner());
         }
-        let mut packed = StorageBuffer::new(Vec::new());
+        let mut packed = StorageBuffer::new(Vec::<u8>::new());
         packed.write(&slots).unwrap();
         assert_eq!(packed.into_inner(), expected);
         assert_eq!(expected.len() as u64, 2 * WorldParams::min_size().get());
