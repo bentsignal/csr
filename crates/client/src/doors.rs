@@ -95,7 +95,7 @@ pub(crate) fn sync(
         leaf.angle = state.angle;
     }
     for (entity, handle, light) in &lights {
-        if let Some(material) = materials.get_mut(&handle.0) {
+        if let Some(mut material) = materials.get_mut(&handle.0) {
             material.params.ambient_cube = light.cube;
             material.params.sun_dir = light.sun_dir;
             material.params.sun_color = light.sun_color;
