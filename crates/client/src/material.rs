@@ -107,6 +107,8 @@ pub struct WorldParams {
     pub skin_pattern_palette:Vec4,
     /// Detail UV scale xy and authored blend factor z.
     pub detail: Vec4,
+    /// Authored self-illumination tint; w: 0 disabled, 1 base alpha, 2 RGB mask.
+    pub self_illum: Vec4,
 }
 
 impl Default for WorldParams {
@@ -136,6 +138,7 @@ impl Default for WorldParams {
             skin_properties:Vec4::ZERO,
             skin_pattern_palette:Vec4::new(1.,2.,3.,4.),
             detail: Vec4::new(1.0, 1.0, 0.0, 0.0),
+            self_illum: Vec4::ZERO,
         }
     }
 }
@@ -187,6 +190,9 @@ pub struct WorldMaterial {
     #[texture(20)]
     #[sampler(21)]
     pub detail: Handle<Image>,
+    #[texture(22)]
+    #[sampler(23)]
+    pub self_illum_mask: Handle<Image>,
     pub alpha_mode: AlphaMode,
     pub cull: bool,
 }

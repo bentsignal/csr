@@ -521,6 +521,7 @@ pub fn material_from_vmt(
         skin_surface:textures.white.clone(),
         skin_position:textures.white.clone(),
         detail: textures.white.clone(),
+        self_illum_mask: textures.black.clone(),
         alpha_mode: AlphaMode::Opaque,
         cull: true,
     };
@@ -619,6 +620,27 @@ pub fn material_from_vmt(
         Ok(None) | Ok(Some(_)) => {}
         Err(error) => warn!("unsupported authored detail layer ({error:?}); retaining base material"),
     }
+    if mat.flag("$selfillum") && !mat.is_unlit() {
+        // These alternate mask/angle contracts need their own native checks.
+        // Keep the existing lit fallback when an authored path is unsupported.
+        let supported = !mat.flag("$selfillum_envmapmask_alpha")
+            && !mat.flag("$selfillumfresnel");
+        let tint = mat.color("$selfillumtint").unwrap_or([1.0; 3]);
+        if supported && tint.iter().all(|v| v.is_finite() && *v >= 0.0) {
+            let mode = if let Some(name) = mat.str("$selfillummask") {
+                if let Some(mask) = textures.load(fs, images, name, false) {
+                    out.self_illum_mask = mask.handle;
+                    2.0
+                } else {
+                    warn!("authored self-illumination mask unavailable; retaining lit material: {name}");
+                    0.0
+                }
+            } else { 1.0 };
+            params.self_illum = Vec4::new(tint[0], tint[1], tint[2], mode);
+        } else {
+            warn!("unsupported authored self-illumination mode/tint; retaining lit material");
+        }
+    }
     params.flags = f;
     out.params = params;
     out
@@ -694,6 +716,35 @@ mod authored_transform_tests {
         assert_eq!(shader.matches("textureSample(normal_tex,normal_samp,normal_uv)").count(), 2);
         assert!(shader.contains("textureSample(base_tex,base_samp,uv)"));
         assert!(shader.contains("textureSample(detail_tex,detail_samp,uv*params.detail.xy)"));
+    }
+
+    #[test]
+    fn authored_luminous_regions_keep_alpha_and_separate_mask_contracts() {
+        let parse = |text| vmt::Material::parse_with(text, &|_| None, 0).unwrap();
+        let alpha = parse(r#""VertexLitGeneric" {
+            "$basetexture" "test/normal" "$selfillum" "1" "$selfillumtint" "[4 4 3]"
+        }"#);
+        let out = normal_material(Some(&alpha), false);
+        assert_eq!(out.params.self_illum, Vec4::new(4., 4., 3., 1.));
+        assert_eq!(out.alpha_mode, AlphaMode::Opaque);
+        assert_eq!(out.params.flags & flags::UNLIT, 0);
+        let separate = parse(r#""VertexLitGeneric" {
+            "$basetexture" "test/normal" "$selfillum" "1" "$selfillummask" "test/normal"
+        }"#);
+        let out = normal_material(Some(&separate), false);
+        assert_eq!(out.params.self_illum, Vec4::new(1., 1., 1., 2.));
+        // Mask data and color have independent cache entries/color spaces.
+        assert_ne!(out.self_illum_mask, out.base);
+        for declaration in [
+            r#""$selfillummask" "missing/mask""#,
+            r#""$selfillumfresnel" "1""#,
+            r#""$selfillum_envmapmask_alpha" "1""#,
+            r#""$selfillumtint" "[-1 1 1]""#,
+        ] {
+            let mat = parse(&format!(r#""VertexLitGeneric" {{ "$selfillum" "1" {declaration} }}"#));
+            assert_eq!(normal_material(Some(&mat), false).params.self_illum.w, 0., "{declaration}");
+        }
+        assert_eq!(normal_material(None, true).params.self_illum, Vec4::ZERO);
     }
 
     #[test]

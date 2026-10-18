@@ -41,6 +41,7 @@ struct WorldParams {
     skin_properties:vec4<f32>,
     skin_pattern_palette:vec4<f32>,
     detail: vec4<f32>,
+    self_illum: vec4<f32>,
 };
 
 
@@ -99,6 +100,8 @@ fn ambient_light(n: vec3<f32>) -> vec3<f32> {
 @group(#{MATERIAL_BIND_GROUP}) @binding(19) var skin_position_samp: sampler;
 @group(#{MATERIAL_BIND_GROUP}) @binding(20) var detail_tex: texture_2d<f32>;
 @group(#{MATERIAL_BIND_GROUP}) @binding(21) var detail_samp: sampler;
+@group(#{MATERIAL_BIND_GROUP}) @binding(22) var self_illum_tex: texture_2d<f32>;
+@group(#{MATERIAL_BIND_GROUP}) @binding(23) var self_illum_samp: sampler;
 fn paint_coords(uv:vec2<f32>)->vec2<f32>{
     let p=(uv-vec2<f32>(0.5))*params.skin_transform.xy;
     return vec2<f32>(p.x*params.skin.z-p.y*params.skin.w,p.x*params.skin.w+p.y*params.skin.z)+vec2<f32>(0.5)+params.skin_transform.zw;
@@ -153,6 +156,7 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let uv = vec2<f32>(0.0);
 #endif
     var albedo = textureSample(base_tex, base_samp, uv);
+    let self_illum_alpha = albedo.a;
     // Preserve the authored mask independently of opacity/cosmetic processing.
     let tint_weight = select(1.0, albedo.a, (params.flags & TINT_BY_BASE_ALPHA) != 0u);
     if params.skin_details.w > 0.5 && params.skin_details.z > 0.0 {
@@ -345,6 +349,15 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
         rgb+=tint*params.sun_color.rgb*params.sun_dir.w*spec*select(0.0,1.0,dot(n,params.sun_dir.xyz)>0.0);
         let rim_mask=select(1.0,exponent_sample.a,params.rim.z>0.5 && params.phong.z>0.5);
         rgb+=ambient_light(v)*tint*pow(1.0-nv,max(params.rim.x,1.0))*params.rim.y*rim_mask*0.25;
+    }
+    if params.self_illum.w > 0.5 {
+        var mask = vec3<f32>(self_illum_alpha);
+        if params.self_illum.w > 1.5 {
+            mask = textureSample(self_illum_tex, self_illum_samp, uv).rgb;
+        }
+        // Preserve the lit surface outside the authored luminous region.
+        // This does not add scene lights; surrounding light is already baked.
+        rgb = mix(rgb, albedo.rgb * params.self_illum.rgb, clamp(mask, vec3<f32>(0.0), vec3<f32>(1.0)));
     }
     if (params.flags & UNLIT) == 0u {
         rgb = tonemap(rgb * params.exposure);
