@@ -7,6 +7,8 @@ mod breakable_digest;
 mod empty_trigger;
 mod grenade_animations;
 mod historical_awp;
+#[cfg(test)]
+mod installed_prop_covers;
 mod recoil_trajectories;
 mod suppressor_animations;
 
