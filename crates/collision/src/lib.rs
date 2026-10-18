@@ -125,6 +125,72 @@ impl Grid {
     }
 }
 
+// Retain only query storage, never a world, shape reference or live geometry.
+// Larger queries still run in full; only their allocations are discarded afterward.
+const TRACE_CANDIDATE_CAPACITY_LIMIT: usize = 4096;
+const TRACE_SEEN_CAPACITY_LIMIT: usize = 4096;
+const TRACE_PLANE_CAPACITY_LIMIT: usize = 32;
+
+struct TraceScratch {
+    cands: Vec<Shape>,
+    planes: Vec<Plane>,
+    seen: std::collections::HashSet<(u8, u32)>,
+}
+
+impl Default for TraceScratch {
+    fn default() -> Self {
+        Self {
+            cands: Vec::with_capacity(64),
+            planes: Vec::with_capacity(32),
+            seen: std::collections::HashSet::new(),
+        }
+    }
+}
+
+impl TraceScratch {
+    fn reset(&mut self) {
+        if self.cands.capacity() > TRACE_CANDIDATE_CAPACITY_LIMIT {
+            self.cands = Vec::new();
+        } else {
+            self.cands.clear();
+        }
+        if self.planes.capacity() > TRACE_PLANE_CAPACITY_LIMIT {
+            self.planes = Vec::new();
+        } else {
+            self.planes.clear();
+        }
+        if self.seen.capacity() > TRACE_SEEN_CAPACITY_LIMIT {
+            self.seen = std::collections::HashSet::new();
+        } else {
+            self.seen.clear();
+        }
+    }
+}
+
+std::thread_local! {
+    static TRACE_SCRATCH: std::cell::RefCell<TraceScratch> =
+        std::cell::RefCell::new(TraceScratch::default());
+}
+
+// Drop also clears copied planes/indices and bounds retained capacity on unwind.
+struct TraceScratchReset<'a>(&'a mut TraceScratch);
+
+impl Drop for TraceScratchReset<'_> {
+    fn drop(&mut self) { self.0.reset(); }
+}
+
+fn with_trace_scratch<R>(trace: impl FnOnce(&mut TraceScratch) -> R) -> R {
+    TRACE_SCRATCH.with(|slot| {
+        if let Ok(mut scratch) = slot.try_borrow_mut() {
+            let reset = TraceScratchReset(&mut scratch);
+            trace(&mut *reset.0)
+        } else {
+            // A nested query must neither alias nor clear the outer query's data.
+            trace(&mut TraceScratch::default())
+        }
+    })
+}
+
 /// A live world backend. BSP levels leave this unset.
 #[derive(Clone,Copy,Debug,Default,PartialEq,Eq)]
 pub enum Climbable { #[default] None, Ladder, Scaffolding }
@@ -366,71 +432,70 @@ impl CollisionWorld {
         // stop at the first segment that contains a hit.
         let length = (e - s).length();
         let segments = ((length / (GRID_CELL * 2.0)).ceil() as usize).clamp(1, 1024);
-        let mut cands = Vec::with_capacity(64);
-        let mut scratch = Vec::with_capacity(32);
-        let mut seen: std::collections::HashSet<(u8, u32)> = std::collections::HashSet::new();
-        for seg in 0..segments {
-            let f0 = seg as f32 / segments as f32;
-            let f1 = (seg + 1) as f32 / segments as f32;
-            let a = s.lerp(e, f0);
-            let b = s.lerp(e, f1);
-            let sweep_min = a.min(b) - ext - Vec3::ONE;
-            let sweep_max = a.max(b) + ext + Vec3::ONE;
-            self.candidates(sweep_min, sweep_max, &mut cands);
-            for &shape in &cands {
-                if segments > 1 {
-                    let key = match shape {
-                        Shape::Convex(i) => (0u8, i),
-                        Shape::Triangle(i) => (1u8, i),
-                    };
-                    if !seen.insert(key) {
-                        continue;
+        with_trace_scratch(|TraceScratch { cands, planes: scratch, seen }| {
+            for seg in 0..segments {
+                let f0 = seg as f32 / segments as f32;
+                let f1 = (seg + 1) as f32 / segments as f32;
+                let a = s.lerp(e, f0);
+                let b = s.lerp(e, f1);
+                let sweep_min = a.min(b) - ext - Vec3::ONE;
+                let sweep_max = a.max(b) + ext + Vec3::ONE;
+                self.candidates(sweep_min, sweep_max, cands);
+                for &shape in &*cands {
+                    if segments > 1 {
+                        let key = match shape {
+                            Shape::Convex(i) => (0u8, i),
+                            Shape::Triangle(i) => (1u8, i),
+                        };
+                        if !seen.insert(key) {
+                            continue;
+                        }
+                    }
+                    match shape {
+                        Shape::Convex(i) => {
+                            if excluded_convexes.is_some_and(|range| range.contains(&(i as usize))) {
+                                continue;
+                            }
+                            let c = &self.convexes[i as usize];
+                            if c.contents & mask == 0 || !overlaps(c.mins, c.maxs, sweep_min, sweep_max) {
+                                if segments > 1 {
+                                    seen.remove(&(0, i));
+                                }
+                                continue;
+                            }
+                            clip_convex(&c.planes, s, e, ext, c.contents, c.surface, &mut tr);
+                        }
+                        Shape::Triangle(i) => {
+                            let t = &self.triangles[i as usize];
+                            if t.contents & mask == 0 || !overlaps(t.mins, t.maxs, sweep_min, sweep_max) {
+                                if segments > 1 {
+                                    seen.remove(&(1, i));
+                                }
+                                continue;
+                            }
+                            triangle_planes(t, scratch);
+                            clip_convex(scratch, s, e, ext, t.contents, t.surface, &mut tr);
+                        }
+                    }
+                    if tr.all_solid {
+                        break;
                     }
                 }
-                match shape {
-                    Shape::Convex(i) => {
-                        if excluded_convexes.is_some_and(|range| range.contains(&(i as usize))) {
-                            continue;
-                        }
-                        let c = &self.convexes[i as usize];
-                        if c.contents & mask == 0 || !overlaps(c.mins, c.maxs, sweep_min, sweep_max) {
-                            if segments > 1 {
-                                seen.remove(&(0, i));
-                            }
-                            continue;
-                        }
-                        clip_convex(&c.planes, s, e, ext, c.contents, c.surface, &mut tr);
-                    }
-                    Shape::Triangle(i) => {
-                        let t = &self.triangles[i as usize];
-                        if t.contents & mask == 0 || !overlaps(t.mins, t.maxs, sweep_min, sweep_max) {
-                            if segments > 1 {
-                                seen.remove(&(1, i));
-                            }
-                            continue;
-                        }
-                        triangle_planes(t, &mut scratch);
-                        clip_convex(&scratch, s, e, ext, t.contents, t.surface, &mut tr);
-                    }
-                }
-                if tr.all_solid {
+                // Anything later in the sweep cannot beat a hit inside this segment.
+                if tr.all_solid || tr.fraction <= f1 {
                     break;
                 }
             }
-            // Anything later in the sweep cannot beat a hit inside this segment.
-            if tr.all_solid || tr.fraction <= f1 {
-                break;
+            if tr.fraction < 1.0 {
+                tr.end = start + (end - start) * tr.fraction;
+            } else {
+                tr.end = end;
             }
-        }
-        if tr.fraction < 1.0 {
-            tr.end = start + (end - start) * tr.fraction;
-        } else {
-            tr.end = end;
-        }
-        if tr.all_solid {
-            tr.end = start;
-        }
-        (tr, None)
+            if tr.all_solid {
+                tr.end = start;
+            }
+            (tr, None)
+        })
     }
 
     /// Sweeps a point.
