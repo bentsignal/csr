@@ -720,7 +720,9 @@ mod authored_transform_tests {
 
     #[test]
     fn authored_luminous_regions_keep_alpha_and_separate_mask_contracts() {
-        let parse = |text| vmt::Material::parse_with(text, &|_| None, 0).unwrap();
+        fn parse(text: &str) -> vmt::Material {
+            vmt::Material::parse_with(text, &|_| None, 0).unwrap()
+        }
         let alpha = parse(r#""VertexLitGeneric" {
             "$basetexture" "test/normal" "$selfillum" "1" "$selfillumtint" "[4 4 3]"
         }"#);
