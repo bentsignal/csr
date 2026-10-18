@@ -1,35 +1,55 @@
 # Current owner priorities
 
-Status: **work resumed by the owner on 2026-10-17**. This is the scheduling
-authority. VISION defines the product; older feedback supplies examples and
-regression cases. Maintain priorities through conversation. The GUI is retired.
+Status: **owner morning playtest accepted on 2026-10-18**. This is the scheduling
+authority. VISION defines the product. The complete newest observations and
+corrections are in [the October 18 playtest record](PLAYTEST-2026-10-18.md).
+Maintain priorities through conversation; the GUI is retired.
 
-Current owner-approved overnight queue (October 17, before bed): finish the
-current lighting/material build, then continue independently through the order
-below. Do not stop after one completed item or PR. The owner returns in the
-morning; another owner test is not required to continue authorized work.
+## Current direction: October 18
 
-1. **Performance**, the top goal. Steady 200–300 FPS on the owner's machine
-   would be substantial progress. Steady above 300 FPS is sufficient to move
-   on, preserving the existing ten-player, across-map and sustained-pacing
-   conditions. Do not chase 500 FPS before progressing through this queue.
-2. **Viewmodels and animations.** Reuse the motion the owner already tested
-   and liked, then make it consistent across weapons and utility. Inspect the
-   existing implementation before redoing completed work; match the original.
-3. **Map interactions.** Ladders, doors and squeaky sounds, breakable vents,
-   firing through doors and visible bullet holes, and normal access to
-   apartments. The owner reports invisible barriers at all modern Inferno
-   apartment entrances and is unsure whether old Inferno is affected too.
-4. **Grenades**, ahead of HUD: throw feel/trajectories and remaining gameplay
-   and effect defects, within the existing CS2 throw-feel exception.
-5. **HUD**, one coherent original-game presentation.
-6. **Audio**, last in this overnight order.
+The overnight queue is superseded by this feedback. Nuke and old Dust II
+performance/lighting passed the owner's test; Inferno and old Inferno are largely
+accepted, and Mirage performance is good enough for now despite some variation.
+Further general FPS optimization is **low priority**. Preserve these gains.
+Core-map support with ten players and acceptable performance is still **high**.
+Do not present this acceptance as proof of steady above-300 FPS on every map.
 
-Prioritize implementation and use focused regression checks. The owner's
-playtest is the main acceptance feedback; do not consume the night building
-verification machinery. Preserve config/content and prior accepted fixes.
-The owner will identify obsolete backlog items as testing proceeds; no backlog
-audit is part of this work.
+**High priority:**
+
+- **Classic maps and playability:** prepare the correct 2015-era core map set,
+  including old Cache/pre-remake Nuke and appropriate versions of the other
+  requested maps. Verify historical identity, dependencies, lighting,
+  navigation and ten-player mode/bot availability. Broaden coverage to Cache,
+  Mirage, Cobblestone, Vertigo, Train and Overpass. Fix failed ladders and blocked
+  intended passages across maps. Nuke vent ladder and Mirage ladder-room/window
+  access are examples, not separate outcomes. Preserve working doors, vents,
+  heaven/palace ladders and accepted maps. Retain newly reported material
+  defects within this map pass.
+- **Movement feel:** correct overly fast walking and investigate crouch/backward
+  speed against original behavior. Do not change accepted input sensitivity or
+  responsiveness without evidence.
+- **Viewmodel finish:** keep accepted grounded gun/utility motion; restore the
+  original airborne and landing response instead of a frozen pose.
+- **Combat hit audio:** investigate inconsistent head/body/helmet/armor cues
+  across guns and maps. Some cues demonstrably work (M4A1-S on Inferno); trace
+  the existing behavior and original audibility instead of inventing sounds.
+- **Reliability:** investigate the grenade-practice unresponsive/failed launch.
+  Logs are retained; its cause is not established.
+
+**Medium:** footsteps through walls and vertical positional audio; Molotov
+visible triangles/flicker (to rise after current high work). Existing decoy
+cadence remains unresolved despite accepted bounce sounds. Other older work
+retains its prior band unless the owner changes it.
+
+**Low:** further general FPS gains; cosmetic vent/glass break sounds, shards and
+fracture embellishment. Functional destruction and traversability remain high.
+Old Inferno's alt-mid door squeak remains recorded without an explicit new band.
+
+The owner is home Sunday and can test coherent batches every few hours when
+useful. Do not return for tiny frequent tests or repeat an overnight run. State
+exact next scope in chat after feedback so the owner can adjust it. Prioritize
+building actual fixes with focused checks; no verification-framework or backlog
+GUI/audit pass. Preserve settings, content and accepted behavior.
 
 ## Objective and working scope
 
@@ -45,14 +65,11 @@ playability priorities is authorized. Reassess through chat as the game improves
 
 ## Critical: core playability
 
-1. **Performance / FPS.** Long-term target **300–500 FPS on the owner's PC, every
-   supported map, with 10 total players (human and/or bots)**, with smooth,
-   predictable frame pacing throughout sustained play. A good solo spawn view
-   or one optimized Nuke/Dust II case does not complete this outcome. Preserve
-   fidelity. Test representative scenes, combat and long sessions; retain worst
-   cases as regressions. Support reasonable lower-end playability too. The
-   target has not been achieved. For the current queue, the owner's newer
-   steady-above-300 stopping threshold takes precedence over chasing 500.
+1. **Performance / FPS.** Preserve the October 18 owner-accepted playable
+   performance. The older 300-500 FPS aspiration across all maps with ten players
+   is not declared complete, but chasing further general gains is low priority
+   now. A newly admitted map still must be playable with ten players; regressions
+   remain part of high-priority map playability.
 2. **Viewmodel and animation feel.** Consistent original look/walk/run motion
    across guns and grenades; continuous jumping and landing; stable hands
    through firing, reload, death, spectating and respawn. The accepted grounded
@@ -74,8 +91,9 @@ playability priorities is authorized. Reassess through chat as the game improves
 - **HUD:** one coherent original HUD, including overall scale/layout, radar,
   health/armor, ammo, player display, weapon selection, icons and kill feed.
   Component complaints are its acceptance checklist, not separate outcomes.
-- **Audio:** classic sound identity and faithful mix, DSP, distance, occlusion,
-  footsteps and animation/event cues throughout the game.
+- **Audio:** original combat hit-cue consistency is high priority now. Footstep
+  occlusion/vertical placement is medium. Broader classic mixing and event cues
+  retain their existing unfinished status.
 - **Grenade throwing:** correct release and trajectories for normal,
   alternate, running and jump throws. The owner's CS2 throw-feel exception
   remains; assets, UI and general fidelity remain old CS:GO.
@@ -107,9 +125,18 @@ playability priorities is authorized. Reassess through chat as the game improves
 - VR, content packs/mod interoperability, private distribution, Intervention
   and Overworld. Low **now**, not abandoned forever.
 - Optional death embellishments/Molotov cloth, extra console/crosshair
-  customization and broader historical map/content expansion.
+  customization and expansion beyond the requested core classic map set. The
+  2015-era core map set itself is high priority after October 18 feedback.
 
 ## Resolved work and acceptance
+
+October 18 additionally accepts Nuke/old Dust II performance and lighting,
+mostly improved Inferno/old Inferno lighting, grounded weapon/utility motion,
+working Nuke/Cache doors and Nuke breakable vent covers, and restored decoy
+bounce sounds. Airborne motion, particular ladders, decoy cadence and named
+material defects remain open; do not erase the owner's corrections or requeue
+the accepted parts as entirely missing.
+
 
 Do not keep resolved work active because an old ledger says open. The owner
 explicitly confirms **AWP 10-round ammunition and bolt sound are resolved**,
