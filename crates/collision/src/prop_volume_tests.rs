@@ -110,7 +110,29 @@ fn zero_width_hulls_are_rejected_without_a_minimum_thickness_cutoff() {
         assert!(convex_from_hull(&flat.points, &flat.triangles, contents::SOLID, 0).is_none());
         high[axis] = 0.0001;
         let thin = box_hull(Vec3::ZERO, high);
-        assert!(convex_from_hull(&thin.points, &thin.triangles, contents::SOLID, 0).is_some());
+        let convex = convex_from_hull(&thin.points, &thin.triangles, contents::SOLID, 0).unwrap();
+        let mut world = CollisionWorld::new();
+        assert!(world.add_convex(convex));
+        world.finalize();
+        // Acceptance alone is insufficient: the thin geometry must still
+        // stop a sweep from either side, including a standing player hull.
+        for (mins, maxs) in [
+            (Vec3::ZERO, Vec3::ZERO),
+            (Vec3::new(-16., -16., 0.), Vec3::new(16., 16., 72.)),
+        ] {
+            for (from, to) in [(-100., 100.), (100., -100.)] {
+                let mut start = Vec3::splat(0.5);
+                let mut end = start;
+                start[axis] = from;
+                end[axis] = to;
+                let tr = world.trace_box(start, end, mins, maxs, contents::MASK_PLAYERSOLID);
+                assert!(
+                    tr.fraction < 1. && !tr.start_solid,
+                    "axis {axis}: thin solid lost: {tr:?}"
+                );
+                assert!(tr.normal[axis].abs() > 0.99);
+            }
+        }
     }
     let mut invalid = box_hull(Vec3::ZERO, Vec3::ONE);
     invalid.points[0].x = f32::NAN;

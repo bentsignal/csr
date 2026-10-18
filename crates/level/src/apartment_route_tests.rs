@@ -76,11 +76,19 @@ fn installed_inferno_apartment_routes_through_tick_input() {
         for &(name, start, goals) in routes {
             let mut world = sim::World::new(collision.clone());
             world.set_tick_rate(rate);
+            assert_eq!(world.tick_rate, rate);
             let actor = world.add_player(name, sim::Team::CounterTerrorist);
             let start = world.drop_to_floor(Vec3::from_array(start), false);
             world.player_mut(actor).unwrap().movement = movement::PlayerMove::spawn_at(start);
-            for &goal in goals {
-                let goal = Vec3::from_array(goal);
+            // The same player walks back out through every threshold. There
+            // is no relocation or reset of velocity between the two legs.
+            let outward = goals.iter().copied().map(Vec3::from_array);
+            let returning = goals[..goals.len() - 1]
+                .iter()
+                .rev()
+                .copied()
+                .map(Vec3::from_array);
+            for goal in outward.chain(returning).chain(std::iter::once(start)) {
                 let mut reached = false;
                 // Gentle ordinary input near corners prevents momentum from
                 // steering the fixture into the side of a narrow doorway.
@@ -88,11 +96,24 @@ fn installed_inferno_apartment_routes_through_tick_input() {
                     let player = world.player(actor).unwrap();
                     let delta = (goal - player.movement.origin).truncate();
                     let distance = delta.length();
-                    if distance < 2. {
+                    if distance < 2. && player.movement.on_ground {
                         assert!(
                             (player.movement.origin.z - goal.z).abs() < 8.,
                             "{name} {rate}Hz: wrong floor at {goal:?}: {:?}",
                             player.movement
+                        );
+                        let support = collision.trace_box(
+                            player.movement.origin,
+                            player.movement.origin - Vec3::Z * 2.,
+                            movement::STAND_MINS,
+                            movement::STAND_MAXS,
+                            collision::contents::MASK_PLAYERSOLID,
+                        );
+                        assert!(
+                            !support.start_solid
+                                && support.fraction < 1.
+                                && support.normal.z >= movement::MIN_GROUND_NORMAL,
+                            "{name} {rate}Hz: waypoint has no walkable support at {goal:?}: {support:?}"
                         );
                         reached = true;
                         break;
@@ -109,8 +130,13 @@ fn installed_inferno_apartment_routes_through_tick_input() {
                     )]);
                     let player = world.player(actor).unwrap();
                     assert!(
-                        player.alive && !player.movement.ducked,
-                        "{name} {rate}Hz: route requires a living standing player"
+                        player.alive
+                            && !player.movement.ducked
+                            && player.movement.duck_amount == 0.
+                            && !player.last_events.jumped
+                            && player.movement.origin.is_finite()
+                            && player.movement.velocity.is_finite(),
+                        "{name} {rate}Hz: route requires finite, living standing movement without jumping"
                     );
                     let tr = collision.trace_box(
                         player.movement.origin,
@@ -120,7 +146,7 @@ fn installed_inferno_apartment_routes_through_tick_input() {
                         collision::contents::MASK_PLAYERSOLID,
                     );
                     assert!(
-                        !tr.all_solid,
+                        !tr.start_solid && !tr.all_solid,
                         "{name} {rate}Hz: entered solid: {:?}",
                         player.movement
                     );
