@@ -1237,3 +1237,6 @@ mod long_trace_tests {
 
 #[cfg(test)]
 mod separating_plane_tests;
+
+#[cfg(test)]
+mod trace_scratch_tests;
