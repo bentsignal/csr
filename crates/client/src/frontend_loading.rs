@@ -1,15 +1,29 @@
-//! Owned loading images from the admitted pinned classic map BSPs.
+//! Owned loading images from pinned classic map BSPs.
 //!
 //! Decoding runs on the movie thread, outside the shared frontend-data lock.
 //! No archive bytes or installed artwork are included in the application.
 use sha2::{Digest, Sha256};
 use std::{io::Read, sync::{OnceLock, atomic::{AtomicBool, Ordering}}};
 
+// Match the existing loading-image decoder's input budget, before ZIP decode.
+const MAX_RADAR_BYTES: usize = 32 * 1024 * 1024;
+
 #[derive(Clone, Copy)]
 struct Pin {
     name: &'static str,
     bytes: usize,
     sha256: &'static str,
+}
+
+impl Pin {
+    fn pak_limit(&self) -> usize {
+        match self.name {
+            // Only this exact size/SHA-256 verified BSP needs more than 64 MiB.
+            // This is its observed pak length, not a general archive increase.
+            "de_cache_2015" => 69_552_432,
+            _ => 64 * 1024 * 1024,
+        }
+    }
 }
 
 const PINS: &[Pin] = &[
@@ -42,6 +56,18 @@ const PINS: &[Pin] = &[
         name: "de_mirage_2019",
         bytes: 46_520_604,
         sha256: "929F09470991A74DF58B8D41F806AB013034E3BF2D478C02EE884BA252143100",
+    },
+    Pin {
+        name: "de_cache_2015",
+        bytes: 86_355_628,
+        sha256: "E3E30373B63210EF79F3F1A5EFD5E73607EA3B28601F50B235757D2F1433AE5D",
+    },
+    Pin {
+        // Kept ready for explicit development loads; the picker still excludes
+        // this snapshot because its gates001 prop material is unavailable.
+        name: "de_overpass_2015",
+        bytes: 32_716_108,
+        sha256: "BA42342BE13C65931D2031C664CF3F0ABC020513DB8200AD83B10B7B497B3732",
     },
     Pin {
         name: "de_cbble_2018",
@@ -139,17 +165,18 @@ impl ArchiveArt {
         if bytes.len() != pin.bytes || format!("{:X}", Sha256::digest(&bytes)) != pin.sha256 {
             return None;
         }
-        let archive = embedded(&bytes)?;
+        // The per-pin budget is consulted only after verifying the whole BSP.
+        let archive = embedded(&bytes, pin.pak_limit())?;
         // This is the actual older overview, never the installed remake radar.
-        // Some compatibility BSPs (Mirage, Vertigo, Cobble) only contain the
-        // ordinary radar. Both variants belong to this verified older BSP.
+        // Some compatibility BSPs only contain the ordinary radar. Cache 2015
+        // also has an RGB24 spectate DDS unsupported by the current decoder;
+        // its ordinary radar uses supported DXT5. Both belong to this verified BSP.
         let spectate_path = format!("resource/overviews/{}_radar_spectate.dds", self.map.base);
         let normal_path = format!("resource/overviews/{}_radar.dds", self.map.base);
-        let (radar_path, radar) = match archive.read(&spectate_path).ok()? {
-            Some(radar) => (spectate_path, radar),
-            None => (normal_path.clone(), archive.read(&normal_path).ok()??),
-        };
-        let radar = scaleform::loading_radar_png(&radar)?;
+        let (radar_path, radar) = [spectate_path, normal_path].into_iter().find_map(|path| {
+            let bytes = archive.read_limited(&path, MAX_RADAR_BYTES).ok()??;
+            Some((path, scaleform::loading_radar_png(&bytes)?))
+        })?;
         // Collection emblems are addressed by the archive's explicit base map;
         // the map title/content identity remains the selected archive.
         let icon = fs.read(&format!(
@@ -169,7 +196,7 @@ impl ArchiveArt {
     }
 }
 
-fn embedded(bytes: &[u8]) -> Option<vfs::ZipArchive> {
+fn embedded(bytes: &[u8], pak_limit: usize) -> Option<vfs::ZipArchive> {
     let header = bsp::lump::Header::parse(bytes).ok()?;
     if !(19..=21).contains(&header.version) {
         return None;
@@ -180,7 +207,7 @@ fn embedded(bytes: &[u8]) -> Option<vfs::ZipArchive> {
     }
     let start = usize::try_from(info.offset).ok()?;
     let size = usize::try_from(info.length).ok()?;
-    if size == 0 || size > 64 * 1024 * 1024 {
+    if size == 0 || size > pak_limit {
         return None;
     }
     let end = start.checked_add(size)?;
@@ -205,12 +232,16 @@ mod tests {
         assert!(ArchiveArt::new("de_nuke_2016").is_some());
         assert!(ArchiveArt::new("de_nuke_2019").is_none());
         for archive in workshop::OLD_MAPS {
-            assert_eq!(supported(archive.name), archive.menu_supported(), "{}", archive.name);
+            assert_eq!(supported(archive.name),
+                archive.menu_supported() || archive.name == "de_overpass_2015",
+                "{}", archive.name);
         }
+        assert!(supported("de_overpass_2015"));
+        assert!(!workshop::find("de_overpass_2015").unwrap().menu_supported());
     }
 
     #[test]
-    #[ignore = "requires all admitted pinned classic BSPs in CSR_DATA_DIR and CS:GO Legacy"]
+    #[ignore = "requires all art-pinned classic BSPs in CSR_DATA_DIR and CS:GO Legacy"]
     fn installed_archives_decode_their_actual_embedded_radar_images() {
         // The frontend uses this exact mount path, including Store::current(),
         // rather than the movie navigator's separate install-only filesystem.
@@ -224,11 +255,12 @@ mod tests {
                 "frontend BSP alias: {}",
                 pin.name
             );
-            assert!(
+            assert_eq!(
                 modes
                     .block("maps")
                     .and_then(|maps| maps.block(pin.name))
                     .is_some(),
+                workshop::find(pin.name).unwrap().menu_supported(),
                 "frontend card metadata alias: {}",
                 pin.name
             );

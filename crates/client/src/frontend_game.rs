@@ -54,6 +54,11 @@ fn add_classic_map(root: &mut kv::Block, archive: &workshop::OldMap) {
         return;
     };
     let title = archive.title;
+    let qualification = if archive.name.ends_with("_2015") {
+        "Compatibility archive; rewritten rendering and gameplay still require fidelity validation."
+    } else {
+        "Compatibility archive; exact 2015 parity is not established."
+    };
     map.set("name", kv::Value::Str(archive.name.into()));
     map.set("nameID", kv::Value::Str(title.into()));
     group.set("name", kv::Value::Str(classic_group.clone()));
@@ -61,7 +66,7 @@ fn add_classic_map(root: &mut kv::Block, archive: &workshop::OldMap) {
     group.set(
         "tooltipID",
         kv::Value::Str(format!(
-            "{}. Compatibility archive; exact 2015 parity is not established.",
+            "{}. {qualification}",
             archive.note.trim_end_matches('.')
         )),
     );
@@ -531,10 +536,10 @@ mod tests {
 
     #[test]
     fn archive_menu_admission_excludes_unresolved_dependencies_and_later_remakes() {
-        for name in ["de_nuke_2016", "de_train_2015", "de_vertigo_2017", "de_mirage_2019", "de_cbble_2018"] {
+        for name in ["de_nuke_2016", "de_train_2015", "de_vertigo_2017", "de_mirage_2019", "de_cbble_2018", "de_cache_2015"] {
             assert!(menu_archive(name), "{name}");
         }
-        for name in ["de_cache_2019", "de_overpass_2019", "de_nuke_2019", "de_train_2020", "de_canals_2018", "de_train_2014"] {
+        for name in ["de_cache_2019", "de_overpass_2015", "de_overpass_2019", "de_nuke_2019", "de_train_2020", "de_canals_2018", "de_train_2014"] {
             assert!(!menu_archive(name), "{name}");
         }
     }

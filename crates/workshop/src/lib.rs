@@ -65,10 +65,12 @@ impl OldMap {
     /// to explicit development loads, without being offered as classic matches.
     /// See docs/OLD-MAPS.md for the retained probe/simulation evidence and gaps.
     pub fn menu_supported(&self) -> bool {
+        // Cache 2015 is a source admission candidate: parent runtime checks
+        // must pass before integration. Overpass 2015 still lacks gates001.
         matches!(self.name,
             "de_dust2_2017" | "de_inferno_2016" | "de_nuke_2016"
             | "de_train_2015" | "de_vertigo_2017" | "de_mirage_2019"
-            | "de_cbble_2018")
+            | "de_cbble_2018" | "de_cache_2015")
     }
 
     /// Stable identity for recipes, content packs and server map selection.
@@ -81,7 +83,8 @@ impl OldMap {
     }
 }
 
-/// Valve's compatibility versions, checked 2026-10-11 with
+/// Valve's compatibility versions, checked 2026-10-11 (the October 2015
+/// Cache/Overpass pair added from verified metadata on 2026-10-18) with
 /// `GetPublishedFileDetails`: creator [`VALVE_CREATOR`], consumer app 730,
 /// filename `mymaps/<base>.bsp`, and the size and SHA-1 of `file_url`.
 pub const OLD_MAPS: &[OldMap] = &[
@@ -166,6 +169,16 @@ pub const OLD_MAPS: &[OldMap] = &[
         sha1: "557e979caebd4c3966e6633c394914ebc641f3f8",
     },
     OldMap {
+        name: "de_cache_2015",
+        base: "de_cache",
+        title: "Cache (2015)",
+        note: "Valve's October 21, 2015 Cache snapshot, before the 2019 remake",
+        workshop_id: 539273673,
+        version: "1.35.0.7",
+        size: 48679788,
+        sha1: "e487d7bea8dbd4a62967026cbb855c1c0df9f956",
+    },
+    OldMap {
         name: "de_cache_2019",
         base: "de_cache",
         title: "Cache (2019)",
@@ -194,6 +207,16 @@ pub const OLD_MAPS: &[OldMap] = &[
         version: "1.37.3.2",
         size: 16805449,
         sha1: "0767980881e0c7b7c0bcaebbb9ca95235d2683fd",
+    },
+    OldMap {
+        name: "de_overpass_2015",
+        base: "de_overpass",
+        title: "Overpass (2015)",
+        note: "Valve's October 13, 2015 Overpass snapshot",
+        workshop_id: 534663598,
+        version: "1.35.0.6",
+        size: 14667547,
+        sha1: "3f819cd7ad38d6966c11e9963b4f879d99c7ffe6",
     },
     OldMap {
         name: "de_overpass_2019",
