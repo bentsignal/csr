@@ -227,6 +227,7 @@ fn setup(world: &mut World) {
         skin_surface: white.clone(),
         skin_position: white.clone(),
         detail: white.clone(),
+        self_illum_mask: white.clone(),
         alpha_mode: if masked {
             AlphaMode::Mask(0.5)
         } else {

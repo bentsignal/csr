@@ -1,12 +1,43 @@
 # Authored world-layer texture scale and offset
 
-The world renderer previously sampled both color layers, both normal layers
-and the blend mask at one raw brush UV. This ignored a material's separate
+Before the secondary-layer correction, the world renderer sampled both color
+layers, both normal layers and the blend mask at one raw brush UV. This ignored a material's separate
 `$basetexturetransform2`, `$bumptransform2` and `$blendmodulatetransform`.
 The secondary color/normal and blend-mask samples now each apply their own
 authored UV scale and offset. The first layer, lightmap UVs, light intensities,
-exposure and tonemapping are unchanged. Diagnostic shadow-depth alpha sampling
-uses the same secondary-color and blend-mask coordinates as the forward pass.
+exposure and tonemapping were unchanged by that correction. Diagnostic
+shadow-depth alpha sampling uses the same secondary-color and blend-mask
+coordinates as the forward pass.
+
+## First normal-map transform (2026-10-17, source only)
+
+The first normal map now receives its independent `$bumptransform` through the
+same existing `AxisAlignedTextureTransform` parser and `WorldParams.normal_uv`.
+Forward normal RGB and the dynamic Phong mask from that normal texture's alpha
+both sample `uv * normal_uv.xy + normal_uv.zw`. Base color and ordinary detail
+continue to use their original UV paths. Absent declarations retain identity.
+The forward/shadow uniform prefix includes the added vector at byte 80 and
+ends at byte 96; shadow alpha sampling otherwise keeps its existing behavior.
+
+Private installed-data research identified Nuke's
+`concrete/hr_c/hr_concrete_wall_001` with
+`center 0 0 scale 8 8 rotate 0 translate 0 0`, referenced by 1,032 HDR face
+records. This establishes an omitted authored parameter, not visible coverage
+or a measured image improvement. Nuke's hazard-stripe material also authors
+scale 8,4 with rotation 90; it remains unsupported. No rotation/general matrix
+parser expansion is included: unsupported forms retain the existing warning
+and identity fallback described below. First-base transforms remain outside
+this correction.
+
+Two added source tests exercise actual material setup with a synthetic
+in-memory normal texture: authored scale 8, independent base/detail sampling,
+normal RGB/Phong-alpha shader wiring, centered nonuniform mapping, absent
+defaults and rejected rotation/matrix/partial declarations. The existing
+serialization test also checks the new vector, both WGSL prefixes and the
+following ambient-cube offset. All these tests are **UNRUN** in this pass;
+builds, required repository checks and matched native/CSR captures belong to
+the integrating root. The verification receipts below apply only to the
+previous secondary-layer correction.
 
 ## Clean-room basis and scope
 

@@ -521,6 +521,7 @@ pub fn material_from_vmt(
         skin_surface:textures.white.clone(),
         skin_position:textures.white.clone(),
         detail: textures.white.clone(),
+        self_illum_mask: textures.black.clone(),
         alpha_mode: AlphaMode::Opaque,
         cull: true,
     };
@@ -562,6 +563,7 @@ pub fn material_from_vmt(
     if let Some(info) = mat.str("$bumpmap").and_then(|n| textures.load(fs, images, n, false)) {
         out.normal = info.handle;
         f |= flags::NORMAL;
+        params.normal_uv = authored_uv_transform(mat, "$bumptransform");
         if mat.flag("$ssbump") { f |= flags::SSBUMP; }
         if mat.flag("$ssbumpmathfix") { f |= flags::SSBUMP_MATHFIX; }
     }
@@ -618,9 +620,50 @@ pub fn material_from_vmt(
         Ok(None) | Ok(Some(_)) => {}
         Err(error) => warn!("unsupported authored detail layer ({error:?}); retaining base material"),
     }
+    if mat.flag("$selfillum") {
+        // Only opaque, non-terrain-blended lit composition is in this pass.
+        // Alternate mask/angle controls and animated inputs need native checks.
+        let supported = f & (flags::UNLIT | flags::ALPHA_TEST | flags::TRANSLUCENT | flags::BLEND) == 0
+            && mat.shader != "worldvertextransition"
+            && !mat.flag("$selfillum_envmapmask_alpha")
+            && !mat.flag("$selfillumfresnel")
+            && mat.params.get("$selfillummaskscale").is_none()
+            && !mat.params.get_all("proxies").any(references_self_illum);
+        // An absent tint defaults to white; an explicit rejected value must
+        // retain the previous diffuse path rather than inventing a tint.
+        let tint = match mat.params.get("$selfillumtint") {
+            None => Some([1.0; 3]),
+            Some(_) => mat.color("$selfillumtint"),
+        }.filter(|rgb| rgb.iter().all(|v| v.is_finite() && *v >= 0.0));
+        if let (true, Some(tint)) = (supported, tint) {
+            let mode = if let Some(name) = mat.str("$selfillummask") {
+                if let Some(mask) = textures.load(fs, images, name, false) {
+                    out.self_illum_mask = mask.handle;
+                    2.0
+                } else {
+                    warn!("authored self-illumination mask unavailable; retaining lit material: {name}");
+                    0.0
+                }
+            } else { 1.0 };
+            params.self_illum = Vec4::new(tint[0], tint[1], tint[2], mode);
+        } else {
+            warn!("unsupported authored self-illumination mode/tint/composition; retaining previous diffuse material");
+        }
+    }
     params.flags = f;
     out.params = params;
     out
+}
+
+/// Proxies can read or write inputs through nested blocks and component
+/// references. Leave unrelated proxies alone; their presence is not a veto.
+fn references_self_illum(value: &kv::Value) -> bool {
+    match value {
+        kv::Value::Str(text) => text.to_ascii_lowercase().contains("$selfillum"),
+        kv::Value::Block(block) => block.iter().any(|(key, value)| {
+            key.to_ascii_lowercase().contains("$selfillum") || references_self_illum(value)
+        }),
+    }
 }
 
 fn authored_uv_transform(mat: &vmt::Material, key: &str) -> Vec4 {
@@ -638,6 +681,187 @@ fn authored_uv_transform(mat: &vmt::Material, key: &str) -> Vec4 {
 #[cfg(test)]
 mod authored_transform_tests {
     use super::*;
+
+    // One synthetic RGBA texel exercises the real texture-load/material path
+    // without an install, filesystem writes, renderer or game asset fixture.
+    fn normal_material(mat: Option<&vmt::Material>, lightmapped: bool) -> WorldMaterial {
+        let mut normal = vec![0u8; 84];
+        normal[..4].copy_from_slice(b"VTF\0");
+        normal[4..8].copy_from_slice(&7u32.to_le_bytes());
+        normal[8..12].copy_from_slice(&2u32.to_le_bytes());
+        normal[12..16].copy_from_slice(&80u32.to_le_bytes());
+        for offset in [16, 18, 24, 63] { // width, height, frames, depth
+            normal[offset..offset + 2].copy_from_slice(&1u16.to_le_bytes());
+        }
+        normal[52..56].copy_from_slice(&(vtf::Format::Rgba8888 as i32).to_le_bytes());
+        normal[56] = 1; // one mip, no thumbnail
+        normal[57..61].copy_from_slice(&(-1i32).to_le_bytes());
+        normal[80..].copy_from_slice(&[128, 128, 255, 64]);
+        let mut fs = vfs::Vfs::new();
+        fs.push_back("synthetic normal", vfs::Mount::Memory(std::collections::BTreeMap::from([
+            ("materials/test/normal.vtf".into(), normal.into()),
+        ])));
+        let mut images = Assets::<Image>::default();
+        let mut textures = TextureCache::new(&mut images);
+        let shared = SharedHandles { lightmap: textures.white.clone() };
+        material_from_vmt(mat, &fs, &mut textures, &mut images, &shared, 1.0, lightmapped)
+    }
+
+    #[test]
+    fn first_normal_uses_authored_nuke_scale8_independently_of_detail_and_base() {
+        // Installed concrete/hr_c/hr_concrete_wall_001's evidenced transform.
+        let mat = vmt::Material::parse_with(
+            r#""LightmappedGeneric" {
+                "$bumpmap" "test/normal"
+                "$bumptransform" "center 0 0 scale 8 8 rotate 0 translate 0 0"
+                "$detail" "test/normal" "$detailscale" "8"
+            }"#,
+            &|_| None, 0,
+        ).unwrap();
+        let params = normal_material(Some(&mat), true).params;
+        assert_ne!(params.flags & flags::NORMAL, 0);
+        assert_ne!(params.flags & flags::DETAIL, 0);
+        assert_eq!(params.normal_uv, Vec4::new(8., 8., 0., 0.));
+        assert_eq!(params.detail, Vec4::new(8., 8., 1., 0.));
+        assert_eq!(params.base2_uv, WorldParams::default().base2_uv);
+        let uv = Vec2::new(-0.25, 1.125);
+        let [sx, sy, x, y] = params.normal_uv.to_array();
+        assert_eq!(uv * Vec2::new(sx, sy) + Vec2::new(x, y), Vec2::new(-2., 9.));
+
+        // Lock the actual shader wiring: RGB and Phong alpha share the same
+        // transformed normal coordinates; color/detail still start at raw UV.
+        let shader: String = include_str!("shaders/world.wgsl")
+            .chars().filter(|c| !c.is_ascii_whitespace()).collect();
+        assert!(shader.contains("letnormal_uv=uv*params.normal_uv.xy+params.normal_uv.zw;"));
+        assert_eq!(shader.matches("textureSample(normal_tex,normal_samp,normal_uv)").count(), 2);
+        assert!(shader.contains("textureSample(base_tex,base_samp,uv)"));
+        assert!(shader.contains("textureSample(detail_tex,detail_samp,uv*params.detail.xy)"));
+    }
+
+    #[test]
+    fn authored_luminous_regions_keep_alpha_and_separate_mask_contracts() {
+        fn parse(text: &str) -> vmt::Material {
+            vmt::Material::parse_with(text, &|_| None, 0).unwrap()
+        }
+        let alpha = parse(r#""VertexLitGeneric" {
+            "$basetexture" "test/normal" "$selfillum" "1" "$selfillumtint" "[4 4 3]"
+        }"#);
+        let out = normal_material(Some(&alpha), false);
+        assert_eq!(out.params.self_illum, Vec4::new(4., 4., 3., 1.));
+        assert_eq!(out.alpha_mode, AlphaMode::Opaque);
+        assert_eq!(out.params.flags & flags::UNLIT, 0);
+        let separate = parse(r#""VertexLitGeneric" {
+            "$basetexture" "test/normal" "$selfillum" "1" "$selfillummask" "test/normal"
+        }"#);
+        let out = normal_material(Some(&separate), false);
+        assert_eq!(out.params.self_illum, Vec4::new(1., 1., 1., 2.));
+        // Mask data and color have independent cache entries/color spaces.
+        assert_ne!(out.self_illum_mask, out.base);
+        for declaration in [
+            r#""$selfillummask" "missing/mask""#,
+            r#""$selfillumfresnel" "1""#,
+            r#""$selfillum_envmapmask_alpha" "1""#,
+            r#""$selfillumtint" "[-1 1 1]""#,
+            r#""$selfillumtint" "[1 -0.5 1]""#,
+            r#""$selfillumtint" "[NaN 1 1]""#,
+            r#""$selfillumtint" "[1 inf 1]""#,
+            r#""$selfillumtint" "[1 1 -inf]""#,
+            r#""$selfillumtint" ".5""#,
+            r#""$selfillumtint" "garbage""#,
+            r#""$selfillumtint" "[1 1]""#,
+            r#""$selfillumtint" { "unsupported" "1" }"#,
+            r#""$selfillummaskscale" "0.2" "$selfillummask" "test/normal""#,
+            // Presence is unsupported even for identity/zero/invalid values.
+            r#""$selfillummaskscale" "1""#,
+            r#""$selfillummaskscale" "0""#,
+            r#""$selfillummaskscale" "garbage""#,
+        ] {
+            let mat = parse(&format!(r#""VertexLitGeneric" {{ "$selfillum" "1" {declaration} }}"#));
+            assert_eq!(normal_material(Some(&mat), false).params.self_illum.w, 0., "{declaration}");
+        }
+        // Static lamps can author Phong; only dynamic composition is gated.
+        let phong = parse(r#""VertexLitGeneric" {
+            "$selfillum" "1" "$phong" "1" "$rimlight" "1"
+        }"#);
+        let params = normal_material(Some(&phong), false).params;
+        assert_eq!(params.self_illum, Vec4::new(1., 1., 1., 1.));
+        assert_eq!(params.flags & flags::DYNAMIC_LIT, 0);
+        assert!(params.phong.y > 0. && params.rim.y > 0.);
+        let world = parse(r#""LightmappedGeneric" { "$selfillum" "1" }"#);
+        assert_eq!(normal_material(Some(&world), true).params.self_illum, Vec4::ONE);
+        assert_eq!(normal_material(None, true).params.self_illum, Vec4::ZERO);
+    }
+
+    #[test]
+    fn self_illum_proxies_reject_references_recursively_without_vetoing_unrelated_proxies() {
+        for (declaration, enabled) in [
+            (r#""Proxies" { "Sine" { "resultVar" "$color" } }"#, true),
+            (r#""Proxies" { "Nested" { "Copy" { "srcVar1" "$time" "resultVar" "$alpha" } } }"#, true),
+            (r#""Proxies" { "Sine" { "resultVar" "$selfIllumTint" } }"#, false),
+            // Reading an input is also an unvalidated animated contract.
+            (r#""PROXIES" { "Nested" { "Copy" { "srcVar1" "$SELFILLUMTINT[0]" "resultVar" "$color" } } }"#, false),
+            (r#""Proxies" { "Nested" { "$SelfIllumMask" "test/normal" } }"#, false),
+            (r#""Proxies" { "Sine" { "resultVar" "$SelfIllum" } }"#, false),
+            (r#""Proxies" "$selfIllumTint""#, false),
+        ] {
+            let mat = vmt::Material::parse_with(
+                &format!(r#""VertexLitGeneric" {{ "$selfillum" "1" {declaration} }}"#),
+                &|_| None, 0,
+            ).unwrap();
+            let expected = if enabled { Vec4::ONE } else { Vec4::ZERO };
+            assert_eq!(normal_material(Some(&mat), false).params.self_illum, expected, "{declaration}");
+        }
+    }
+
+    #[test]
+    fn self_illum_opacity_and_terrain_blends_preserve_previous_diffuse_material() {
+        for (shader, declaration, lightmapped, alpha_mode, required_flag) in [
+            ("VertexLitGeneric", r#""$alphatest" "1""#, false, AlphaMode::Mask(0.5), flags::ALPHA_TEST),
+            ("VertexLitGeneric", r#""$translucent" "1""#, false, AlphaMode::Blend, flags::TRANSLUCENT),
+            ("VertexLitGeneric", r#""$additive" "1""#, false, AlphaMode::Add, flags::TRANSLUCENT),
+            ("UnlitGeneric", "", false, AlphaMode::Opaque, flags::UNLIT),
+            ("WorldVertexTransition", r#""$basetexture2" "test/normal""#, true, AlphaMode::Opaque, flags::BLEND),
+            // Missing second textures do not validate the terrain contract.
+            ("WorldVertexTransition", r#""$basetexture2" "missing/texture""#, true, AlphaMode::Opaque, flags::LIGHTMAPPED),
+            ("LightmappedGeneric", r#""$basetexture2" "test/normal""#, true, AlphaMode::Opaque, flags::BLEND),
+        ] {
+            let parse = |self_illum: u8| vmt::Material::parse_with(
+                &format!(r#""{shader}" {{ "$basetexture" "test/normal" "$color" "[0.5 0.75 1]" "$selfillum" "{self_illum}" {declaration} }}"#),
+                &|_| None, 0,
+            ).unwrap();
+            let before = normal_material(Some(&parse(0)), lightmapped);
+            let out = normal_material(Some(&parse(1)), lightmapped);
+            assert_eq!(out.params.self_illum, Vec4::ZERO, "{shader}: {declaration}");
+            assert_eq!(out.alpha_mode, alpha_mode);
+            assert_ne!(out.params.flags & required_flag, 0);
+            assert_eq!(out.params.flags, before.params.flags);
+            assert_eq!(out.params.color, before.params.color);
+            assert_eq!(out.alpha_mode, before.alpha_mode);
+        }
+    }
+
+    #[test]
+    fn first_normal_nonuniform_centered_mapping_and_identity_fallbacks_reach_material() {
+        let identity = Vec4::new(1., 1., 0., 0.);
+        assert_eq!(WorldParams::default().normal_uv, identity);
+        assert_eq!(normal_material(None, true).params.normal_uv, identity);
+        for (declaration, expected) in [
+            ("", identity),
+            (r#""$bumptransform" "translate .125 -.25 rotate 0 scale 2 .5 center .5 .5""#, Vec4::new(2., 0.5, -0.375, 0.)),
+            // Evidenced hazard-stripe scale8,4/rotation90 stays unsupported.
+            (r#""$bumptransform" "center 0 0 scale 8 4 rotate 90 translate 0 0""#, identity),
+            (r#""$bumptransform" "[1 0 0 0 0 1 0 0]""#, identity),
+            (r#""$bumptransform" "scale 8 8""#, identity),
+        ] {
+            let text = format!(r#""VertexLitGeneric" {{ "$bumpmap" "test/normal" "$phong" "1" {declaration} }}"#);
+            let mat = vmt::Material::parse_with(&text, &|_| None, 0).unwrap();
+            let params = normal_material(Some(&mat), false).params;
+            assert_ne!(params.flags & flags::NORMAL, 0, "{declaration}");
+            assert_eq!(params.normal_uv, expected, "{declaration}");
+            assert_eq!(params.normal2_uv, identity);
+            assert!(params.phong.y > 0.0);
+        }
+    }
 
     #[test]
     fn independent_layer_parameters_and_rejected_rotation_keep_their_own_mapping() {

@@ -25,6 +25,7 @@ struct WorldParams {
     base2_uv: vec4<f32>,
     normal2_uv: vec4<f32>,
     modulate_uv: vec4<f32>,
+    normal_uv: vec4<f32>,
     ambient_cube: array<vec4<f32>, 6>,
     sun_dir: vec4<f32>,
     sun_color: vec4<f32>,
@@ -40,6 +41,7 @@ struct WorldParams {
     skin_properties:vec4<f32>,
     skin_pattern_palette:vec4<f32>,
     detail: vec4<f32>,
+    self_illum: vec4<f32>,
 };
 
 
@@ -98,6 +100,8 @@ fn ambient_light(n: vec3<f32>) -> vec3<f32> {
 @group(#{MATERIAL_BIND_GROUP}) @binding(19) var skin_position_samp: sampler;
 @group(#{MATERIAL_BIND_GROUP}) @binding(20) var detail_tex: texture_2d<f32>;
 @group(#{MATERIAL_BIND_GROUP}) @binding(21) var detail_samp: sampler;
+@group(#{MATERIAL_BIND_GROUP}) @binding(22) var self_illum_tex: texture_2d<f32>;
+@group(#{MATERIAL_BIND_GROUP}) @binding(23) var self_illum_samp: sampler;
 fn paint_coords(uv:vec2<f32>)->vec2<f32>{
     let p=(uv-vec2<f32>(0.5))*params.skin_transform.xy;
     return vec2<f32>(p.x*params.skin.z-p.y*params.skin.w,p.x*params.skin.w+p.y*params.skin.z)+vec2<f32>(0.5)+params.skin_transform.zw;
@@ -152,6 +156,7 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let uv = vec2<f32>(0.0);
 #endif
     var albedo = textureSample(base_tex, base_samp, uv);
+    let self_illum_alpha = albedo.a;
     // Preserve the authored mask independently of opacity/cosmetic processing.
     let tint_weight = select(1.0, albedo.a, (params.flags & TINT_BY_BASE_ALPHA) != 0u);
     if params.skin_details.w > 0.5 && params.skin_details.z > 0.0 {
@@ -245,8 +250,10 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
 
     var n = normalize(in.world_normal);
     var weights = vec3<f32>(1.0 / 3.0);
+    // Keep base/detail coordinates independent; normal alpha shares this map.
+    let normal_uv = uv * params.normal_uv.xy + params.normal_uv.zw;
     if (params.flags & NORMAL) != 0u {
-        let b1 = textureSample(normal_tex, normal_samp, uv).rgb;
+        let b1 = textureSample(normal_tex, normal_samp, normal_uv).rgb;
         var tangent_normal = bump_normal(b1);
         weights = bump_weights(b1);
         if (params.flags & NORMAL2) != 0u {
@@ -334,7 +341,7 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
         let fresnel=select(mix(params.fresnel.x,params.fresnel.y,fresnel_t*2.0),mix(params.fresnel.y,params.fresnel.z,(fresnel_t-0.5)*2.0),fresnel_t>0.5);
         let exponent_sample=textureSample(phong_tex,phong_samp,uv);
         let exponent=select(params.phong.x,1.0+exponent_sample.r*149.0,params.phong.z>0.5);
-        let normal_alpha=textureSample(normal_tex,normal_samp,uv).a;
+        let normal_alpha=textureSample(normal_tex,normal_samp,normal_uv).a;
         let mask=select(select(1.0,normal_alpha,(params.flags & NORMAL)!=0u),albedo.a,params.phong.w>0.5);
         let tint=params.phong_tint.rgb*mix(vec3<f32>(1.0),albedo.rgb,params.phong_tint.w*exponent_sample.g);
         let reflected=reflect(-params.sun_dir.xyz,n);
@@ -342,6 +349,15 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
         rgb+=tint*params.sun_color.rgb*params.sun_dir.w*spec*select(0.0,1.0,dot(n,params.sun_dir.xyz)>0.0);
         let rim_mask=select(1.0,exponent_sample.a,params.rim.z>0.5 && params.phong.z>0.5);
         rgb+=ambient_light(v)*tint*pow(1.0-nv,max(params.rim.x,1.0))*params.rim.y*rim_mask*0.25;
+    }
+    if params.self_illum.w > 0.5 {
+        var mask = vec3<f32>(self_illum_alpha);
+        if params.self_illum.w > 1.5 {
+            mask = textureSample(self_illum_tex, self_illum_samp, uv).rgb;
+        }
+        // Preserve the lit surface outside the authored luminous region.
+        // This does not add scene lights; surrounding light is already baked.
+        rgb = mix(rgb, albedo.rgb * params.self_illum.rgb, clamp(mask, vec3<f32>(0.0), vec3<f32>(1.0)));
     }
     if (params.flags & UNLIT) == 0u {
         rgb = tonemap(rgb * params.exposure);

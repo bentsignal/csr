@@ -652,6 +652,7 @@ mod tests {
             base2_uv: Vec4::new(2.0, 2.0, 0.0, 0.0),
             normal2_uv: Vec4::new(3.0, 4.0, 0.1, 0.2),
             modulate_uv: Vec4::new(0.65, 0.65, 0.5, -0.5),
+            normal_uv: Vec4::new(8.0, 4.0, -0.25, 0.125),
             ..Default::default()
         };
         let mut buffer = UniformBuffer::new(Vec::new());
@@ -667,10 +668,27 @@ mod tests {
             [f(20), f(24), f(28)],
             [params.alpha_ref, params.exposure, params.lightmap_scale]
         );
-        for (offset, expected) in [(32, params.base2_uv), (48, params.normal2_uv), (64, params.modulate_uv)] {
+        for (offset, expected) in [
+            (32, params.base2_uv), (48, params.normal2_uv),
+            (64, params.modulate_uv), (80, params.normal_uv),
+        ] {
             assert_eq!([f(offset), f(offset + 4), f(offset + 8), f(offset + 12)], expected.to_array());
         }
-        // Forward and shadow-depth alpha sampling share this80-byte prefix.
-        assert!(bytes.len() > 80);
+        // Both WGSL declarations must match the serialized 96-byte prefix,
+        // including normal_uv even though depth alpha does not sample normals.
+        let expected = [
+            "color: vec4<f32>,", "flags: u32,", "alpha_ref: f32,",
+            "exposure: f32,", "lightmap_scale: f32,", "base2_uv: vec4<f32>,",
+            "normal2_uv: vec4<f32>,", "modulate_uv: vec4<f32>,", "normal_uv: vec4<f32>,",
+        ];
+        for shader in [
+            include_str!("shaders/world.wgsl"), include_str!("shaders/world_shadow.wgsl"),
+        ] {
+            let declaration = shader.split_once("Params {").unwrap().1;
+            let fields: Vec<_> = declaration.lines().map(str::trim)
+                .filter(|line| !line.is_empty()).take(expected.len()).collect();
+            assert_eq!(fields, expected);
+        }
+        assert_eq!([f(96), f(100), f(104), f(108)], params.ambient_cube[0].to_array());
     }
 }

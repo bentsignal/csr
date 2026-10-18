@@ -156,6 +156,9 @@ pub struct CollisionWorld {
     pub triangles: Vec<Triangle>,
     pub surfaces: Vec<String>,
     grid: Grid,
+    /// Convex indices per BSP static-prop ordinal, including empty entries.
+    /// Built alongside the placed hulls; world geometry is never in a range.
+    static_prop_convexes: Vec<std::ops::Range<usize>>,
     pub mins: Vec3,
     pub maxs: Vec3,
     /// Shapes dropped for invalid geometry.
@@ -288,6 +291,13 @@ impl CollisionWorld {
 
     /// Sweeps a box `mins..maxs` (relative to the position) from `start` to `end`.
     pub fn trace_box(&self, start: Vec3, end: Vec3, mins: Vec3, maxs: Vec3, mask: i32) -> Trace {
+        self.trace_box_excluding(start, end, mins, maxs, mask, None)
+    }
+
+    fn trace_box_excluding(
+        &self, start: Vec3, end: Vec3, mins: Vec3, maxs: Vec3, mask: i32,
+        excluded_convexes: Option<&std::ops::Range<usize>>,
+    ) -> Trace {
         if let Some(world)=&self.dynamic { return world.trace_box(start,end,mins,maxs,mask); }
         let offset = (mins + maxs) * 0.5;
         let ext = (maxs - mins) * 0.5;
@@ -323,6 +333,9 @@ impl CollisionWorld {
                 }
                 match shape {
                     Shape::Convex(i) => {
+                        if excluded_convexes.is_some_and(|range| range.contains(&(i as usize))) {
+                            continue;
+                        }
                         let c = &self.convexes[i as usize];
                         if c.contents & mask == 0 || !overlaps(c.mins, c.maxs, sweep_min, sweep_max) {
                             if segments > 1 {
@@ -367,6 +380,18 @@ impl CollisionWorld {
     /// Sweeps a point.
     pub fn trace_ray(&self, start: Vec3, end: Vec3, mask: i32) -> Trace {
         self.trace_box(start, end, Vec3::ZERO, Vec3::ZERO, mask)
+    }
+
+    /// Render-only solid visibility ray from a static prop's lighting sample.
+    /// Ignores only that placed prop's hulls, indexed by BSP `sprp` ordinal.
+    /// World brushes, displacements and other instances (even of the same
+    /// model) still occlude. An absent ordinal excludes nothing. Gameplay
+    /// traces use `trace_ray` / `trace_box` without this exclusion.
+    pub fn trace_prop_lighting_ray(&self, start: Vec3, end: Vec3, prop_ordinal: usize) -> Trace {
+        self.trace_box_excluding(
+            start, end, Vec3::ZERO, Vec3::ZERO, contents::MASK_SOLID,
+            self.static_prop_convexes.get(prop_ordinal),
+        )
     }
 
     /// Contents at a point (union of all shapes containing it).
@@ -699,7 +724,11 @@ impl CollisionWorld {
 
         // Static props (solid 6 = vphysics).
         let mut cache: std::collections::HashMap<u16, Option<Vec<mdl::ConvexHull>>> = Default::default();
-        for prop in &map.static_props.props {
+        for (prop_ordinal, prop) in map.static_props.props.iter().enumerate() {
+            let first_convex = w.convexes.len();
+            // Record every ordinal before any early continue: nonsolid,
+            // missing and rejected hulls must not shift later ownership.
+            w.static_prop_convexes.push(first_convex..first_convex);
             if prop.solid != 6 {
                 continue;
             }
@@ -725,6 +754,7 @@ impl CollisionWorld {
                     w.add_convex(c);
                 }
             }
+            w.static_prop_convexes[prop_ordinal].end = w.convexes.len();
         }
         w.finalize();
         w
@@ -855,6 +885,79 @@ mod tests {
         w.finalize();
         let tr = w.trace_ray(Vec3::new(10.0, 10.0, 100.0), Vec3::new(10.0, 10.0, -10.0), contents::MASK_SOLID);
         assert!((tr.end.z - 44.0).abs() < 0.2, "end {:?}", tr.end);
+    }
+
+    #[test]
+    fn bsp_prop_ordinals_keep_empty_and_multi_hull_ranges() {
+        let prop = |model, solid, x| bsp::StaticProp {
+            origin: Vec3::new(x, 0.0, 0.0), angles: Vec3::ZERO, model, solid,
+            flags: 0, skin: 0, fade_min: 0.0, fade_max: 0.0, scale: 1.0,
+            diffuse_modulation: None,
+        };
+        let mut map = bsp::Bsp {
+            static_props: bsp::StaticProps {
+                models: ["box", "missing", "empty", "invalid"].map(String::from).to_vec(),
+                props: vec![
+                    prop(0, 0, 0.0), prop(0, 6, 0.0), prop(1, 6, 0.0),
+                    prop(u16::MAX, 6, 0.0), prop(2, 6, 0.0), prop(3, 6, 0.0),
+                    prop(0, 6, 100.0),
+                ],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        // A world brush precedes all prop hulls in the real builder.
+        let world_brush = box_convex(Vec3::new(-32.0, -16.0, -16.0), Vec3::new(-16.0, 16.0, 16.0));
+        map.models.push(bsp::Model {
+            mins: world_brush.mins, maxs: world_brush.maxs, origin: Vec3::ZERO,
+            head_node: -1, first_face: 0, num_faces: 0,
+        });
+        map.leafs.push(bsp::Leaf {
+            contents: 0, cluster: -1, area: 0, mins: [-32, -16, -16], maxs: [-16, 16, 16],
+            first_leaf_face: 0, num_leaf_faces: 0, first_leaf_brush: 0, num_leaf_brushes: 1,
+        });
+        map.leaf_brushes.push(0);
+        map.brushes.push(bsp::Brush { first_side: 0, num_sides: 6, contents: contents::SOLID });
+        for (index, plane) in world_brush.planes.iter().enumerate() {
+            map.planes.push(bsp::Plane { normal: plane.normal, dist: plane.dist, kind: 0 });
+            map.brush_sides.push(bsp::BrushSide { plane: index as u16, texinfo: -1, dispinfo: -1, bevel: false });
+        }
+        let hull = mdl::ConvexHull {
+            points: vec![Vec3::ZERO, Vec3::X * 8.0, Vec3::Y * 8.0, Vec3::Z * 8.0],
+            triangles: vec![[0, 2, 1], [0, 1, 3], [0, 3, 2], [1, 2, 3]],
+        };
+        let mut far_hull = hull.clone();
+        for point in &mut far_hull.points { point.x += 200_000.0; }
+        let loader = |name: &str| match name {
+            "box" => Some(vec![hull.clone(), hull.clone()]),
+            "empty" => Some(Vec::new()),
+            "invalid" => Some(vec![mdl::ConvexHull::default(), far_hull.clone()]),
+            _ => None,
+        };
+        let w = CollisionWorld::from_bsp(&map, &MapCollisionOptions::default(), &loader);
+        assert_eq!(w.static_prop_convexes, vec![1..1, 1..3, 3..3, 3..3, 3..3, 3..3, 3..5]);
+        assert_eq!(w.rejected, 1);
+        assert_eq!(w.convexes.len(), 5);
+        assert_eq!(w.convexes[0].mins, world_brush.mins);
+        assert_eq!(w.convexes[1].mins, Vec3::ZERO);
+        assert_eq!(w.convexes[3].mins, Vec3::X * 100.0);
+
+        let start = Vec3::new(1.0, 1.0, 1.0);
+        let end = Vec3::new(20.0, 1.0, 1.0);
+        assert!(w.trace_ray(start, end, contents::MASK_SOLID).start_solid);
+        // Both hulls of this instance are excluded; the empty ordinal and
+        // an out-of-range ordinal must leave the normal solid trace intact.
+        assert!(!w.trace_prop_lighting_ray(start, end, 1).hit());
+        assert!(w.trace_prop_lighting_ray(start, end, 0).start_solid);
+        assert!(w.trace_prop_lighting_ray(start, end, usize::MAX).start_solid);
+        // Identical model and surface, different placed instance: still hit.
+        let tr = w.trace_prop_lighting_ray(start, Vec3::new(120.0, 1.0, 1.0), 1);
+        assert!(!tr.start_solid);
+        assert!(tr.hit());
+        assert!((tr.end.x - 100.0).abs() < 0.1, "{tr:?}");
+        let tr = w.trace_prop_lighting_ray(start, Vec3::new(-40.0, 1.0, 1.0), 1);
+        assert!(!tr.start_solid && tr.hit());
+        assert!((tr.end.x + 16.0).abs() < 0.1, "world brush must remain: {tr:?}");
     }
 }
 

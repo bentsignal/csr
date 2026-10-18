@@ -83,6 +83,8 @@ pub struct WorldParams {
     pub base2_uv: Vec4,
     pub normal2_uv: Vec4,
     pub modulate_uv: Vec4,
+    /// First normal-map UV scale/offset, independent of base and detail UVs.
+    pub normal_uv: Vec4,
     /// Dynamic lighting: +X, -X, +Y, -Y, +Z, -Z (Bevy axes).
     pub ambient_cube: [Vec4; 6],
     /// xyz: direction towards the sun (Bevy axes); w: sun visibility 0..1.
@@ -105,6 +107,8 @@ pub struct WorldParams {
     pub skin_pattern_palette:Vec4,
     /// Detail UV scale xy and authored blend factor z.
     pub detail: Vec4,
+    /// Authored self-illumination tint; w: 0 disabled, 1 base alpha, 2 RGB mask.
+    pub self_illum: Vec4,
 }
 
 impl Default for WorldParams {
@@ -118,6 +122,7 @@ impl Default for WorldParams {
             base2_uv: Vec4::new(1.0, 1.0, 0.0, 0.0),
             normal2_uv: Vec4::new(1.0, 1.0, 0.0, 0.0),
             modulate_uv: Vec4::new(1.0, 1.0, 0.0, 0.0),
+            normal_uv: Vec4::new(1.0, 1.0, 0.0, 0.0),
             ambient_cube: [Vec4::splat(0.4); 6],
             sun_dir: Vec4::new(0.0, 1.0, 0.0, 0.0),
             sun_color: Vec4::ZERO,
@@ -133,6 +138,7 @@ impl Default for WorldParams {
             skin_properties:Vec4::ZERO,
             skin_pattern_palette:Vec4::new(1.,2.,3.,4.),
             detail: Vec4::new(1.0, 1.0, 0.0, 0.0),
+            self_illum: Vec4::ZERO,
         }
     }
 }
@@ -184,6 +190,9 @@ pub struct WorldMaterial {
     #[texture(20)]
     #[sampler(21)]
     pub detail: Handle<Image>,
+    #[texture(22)]
+    #[sampler(23)]
+    pub self_illum_mask: Handle<Image>,
     pub alpha_mode: AlphaMode,
     pub cull: bool,
 }
