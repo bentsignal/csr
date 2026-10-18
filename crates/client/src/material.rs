@@ -36,7 +36,10 @@ pub(crate) fn install_lighting(app: &mut App) {
 }
 
 fn report_material_bindings(device: Res<bevy::render::renderer::RenderDevice>) {
-    info!(bindless = WorldMaterial::bindless_supported(&device), "world material binding mode");
+    let bindless = WorldMaterial::bindless_slot_count().is_some_and(|limit| {
+        limit.resolve() > 1 && WorldMaterial::bindless_supported(&device)
+    });
+    info!(bindless, "world material binding mode");
 }
 
 fn disable_unused_gpu_clusters(mut settings: ResMut<bevy::light::cluster::GlobalClusterSettings>) {
