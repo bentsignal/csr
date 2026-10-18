@@ -770,7 +770,7 @@ mod lighting_tests {
             w.finalize();
             let instance = fallback(&map, &w);
             assert_eq!(instance.sun, SourceVec3::ZERO);
-            let sample = |x| surface_directional_light(&map, &w, Some(SUN), &instance,
+            let sample = |x| surface_directional_light(&map, &mut w.prepare_prop_lighting(), Some(SUN), &instance,
                 SourceVec3::new(x, 0., 1.), SourceVec3::Z, 0);
             assert_eq!(sample(-80.).sun, SourceVec3::ZERO,
                 "cast-shadow flags must not disable receiving shadows: {flags:#x}");
