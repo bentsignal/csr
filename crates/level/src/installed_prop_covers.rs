@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 #[test]
 #[ignore = "requires the selected local CS:GO Legacy Nuke/Cache data; parent executes under its Cargo slot"]
-fn installed_nuke_cache_covers_decode_and_win_both_faces_before_tick_damage() {
+fn installed_nuke_cache_covers_decode_and_win_reachable_faces_before_tick_damage() {
     let trace_fields = |tr: collision::Trace| (tr.fraction, tr.end, tr.normal,
         tr.plane_dist, tr.start_solid, tr.all_solid, tr.contents, tr.surface);
     const SLATS: &str = "models/props/de_nuke/hr_nuke/nuke_vent_slats/nuke_vent_slats.mdl";
@@ -90,13 +90,24 @@ fn installed_nuke_cache_covers_decode_and_win_both_faces_before_tick_damage() {
                     "this installed Nuke button declares SF_BUTTON_NOTSOLID");
                 assert!(linked[0].solids.is_empty(), "the non-solid button must never occlude the cover");
             }
+            let mut reachable_faces = 0;
             for (from, to) in [(front, back), (back, front)] {
+                let underlying = intact.collision.static_world().trace_ray(from, to, contents::MASK_SHOT);
                 let (hit, owner) = intact.collision.trace_owned_ray(from, to, contents::MASK_SHOT);
+                // The two horizontal bombsite plates sit above a real floor;
+                // their rear test eye lies inside that floor. Preserve its
+                // occlusion instead of requiring a shot from outside the map.
+                if underlying.start_solid {
+                    assert!(hit.start_solid);
+                    assert_eq!(owner, None, "static floor still owns a buried eye");
+                    continue;
+                }
                 assert!(hit.hit() && !hit.start_solid && !hit.all_solid,
                     "{name} entity {entity}: invalid external PHY face lane {from:?} -> {to:?}: {hit:?}");
                 assert_eq!(owner, Some(HitOwner::Breakable(index)),
                     "{name} entity {entity}: full-world first hit must be the cover from BOTH sides; \
                      unowned dependency occlusion is a real gap, never a reason to bypass strict first-hit: {hit:?}");
+                reachable_faces += 1;
                 let direction = (to - from).normalize();
                 let angles = Vec3::new(-direction.z.atan2(direction.truncate().length()).to_degrees(),
                     direction.y.atan2(direction.x).to_degrees(), 0.);
@@ -128,7 +139,6 @@ fn installed_nuke_cache_covers_decode_and_win_both_faces_before_tick_damage() {
                     // Floor-mounted covers can expose an ordinary static floor.
                     // Removing a cover must restore that exact underlying hit,
                     // rather than deleting unrelated world geometry to clear a ray.
-                    let underlying = intact.collision.static_world().trace_ray(from, to, contents::MASK_SHOT);
                     assert_eq!(trace_fields(after.0), trace_fields(underlying),
                         "{name} entity {entity}: removed cover/dependency differs from underlying world");
                     if name == "de_nuke" && entity == 237 {
@@ -151,6 +161,10 @@ fn installed_nuke_cache_covers_decode_and_win_both_faces_before_tick_damage() {
                     assert!(restored.events.iter().any(|e| matches!(e, GameEvent::RoundStart { .. })));
                     assert_eq!(restored.collision.trace_owned_ray(from, to, contents::MASK_SHOT).1, Some(HitOwner::Breakable(index)));
                 }
+            }
+            assert!(reachable_faces > 0, "every cover must be reachable");
+            if name == "de_cache" || entity == 237 {
+                assert_eq!(reachable_faces, 2, "passage covers must work from both sides");
             }
         }
     }
