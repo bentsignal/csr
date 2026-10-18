@@ -1,6 +1,74 @@
 use super::*;
 use glam::Vec3;
 
+#[test]
+#[ignore = "requires private cached de_cbble_2018 BSP via CSR_DATA_DIR and installed Legacy dependencies"]
+fn cached_classic_cobble_admission_routes_never_enter_solid() {
+    // Match launcher's movement_checks, including the other player and every
+    // preceding route: respawn selection depends on the global tick and ID.
+    // Load only already-local content; this entry point never fetches a map.
+    let (game, fs) = mount_game(None).expect("installed Legacy dependencies");
+    let id = workshop::find("de_cbble_2018").unwrap().content_id();
+    let level = Level::load_local_id_from_vfs(&id, game, fs, &workshop::Store::current())
+        .expect("private cached Cobble BSP required; no download");
+    let mut world = sim::World::with_catalog(level.collision.clone(), level.catalog.clone());
+    world.set_character_profiles(level.character_profiles.clone());
+    world.set_tick_rate(128);
+    world.load_spawns(&level.bsp);
+    let terrorist = world.add_player("terrorist", sim::Team::Terrorist);
+    let ct = world.add_player("counter-terrorist", sim::Team::CounterTerrorist);
+    for _ in 0..world.ticks(0.5) { world.step(&[]); }
+    for actor in [terrorist, ct] {
+        for dir in 0..8 {
+            world.respawn(actor);
+            for _ in 0..8 { world.step(&[]); }
+            let start = world.player(actor).unwrap().movement.origin;
+            let yaw = dir as f32 * 45.;
+            let input = sim::TickInput {
+                view_angles: Vec3::new(0., yaw, 0.),
+                forward_move: 450.,
+                weapon_slot: 3,
+                ..Default::default()
+            };
+            for tick in 0..world.ticks(2.) {
+                let before = world.player(actor).unwrap().movement;
+                world.step(&[(actor, input)]);
+                let player = world.player(actor).unwrap();
+                let after = player.movement;
+                let (mins, maxs) = after.hull();
+                let at = world.collision.trace_box(after.origin, after.origin, mins, maxs,
+                    collision::contents::MASK_PLAYERSOLID);
+                if at.start_solid || at.all_solid {
+                    // One failing command's real sweeps, not a second solver
+                    // or changed admission threshold. Keep all operands private
+                    // in test output; no installed geometry is copied here.
+                    struct Traces<'a>(&'a CollisionWorld, std::cell::RefCell<Vec<(Vec3, Vec3, collision::Trace)>>);
+                    impl movement::TraceWorld for Traces<'_> {
+                        fn ladder_normal(&self, origin: Vec3, mins: Vec3, maxs: Vec3) -> Option<Vec3> {
+                            self.0.ladder_normal(origin, mins, maxs)
+                        }
+                        fn trace_hull(&self, start: Vec3, end: Vec3, mins: Vec3, maxs: Vec3, mask: i32) -> collision::Trace {
+                            let tr = self.0.trace_box(start, end, mins, maxs, mask);
+                            self.1.borrow_mut().push((start, end, tr));
+                            tr
+                        }
+                    }
+                    let traces = Traces(&world.collision, Default::default());
+                    let mut replay = before;
+                    movement::player_move(&mut replay, &movement::MoveInput {
+                        view_angles: input.view_angles,
+                        forward_move: input.forward_move,
+                        weapon_max_speed: player.active_weapon().map_or(250., |weapon| weapon.max_speed()),
+                        ..Default::default()
+                    }, &world.config, &traces, world.dt());
+                    panic!("{} yaw {yaw}, route start {start:?}, command {tick}, world tick {}: before={before:?}, after={after:?}, at={at:?}, replay_matches={}, sweeps={:#?}",
+                        player.name, world.tick, replay == after, traces.1.borrow());
+                }
+            }
+        }
+    }
+}
+
 // Exact installed-world fixtures; numeric starting points identify the authored
 // routes, but all geometry comes from the player's read-only Legacy install.
 // No copied BSP/PHY data, game processes, settings changes or content fetches.
