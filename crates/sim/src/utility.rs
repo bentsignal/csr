@@ -53,8 +53,9 @@ pub struct Projectile {
     pub kind: Kind,
     pub pos: Vec3,
     pub velocity: Vec3,
-    /// Presentation rests after the existing soft floor stop, despite the
-    /// solver's small gravity/contact cycles. Never skips ballistic integration.
+    /// Presentation rests and contact audio stays silent after the existing
+    /// soft floor stop, despite the solver's small gravity/contact cycles.
+    /// Never skips ballistic integration.
     pub settled: bool,
     pub born: f32,
     /// Immutable weapon ContentId captured when a decoy leaves the hand.
