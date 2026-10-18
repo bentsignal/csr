@@ -239,7 +239,14 @@ pub(crate) fn desktop_plugins() -> PluginGroupBuilder {
     // main world's N + 1 instead of adding both CPU costs to every frame.
     // Extraction still synchronizes the worlds; gameplay stays in TickInput.
     // The surface queue hint below is independent of this CPU overlap.
-    DefaultPlugins.build()
+    // Bound per-frame worker fan-out on high-core-count desktop CPUs. Leave
+    // IO and background loading/collider work on their existing policies.
+    // This is independent of the render thread and surface queue hint.
+    let mut task_pools = bevy::app::TaskPoolOptions::default();
+    task_pools.compute.max_threads = 4;
+    DefaultPlugins.build().set(bevy::app::TaskPoolPlugin {
+        task_pool_options: task_pools,
+    })
 }
 
 pub(crate) fn surface_frame_latency() -> Option<NonZeroU32> {
