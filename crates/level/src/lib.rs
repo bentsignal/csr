@@ -222,7 +222,13 @@ impl Level {
             let bytes = fs.read(&format!("{base}.phy"))?;
             mdl::Phy::parse(&bytes).ok().map(|p| p.hulls)
         };
-        let collision = CollisionWorld::from_bsp(&bsp, &MapCollisionOptions::default(), &loader);
+        let mut collision = CollisionWorld::from_bsp(&bsp, &MapCollisionOptions::default(), &loader);
+        if let Some(data) = fs.read_string("scripts/propdata.txt").and_then(|text| kv::parse(&text).ok()) {
+            let root = data.block("PropData.txt").unwrap_or(&data);
+            if let Some(defs) = Arc::get_mut(&mut collision.breakables) {
+                for def in defs { def.apply_prop_data(root); }
+            }
+        }
         timings.push(("collision", t.elapsed().as_secs_f32()));
 
         let t = Instant::now();
@@ -287,6 +293,22 @@ impl Level {
                 hash.finalize().into()
             })
         } else { catalog_sha1 };
+        // Peers must agree on the resolved mounted breakable damage data,
+        // which can differ between packs even when the BSP/items schema match.
+        let catalog_sha1 = if collision.breakables.is_empty() { catalog_sha1 } else {
+            catalog_sha1.map(|previous| {
+                let mut hash = Sha1::new();
+                hash.update(b"csr-brush-breakable-damage-v1\0");
+                hash.update(previous);
+                for def in collision.breakables.iter() {
+                    hash.update((def.entity as u64).to_le_bytes());
+                    for value in [def.health, def.bullet_scale, def.club_scale, def.minimum_damage] {
+                        hash.update(value.to_le_bytes());
+                    }
+                }
+                hash.finalize().into()
+            })
+        };
         timings.push(("weapons", t.elapsed().as_secs_f32()));
         let t = Instant::now();
         let (character_profiles, catalog_sha1) = character_profiles::load(&fs, catalog_sha1)?;

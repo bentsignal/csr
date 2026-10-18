@@ -294,10 +294,21 @@ pub fn sky_faces(bsp: &Bsp, sky: &bsp::SkyCamera) -> std::collections::HashSet<u
 /// Builds batched world meshes keyed by material name (lowercase), for the
 /// faces `include` accepts.
 pub fn build(bsp: &Bsp, atlas: &LightmapAtlas, include: &dyn Fn(usize) -> bool) -> WorldBuild {
+    build_models(bsp, atlas, include, visible_models(bsp))
+}
+
+/// Same authored topology, UV/lightmaps and materials as world batches, but
+/// isolated by brush entity so a simulated break can hide every owned face.
+pub fn build_brush_model(bsp: &Bsp, atlas: &LightmapAtlas, model: usize, origin: glam::Vec3) -> WorldBuild {
+    build_models(bsp, atlas, &|_| true, vec![(model, origin)])
+}
+
+fn build_models(bsp: &Bsp, atlas: &LightmapAtlas, include: &dyn Fn(usize) -> bool,
+    models: Vec<(usize, glam::Vec3)>) -> WorldBuild {
     let mut groups: HashMap<(String, [i32; 3]), MeshBuilder> = HashMap::new();
     let mut triangles = 0usize;
 
-    for (model_index, origin) in visible_models(bsp) {
+    for (model_index, origin) in models {
         let Some(model) = bsp.models.get(model_index) else { continue };
         let first = model.first_face.max(0) as usize;
         let count = model.num_faces.max(0) as usize;
@@ -466,6 +477,17 @@ mod compiled_topology_tests {
             panic!("missing UVs")
         };
         assert_eq!(uv[1], [0.5, 0.]);
+        // Breakable batches retain the compiled mesh, including its UVs and
+        // lightmap addressing, while moving all vertices by the entity origin.
+        let isolated = build_brush_model(&bsp, &LightmapAtlas::build(&bsp), 0, glam::Vec3::X * 100.0);
+        assert_eq!(isolated.triangles, built.triangles);
+        let isolated = &isolated.meshes[0].1;
+        assert_eq!(isolated.indices().unwrap().iter().collect::<Vec<_>>(), mesh.indices().unwrap().iter().collect::<Vec<_>>());
+        assert_eq!(isolated.attribute(Mesh::ATTRIBUTE_UV_0), mesh.attribute(Mesh::ATTRIBUTE_UV_0));
+        assert_eq!(isolated.attribute(Mesh::ATTRIBUTE_UV_1), mesh.attribute(Mesh::ATTRIBUTE_UV_1));
+        let Some(VertexAttributeValues::Float32x3(shifted)) = isolated.attribute(Mesh::ATTRIBUTE_POSITION) else { panic!("missing positions") };
+        let Some(VertexAttributeValues::Float32x3(original)) = mesh.attribute(Mesh::ATTRIBUTE_POSITION) else { panic!("missing positions") };
+        assert!(shifted.iter().zip(original).all(|(a, b)| (Vec3::from_array(*a) - Vec3::from_array(*b) - Vec3::X * 100.0).length() < 0.001));
         // A bad explicit index must not turn back into the old fan.
         bsp.primitive_indices[0] = 5;
         let rejected = build(&bsp, &LightmapAtlas::build(&bsp), &|_| true);

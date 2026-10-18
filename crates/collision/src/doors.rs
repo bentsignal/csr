@@ -161,10 +161,13 @@ impl CollisionWorld {
 
     /// Pose-owned collision for one simulation copy. No shared mutable state,
     /// whole-map clone, or map-grid rebuild during prediction/correction.
+    /// `solids` contains current doors AND intact brush breakables. Keeping
+    /// one overlay avoids losing either owner when the other changes state.
     pub fn with_door_solids(base: Arc<Self>, solids: Vec<Convex>) -> Arc<Self> {
-        if base.doors.is_empty() { return base; }
+        if base.doors.is_empty() && base.breakables.is_empty() { return base; }
         Arc::new(Self {
             mins: base.mins, maxs: base.maxs, doors: base.doors.clone(),
+            breakables: base.breakables.clone(),
             dynamic: base.dynamic.clone(),
             convexes: solids, base: Some(base), ..Default::default()
         })

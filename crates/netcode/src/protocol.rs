@@ -2,11 +2,11 @@
 use serde::{Deserialize, Serialize};
 use sim::{GameEvent, PlayerId, Snapshot, Team, TickInput};
 
-// v26 combines authoritative rotating-door state/cues with v25's replicated
-// BSP ladder contact in PlayerMove for prediction and foley.
+// v27 combines authoritative door poses/cues, brush-breakable health/removal,
+// and replicated BSP ladder contact for prediction and foley.
 // Older peers must reject the session before attempting snapshot decoding.
-pub const VERSION: u32 = 26;
-pub const PROTOCOL_ID: u64 = 0x4353_5257_0000_001a;
+pub const VERSION: u32 = 27;
+pub const PROTOCOL_ID: u64 = 0x4353_5257_0000_001b;
 pub const CONTROL: u8 = 0;
 pub const INPUT: u8 = 1;
 pub const SNAPSHOT: u8 = 2;
@@ -389,8 +389,12 @@ pub(crate) fn validate_state(
         || world.projectiles.len() > 4096
         || world.utility_fields.len() > 4096
         || world.doors.len() > sim::doors::MAX_DOORS
+        || world.breakables.len() > sim::breakables::MAX_BREAKABLES
     {
         return Err("snapshot entity limit exceeded".into());
+    }
+    if world.breakables.iter().any(|state| !state.valid()) {
+        return Err("invalid snapshot breakable state".into());
     }
     if world.doors.iter().any(|door| !door.valid()) {
         return Err("invalid snapshot door state".into());
@@ -626,6 +630,30 @@ mod tests {
             State { return_at: Some(f32::INFINITY), ..state }, State { return_at: Some(-1.0), ..state }] {
             assert!(!bad.valid());
         }
+    }
+
+    #[test]
+    fn breakable_wire_health_roundtrips_and_rejects_invalid_or_unbounded_state() {
+        use sim::breakables::State;
+        let mut world = sim::World::new(std::sync::Arc::new(collision::CollisionWorld::new()));
+        let player = world.add_player("fixture", Team::CounterTerrorist);
+        let welcome = ServerControl::Welcome { version: VERSION, player, tick_rate: world.tick_rate,
+            server_tick: 0, content: ContentManifest { map_id: "csgo_map_fixture".into(),
+                map_name: "fixture".into(), map_hash: "0".repeat(40), catalog_hash: "1".repeat(40) } };
+        let mut state = StateUpdate { acknowledged_input: 0, snapshot: world.snapshot() };
+        for leaf in [State { health: 12.5, destroyed: false }, State { health: 0., destroyed: true }] {
+            state.snapshot.state.breakables = vec![leaf];
+            validate_state(&state, Some(&welcome), 0, 0).unwrap();
+            assert_eq!(decode::<StateUpdate>(&encode(&state).unwrap()).unwrap(), state);
+        }
+        for leaf in [State { health: f32::NAN, destroyed: false }, State { health: f32::INFINITY, destroyed: false },
+            State { health: -1., destroyed: false }, State { health: 1., destroyed: true },
+            State { health: collision::breakables::MAX_HEALTH + 1., destroyed: false }] {
+            state.snapshot.state.breakables = vec![leaf];
+            assert!(validate_state(&state, Some(&welcome), 0, 0).is_err());
+        }
+        state.snapshot.state.breakables = vec![State { health: 1., destroyed: false }; sim::breakables::MAX_BREAKABLES + 1];
+        assert!(validate_state(&state, Some(&welcome), 0, 0).is_err());
     }
 
     #[test]

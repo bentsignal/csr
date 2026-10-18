@@ -49,8 +49,10 @@ impl World {
     }
 
     pub(crate) fn rebuild_door_collision(&mut self) {
-        let solids = self.collision.doors.iter().zip(&self.doors)
+        let mut solids: Vec<_> = self.collision.doors.iter().zip(&self.doors)
             .flat_map(|(def, state)| def.solids(state.angle)).collect();
+        solids.extend(self.collision.breakables.iter().zip(&self.breakables)
+            .filter(|(_, state)| !state.broken()).flat_map(|(def, _)| def.solids.iter().cloned()));
         self.collision = collision::CollisionWorld::with_door_solids(collision::CollisionWorld::map_arc(&self.collision), solids);
     }
 

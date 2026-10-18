@@ -21,6 +21,7 @@ mod prop_lighting;
 pub use prop_lighting::PropLightingQuery;
 mod ladders;
 pub mod doors;
+pub mod breakables;
 
 /// Distance kept between a sweep's end position and the surface it hit.
 pub const DIST_EPSILON: f32 = 0.03125;
@@ -162,6 +163,7 @@ pub struct CollisionWorld {
     pub surfaces: Vec<String>,
     /// Authored prop doors, separate from the immutable map solids.
     pub doors: std::sync::Arc<[doors::Door]>,
+    pub breakables: std::sync::Arc<[breakables::Breakable]>,
     /// A session-owned, immutable pose overlay shares the heavy map/grid.
     base: Option<std::sync::Arc<CollisionWorld>>,
     grid: Grid,
@@ -735,7 +737,8 @@ impl CollisionWorld {
             }
         };
         add_model_brushes(&mut w, 0, Vec3::ZERO);
-        for ent in &map.entities {
+        let mut breakables = Vec::new();
+        for (entity, ent) in map.entities.iter().enumerate() {
             let Some(class) = ent.str("classname") else { continue };
             if !opts.solid_brush_classes.iter().any(|c| c.eq_ignore_ascii_case(class)) {
                 continue;
@@ -753,8 +756,18 @@ impl CollisionWorld {
                 continue;
             };
             let origin = ent.str("origin").and_then(bsp::parse_origin).unwrap_or(Vec3::ZERO);
+            let start = w.convexes.len();
             add_model_brushes(&mut w, model, origin);
+            if breakables.len() < breakables::MAX_BREAKABLES {
+                if let Some(mut def) = breakables::Breakable::load(entity, ent, map) {
+                    if w.convexes.len() > start {
+                        def.solids = w.convexes.drain(start..).collect();
+                        breakables.push(def);
+                    }
+                }
+            }
         }
+        w.breakables = breakables.into();
 
         // Displacements.
         for (fi, face) in map.faces.iter().enumerate() {

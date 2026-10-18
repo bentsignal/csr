@@ -32,7 +32,7 @@ impl MapClusters {
 }
 
 pub fn update(level: Res<crate::LoadedLevel>, local: Res<crate::player::LocalPlayer>,
-    mut previous: Local<Option<i16>>, mut batches: Query<(&MapClusters, &mut Visibility)>) {
+    mut previous: Local<Option<i16>>, mut batches: Query<(&MapClusters, &mut Visibility), Without<crate::breakables::BreakableMesh>>) {
     let bsp = &level.0.bsp;
     let cluster = bsp.leafs.get(bsp.point_leaf(local.render_eye)).map_or(-1, |l| l.cluster);
     if !level.is_added() && *previous == Some(cluster) { return; }

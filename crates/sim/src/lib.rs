@@ -25,6 +25,7 @@ pub mod bots;
 pub mod model_pose;
 pub mod death;
 pub mod doors;
+pub mod breakables;
 pub mod loadout;
 pub mod objectives;
 pub mod rewind;
@@ -442,6 +443,7 @@ pub struct World {
     pub collision: Arc<CollisionWorld>,
     /// Replicated pose/lifecycle; immutable definitions stay with the map.
     pub doors: Vec<doors::State>,
+    pub breakables: Vec<breakables::State>,
     pub catalog: Arc<weapons::Catalog>,
     pub config: MoveConfig,
     pub mode: GameMode,
@@ -505,6 +507,7 @@ impl World {
         let mut world = Self {
             collision,
             doors: Vec::new(),
+            breakables: Vec::new(),
             catalog,
             config: MoveConfig::default(),
             mode: GameMode::Deathmatch,
@@ -527,6 +530,7 @@ impl World {
             next_id: 1,
             next_item: 1,
         };
+        world.reset_breakables();
         world.reset_doors();
         world
     }
@@ -599,6 +603,7 @@ impl World {
     pub fn set_mode(&mut self, mode: GameMode, rules: RulesConfig) {
         self.mode = mode;
         self.rules = rules;
+        self.reset_breakables();
         self.reset_doors();
         if mode == GameMode::Special { self.players.retain(|p|!p.is_bot); for p in &mut self.players {p.money=0;} }
         match mode {
@@ -854,6 +859,7 @@ impl World {
 
     fn start_round(&mut self, keep_survivors: bool) {
         let now = self.time();
+        self.reset_breakables();
         self.reset_doors();
         self.items.clear();
         self.projectiles.clear();
@@ -1732,6 +1738,8 @@ impl World {
             self.apply_damage(shooter, victim, &def, distance, HitGroup::Chest, eye + dir * distance, Some(dir));
         }
         if external.is_none() && best.is_none() && tr.hit() {
+            self.damage_breakable(eye, eye + dir * range, &tr,
+                if secondary { 65.0 } else if first { 40.0 } else { 25.0 }, breakables::DamageKind::Club);
             if let Some(dynamic) = &self.collision.dynamic {
                 dynamic.damage_block(tr.end, tr.normal, if secondary { 30.0 } else { 15.0 });
             }
@@ -1846,6 +1854,8 @@ impl World {
                 None => {
                     self.events.push(GameEvent::Tracer { player: id, start: eye, end: tr.end });
                     if tr.fraction < 1.0 && !self.collision.is_sky(tr.surface) {
+                        self.damage_breakable(eye, end, &tr,
+                            def.damage * def.range_modifier.powf(world_dist / 500.0), breakables::DamageKind::Bullet);
                         if let Some(dynamic)=&self.collision.dynamic {dynamic.damage_block(tr.end,tr.normal,def.damage as f32 * def.range_modifier.powf(world_dist/500.0));}
                         self.events.push(GameEvent::Impact {
                             player: id,

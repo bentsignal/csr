@@ -360,10 +360,14 @@ pub fn update(
                         if std::env::var_os("CSR_WEAPON_TRACE").is_some() {
                             info!("impact artwork: {:?} at {:?}; surface={prop}, game_material={:?}", decal.id, pos, props.get(&prop).and_then(|p| p.game_material.as_deref()));
                         }
-                        commands.spawn((Mesh3d(decal.mesh), MeshMaterial3d(decal.material), ImpactArtwork(decal.id),
+                        let mut mark = commands.spawn((Mesh3d(decal.mesh), MeshMaterial3d(decal.material), ImpactArtwork(decal.id),
                             Transform::from_translation(to_bevy(pos) + normal * 0.12)
                                 .with_rotation(Quat::from_rotation_arc(Vec3::Z, normal)),
                             ImpactFx { born: now, life: 30., velocity: Vec3::ZERO, billboard: false }));
+                        if let Some(index) = level.0.collision.breakables.iter()
+                            .position(|def| def.contains_surface(pos, crate::coords::to_source(normal))) {
+                            mark.insert(crate::breakables::BreakableMesh(index));
+                        }
                     }
                 }
                 for i in 0..3 {
