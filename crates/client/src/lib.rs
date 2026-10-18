@@ -456,6 +456,7 @@ fn spawn_level(
         model.first_face.max(0) as usize..(model.first_face.max(0) as usize + model.num_faces.max(0) as usize).min(level.bsp.faces.len())
     }).collect();
     let moving_door_builds: Vec<_> = level.collision.doors.iter().enumerate()
+        .filter(|(_, door)| level.bsp.entities[door.entity].i64("rendermode") != Some(10))
         .filter_map(|(index, door)| door.brush_model.map(|model|
             (index, world_mesh::build_brush_model(&level.bsp, &atlas, model, glam::Vec3::ZERO))))
         .collect();

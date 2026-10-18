@@ -33,9 +33,16 @@ pub struct Door {
     pub open_sound: String,
     pub close_sound: String,
     pub surface: u32,
-    hulls: Vec<mdl::ConvexHull>,
+    hulls: Vec<DoorHull>,
     pub center: Vec3,
     pub radius: f32,
+}
+
+#[derive(Debug)]
+struct DoorHull {
+    geometry: mdl::ConvexHull,
+    contents: i32,
+    surface: u32,
 }
 
 impl Door {
@@ -52,10 +59,10 @@ impl Door {
     pub fn solids(&self, angle: f32) -> Vec<Convex> {
         let rotation = self.rotation(angle);
         self.hulls.iter().filter_map(|hull| {
-            let points: Vec<_> = hull.points.iter().map(|p| self.origin + rotation * *p).collect();
+            let points: Vec<_> = hull.geometry.points.iter().map(|p| self.origin + rotation * *p).collect();
             // Rebuild the axial/edge bevels for this rotation. Reusing rotated
             // bevels alone is insufficient for swept world-axis player hulls.
-            convex_from_hull(&points, &hull.triangles, contents::SOLID, self.surface)
+            convex_from_hull(&points, &hull.geometry.triangles, hull.contents, hull.surface)
         }).collect()
     }
 
@@ -113,15 +120,16 @@ pub(super) fn load(map: &bsp::Bsp, loader: &PropHullLoader<'_>, surfaces: &mut V
         } else {
             if authored_model.starts_with('*') { continue; }
             let Some(hulls) = loader(authored_model) else { continue; };
-            (authored_model, None, entity, Vec3::ZERO, authored_angles, authored_angles, hulls)
+            (authored_model, None, entity, Vec3::ZERO, authored_angles, authored_angles,
+                hulls.into_iter().map(|hull| (hull, contents::SOLID, String::new())).collect())
         };
         // Preserve the shared malformed/zero-volume PHY rejection.
-        hulls.retain(|h| convex_from_hull(&h.points, &h.triangles, contents::SOLID, 0).is_some());
+        hulls.retain(|(h, mask, _)| convex_from_hull(&h.points, &h.triangles, *mask, 0).is_some());
         if hulls.is_empty() { continue; }
         let mut low = Vec3::splat(f32::INFINITY);
         let mut high = Vec3::splat(f32::NEG_INFINITY);
         let mut radius = 0.0f32;
-        for p in hulls.iter().flat_map(|h| &h.points) {
+        for p in hulls.iter().flat_map(|(h, _, _)| &h.points) {
             low = low.min(*p); high = high.max(*p); radius = radius.max(p.length());
         }
         if radius > 4096.0 { continue; }
@@ -138,6 +146,15 @@ pub(super) fn load(map: &bsp::Bsp, loader: &PropHullLoader<'_>, surfaces: &mut V
             Some(i) => i as u32,
             None => { surfaces.push(surface_name); (surfaces.len() - 1) as u32 }
         };
+        let hulls = hulls.into_iter().map(|(geometry, contents, name)| {
+            let surface = if name.is_empty() { surface } else {
+                match surfaces.iter().position(|s| s == &name) {
+                    Some(index) => index as u32,
+                    None => { surfaces.push(name); (surfaces.len() - 1) as u32 }
+                }
+            };
+            DoorHull { geometry, contents, surface }
+        }).collect();
         let cue = |key| ent.str(key).filter(|s| !s.eq_ignore_ascii_case("none")).unwrap_or("").to_owned();
         names.push((ent.str("targetname").unwrap_or("").to_owned(), ent.str("slavename").unwrap_or("").to_owned()));
         doors.push(Door {
@@ -176,7 +193,7 @@ pub(super) fn load(map: &bsp::Bsp, loader: &PropHullLoader<'_>, surfaces: &mut V
 /// Recover the bounded compiled brush convexes in their local hinge frame.
 /// Plane triplets supply vertices; each plane's ordered polygon supplies edges
 /// for swept-box bevels. Do not substitute a visible mesh or model bounds.
-fn brush_hulls(map: &bsp::Bsp, model: usize) -> Option<Vec<mdl::ConvexHull>> {
+fn brush_hulls(map: &bsp::Bsp, model: usize) -> Option<Vec<(mdl::ConvexHull, i32, String)>> {
     let model = map.models.get(model)?;
     let mut brushes = Vec::new();
     crate::collect_leaf_brushes(map, model.head_node, &mut brushes);
@@ -185,13 +202,17 @@ fn brush_hulls(map: &bsp::Bsp, model: usize) -> Option<Vec<mdl::ConvexHull>> {
     let mut hulls = Vec::new();
     for index in brushes {
         let brush = map.brushes.get(index as usize)?;
-        if brush.contents & contents::MASK_SOLID == 0 { continue; }
+        if brush.contents & (contents::MASK_SOLID | contents::PLAYERCLIP | contents::LADDER) == 0 { continue; }
         let first = usize::try_from(brush.first_side).ok()?;
         let count = usize::try_from(brush.num_sides).ok()?;
         if !(4..=64).contains(&count) { return None; }
         let mut planes = Vec::new();
+        let mut material = String::new();
         for side in map.brush_sides.get(first..first.checked_add(count)?)? {
             if side.bevel { continue; }
+            if material.is_empty() && side.texinfo >= 0 {
+                material = map.texinfo_material(side.texinfo as usize).unwrap_or("").to_ascii_lowercase();
+            }
             let plane = map.planes.get(side.plane as usize)?;
             if !plane.normal.is_finite() || !plane.dist.is_finite() { return None; }
             planes.push((plane.normal, plane.dist));
@@ -202,8 +223,11 @@ fn brush_hulls(map: &bsp::Bsp, model: usize) -> Option<Vec<mdl::ConvexHull>> {
             let det = na.dot(nb.cross(nc));
             if det.abs() < 1e-6 { continue; }
             let point = (nb.cross(nc) * da + nc.cross(na) * db + na.cross(nb) * dc) / det;
-            if !point.is_finite() || point.abs().max_element() > 4096.0 { continue; }
+            if !point.is_finite() { return None; }
             if planes.iter().any(|(n, d)| n.dot(point) - d > 0.01) { continue; }
+            // Only after containment is established is this a genuine vertex.
+            // Reject an unsupported whole volume, never manufacture its subset.
+            if point.abs().max_element() > 4096.0 { return None; }
             if !points.iter().any(|p| p.distance_squared(point) < 1e-6) { points.push(point); }
         } } }
         if points.len() < 4 || points.len() > 256 { return None; }
@@ -222,7 +246,7 @@ fn brush_hulls(map: &bsp::Bsp, model: usize) -> Option<Vec<mdl::ConvexHull>> {
             for i in 1..face.len()-1 { triangles.push([face[0] as u32, face[i] as u32, face[i+1] as u32]); }
         }
         convex_from_hull(&points, &triangles, contents::SOLID, 0)?;
-        hulls.push(mdl::ConvexHull { points, triangles });
+        hulls.push((mdl::ConvexHull { points, triangles }, brush.contents, material));
     }
     (!hulls.is_empty()).then_some(hulls)
 }

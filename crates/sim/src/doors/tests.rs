@@ -243,6 +243,10 @@ fn tick_input_impacts_capture_shot_pose_and_survive_prediction_restore_and_death
 /// Compiled brush plus a separately positioned visual leaf, deliberately with
 /// no PHY. This exercises map admission, tick collision and snapshot together.
 fn brush_fixture(rate: u32) -> (World, PlayerId) {
+    brush_fixture_with_contents(rate, contents::SOLID)
+}
+
+fn brush_fixture_with_contents(rate: u32, mask: i32) -> (World, PlayerId) {
     let mut map = bsp::Bsp::default();
     let doc = kv::parse(r#"
         hinge { classname func_door_rotating model *1 targetname hinge
@@ -265,7 +269,7 @@ fn brush_fixture(rate: u32) -> (World, PlayerId) {
         .into_iter().zip([maxs.x, -mins.x, maxs.y, -mins.y, maxs.z, -mins.z])
         .map(|(normal, dist)| bsp::Plane { normal, dist, kind: 0 }).collect();
     map.brush_sides = (0..6).map(|plane| bsp::BrushSide { plane, texinfo: -1, dispinfo: -1, bevel: false }).collect();
-    map.brushes = vec![bsp::Brush { first_side: 0, num_sides: 6, contents: contents::SOLID }];
+    map.brushes = vec![bsp::Brush { first_side: 0, num_sides: 6, contents: mask }];
     let mut collision = CollisionWorld::from_bsp(&map, &MapCollisionOptions::default(), &|_| None);
     assert_eq!(collision.doors.len(), 1);
     let size = 2048.;
@@ -306,5 +310,28 @@ fn parented_visual_brush_door_moves_collision_once_and_preserves_toggle_and_snap
             assert_eq!(world.state(), restored.state());
         }
         assert!(world.player(id).unwrap().movement.origin.x > 180.);
+    }
+}
+
+
+#[test]
+fn moving_brush_preserves_grate_and_player_clip_masks_across_rotations() {
+    for contents in [collision::contents::GRATE, collision::contents::PLAYERCLIP] {
+        let (mut world, _) = brush_fixture_with_contents(128, contents);
+        for angle in [0., -45., -90.] {
+            world.doors[0].angle=angle; world.doors[0].target=angle;
+            world.rebuild_door_collision();
+            let def=&world.collision.doors[0];
+            let center=def.center_at(angle);
+            let normal=def.rotation(angle)*Vec3::X;
+            let a=center-normal*60.; let b=center+normal*60.;
+            assert!(world.collision.trace_ray(a,b,collision::contents::MASK_PLAYERSOLID).hit());
+            assert!(!world.collision.trace_ray(a,b,collision::contents::MASK_SHOT).hit());
+            let state=world.decode(&world.encode_state()).unwrap();
+            let mut restored=brush_fixture_with_contents(128,contents).0;
+            restored.restore(state);
+            assert_eq!(restored.state(),world.state());
+            assert!(!restored.collision.trace_ray(a,b,collision::contents::MASK_SHOT).hit());
+        }
     }
 }
