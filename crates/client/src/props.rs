@@ -3,8 +3,9 @@
 //! Static props never move, so every instance is transformed into world
 //! space at load time and merged into one mesh per material (per sky/world
 //! layer). Eligible authored VHV lighting or spatial ambient-cube/Sun lighting
-//! is baked into vertex colours. Bumped/special-mode props keep their instance
-//! fallback. A few hundred draws replace thousands of entities.
+//! is baked into vertex colours. Bumped ordinary props transport directional
+//! coefficients instead, evaluated with the fragment normal. Special modes
+//! keep their instance fallback. A few hundred draws replace thousands of entities.
 
 use crate::coords::{rotation_to_bevy, to_bevy};
 use crate::material::WorldMaterial;
@@ -18,6 +19,8 @@ use std::collections::HashMap;
 
 #[path = "prop_vertex_lighting.rs"]
 mod vertex_lighting;
+#[path = "prop_irradiance.rs"]
+pub(crate) mod irradiance;
 
 /// The map's sun, from `light_environment`.
 #[derive(Clone, Copy, Debug)]
@@ -136,6 +139,22 @@ fn surface_light(
     normal: glam::Vec3,
     prop_ordinal: usize,
 ) -> glam::Vec3 {
+    // Plain surfaces can skip a ray whose cosine contribution is zero.
+    surface_directional_light(bsp, collision, sun.filter(|s| normal.dot(s.to_sun) > 0.0),
+        fallback, position, normal, prop_ordinal).eval(normal)
+}
+
+/// Keep the complete cube and visible Sun for later evaluation with a bumped
+/// normal. A geometric back face can still have a sun-facing perturbed normal.
+fn surface_directional_light(
+    bsp: &bsp::Bsp,
+    collision: &CollisionWorld,
+    sun: Option<Sun>,
+    fallback: &PropLight,
+    position: glam::Vec3,
+    normal: glam::Vec3,
+    prop_ordinal: usize,
+) -> PropLight {
     // Resolve a surface exactly on a BSP split towards its visible side. This
     // is the collision tolerance, not the old multi-inch/radius ray teleport.
     let sample = position + normal * collision::DIST_EPSILON;
@@ -148,13 +167,13 @@ fn surface_light(
         to_sun: sun.map_or(glam::Vec3::Z, |s| s.to_sun),
         sun: glam::Vec3::ZERO,
     };
-    if let Some(s) = sun.filter(|s| normal.dot(s.to_sun) > 0.0) {
+    if let Some(s) = sun {
         let tr = collision.trace_prop_lighting_ray(sample, sample + s.to_sun * 16384.0, prop_ordinal);
         if !tr.start_solid && !tr.all_solid && (!tr.hit() || collision.is_sky(tr.surface)) {
             light.sun = s.color;
         }
     }
-    light.eval(normal)
+    light
 }
 
 #[derive(Default)]
@@ -165,6 +184,7 @@ struct Batch {
     colors: Vec<[f32; 4]>,
     light_ids: Vec<[f32; 2]>,
     tangents: Vec<[f32; 4]>,
+    irradiance: [Vec<[u32; 4]>; 3],
     indices: Vec<u32>,
 }
 
@@ -178,6 +198,9 @@ impl Batch {
         m.insert_attribute(Mesh::ATTRIBUTE_UV_1, self.light_ids);
         m.insert_indices(Indices::U32(self.indices));
         m.insert_attribute(Mesh::ATTRIBUTE_TANGENT, self.tangents);
+        for (attribute, values) in irradiance::ATTRIBUTES.into_iter().zip(self.irradiance) {
+            if !values.is_empty() { m.insert_attribute(attribute, values); }
+        }
         m
     }
 }
@@ -273,7 +296,7 @@ pub fn spawn(
 
     // One material per resolved VMT, shared by every prop that uses it.
     let mut material_cache: HashMap<String, Handle<WorldMaterial>> = HashMap::new();
-    let mut batches: HashMap<(AssetId<WorldMaterial>, bool, [i32; 3]), (Handle<WorldMaterial>, Batch)> = HashMap::new();
+    let mut batches: HashMap<(AssetId<WorldMaterial>, bool, [i32; 3], bool), (Handle<WorldMaterial>, Batch)> = HashMap::new();
 
     // Six ambient faces, Sun direction/color, then per-instance diffuse tint.
     const PROP_TEXELS: usize = 9;
@@ -281,6 +304,7 @@ pub fn spawn(
     let mut authored_meshes = 0usize;
     let mut authored_vertices = 0usize;
     let mut surface_vertices = 0usize;
+    let mut directional_vertices = 0usize;
     let mut detail_meshes = 0usize;
     let mut tinted_instances = 0usize;
     for (prop_index, prop) in bsp.static_props.props.iter().enumerate() {
@@ -295,7 +319,8 @@ pub fn spawn(
         // or leaf boundary. The cache dies with this placed instance, so another
         // instance of the same model cannot reuse its lighting/occlusion.
         let mut surface_cache = HashMap::<([u32; 3], [u32; 3]), glam::Vec3>::new();
-        let cube = [0, 1, 4, 5, 3, 2].map(|i| light.cube[i].extend(1.0));
+        let mut directional_cache = HashMap::<([u32; 3], [u32; 3]), PropLight>::new();
+        let cube = irradiance::CUBE_ORDER.map(|i| light.cube[i].extend(1.0));
         // Opacity changes need separate native admission and material modes.
         // Unsupported layouts/alpha retain the previous identity modulation.
         let tint = match prop.diffuse_modulation {
@@ -346,15 +371,18 @@ pub fn spawn(
                 .filter(|m| m.params.flags & crate::material::flags::VERTEX_LIT != 0
                     && m.params.flags & crate::material::flags::NORMAL == 0)
                 .and_then(|_| authored.as_ref()?.get(mesh_index)?.as_deref());
-            // Normal-mapped props still evaluate their per-instance cube in
-            // world.wgsl. Do not silently remove normal mapping or upload colors
-            // which that shader will discard. Special prop lighting modes also
-            // retain their previous fallback; only ordinary/fading props enter.
+            // Special prop lighting modes retain their previous fallback. Only
+            // ordinary/fading props enter either spatial path. Bumped meshes
+            // carry full coefficients, rather than colors the shader discards.
             let spatial_fallback = authored_colors.is_none()
                 && prop.flags & !1 == 0
                 && materials.get(&material).is_some_and(|m|
                     m.params.flags & crate::material::flags::VERTEX_LIT != 0
                     && m.params.flags & crate::material::flags::NORMAL == 0);
+            let directional_fallback = prop.flags & !1 == 0
+                && materials.get(&material).is_some_and(|m|
+                    m.params.flags & crate::material::flags::VERTEX_LIT != 0
+                    && m.params.flags & crate::material::flags::NORMAL != 0);
             if let Some(colors) = authored_colors {
                 // The scoped candidate checked mesh identity/counts; its
                 // individual hardware-order interpretation still needs native
@@ -365,7 +393,7 @@ pub fn spawn(
                     colors.len(), bsp.static_props.models[prop.model as usize]);
             }
             let (_, batch) = batches
-                .entry((material.id(), in_sky.is_some(), crate::world_mesh::spatial_cell(prop.origin)))
+                .entry((material.id(), in_sky.is_some(), crate::world_mesh::spatial_cell(prop.origin), directional_fallback))
                 .or_insert_with(|| (material.clone(), Batch::default()));
             let base = batch.positions.len() as u32;
             for (vertex_index, v) in mesh.vertices.iter().enumerate() {
@@ -381,6 +409,18 @@ pub fn spawn(
                     let key = (position.to_array().map(f32::to_bits), n_source.to_array().map(f32::to_bits));
                     *surface_cache.entry(key).or_insert_with(||
                         surface_light(bsp, collision, sun, &light, position, n_source, prop_index))
+                } else if directional_fallback {
+                    directional_vertices += 1;
+                    let position = prop.origin + rot * (v.position * scale);
+                    let key = (position.to_array().map(f32::to_bits), n_source.to_array().map(f32::to_bits));
+                    let surface = directional_cache.entry(key).or_insert_with(||
+                        surface_directional_light(bsp, collision, sun, &light, position, n_source, prop_index));
+                    for (values, packed) in batch.irradiance.iter_mut().zip(irradiance::pack(surface)) {
+                        values.push(packed);
+                    }
+                    // Retain the color stream/layout; the directional shader
+                    // replaces it once, after perturbing the normal.
+                    surface.eval(n_source)
                 } else {
                     light.eval(n_source)
                 };
@@ -410,7 +450,7 @@ pub fn spawn(
     for handle in material_cache.values() {
         if let Some(mut mat) = materials.get_mut(handle) { mat.prop_light = lighting.clone(); }
     }
-    for ((_, in_sky, _), (material, batch)) in batches {
+    for ((_, in_sky, _, _), (material, batch)) in batches {
         if batch.indices.is_empty() {
             continue;
         }
@@ -428,7 +468,7 @@ pub fn spawn(
         stats.draws += 1;
     }
     info!("Authored equal-group prop lighting: meshes={authored_meshes} vertices={authored_vertices}; unsupported meshes use ambient/Sun fallback");
-    info!("Spatial ambient/Sun prop fallback: vertices={surface_vertices}; bumped/special-mode props retain instance lighting");
+    info!("Spatial ambient/Sun prop fallback: plain_vertices={surface_vertices} directional_vertices={directional_vertices} directional_attribute_bytes={}; special-mode props retain instance lighting", directional_vertices * 48);
     info!("Authored static-prop diffuse tint: nonwhite_instances={tinted_instances}");
     info!("Authored ordinary static-prop detail: meshes={detail_meshes}; unsupported layers retain base material");
     stats
@@ -670,5 +710,68 @@ mod lighting_tests {
         // an arbitrary neighboring leaf or an unrelated authored origin.
         map.leaf_ambient_index[1] = (0, 0);
         assert_eq!(surface_light(&map, &w, None, &instance, SourceVec3::new(-80.0, 0.0, 1.0), SourceVec3::Z, 0), instance.cube[4]);
+    }
+
+    #[test]
+    fn bumped_surface_keeps_sun_for_perturbed_normals_but_rejects_local_occlusion() {
+        let (map, mut w) = fixture(false);
+        add_world_bounds(&mut w, SourceVec3::new(-256.0, -256.0, 33.0), SourceVec3::new(32.0, 256.0, 44.0), "partial_roof");
+        w.finalize();
+        let instance = fallback(&map, &w);
+        assert_eq!(instance.sun, SourceVec3::ZERO);
+        let sample = |x| surface_directional_light(&map, &w, Some(SUN), &instance,
+            SourceVec3::new(x, 0., 1.), -SourceVec3::Z, 0);
+        let covered = sample(-80.);
+        let exposed = sample(80.);
+        assert_eq!(covered.sun, SourceVec3::ZERO);
+        assert_eq!(exposed.sun, SUN.color, "geometric back face must not cull a later bumped Sun response");
+        assert_eq!(covered.eval(-SourceVec3::Z), exposed.eval(-SourceVec3::Z));
+        assert_eq!(exposed.eval(SourceVec3::Z) - covered.eval(SourceVec3::Z), SUN.color);
+        assert_eq!(surface_light(&map, &w, Some(SUN), &instance,
+            SourceVec3::new(80., 0., 1.), -SourceVec3::Z, 0), exposed.eval(-SourceVec3::Z));
+
+        // A missing surface cube may retain ambient, but an exposed instance
+        // must not leak its Sun through remaining world solid or other props.
+        for other_prop in [false, true] {
+            let (map, mut w) = fixture(other_prop);
+            if !other_prop { add_world_box(&mut w, -8., 8., "world_solid"); }
+            w.finalize();
+            let fallback = PropLight { cube: instance.cube, sun: SUN.color, to_sun: SUN.to_sun };
+            let local = surface_directional_light(&map, &w, Some(SUN), &fallback,
+                SourceVec3::ZERO, -SourceVec3::Z, 0);
+            assert_eq!(local.sun, SourceVec3::ZERO, "other_prop={other_prop}");
+            assert_eq!(local.cube, instance.cube);
+        }
+    }
+
+    #[test]
+    fn prop_batches_keep_all_packed_streams_aligned_without_changing_ordinary_layouts() {
+        for directional in [false, true] {
+            let mut batch = Batch::default();
+            let light = PropLight { cube: [SourceVec3::ONE; 6], sun: SourceVec3::ZERO, to_sun: SUN.to_sun };
+            for _ in 0..3 {
+                batch.positions.push([0.; 3]);
+                batch.normals.push([0., 1., 0.]);
+                batch.uvs.push([0.; 2]);
+                batch.light_ids.push([7., 0.]);
+                batch.colors.push([1.; 4]);
+                batch.tangents.push([1., 0., 0., 1.]);
+                if directional {
+                    for (values, packed) in batch.irradiance.iter_mut().zip(irradiance::pack(&light)) {
+                        values.push(packed);
+                    }
+                }
+            }
+            batch.indices = vec![0, 1, 2];
+            let mesh = batch.into_mesh();
+            assert_eq!(mesh.count_vertices(), 3);
+            for attribute in irradiance::ATTRIBUTES {
+                assert_eq!(mesh.contains_attribute(attribute), directional);
+                if directional {
+                    let Some(bevy::mesh::VertexAttributeValues::Uint32x4(values)) = mesh.attribute(attribute) else { panic!("packed integer attribute lost"); };
+                    assert_eq!(values.len(), 3);
+                }
+            }
+        }
     }
 }

@@ -1,12 +1,104 @@
 // World / prop shader for CSGO Rewrite.
 //
-// Inputs come from Bevy's default mesh vertex shader:
+// Inputs come from Bevy's mesh vertex shader, or the static-prop specialization:
 //   uv    = base texture coordinates
 //   uv_b  = lightmap atlas coordinates (world geometry)
 //   color = rgb: vertex tint, a: WorldVertexTransition blend weight
 
 #import bevy_pbr::forward_io::VertexOutput
 #import bevy_pbr::mesh_view_bindings::view
+#ifdef CSR_SPATIAL_PROP
+#import bevy_pbr::{mesh_functions, view_transformations::position_world_to_clip}
+
+// Only unskinned static-prop batches with all three packed attributes use this
+// entry point. Other meshes retain Bevy's own vertex shader and VertexOutput.
+struct SpatialPropVertex {
+    @builtin(instance_index) instance_index: u32,
+    @location(0) position: vec3<f32>,
+    @location(1) normal: vec3<f32>,
+    @location(2) uv: vec2<f32>,
+    @location(3) uv_b: vec2<f32>,
+    @location(4) tangent: vec4<f32>,
+    @location(5) color: vec4<f32>,
+    @location(8) light0: vec4<u32>,
+    @location(9) light1: vec4<u32>,
+    @location(10) light2: vec4<u32>,
+}
+
+struct SpatialPropOutput {
+    @builtin(position) position: vec4<f32>,
+    @location(0) world_position: vec4<f32>,
+    @location(1) world_normal: vec3<f32>,
+    @location(2) uv: vec2<f32>,
+    // This remains an INSTANCE row for tint/Sun direction. It is never a
+    // per-vertex lighting row, and never interpolates between unrelated rows.
+    @location(3) @interpolate(flat) uv_b: vec2<f32>,
+    @location(4) world_tangent: vec4<f32>,
+    @location(5) color: vec4<f32>,
+#ifdef VERTEX_OUTPUT_INSTANCE_INDEX
+    @location(6) @interpolate(flat) instance_index: u32,
+#endif
+#ifdef VISIBILITY_RANGE_DITHER
+    @location(7) @interpolate(flat) visibility_range_dither: i32,
+#endif
+    @location(8) cube0: vec3<f32>,
+    @location(9) cube1: vec3<f32>,
+    @location(10) cube2: vec3<f32>,
+    @location(11) cube3: vec3<f32>,
+    @location(12) cube4: vec3<f32>,
+    @location(13) cube5: vec3<f32>,
+    @location(14) sun: vec3<f32>,
+}
+
+@vertex
+fn vertex(in: SpatialPropVertex) -> SpatialPropOutput {
+    let world_from_local = mesh_functions::get_world_from_local(in.instance_index);
+    var out: SpatialPropOutput;
+    out.world_position = mesh_functions::mesh_position_local_to_world(world_from_local, vec4<f32>(in.position, 1.0));
+    out.position = position_world_to_clip(out.world_position.xyz);
+    out.world_normal = mesh_functions::mesh_normal_local_to_world(in.normal, in.instance_index);
+    out.world_tangent = mesh_functions::mesh_tangent_local_to_world(world_from_local, in.tangent, in.instance_index);
+    out.uv = in.uv;
+    out.uv_b = in.uv_b;
+    out.color = in.color;
+#ifdef VERTEX_OUTPUT_INSTANCE_INDEX
+    out.instance_index = in.instance_index;
+#endif
+#ifdef VISIBILITY_RANGE_DITHER
+    out.visibility_range_dither = mesh_functions::get_visibility_range_dither_level(in.instance_index, world_from_local[3]);
+#endif
+    // Same half precision as the existing instance Rgba16Float texture. Unpack
+    // BEFORE raster interpolation; packed integers cannot be interpolated.
+    let a = unpack2x16float(in.light0.x);
+    let b = unpack2x16float(in.light0.y);
+    let c = unpack2x16float(in.light0.z);
+    let d = unpack2x16float(in.light0.w);
+    let e = unpack2x16float(in.light1.x);
+    let f = unpack2x16float(in.light1.y);
+    let g = unpack2x16float(in.light1.z);
+    let h = unpack2x16float(in.light1.w);
+    let i = unpack2x16float(in.light2.x);
+    let j = unpack2x16float(in.light2.y);
+    let k = unpack2x16float(in.light2.z);
+    out.cube0 = vec3<f32>(a, b.x);
+    out.cube1 = vec3<f32>(b.y, c);
+    out.cube2 = vec3<f32>(d, e.x);
+    out.cube3 = vec3<f32>(e.y, f);
+    out.cube4 = vec3<f32>(g, h.x);
+    out.cube5 = vec3<f32>(h.y, i);
+    out.sun = vec3<f32>(j, k.x);
+    return out;
+}
+
+fn spatial_prop_irradiance(in: SpatialPropOutput, n: vec3<f32>) -> vec3<f32> {
+    let n2 = n * n;
+    let ambient = n2.x * select(in.cube1, in.cube0, n.x >= 0.0)
+        + n2.y * select(in.cube3, in.cube2, n.y >= 0.0)
+        + n2.z * select(in.cube5, in.cube4, n.z >= 0.0);
+    let dir = textureLoad(prop_light, vec2<i32>(6, i32(in.uv_b.x)), 0).xyz;
+    return ambient + in.sun * max(dot(n, dir), 0.0);
+}
+#endif
 #ifdef CSR_SHADOW_DIAGNOSTIC
 #import bevy_pbr::{
     shadows::fetch_directional_shadow,
@@ -149,7 +241,11 @@ fn tonemap(x: vec3<f32>) -> vec3<f32> {
 }
 
 @fragment
+#ifdef CSR_SPATIAL_PROP
+fn fragment(in: SpatialPropOutput) -> @location(0) vec4<f32> {
+#else
 fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
+#endif
 #ifdef VERTEX_UVS_A
     let uv = in.uv;
 #else
@@ -298,7 +394,11 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
         // Static props: per-vertex lighting baked at load time.
         light = vcolor.rgb;
 #ifdef VERTEX_UVS_B
+#ifdef CSR_SPATIAL_PROP
+        if (params.flags & NORMAL) != 0u { light = spatial_prop_irradiance(in, n); }
+#else
         if (params.flags & NORMAL) != 0u { light = prop_irradiance(n, i32(round(in.uv_b.x))); }
+#endif
         // Tint belongs to this placed prop, not its shared material or lighting.
         // Other material users retain their existing one-texel identity default.
         if textureDimensions(prop_light, 0).x >= 9u {

@@ -210,6 +210,12 @@ impl From<&WorldMaterial> for WorldMaterialKey {
 }
 
 impl Material for WorldMaterial {
+    fn vertex_shader() -> ShaderRef {
+        // Specialization restores Bevy's own vertex shader for every mesh
+        // without the complete static-prop directional attribute layout.
+        SHADER_PATH.into()
+    }
+
     fn fragment_shader() -> ShaderRef {
         SHADER_PATH.into()
     }
@@ -243,11 +249,12 @@ impl Material for WorldMaterial {
     }
 
     fn specialize(
-        _pipeline: &MaterialPipeline,
+        pipeline: &MaterialPipeline,
         descriptor: &mut RenderPipelineDescriptor,
-        _layout: &MeshVertexBufferLayoutRef,
+        layout: &MeshVertexBufferLayoutRef,
         key: MaterialPipelineKey<Self>,
     ) -> Result<(), SpecializedMeshPipelineError> {
+        specialize_prop_vertex(descriptor, layout, &pipeline.mesh_pipeline.shader)?;
         descriptor.primitive.cull_mode = if key.bind_group_data.cull { Some(Face::Back) } else { None };
         if key.bind_group_data.shadow_diagnostic {
             if let Some(fragment) = descriptor.fragment.as_mut() {
@@ -265,5 +272,95 @@ impl Material for WorldMaterial {
             }
         }
         Ok(())
+    }
+}
+
+/// Forward-only specialization: Bevy also invokes Material::specialize for its
+/// depth/shadow prepass, whose vertex IO must retain the prepass contract.
+fn specialize_prop_vertex(
+    descriptor: &mut RenderPipelineDescriptor,
+    layout: &MeshVertexBufferLayoutRef,
+    default_mesh_shader: &Handle<Shader>,
+) -> Result<(), SpecializedMeshPipelineError> {
+    if descriptor.vertex.shader_defs.contains(&"PREPASS_PIPELINE".into()) {
+        return Ok(());
+    }
+    let attributes = crate::props::irradiance::ATTRIBUTES;
+    if layout.0.contains(attributes[0]) {
+        descriptor.vertex.buffers = vec![layout.0.get_layout(&[
+            Mesh::ATTRIBUTE_POSITION.at_shader_location(0),
+            Mesh::ATTRIBUTE_NORMAL.at_shader_location(1),
+            Mesh::ATTRIBUTE_UV_0.at_shader_location(2),
+            Mesh::ATTRIBUTE_UV_1.at_shader_location(3),
+            Mesh::ATTRIBUTE_TANGENT.at_shader_location(4),
+            Mesh::ATTRIBUTE_COLOR.at_shader_location(5),
+            attributes[0].at_shader_location(8),
+            attributes[1].at_shader_location(9),
+            attributes[2].at_shader_location(10),
+        ])?];
+        descriptor.vertex.shader_defs.push("CSR_SPATIAL_PROP".into());
+        if let Some(fragment) = descriptor.fragment.as_mut() {
+            fragment.shader_defs.push("CSR_SPATIAL_PROP".into());
+        }
+    } else {
+        // Preserve skinning, morphs and all other default mesh behavior.
+        descriptor.vertex.shader = default_mesh_shader.clone();
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod prop_vertex_tests {
+    use super::*;
+    use bevy::{asset::RenderAssetUsages, mesh::{MeshVertexBufferLayouts, PrimitiveTopology},
+        render::render_resource::FragmentState};
+
+    fn layout(packed_attributes: usize) -> MeshVertexBufferLayoutRef {
+        let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::MAIN_WORLD);
+        mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, vec![[0f32; 3]; 3]);
+        mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, vec![[0f32, 0., 1.]; 3]);
+        mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, vec![[0f32; 2]; 3]);
+        mesh.insert_attribute(Mesh::ATTRIBUTE_UV_1, vec![[0f32; 2]; 3]);
+        mesh.insert_attribute(Mesh::ATTRIBUTE_TANGENT, vec![[1f32, 0., 0., 1.]; 3]);
+        mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, vec![[1f32; 4]; 3]);
+        for attribute in crate::props::irradiance::ATTRIBUTES.into_iter().take(packed_attributes) {
+            mesh.insert_attribute(attribute, vec![[0u32; 4]; 3]);
+        }
+        mesh.get_mesh_vertex_buffer_layout(&mut MeshVertexBufferLayouts::default())
+    }
+
+    #[test]
+    fn forward_props_require_complete_coefficients_and_stay_within_vertex_limits() {
+        let mut descriptor = RenderPipelineDescriptor {
+            fragment: Some(FragmentState::default()), ..default()
+        };
+        specialize_prop_vertex(&mut descriptor, &layout(3), &Handle::default()).unwrap();
+        assert!(descriptor.vertex.shader_defs.contains(&"CSR_SPATIAL_PROP".into()));
+        assert!(descriptor.fragment.as_ref().unwrap().shader_defs.contains(&"CSR_SPATIAL_PROP".into()));
+        let buffer = &descriptor.vertex.buffers[0];
+        assert_eq!(buffer.array_stride, 120); // existing72 + packed48 bytes
+        assert_eq!(buffer.attributes.len(), 9);
+        assert!(buffer.attributes.iter().all(|a| a.shader_location < 16));
+        // Do not silently fill missing directional faces or truncate vertices.
+        assert!(specialize_prop_vertex(&mut descriptor, &layout(2), &Handle::default()).is_err());
+    }
+
+    #[test]
+    fn ordinary_meshes_keep_bevy_vertex_shader_and_prepass_io_is_untouched() {
+        let mut shaders = Assets::<Shader>::default();
+        let original = shaders.add(Shader::from_wgsl("", "original"));
+        let bevy_default = shaders.add(Shader::from_wgsl("", "default"));
+        let mut descriptor = RenderPipelineDescriptor::default();
+        descriptor.vertex.shader = original.clone();
+        specialize_prop_vertex(&mut descriptor, &layout(0), &bevy_default).unwrap();
+        assert_eq!(descriptor.vertex.shader, bevy_default);
+        assert!(!descriptor.vertex.shader_defs.contains(&"CSR_SPATIAL_PROP".into()));
+        for count in [0, 3] {
+            descriptor.vertex.shader = original.clone();
+            descriptor.vertex.shader_defs = vec!["PREPASS_PIPELINE".into()];
+            let before = descriptor.clone();
+            specialize_prop_vertex(&mut descriptor, &layout(count), &bevy_default).unwrap();
+            assert_eq!(descriptor, before);
+        }
     }
 }
