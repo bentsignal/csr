@@ -20,7 +20,7 @@ fn reference(
                 }
             }
         }
-        tr.end = if tr.all_solid { start } else { start.lerp(end, tr.fraction) };
+        tr.end = if tr.all_solid { start } else { start + (end - start) * tr.fraction };
         return (tr, owner);
     }
     if let Some(world)=&world.dynamic { return (world.trace_box(start,end,mins,maxs,mask), None); }
@@ -369,4 +369,25 @@ fn scratch_warm_queries_retain_storage_and_unwind_clears_it() {
     assert_idle();
     query();
     assert_eq!(storage(), warm);
+}
+
+#[test]
+fn runtime_overlay_floor_snap_preserves_stationary_axes_beside_wall() {
+    let mut base = CollisionWorld::new();
+    base.add_convex(solid(Vec3::new(-3000., -2000., -100.),
+        Vec3::new(-2000., -1500., 6.328184), contents::SOLID, 1));
+    base.add_convex(solid(Vec3::new(-3000., -2000., -100.),
+        Vec3::new(-2512., -1500., 48.), contents::SOLID, 2));
+    base.finalize();
+    let overlay = CollisionWorld { base: Some(std::sync::Arc::new(base)), ..Default::default() };
+    let start = Vec3::new(-2495.9998, -1728.787, 8.296946);
+    let mins = Vec3::new(-16., -16., 0.);
+    let maxs = Vec3::new(16., 16., 72.);
+    assert!(!overlay.trace_box(start, start, mins, maxs, contents::MASK_PLAYERSOLID).start_solid);
+    let hit = overlay.trace_box(start, start - Vec3::Z * 20., mins, maxs, contents::MASK_PLAYERSOLID);
+    assert!(hit.hit() && !hit.start_solid);
+    assert_eq!(hit.end.x.to_bits(), start.x.to_bits());
+    assert_eq!(hit.end.y.to_bits(), start.y.to_bits());
+    assert!(!overlay.trace_box(hit.end, hit.end, mins, maxs, contents::MASK_PLAYERSOLID).start_solid,
+        "a downward floor snap cannot move the hull sideways into an adjacent wall");
 }

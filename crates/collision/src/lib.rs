@@ -217,7 +217,7 @@ pub fn clip_bounds(start: Vec3, end: Vec3, mins: Vec3, maxs: Vec3, low: Vec3, hi
         Plane{normal:Vec3::Z,dist:high.z}, Plane{normal:-Vec3::Z,dist:-low.z}];
     let offset=(mins+maxs)*0.5;
     clip_convex(&planes,start+offset,end+offset,(maxs-mins)*0.5,contents,surface,tr);
-    tr.end=if tr.all_solid {start} else {start.lerp(end,tr.fraction)};
+    tr.end=if tr.all_solid {start} else {start + (end - start) * tr.fraction};
 }
 
 /// Map ordinal of the runtime solid that won the ordinary masked clip query.
@@ -420,7 +420,9 @@ impl CollisionWorld {
                     }
                 }
             }
-            tr.end = if tr.all_solid { start } else { start.lerp(end, tr.fraction) };
+            // Keep stationary axes bit-exact, as in the static query. Weighted
+            // endpoint sums can round a vertical floor snap sideways into a wall.
+            tr.end = if tr.all_solid { start } else { start + (end - start) * tr.fraction };
             return (tr, owner);
         }
         if let Some(world)=&self.dynamic { return (world.trace_box(start,end,mins,maxs,mask), None); }

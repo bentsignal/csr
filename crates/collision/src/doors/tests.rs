@@ -116,7 +116,7 @@ fn runtime_swept_bounds_rejection_matches_unfiltered_convex_clipping() {
                                     solid.contents, solid.surface, &mut expected);
                             }
                         }
-                        expected.end = if expected.all_solid { start } else { start.lerp(end, expected.fraction) };
+                        expected.end = if expected.all_solid { start } else { start + (end - start) * expected.fraction };
                         let actual = world.trace_box_excluding(start, end, mins, maxs, mask, exclusion);
                         assert_eq!(actual.fraction.to_bits(), expected.fraction.to_bits());
                         assert_eq!(actual.end, expected.end);
