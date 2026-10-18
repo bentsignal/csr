@@ -638,6 +638,8 @@ pub(crate) fn clear_match(world: &mut World) {
     world.remove_resource::<crate::characters::CharacterModels>();
     world.remove_resource::<crate::viewmodel::ViewModels>();
     world.remove_resource::<crate::items::GroundModels>();
+    world.remove_resource::<crate::doors::DoorScene>();
+    world.remove_resource::<crate::prop_breakables::PropBreakableScene>();
     world.remove_resource::<crate::feedback::FeedbackAssets>();
     world.remove_resource::<crate::utility_fx::AssetsFx>();
     world.remove_resource::<crate::hud_art::Radar>();
@@ -1092,6 +1094,7 @@ mod tests {
             .init_resource::<crate::menu::Menu>()
             .add_systems(OnExit(AppState::Match), clear_match);
         app.update();
+        app.world_mut().insert_resource(crate::prop_breakables::PropBreakableScene::default());
         let camera = app
             .world_mut()
             .spawn((Persistent, Transform::default()))
@@ -1116,6 +1119,7 @@ mod tests {
         assert!(app.world().get_entity(child).is_err());
         assert!(app.world().get_entity(hud).is_err());
         assert!(app.world().get_entity(ui_sound).is_ok());
+        assert!(!app.world().contains_resource::<crate::prop_breakables::PropBreakableScene>());
         assert_eq!(
             *app.world().resource::<State<AppState>>().get(),
             AppState::Menu

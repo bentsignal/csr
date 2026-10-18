@@ -9,6 +9,7 @@ const FIRE_DAMAGE_RADIUS: f32 = 140.0;
 mod throw_state;
 pub use throw_state::{ThrowMode,ThrowPhase,ThrowState};
 mod bot_lob;
+mod decoy;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Kind {
@@ -52,8 +53,9 @@ pub struct Projectile {
     pub kind: Kind,
     pub pos: Vec3,
     pub velocity: Vec3,
-    /// Presentation rests after the existing soft floor stop, despite the
-    /// solver's small gravity/contact cycles. Never skips ballistic integration.
+    /// Presentation rests and contact audio stays silent after the existing
+    /// soft floor stop, despite the solver's small gravity/contact cycles.
+    /// Never skips ballistic integration.
     pub settled: bool,
     pub born: f32,
     /// Immutable weapon ContentId captured when a decoy leaves the hand.
@@ -253,6 +255,7 @@ impl World {
         let dt = self.dt();
         let mut exploded = Vec::new();
         for p in &mut self.projectiles {
+            let was_settled = p.settled;
             let was_moving = p.velocity != Vec3::ZERO;
             p.velocity.z -= 320.0 * dt;
             let end = p.pos + p.velocity * dt;
@@ -297,11 +300,10 @@ impl World {
             } else {
                 age > 1.5
             };
-            // The existing solver settles soft floor contacts to ZERO. Such
-            // contacts are silent: its 0.1-unit separation nudge otherwise
-            // produces another gravity-driven "bounce" every few ticks.
+            // Include the actual final settling contact. The pre-step rest mark
+            // distinguishes it from the solver's later gravity/nudge chatter.
             // No new speed threshold or velocity-to-loudness curve is added.
-            if was_moving && tr.hit() && !tr.start_solid && p.velocity != Vec3::ZERO
+            if was_moving && !was_settled && tr.hit() && !tr.start_solid
                 && !(p.kind.fire() && detonate)
             {
                 self.events.push(GameEvent::UtilityBounced {
@@ -356,7 +358,7 @@ impl World {
                         + if kind == Kind::Smoke {
                             18.0
                         } else if kind == Kind::Decoy {
-                            15.0
+                            decoy::LIFETIME_SECONDS
                         } else {
                             7.0
                         },
@@ -379,9 +381,8 @@ impl World {
         self.utility_fields.retain(|f| {
             f.until > time && !(f.kind.fire() && smokes.iter().any(|s| s.distance(f.pos) < 180.0))
         });
-        // Decoys fire twice a second; fire burns about five times a second.
-        if self.tick % (self.tick_rate as u64 / 2).max(1) == 0 {
-            for f in self.utility_fields.iter().filter(|f| f.kind == Kind::Decoy) {
+        for f in self.utility_fields.iter().filter(|f| f.kind == Kind::Decoy) {
+            if decoy::shot_due(f, self.tick, self.tick_rate) {
                 if let Some(weapon) = &f.decoy_weapon { self.events.push(GameEvent::DecoyShot {
                     player: f.owner,
                     pos: f.pos,
@@ -840,10 +841,20 @@ mod tests {
                 assert_eq!((contacts[0].0, contacts[0].1), (1, kind));
                 assert!((2. ..2.3).contains(&contacts[0].2.z));
                 assert!(world.projectiles[0].velocity.z > 0.);
-                // Exercise repeated gravity/nudge contacts, not just one ZERO tick.
-                world.projectiles[0].velocity = Vec3::ZERO;
+                // The final genuine soft tap must sound once even though its
+                // outgoing velocity is zero. Later separation/gravity cycles
+                // must remain silent at both supported tick rates.
+                world.projectiles[0].velocity = -Vec3::Z * 20.;
+                world.projectiles[0].settled = false;
                 world.projectiles[0].pos = Vec3::Z * 2.1;
                 world.projectiles[0].born = world.time();
+                world.tick += 1;
+                world.events.clear();
+                world.step_utility();
+                assert_eq!(world.events.iter().filter(|e| matches!(e,
+                    GameEvent::UtilityBounced { .. })).count(), 1);
+                assert_eq!(world.projectiles[0].velocity, Vec3::ZERO);
+                assert!(world.projectiles[0].settled);
                 for _ in 0..rate {
                     world.tick += 1;
                     world.events.clear();
@@ -893,7 +904,6 @@ mod tests {
                     let p = &world.projectiles[0];
                     if world.events.iter().any(|e| matches!(e, GameEvent::UtilityBounced { .. })) {
                         bounced = true;
-                        assert!(!p.settled, "a genuine bounce must keep tumbling");
                     }
                     if p.settled { break; }
                 }

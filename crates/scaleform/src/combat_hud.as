@@ -51,7 +51,7 @@ _global.csrCombatHud.loadPart = function(name, url, depth) {
                 return;
             }
             mc.onLoaded();
-            mc.onResize();
+            _global.csrHudLayout.bottom(mc, part.name == "ammo");
             // Authored sample values must never become a gameplay raster.
             mc._visible = false;
             part.ready = true;
@@ -300,7 +300,7 @@ _global.csrCombatHud.resize = function() {
     while (i < this.parts.length) {
         var part = this.parts[i];
         if (part.ready) {
-            try { part.root.onResize(); }
+            try { _global.csrHudLayout.bottom(part.root, part.name == "ammo"); }
             catch (error) { this.failed(part, "Resize failed"); }
         }
         i += 1;

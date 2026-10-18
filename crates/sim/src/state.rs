@@ -3,7 +3,7 @@
 //! [`WorldState`] is everything in a [`World`] that changes while playing:
 //! the round, every player (pose, health, money, inventory, loadout,
 //! tracked VR pose), dropped items, grenades in flight, smoke and fire, the
-//! bomb, and the rules and movement settings in force. It leaves out what
+//! bomb, door poses/lifecycle, breakable health/removal, and the rules and movement settings in force. It leaves out what
 //! both sides load from the map and the install (collision, spawns,
 //! objectives, the weapon catalog), server-only bot brains and hit history.
 //!
@@ -43,6 +43,8 @@ pub struct WorldState {
     pub projectiles: Vec<Projectile>,
     pub utility_fields: Vec<Field>,
     pub bomb: Option<PlantedBomb>,
+    pub doors: Vec<crate::doors::State>,
+    pub breakables: Vec<crate::breakables::State>,
     pub next_id: PlayerId,
     pub next_item: u32,
 }
@@ -81,6 +83,8 @@ impl World {
             projectiles: self.projectiles.clone(),
             utility_fields: self.utility_fields.clone(),
             bomb: self.bomb,
+            doors: self.doors.clone(),
+            breakables: self.breakables.clone(),
             next_id: self.next_id,
             next_item: self.next_item,
         }
@@ -99,6 +103,9 @@ impl World {
         self.projectiles = s.projectiles;
         self.utility_fields = s.utility_fields;
         self.bomb = s.bomb;
+        self.doors = s.doors;
+        self.breakables = s.breakables;
+        self.rebuild_door_collision();
         self.next_id = s.next_id;
         self.next_item = s.next_item;
         self.rewind = None;

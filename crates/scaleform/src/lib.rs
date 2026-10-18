@@ -20,6 +20,10 @@ mod loading_image;
 mod messagebox_font;
 mod rewrite;
 
+/// HUD Scale recorded in the retained classic 2015 player reference.
+/// Shared with Bevy geometry; movie adapters query the same engine default.
+pub const HUD_SCALING: f64 = 0.85;
+
 /// Decode an owned archive's radar with the same bounds as installed loading art.
 /// The caller owns the content identity and keeps the original data private.
 pub fn loading_radar_png(bytes: &[u8]) -> Option<Vec<u8>> {

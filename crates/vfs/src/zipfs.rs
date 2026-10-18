@@ -133,9 +133,17 @@ impl ZipArchive {
     }
 
     pub fn read(&self, path: &str) -> io::Result<Option<Vec<u8>>> {
+        self.read_limited(path, usize::MAX)
+    }
+
+    /// Reject oversized input/output before copying or decompressing an entry.
+    pub fn read_limited(&self, path: &str, limit: usize) -> io::Result<Option<Vec<u8>>> {
         let Some(e) = self.entries.get(&vpk::normalize(path)) else {
             return Ok(None);
         };
+        if e.uncompressed_size as usize > limit || e.compressed_size as usize > limit {
+            return Err(invalid("zip entry exceeds read limit"));
+        }
         let lh = e.local_header_offset as usize;
         if u32_at(&self.data, lh)? != LOCAL_SIG {
             return Err(invalid("bad zip local header"));
@@ -159,6 +167,9 @@ impl ZipArchive {
                     .ok_or_else(|| invalid("truncated zip lzma header"))?;
                 if props_len != 5 || stream.len() < 5 {
                     return Err(invalid("unexpected zip lzma props"));
+                }
+                if u32_at(stream, 1)? as usize > limit {
+                    return Err(invalid("zip lzma dictionary exceeds read limit"));
                 }
                 decode_lzma_raw(stream, e.uncompressed_size as u64)?
             }
@@ -195,6 +206,18 @@ pub fn decode_lzma_raw(props_and_stream: &[u8], size: u64) -> io::Result<Vec<u8>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn limited_zip_read_rejects_before_decode_and_preserves_selected_mount() {
+        let zip = ZipArchive::from_bytes(build_stored(&[("fixture.txt", b"archive")])).unwrap();
+        assert!(zip.read_limited("fixture.txt", 6).is_err());
+        assert_eq!(zip.read_limited("fixture.txt", 7).unwrap().unwrap(), b"archive");
+        let mut fs = crate::Vfs::new();
+        fs.push_back("zip", crate::Mount::Zip(zip));
+        fs.push_back("lower", crate::Mount::Memory([("fixture.txt".into(), std::sync::Arc::from(b"low".as_slice()))].into()));
+        assert!(fs.read_limited("fixture.txt", 6).is_none());
+        assert_eq!(fs.read_limited("fixture.txt", 7).unwrap(), b"archive");
+    }
 
     /// Builds a stored-only zip in memory.
     pub fn build_stored(files: &[(&str, &[u8])]) -> Vec<u8> {

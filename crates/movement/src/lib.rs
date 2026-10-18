@@ -14,6 +14,7 @@
 
 use collision::{contents, Trace};
 use glam::Vec3;
+mod ladders;
 
 pub mod buttons {
     pub const JUMP: u32 = 1 << 0;
@@ -28,6 +29,7 @@ pub mod buttons {
 
 /// Anything movement can trace against.
 pub trait TraceWorld {
+    fn ladder_normal(&self, _origin: Vec3, _mins: Vec3, _maxs: Vec3) -> Option<Vec3> { None }
     fn voxel_scale(&self)->f32 {0.}
     fn climbable(&self,_origin:Vec3,_mins:Vec3,_maxs:Vec3)->collision::Climbable {collision::Climbable::None}
     fn trace_player(&self,start:Vec3,end:Vec3,mins:Vec3,maxs:Vec3,mask:i32,_drop_scaffold:bool)->Trace {self.trace_hull(start,end,mins,maxs,mask)}
@@ -35,6 +37,9 @@ pub trait TraceWorld {
 }
 
 impl TraceWorld for collision::CollisionWorld {
+    fn ladder_normal(&self, origin: Vec3, mins: Vec3, maxs: Vec3) -> Option<Vec3> {
+        collision::CollisionWorld::ladder_normal(self, origin, mins, maxs)
+    }
     fn voxel_scale(&self)->f32 {self.dynamic.as_ref().map_or(0.,|d|d.voxel_scale())}
     fn climbable(&self,origin:Vec3,mins:Vec3,maxs:Vec3)->collision::Climbable {self.dynamic.as_ref().map_or(collision::Climbable::None,|d|d.climbable(origin,mins,maxs))}
     fn trace_player(&self,start:Vec3,end:Vec3,mins:Vec3,maxs:Vec3,mask:i32,drop_scaffold:bool)->Trace {
@@ -144,6 +149,9 @@ pub struct PlayerMove {
     pub last_fall_speed: f32,
     /// Ticks since landing, saturating.
     pub ground_ticks: u32,
+    /// Authored BSP ladder face held this tick (outward unit normal).
+    /// Replicated with movement so prediction and positional foley agree.
+    pub ladder_normal: Option<Vec3>,
 }
 
 impl Default for PlayerMove {
@@ -158,6 +166,7 @@ impl Default for PlayerMove {
             old_buttons: 0,
             last_fall_speed: 0.0,
             ground_ticks: 0,
+            ladder_normal: None,
         }
     }
 }
@@ -709,6 +718,10 @@ pub fn player_move<W: TraceWorld + ?Sized>(
     // Classify current support before choosing ground/air duck and jump paths.
     m.categorize(&mut events);
     m.duck(input);
+    if m.ladder_move(input, &mut events) {
+        m.pm.old_buttons = input.buttons;
+        return events;
+    }
     let (mins,maxs)=m.pm.hull();
     let climb=world.climbable(m.pm.origin,mins,maxs);
     if climb!=collision::Climbable::None {

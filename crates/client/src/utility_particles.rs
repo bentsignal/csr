@@ -599,8 +599,8 @@ impl Emitter {
                     if l.ground_normal {
                         normal = to_bevy(tr.normal).normalize_or(Vec3::Y);
                     }
-                    pos.y = to_bevy(from.lerp(to, tr.fraction)).y - self.origin.y
-                        + if l.ground { 1.0 } else { radius * 0.65 };
+                    pos = anchor_fire_particle(pos,
+                        to_bevy(from.lerp(to, tr.fraction)).y - self.origin.y, l.ground);
                 }
                 let tint = rng.unit();
                 let color = Color::srgb_u8(l.color[0][0], l.color[0][1], l.color[0][2])
@@ -721,6 +721,15 @@ impl Emitter {
     }
 }
 
+/// Floor sampling supplies the field's local ground height, not a replacement
+/// for an upright layer's authored initial height. In particular, radius-scaled
+/// offsets can deliberately put a flame center below its supporting surface.
+/// Ground cards retain their existing one-unit surface separation.
+fn anchor_fire_particle(mut pos: Vec3, floor_height: f32, ground_card: bool) -> Vec3 {
+    pos.y = floor_height + if ground_card { 1.0 } else { pos.y };
+    pos
+}
+
 /// Orientation 3 cards use their ground initializer's sampled surface normal.
 /// Project the previous world-X heading onto that plane before applying yaw,
 /// preserving the flat-floor layout without turning cards toward the camera.
@@ -819,6 +828,24 @@ impl Rng {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fire_floor_anchor_keeps_authored_layer_heights_instead_of_radius_lift() {
+        // Installed fancy fire: -0.08..-0.04 times its 35..45 radius.
+        // Center fire: +5..15. Child flame: +0.1 times its 28..34 radius.
+        // These are PCF initializer examples, not native appearance claims.
+        for height in [-3.6, -1.4, 5.0, 15.0, 2.8, 3.4] {
+            let authored = Vec3::new(17.0, height, -23.0);
+            for floor in [-64.0, 0.0, 120.0] {
+                let placed = anchor_fire_particle(authored, floor, false);
+                assert_eq!(placed.x, authored.x);
+                assert_eq!(placed.z, authored.z);
+                assert!((placed.y - floor - height).abs() < 1e-5);
+                assert_eq!(anchor_fire_particle(authored, floor, true),
+                    Vec3::new(authored.x, floor + 1.0, authored.z));
+            }
+        }
+    }
 
     #[test]
     fn authored_box_positions_preserve_source_bounds_and_axis_conversion() {

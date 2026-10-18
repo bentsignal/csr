@@ -3,9 +3,12 @@
 pub mod maps;
 pub mod bot_profiles;
 mod character_profiles;
+mod breakable_digest;
 mod empty_trigger;
 mod grenade_animations;
 mod historical_awp;
+#[cfg(test)]
+mod installed_prop_covers;
 mod recoil_trajectories;
 mod suppressor_animations;
 
@@ -222,7 +225,15 @@ impl Level {
             let bytes = fs.read(&format!("{base}.phy"))?;
             mdl::Phy::parse(&bytes).ok().map(|p| p.hulls)
         };
-        let collision = CollisionWorld::from_bsp(&bsp, &MapCollisionOptions::default(), &loader);
+        let propdata = fs.read_string("scripts/propdata.txt").and_then(|text| kv::parse(&text).ok()).unwrap_or_default();
+        let root = propdata.block("PropData.txt").unwrap_or(&propdata);
+        let mut collision = CollisionWorld::from_bsp_with_model_data(&bsp, &MapCollisionOptions::default(),
+            &loader, &|model| fs.read(model), root);
+        if let Some(defs) = Arc::get_mut(&mut collision.breakables) {
+            // Studio declarations already resolve local overrides over their
+            // model's inherited base; brush presets retain their existing order.
+            for def in defs { if def.studio.is_none() { def.apply_prop_data(root); } }
+        }
         timings.push(("collision", t.elapsed().as_secs_f32()));
 
         let t = Instant::now();
@@ -287,6 +298,9 @@ impl Level {
                 hash.finalize().into()
             })
         } else { catalog_sha1 };
+        // Peers must agree on the resolved mounted breakable damage data,
+        // which can differ between packs even when the BSP/items schema match.
+        let catalog_sha1 = breakable_digest::bind(&collision, catalog_sha1);
         timings.push(("weapons", t.elapsed().as_secs_f32()));
         let t = Instant::now();
         let (character_profiles, catalog_sha1) = character_profiles::load(&fs, catalog_sha1)?;

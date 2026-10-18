@@ -27,15 +27,38 @@ Protocol 12 is required because the replicated projectile, field and event
 payloads changed. Older clients are rejected during admission. Malformed or
 non-weapon identities and identities attached to non-decoy utility are rejected.
 
-## Cadence remains unmeasured
+## Empirical cadence candidate (October 18, source only)
 
-The existing twice-per-second schedule is retained as an explicit unfinished
-approximation. A weapon's ordinary `cycle_time` does not establish how a decoy
-groups shots or pauses. The owner's recollection of alternating bursts/taps is
-a measurement target, not grounds for introducing a new random scheduler.
-Use a bounded offline Legacy observation or clearly dated original-game footage
-to establish the AK/AWP/pistol cadence before changing that law. Modern CS2
-footage and leaked/decompiled game code are not references for this work.
+The owned Legacy 1.38.8.1 decoy packets now supply actual irregular inter-shot
+observations. Private originals are `native-decoy-cadence/ak-only-20261014-020417`
+and `ak-awp-20261014-015235` under `csr-fidelity`. The latter's failed AK setup
+is excluded; its AWP case and the separately accepted AK-only case identify
+the current decoy entity and near/distant sound requests. The separate
+`grenade-observation-research-20261016` review preserves their log hashes and
+negative statement that the native gameplay scheduling law is not established.
+
+The new AK/AWP candidate deterministically resamples the respective recorded
+printed-time gaps (AK 0.135..4.027 seconds; AWP 1.464..5.217). This is explicitly
+an **empirical approximation**, not recovery of native burst correlations,
+probabilities, random-number generator or a historical 2015 scheduler. No gap
+is invented from the gun's cycle time. The first-shot delay retains the previous
+half-second scale as an unmeasured compatibility choice, now measured from
+field activation. Gun identities without observations retain their existing
+2 Hz schedule, including pistols and other-origin content-pack identities.
+
+Each active field derives timing from its replicated id, owner and birth, so
+separate decoys have independent gap sequences, and restored snapshots and
+prediction reproduce the same events without serialized timer/RNG additions.
+The existing 15-second lifetime bounds recomputation. Field expiry, body
+presence, captured gun identity and sound/era selection remain unchanged.
+Native CS2 footage is not used for decoy behavior: the owner's exception only
+covers grenade throwing. No installed sound bytes or capture artifacts ship.
+
+Focused source regressions cover variable intervals, independent identities,
+64/128 Hz quantization and compatibility schedules. The existing ordinary
+TickInput throw/death/snapshot regression covers event reproduction. All tests,
+compilation and audible review are **UNRUN** while the parent holds the exclusive
+performance slot. Exact native scheduling and other guns remain open.
 
 The focused sim test drives pin/hold/release through `TickInput` at 64 and 128
 ticks, checks primary/pistol selection, changes the owner's inventory/life, and

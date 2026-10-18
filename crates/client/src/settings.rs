@@ -196,6 +196,8 @@ pub struct Settings {
     pub cross_thickness: f32,
     pub cross_dot: bool,
     pub radar_scale: f32,
+    /// Display size is independent of the overview's map zoom.
+    pub radar_hud_size: f32,
     pub radar_rotate: bool,
     pub close_on_buy: bool,
     pub binds: [Option<KeyCode>; 30],
@@ -229,6 +231,9 @@ impl Default for Settings {
             cross_dot: false,
             // Installed game_options sliderhome and ordinary rotating radar.
             radar_scale: 0.5,
+            // Neutral migration fallback; the larger retained reference uses
+            // unmatched settings and does not establish an ordinary default.
+            radar_hud_size: 1.0,
             radar_rotate: true,
             // Preserve the existing stay-open behavior; native default unmeasured.
             close_on_buy: false,
@@ -345,6 +350,9 @@ impl Settings {
                 "radar_scale" => {
                     if let Some(v) = v { s.radar_scale = v.clamp(0.4, 1.0); }
                 }
+                "radar_hud_size" => {
+                    if let Some(v) = v { s.radar_hud_size = v.clamp(0.8, 1.3); }
+                }
                 "radar_rotate" => s.radar_rotate = value == "true",
                 "closeonbuy" => {
                     if let Ok(number) = value.parse::<f64>() { s.set_convar_number(key, number); }
@@ -420,7 +428,7 @@ impl Settings {
         }
         text.push_str(&format!("menu_blur={}\n", self.menu_blur));
         text.push_str(&format!("controls_source={}\n", self.controls_source.replace(['\r', '\n'], " ")));
-        text.push_str(&format!("radar_scale={}\nradar_rotate={}\n", self.radar_scale, self.radar_rotate));
+        text.push_str(&format!("radar_scale={}\nradar_hud_size={}\nradar_rotate={}\n", self.radar_scale, self.radar_hud_size, self.radar_rotate));
         text.push_str(&format!("closeonbuy={}\n", u8::from(self.close_on_buy)));
         for (i, key) in self.binds.iter().enumerate() {
             let name = key.map(|key| format!("{key:?}")).unwrap_or_default();
@@ -533,6 +541,7 @@ impl Settings {
             "m_pitch" => if self.invert_y { -0.022 } else { 0.022 },
             "cl_crosshaircolor" => [1., 3., 2., 4., 0.][self.cross_color.min(4)],
             "cl_radar_scale" => self.radar_scale as f64,
+            "cl_hud_radar_scale" => self.radar_hud_size as f64,
             "cl_radar_rotate" => u8::from(self.radar_rotate) as f64,
             "closeonbuy" => u8::from(self.close_on_buy) as f64,
             _ => return self.audio_options.convar_number(name),
@@ -557,6 +566,7 @@ impl Settings {
                 self.cross_color = [4, 0, 2, 1, 3][number as usize];
             }
             "cl_radar_scale" => self.radar_scale = number.clamp(0.4, 1.0) as f32,
+            "cl_hud_radar_scale" => self.radar_hud_size = number.clamp(0.8, 1.3) as f32,
             "cl_radar_rotate" if number == 0.0 || number == 1.0 => self.radar_rotate = number == 1.0,
             "closeonbuy" if number == 0.0 || number == 1.0 => self.close_on_buy = number == 1.0,
             _ => return self.audio_options.set_convar_number(name, number),
@@ -648,6 +658,7 @@ mod tests {
         s.cross_dot = true;
         s.menu_blur = false;
         s.radar_scale = 0.8;
+        s.radar_hud_size = 1.1;
         s.radar_rotate = false;
         s.close_on_buy = true;
         s.controls_source = "CS2 controls imported; details: config/cs2-import.txt".into();
@@ -669,6 +680,29 @@ mod tests {
             settings.rebind(KEY_FIRE_GRENADE, key);
             assert_eq!(Settings::parse(&settings.encode()).binds[KEY_FIRE_GRENADE], Some(key));
         }
+    }
+    #[test]
+    fn radar_display_size_is_persisted_independently_of_map_zoom() {
+        assert_eq!(Settings::default().radar_hud_size, 1.0);
+        let mut s = Settings::parse("radar_scale=0.7\nradar_rotate=false\nsensitivity=2.25\n");
+        assert_eq!(s.radar_hud_size, 1.0);
+        for size in [0.8, 1.0, 1.1, 1.24, 1.3] {
+            let stored = Settings::parse(&format!("radar_hud_size={size}\nradar_scale=0.7\nradar_rotate=false\nsensitivity=2.25\n"));
+            assert_eq!(stored.radar_hud_size, size, "explicit stored size must survive the default change");
+            assert_eq!(Settings::parse(&stored.encode()), stored);
+            assert_eq!(stored.radar_scale, s.radar_scale);
+            assert_eq!(stored.radar_rotate, s.radar_rotate);
+            assert_eq!(stored.sensitivity, s.sensitivity);
+        }
+        assert!(s.set_convar_number("cl_hud_radar_scale", 1.1));
+        assert_eq!(s.radar_scale, 0.7);
+        assert!(!s.radar_rotate);
+        assert_eq!(s.sensitivity, 2.25);
+        let saved = Settings::parse(&s.encode());
+        assert_eq!(saved, s);
+        assert_eq!(saved.convar_number("cl_hud_radar_scale"), Some(1.1f32 as f64));
+        assert!(!s.set_convar_number("cl_hud_radar_scale", f64::NAN));
+        assert_eq!(s.radar_hud_size, 1.1);
     }
     #[test]
     fn pointer_settings_cycle_only_supported_commands_and_round_trip() {

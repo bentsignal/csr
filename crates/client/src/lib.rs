@@ -61,6 +61,7 @@ pub mod coords;
 pub mod effects;
 mod kill_feed;
 mod combat_hud;
+mod hud_layout;
 pub mod hud;
 pub mod ui_assets;
 pub mod hud_art;
@@ -88,6 +89,10 @@ mod remote_flow;
 mod bot_performance;
 pub mod xr_input;
 pub mod props;
+mod doors;
+mod breakables;
+mod prop_breakables;
+mod studio_pose;
 pub mod scoreboard;
 pub mod scope;
 pub mod sky;
@@ -273,12 +278,13 @@ impl Plugin for CsgoPlugin {
                     effects::draw,
                     characters::sync,
                     items::sync,
+                    (doors::sync, breakables::sync).chain(),
                     (viewmodel::update, utility_fx::update_wick).chain(),
                     tracers::draw,
                     scope::update,
                     buymenu::draw,
                     scoreboard::draw,
-                    hud_art::update.run_if(|| std::env::var_os("CSR_NO_HUD").is_none()),
+                    (hud_art::layout, hud_art::update).chain().run_if(|| std::env::var_os("CSR_NO_HUD").is_none()),
                     (menu_scene::update.run_if(frontend::native_enabled),skin_finish::update,decorations::update).chain(),
                     (menu::draw.in_set(menu::ControlsDraw).after(frontend::update), (case_ui::input, case_ui::draw, case_ui::animate).chain().run_if(frontend::native_enabled)).chain(),
                     (menu::scroll_controls, menu::cards).chain().run_if(frontend::engine_menu_enabled),
@@ -436,10 +442,33 @@ fn spawn_level(
         .map(|s| world_mesh::sky_faces(&level.bsp, &s))
         .unwrap_or_default();
     let atlas = world_mesh::LightmapAtlas::build(&level.bsp);
-    let main = world_mesh::build(&level.bsp, &atlas, &|f| !sky_faces.contains(&f));
-    let skybox = world_mesh::build(&level.bsp, &atlas, &|f| sky_faces.contains(&f));
-    let main_overlays = world_mesh::build_overlays(&level.bsp, &atlas, &|f| !sky_faces.contains(&f));
-    let sky_overlays = world_mesh::build_overlays(&level.bsp, &atlas, &|f| sky_faces.contains(&f));
+    // Isolate only brush models here. Studio props have independent meshes;
+    // immediate Kill dependencies share the same health-driven visibility.
+    let breakable_models: Vec<_> = level.collision.breakables.iter().enumerate()
+        .filter(|(_, def)| def.studio.is_none())
+        .map(|(index, def)| (vec![index], def.model, def.origin, true))
+        .chain(level.collision.breakable_dependencies.iter().map(|dep| {
+            let visible = level.bsp.entities[dep.entity].i64("rendermode") != Some(10);
+            (dep.killed_by.clone(), dep.model, dep.origin, visible)
+        })).collect();
+    let breakable_faces: std::collections::HashSet<_> = breakable_models.iter().flat_map(|(_, model, _, _)| {
+        let model = &level.bsp.models[*model];
+        model.first_face.max(0) as usize..(model.first_face.max(0) as usize + model.num_faces.max(0) as usize).min(level.bsp.faces.len())
+    }).collect();
+    let main = world_mesh::build(&level.bsp, &atlas, &|f| !sky_faces.contains(&f) && !breakable_faces.contains(&f));
+    let skybox = world_mesh::build(&level.bsp, &atlas, &|f| sky_faces.contains(&f) && !breakable_faces.contains(&f));
+    let breakable_builds: Vec<_> = breakable_models.iter().filter(|(_, _, _, visible)| *visible).map(|(owners, model, origin, _)| {
+        let def = &level.bsp.models[*model];
+        (owners.clone(), sky_faces.contains(&(def.first_face.max(0) as usize)),
+            world_mesh::build_brush_model(&level.bsp, &atlas, *model, *origin))
+    }).collect();
+    let main_overlays = world_mesh::build_overlays(&level.bsp, &atlas, &|f| !sky_faces.contains(&f) && !breakable_faces.contains(&f));
+    let sky_overlays = world_mesh::build_overlays(&level.bsp, &atlas, &|f| sky_faces.contains(&f) && !breakable_faces.contains(&f));
+    let breakable_overlay_builds: Vec<_> = breakable_models.iter().filter(|(_, _, _, visible)| *visible).map(|(owners, model, _, _)| {
+        let model = &level.bsp.models[*model];
+        let range = model.first_face.max(0) as usize..model.first_face.max(0) as usize + model.num_faces.max(0) as usize;
+        (owners.clone(), sky_faces.contains(&range.start), world_mesh::build_overlays(&level.bsp, &atlas, &|f| range.contains(&f)))
+    }).collect();
     let lightmap = images.add(atlas.to_image());
     drop(atlas);
     let world_shared = world_mesh::SharedHandles {
@@ -448,7 +477,9 @@ fn spawn_level(
     sky::spawn_2d(&mut commands, &level, &mut meshes, &mut materials, &mut images, &mut textures, &world_shared);
     let mut world_draws = 0;
     let mut world_materials: std::collections::HashMap<String, Option<Handle<WorldMaterial>>> = Default::default();
-    for (in_sky, build) in [(false, &main), (true, &skybox)] {
+    let mut world_builds = vec![(false, None, &main), (true, None, &skybox)];
+    world_builds.extend(breakable_builds.iter().map(|(index, in_sky, build)| (*in_sky, Some(index), build)));
+    for (in_sky, breakable, build) in world_builds {
         for (name, mesh) in &build.meshes {
             let mat = world_materials
                 .entry(name.clone())
@@ -463,6 +494,7 @@ fn spawn_level(
                 .clone();
             let Some(mat) = mat else { continue };
             let mut e = commands.spawn((Mesh3d(meshes.add(mesh.clone())), MeshMaterial3d(mat)));
+            if let Some(index) = breakable { e.insert(breakables::BreakableMesh(index.clone())); }
             match (in_sky, sky) {
                 (true, Some(s)) => {
                     e.insert((sky::sky_transform(&s), sky::sky_layer()));
@@ -476,7 +508,9 @@ fn spawn_level(
     }
     let mut overlay_materials: std::collections::HashMap<(String, u8), Option<Handle<WorldMaterial>>> = Default::default();
     let mut overlay_draws = 0;
-    for (in_sky, build) in [(false, &main_overlays), (true, &sky_overlays)] {
+    let mut overlay_builds = vec![(false, None, &main_overlays), (true, None, &sky_overlays)];
+    overlay_builds.extend(breakable_overlay_builds.iter().map(|(index, in_sky, build)| (*in_sky, Some(index), build)));
+    for (in_sky, breakable, build) in overlay_builds {
         for (name, order, mesh) in &build.meshes {
             let mat = overlay_materials.entry((name.clone(), *order)).or_insert_with(|| {
                 let material = world_mesh::overlay_material(name, *order, &level.vfs, &mut textures, &mut images, &world_shared, opts.exposure);
@@ -485,6 +519,7 @@ fn spawn_level(
             }).clone();
             let Some(mat) = mat else { continue };
             let mut e = commands.spawn((Mesh3d(meshes.add(mesh.clone())), MeshMaterial3d(mat)));
+            if let Some(index) = breakable { e.insert(breakables::BreakableMesh(index.clone())); }
             match (in_sky, sky) {
                 (true, Some(s)) => { e.insert((sky::sky_transform(&s), sky::sky_layer())); }
                 _ => { e.insert((Transform::IDENTITY, visibility::MapClusters::mesh(&level.bsp, mesh))); }
@@ -492,7 +527,7 @@ fn spawn_level(
             overlay_draws += 1;
         }
     }
-    info!("overlays: {overlay_draws} draws, {} triangles, {} main-world records skipped (non-affine/invalid/unsupported receivers)", main_overlays.triangles + sky_overlays.triangles, main_overlays.skipped);
+    info!("overlays: {overlay_draws} draws, {} triangles, {} main-world records skipped (non-affine/invalid/unsupported receivers)", main_overlays.triangles + sky_overlays.triangles + breakable_overlay_builds.iter().map(|(_, _, build)| build.triangles).sum::<usize>(), main_overlays.skipped);
     let t_world = t.elapsed().as_secs_f32();
 
     let sun = props::Sun::from_bsp(&level.bsp);
@@ -514,7 +549,7 @@ fn spawn_level(
     ) };
     info!(
         "world: {} tris ({} in 3D skybox) in {world_draws} batches ({t_world:.2}s); props: {} instances, {} tris, {} draws ({} in 3D skybox), {} materials, {} failed models; textures: {} compressed, {} decoded, {} missing ({:.2}s total); sun {:?}; sky {:?}",
-        main.triangles + skybox.triangles,
+        main.triangles + skybox.triangles + breakable_builds.iter().map(|(_, _, build)| build.triangles).sum::<usize>(),
         skybox.triangles,
         prop_stats.instances,
         prop_stats.triangles,
@@ -565,6 +600,10 @@ fn spawn_level(
         &mut bindposes,
         opts.exposure,
     );
+    doors::spawn(&mut commands, &level, &mut meshes, &mut materials, &mut images,
+        &mut textures, &world_shared, &mut bindposes, opts.exposure);
+    prop_breakables::spawn(&mut commands, &level, &mut meshes, &mut materials, &mut images,
+        &mut textures, &world_shared, &mut bindposes, opts.exposure);
     info!("characters and viewmodels loaded in {:.2}s", t_chars.elapsed().as_secs_f32());
     let localization = localize::Localization::load(&level.vfs);
     let sounds = audio::SoundLibrary::load(&level.vfs);
@@ -809,7 +848,7 @@ fn smoke_test(
             let (forward,_,_)=movement::angle_vectors(l.render_angles);
             let start=l.render_eye;
             let tr=level.0.collision.trace_ray(start,start+forward*500.0,collision::contents::MASK_SOLID);
-            if tr.hit() {events.0.push(sim::GameEvent::Impact{player:l.id,pos:tr.end,normal:tr.normal,surface:tr.surface});}
+            if tr.hit() {events.0.push(sim::GameEvent::Impact{player:l.id,pos:tr.end,normal:tr.normal,surface:tr.surface,door:None});}
             if std::env::var("CSR_TEST_FEEDBACK").as_deref() != Ok("impact") {
                 let pos=start+forward*70.0;
                 events.0.push(sim::GameEvent::Damage{attacker:l.id,victim:l.id,health:25,group:sim::weapon::HitGroup::Chest,pos});

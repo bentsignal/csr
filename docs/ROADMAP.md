@@ -696,8 +696,9 @@ parity and the gameplay gaps listed above remain unfinished.
   expiry behaviour remain unmeasured. [Evidence](research/decoy-expiry-audio.md).
 - [x] Authoritative grenade contact audio uses installed HE/flash/smoke/incendiary
   entries at the projectile position, with resting chatter and contact-fire
-  duplication suppressed. Decoy/Molotov bindings and final soft settling taps
-  remain unsupported; native cadence/mix parity is unmeasured.
+  duplication suppressed. October18 source candidate adds the observed decoy
+  flashbang binding and final soft settling taps; validation UNRUN.
+  Molotov binding and native cadence/mix parity remain unmeasured.
 - [x] Retain bounded Rapier death bodies with installed MDL/PHY convex rigs,
   captured live poses, velocity and hit context, with asynchronous nearby
   collision cooking. An evaluated authored pose covers a death before its
@@ -717,10 +718,17 @@ parity and the gameplay gaps listed above remain unfinished.
   currently drawn centers. Absent flags retain the prior enabled behavior;
   rendered validation and smoke/fire material parity remain pending.
 - [x] Preserve the throw-time primary/pistol ContentId for positional decoy
-  playback through inventory changes, death and snapshots. The existing 2 Hz
-  cadence is still provisional; native burst/tap timing is not established.
+  playback through inventory changes, death and snapshots. October18 source
+  candidate replaces AK/AWP 2 Hz timing with deterministic sampling of observed
+  irregular intervals; validation UNRUN. Native scheduling law is not established,
+  and other weapons retain provisional 2 Hz timing.
   [PR #90](https://github.com/bentsignal/global-offensive/pull/90).
 - [x] Remove look-driven viewmodel lag; retain authored weapon animations.
+- [ ] Validate the shared accepted M4 look/speed-settling presentation across
+  weapons and utility, including airborne continuity and authored absolute
+  animation tracks. Source candidate reuses accepted coefficients and the held
+  compressed-track sampler; all compilation/tests/render checks remain UNRUN.
+  [Scope and preserved measured evidence](VIEWMODEL_MOTION.md).
 - [x] Tick-authoritative M4A1-S/USP-S suppressor toggling, installed transition
   clips and cues, shot-time sound routing and held/dropped bodypart visibility;
   landed in `aefad89`, [PR #105](https://github.com/bentsignal/global-offensive/pull/105).

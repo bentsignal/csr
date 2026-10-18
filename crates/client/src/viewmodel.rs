@@ -23,6 +23,7 @@ use std::sync::Arc;
 mod grenade_hold;
 mod inspection;
 mod look_motion;
+mod sequence_pose;
 mod settling;
 
 pub const VIEWMODEL_LAYER: usize = 2;
@@ -279,6 +280,11 @@ mod life_tests {
             app.update();
             assert_mesh_visibility(&app, Visibility::Inherited);
             assert_eq!(app.world().resource::<ViewModelState>().owner, Some(other));
+            app.world_mut().resource_mut::<crate::tracers::InspectRequest>().start();
+            app.update();
+            let state = app.world().resource::<ViewModelState>();
+            assert_ne!(state.activity, "INSPECT", "local requests cannot inspect a spectator target");
+            assert_eq!(state.inspect_seen, app.world().resource::<crate::tracers::InspectRequest>().serial());
             let joints = app.world().resource::<ViewModelState>().weapon.as_ref().unwrap().1.joints.clone();
             app.world_mut().resource_mut::<SimWorld>().0.damage_environment(other, 1000, "fixture");
             app.update();
@@ -335,6 +341,159 @@ mod life_tests {
         app.update();
         assert_mesh_visibility(&app, Visibility::Hidden);
         assert_eq!(joint_transforms(&app), posed);
+    }
+
+    #[test]
+    #[ignore = "requires the player's installed CS:GO Legacy; no GPU required"]
+    fn installed_absolute_sequences_cover_guns_knives_and_all_six_grenades_without_pose_debt() {
+        // Source-only candidate: compilation and installed-data checks UNRUN.
+        let (app, _) = installed_app(None);
+        let models = app.world().resource::<ViewModels>();
+        let level = &app.world().resource::<LoadedLevel>().0;
+        for name in [
+            "ak47", "aug", "awp", "bizon", "cz75a", "deagle", "elite", "famas",
+            "fiveseven", "g3sg1", "galilar", "glock", "hkp2000", "m249", "m4a1",
+            "m4a1_silencer", "mac10", "mag7", "mp5sd", "mp7", "mp9", "negev",
+            "nova", "p250", "p90", "revolver", "sawedoff", "scar20", "sg556",
+            "ssg08", "tec9", "ump45", "usp_silencer", "xm1014", "knife", "taser",
+            "hegrenade", "flashbang", "smokegrenade", "decoy", "molotov", "incgrenade",
+        ] {
+            let weapon = format!("weapon_{name}");
+            let view = models.weapons.get(&weapon).unwrap_or_else(|| panic!("missing installed {weapon}"));
+            let def = level.catalog.get(&weapon).unwrap();
+            assert!(look_motion::shared_profile(level.item_schema_sha1(), def),
+                "{weapon} must use the accepted shared motion profile");
+            assert!(!look_motion::shared_profile(None, def));
+            let mut pack = def.clone();
+            pack.id = content::ContentId::new(content::GameOrigin::Mod,
+                content::ContentKind::Weapon, name);
+            assert!(!look_motion::shared_profile(level.item_schema_sha1(), &pack));
+            assert!(view.clips.contains_key("ACT_VM_IDLE"), "{weapon} has no idle");
+            let mut checked = 0;
+            for (activity, clips) in &view.clips {
+                for seq in clips.iter().filter(|seq| !seq.clip.delta) {
+                    for time in [0., seq.clip.duration() / 3., seq.clip.duration()] {
+                        let mut expected = mdl::skeleton::rest_pose(&view.asset.model.bones);
+                        seq.clip.sample(time, &mut expected);
+                        let mut previous = vec![(glam::Vec3::splat(90.),
+                            glam::Quat::from_rotation_y(1.)); expected.len()];
+                        sequence_pose::sample(&seq.clip, time, &mut previous,
+                            |bone| seq.weights.get(bone).copied().unwrap_or(1.));
+                        for (bone, (actual, expected)) in previous.iter().zip(&expected).enumerate() {
+                            if seq.weights.get(bone).copied().unwrap_or(1.) >= 0.999 {
+                                assert_eq!(actual, expected, "{weapon} {activity} bone {bone} time {time}");
+                            }
+                        }
+                    }
+                    checked += 1;
+                }
+            }
+            assert!(checked > 0, "{weapon} has no admitted absolute clips");
+        }
+    }
+
+    #[test]
+    #[ignore = "requires the player's installed CS:GO Legacy; no GPU required"]
+    fn installed_galil_idle_and_fire_clear_compressed_tracks_after_interrupted_reload() {
+        let (mut app, id) = installed_app(Some("weapon_galilar"));
+        {
+            let view = &app.world().resource::<ViewModels>().weapons["weapon_galilar"];
+            let hand = view.asset.model.bone_index("v_weapon.Bip01_R_Hand").unwrap();
+            let idle = &view.clips["ACT_VM_IDLE"][0];
+            assert!(!idle.clip.animated[hand], "fixture must exercise compressed-out tracks");
+            assert_eq!(idle.weights[hand], 1.);
+        }
+        let reload = app.world().resource::<ViewModels>().weapons["weapon_galilar"]
+            .clips["ACT_VM_RELOAD"][0].clone();
+        let authoritative = app.world().resource::<SimWorld>().0.state();
+        for (activity, index) in [("ACT_VM_IDLE", 0), ("ACT_VM_PRIMARYATTACK", 0),
+            ("ACT_VM_PRIMARYATTACK", 1), ("ACT_VM_PRIMARYATTACK", 2)] {
+            let expected = {
+                let view = &app.world().resource::<ViewModels>().weapons["weapon_galilar"];
+                let seq = &view.clips[activity][index];
+                assert!(seq.weights.iter().all(|weight| *weight == 1.));
+                let mut expected = mdl::skeleton::rest_pose(&view.asset.model.bones);
+                seq.clip.sample(0., &mut expected);
+                expected
+            };
+            {
+                let mut state = app.world_mut().resource_mut::<ViewModelState>();
+                state.activity = activity.into();
+                state.clip_index = index;
+                state.reloading = false;
+                sequence_pose::sample(&reload.clip, reload.clip.duration() * 0.5, &mut state.pose,
+                    |bone| reload.weights.get(bone).copied().unwrap_or(1.));
+                assert_ne!(state.pose, expected, "fixture must interrupt an actual changed reload pose");
+            }
+            app.update();
+            let state = app.world().resource::<ViewModelState>();
+            assert_eq!(state.pose, expected, "{activity} variant {index} retains no previous pose");
+            assert_eq!(state.owner, Some(id));
+        }
+        assert_eq!(app.world().resource::<SimWorld>().0.state(), authoritative);
+    }
+
+    #[test]
+    #[ignore = "requires the player's installed CS:GO Legacy; no GPU required"]
+    fn installed_weapon_switch_keeps_accepted_look_history_within_the_same_life() {
+        // Source-only candidate: compilation and installed-data checks UNRUN.
+        let (mut app, id) = installed_app(Some("weapon_m4a1"));
+        app.world_mut().resource_mut::<LocalPlayer>().yaw = 10.;
+        app.world_mut().resource_mut::<Time>().advance_by(std::time::Duration::from_millis(10));
+        app.update();
+        let now = app.world().resource::<Time>().elapsed_secs();
+        let forward = movement::angle_vectors(glam::Vec3::new(0., 10., 0.)).0;
+        let before = app.world_mut().resource_mut::<ViewModelState>().look_motion.translation(now, forward);
+        assert!(before.length() > 0.2, "fixture must retain a delayed look sample");
+        for weapon in ["weapon_galilar", "weapon_smokegrenade", "weapon_m4a1"] {
+            {
+                let mut world = app.world_mut().resource_mut::<SimWorld>();
+                let def = Arc::new(world.0.catalog.get(weapon).unwrap().clone());
+                world.0.player_mut(id).unwrap().weapons = vec![sim::weapon::WeaponState::new(def)];
+            }
+            let authoritative = app.world().resource::<SimWorld>().0.state();
+            app.update(); // replacement instances remain hidden until posed
+            assert_mesh_visibility(&app, Visibility::Hidden);
+            app.update();
+            assert_mesh_visibility(&app, Visibility::Inherited);
+            let after = app.world_mut().resource_mut::<ViewModelState>().look_motion.translation(now, forward);
+            assert_eq!(after, before, "{weapon} must not restart the player's look history");
+            assert_eq!(app.world().resource::<SimWorld>().0.state(), authoritative);
+        }
+    }
+
+    #[test]
+    #[ignore = "requires the player's installed CS:GO Legacy; no GPU required"]
+    fn installed_magazine_reload_finishes_at_the_authoritative_deadline() {
+        // Joining a reload late can give rendering a newer start time than sim.
+        // Keep render time frozen while ordinary TickInput ticks finish it.
+        let (mut app, id) = installed_app(Some("weapon_ak47"));
+        {
+            let mut world = app.world_mut().resource_mut::<SimWorld>();
+            world.0.player_mut(id).unwrap().weapons[0].clip -= 5;
+            world.0.step(&[(id, sim::TickInput {
+                buttons: movement::buttons::RELOAD, ..Default::default()
+            })]);
+            assert!(world.0.player(id).unwrap().active_weapon().unwrap().reload_end.is_some());
+        }
+        app.update();
+        assert_eq!(app.world().resource::<ViewModelState>().activity, "ACT_VM_RELOAD");
+        {
+            let mut world = app.world_mut().resource_mut::<SimWorld>();
+            let end = world.0.player(id).unwrap().active_weapon().unwrap().reload_end.unwrap();
+            // World::step processes the current tick, then advances its clock.
+            // Include the first processed tick at/after a fractional deadline.
+            while world.0.time() < end + world.0.dt() {
+                world.0.step(&[(id, sim::TickInput::default())]);
+            }
+            assert!(world.0.player(id).unwrap().active_weapon().unwrap().reload_end.is_none());
+        }
+        let authoritative = app.world().resource::<SimWorld>().0.state();
+        app.update();
+        let state = app.world().resource::<ViewModelState>();
+        assert_eq!(state.activity, "ACT_VM_IDLE", "render elapsed time cannot prolong a completed reload");
+        assert!(!state.reload_from_inspect);
+        assert_eq!(app.world().resource::<SimWorld>().0.state(), authoritative);
     }
 
     #[test]
@@ -555,8 +714,8 @@ pub struct ViewModelState {
     suppressor_seen: Option<sim::weapon::SuppressorTransition>,
     light_timer: f32,
     look_motion: look_motion::LookMotion,
-    /// Persistent bone-local pose: sequences only overwrite the bones they
-    /// animate (weighted), as the game layers masked viewmodel sequences.
+    /// Persistent bone-local pose for authored sequence masks. Absolute clips
+    /// also restore decoded rest values for tracks omitted by compression.
     pose: Vec<(glam::Vec3, glam::Quat)>,
     inspection: inspection::Inspection,
 }
@@ -578,9 +737,8 @@ impl ViewModelState {
         self.grenade_seen = None;
         self.suppressor_seen = None;
         self.light_timer = 0.0;
-        self.look_motion.clear();
         self.inspection = inspection::Inspection::default();
-        // Masked clips deliberately preserve untouched bones within one life.
+        // Masked clips deliberately preserve zero-weight bones within one life.
         // They must never inherit the reload/inspect pose of a previous life.
         self.pose = mdl::skeleton::rest_pose(bones);
         true
@@ -676,7 +834,7 @@ pub fn load(
         let scope_center = if def.attr_f32("zoom levels").unwrap_or(0.0) > 0.0 && def.class == weapons::WeaponClass::Rifle {
             let mut idle = mdl::skeleton::rest_pose(&model.bones);
             if let Some(seq) = clips.get("ACT_VM_IDLE").and_then(|c| c.first()) {
-                seq.clip.sample_layered(0.0, &mut idle, |b| seq.weights.get(b).copied().unwrap_or(1.0));
+                sequence_pose::sample(&seq.clip, 0.0, &mut idle, |b| seq.weights.get(b).copied().unwrap_or(1.0));
             }
             let pose = mdl::skeleton::model_space(&model.bones, &idle);
             let mut center = glam::Vec3::ZERO;
@@ -796,6 +954,11 @@ pub fn update(
         return;
     };
     let show = p.alive && !local.noclip && !p.active_weapon().is_some_and(|w| w.hides_viewmodel());
+    // Look history belongs to the viewing life, not the selected weapon.
+    // Switching within that life keeps the accepted response across the arsenal.
+    if state.owner != Some(p.id) || state.life != Some(p.life_epoch) {
+        state.look_motion.clear();
+    }
     let active = p.active_weapon().map(|w| w.def.class_name.clone()).unwrap_or_default();
 
     let glove=if p.id==local.id{inventory.active("gloves").map(|i|i.weapon.as_str()).unwrap_or("")}else{""};
@@ -878,7 +1041,10 @@ pub fn update(
         state.suppressor_seen = suppressor;
     }
     if let Some(transition) = suppressor { state.activity = transition.activity().into(); }
-    let inspect_action = request.after(&mut state.inspect_seen);
+    // Consume the local request even while observing somebody else; it must
+    // never inspect a spectator target's weapon or replay on returning home.
+    let inspect_action = request.after(&mut state.inspect_seen)
+        .filter(|_| show && p.id == local.id && local.spectating.is_none());
     let knife = w.is_some_and(|w| w.def.class == weapons::WeaponClass::Knife);
     if knife && inspect_action == Some(crate::tracers::InspectAction::Cancel) && state.activity == "INSPECT" {
         state.activity = "INSPECT_CANCEL".into();
@@ -904,6 +1070,13 @@ pub fn update(
     } else if !reloading && state.reloading && shell_gun && attack.is_none() && view.clips.contains_key("ACT_SHOTGUN_RELOAD_FINISH") {
         state.activity = "ACT_SHOTGUN_RELOAD_FINISH".into();
         state.started = now;
+    } else if !reloading && state.reloading && !shell_gun && attack.is_none() {
+        // Magazine reload completion/cancellation belongs to the simulation.
+        // A render-time restart (e.g. joining a reloading spectator) cannot
+        // keep playing a reload after its authoritative deadline has ended.
+        state.activity = "ACT_VM_IDLE".into();
+        state.started = now;
+        state.clip_index = 0;
     } else if p.plant_start.is_some() && !state.planting {
         // C4: the keypad sequence while planting.
         state.activity = "ACT_VM_PRIMARYATTACK".into();
@@ -1006,7 +1179,7 @@ pub fn update(
         &state.pose,
     );
     inspection.sample_base(&mut state.pose);
-    clip.sample_layered(t, &mut state.pose, |b| weights.get(b).copied().unwrap_or(1.0));
+    sequence_pose::sample(&clip, t, &mut state.pose, |b| weights.get(b).copied().unwrap_or(1.0));
     inspection.apply(now, &mut state.pose);
     state.inspection = inspection;
     if let Some(hold) = &view.grenade_hold { hold.apply(grenade, &mut state.pose); }
@@ -1025,21 +1198,19 @@ pub fn update(
         let rear = view.scope_rear.map_or(center, |(position, _)| position);
         offset = offset.lerp(glam::Vec3::new(8.0 - center.x, -rear.y, -rear.z), blend);
     }
-    let look_translation = if show && p.id == local.id && local.spectating.is_none()
+    let shared_motion = show && p.id == local.id && local.spectating.is_none()
+        && p.tracked.is_none() && p.aim.is_none()
         && w.is_some_and(|w| w.zoom_level == 0
-            && look_motion::observed_profile(level.0.item_schema_sha1(), &w.def)) {
+            && look_motion::shared_profile(level.0.item_schema_sha1(), &w.def));
+    let look_translation = if shared_motion {
         // The admitted input is flat local look, not simulated recoil punch or
         // a future tracked hand/head pose. Existing rendered punch stays current.
         let look = movement::angle_vectors(glam::Vec3::new(local.pitch, local.yaw, 0.)).0;
         state.look_motion.translation(now, look)
     } else { state.look_motion.clear(); glam::Vec3::ZERO };
-    let settling = if show && p.id == local.id && local.spectating.is_none()
-        && p.tracked.is_none() && p.aim.is_none()
-        && w.is_some_and(|w| w.zoom_level == 0
-            && look_motion::observed_profile(level.0.item_schema_sha1(), &w.def)) {
+    let settling = if shared_motion {
         settling::Settling::sample(p.movement.velocity,
-            movement::angle_vectors(glam::Vec3::new(0., local.yaw, 0.)).0,
-            p.movement.on_ground, p.movement.duck_amount)
+            movement::angle_vectors(glam::Vec3::new(0., local.yaw, 0.)).0)
     } else { settling::Settling::default() };
     let settled_offset = settling.offset(offset);
     let origin = eye + f * settled_offset.x - r * settled_offset.y + u * settled_offset.z + look_translation;

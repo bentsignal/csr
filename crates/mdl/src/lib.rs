@@ -175,6 +175,24 @@ fn read_attachments(m: R<'_>, bone_count: usize) -> io::Result<Vec<Attachment>> 
 }
 
 impl Model {
+    /// Bounded embedded MDL v48/v49 KeyValues, independent of mesh decoding.
+    /// Offsets are absolute header fields; never scan arbitrary model strings.
+    pub fn keyvalues(mdl: &[u8]) -> io::Result<&str> {
+        let r = R(mdl);
+        if mdl.get(..4) != Some(b"IDST") || !matches!(r.i32(4)?, 48 | 49) {
+            return Err(invalid("unsupported MDL keyvalues header"));
+        }
+        let offset = usize::try_from(r.i32(312)?).map_err(|_| invalid("negative keyvalues offset"))?;
+        let size = usize::try_from(r.i32(316)?).map_err(|_| invalid("negative keyvalues size"))?;
+        if size == 0 { return Ok(""); }
+        if offset < 320 || size > 1_048_576 { return Err(invalid("invalid keyvalues range")); }
+        let end = offset.checked_add(size).ok_or_else(|| invalid("keyvalues overflow"))?;
+        let data = mdl.get(offset..end).ok_or_else(|| invalid("keyvalues past end"))?;
+        let data = data.strip_suffix(&[0]).unwrap_or(data);
+        if data.contains(&0) { return Err(invalid("embedded NUL in keyvalues")); }
+        std::str::from_utf8(data).map_err(|_| invalid("non-UTF8 keyvalues"))
+    }
+
     /// Candidate material paths (without `materials/` and `.vmt`) for a
     /// texture index, in search order.
     pub fn material_candidates(&self, texture: usize) -> Vec<String> {
@@ -297,6 +315,29 @@ impl Model {
     /// Loads a model choosing a sub-model per body part:
     /// `choose_body(part_name, sub_model_names) -> index`.
     pub fn load_with_body(mdl: &[u8], vvd: &[u8], vtx: &[u8], choose_body: &dyn Fn(&str, &[String]) -> usize) -> io::Result<Model> {
+        Self::load_selected(mdl, vvd, vtx, &|_, name, names| choose_body(name, names))
+    }
+
+    /// Entity `body` encodes each bodypart using its authored MDL base.
+    pub fn load_with_body_value(mdl: &[u8], vvd: &[u8], vtx: &[u8], body: u32) -> io::Result<Model> {
+        let choices = Self::body_choices(mdl, body)?;
+        Self::load_selected(mdl, vvd, vtx, &|part, _, _| choices[part])
+    }
+
+    fn body_choices(mdl: &[u8], body: u32) -> io::Result<Vec<usize>> {
+        let r = R(mdl);
+        let count = usize::try_from(r.i32(232)?).map_err(|_| invalid("negative bodypart count"))?;
+        let base = usize::try_from(r.i32(236)?).map_err(|_| invalid("negative bodypart offset"))?;
+        if count > mdl.len().saturating_sub(base) / 16 { return Err(invalid("bodyparts past end")); }
+        (0..count).map(|part| {
+            let at = base + part * 16;
+            let models = usize::try_from(r.i32(at + 4)?).map_err(|_| invalid("negative body model count"))?;
+            let divisor = usize::try_from(r.i32(at + 8)?).map_err(|_| invalid("negative body base"))?;
+            Ok(if divisor == 0 || models == 0 { 0 } else { body as usize / divisor % models })
+        }).collect()
+    }
+
+    fn load_selected(mdl: &[u8], vvd: &[u8], vtx: &[u8], choose_body: &dyn Fn(usize, &str, &[String]) -> usize) -> io::Result<Model> {
         let m = R(mdl);
         if mdl.get(0..4) != Some(b"IDST") {
             return Err(invalid("not an MDL (bad id)"));
@@ -369,7 +410,7 @@ impl Model {
             let sub_names: Vec<String> = (0..num_models as usize)
                 .map(|k| m.cstr(first_sm + k * 148).unwrap_or_default())
                 .collect();
-            let choice = choose_body(&part_name, &sub_names).min(num_models as usize - 1);
+            let choice = choose_body(bp, &part_name, &sub_names).min(num_models as usize - 1);
             model.body_parts.push((part_name, sub_names, choice));
             let sm_ofs = first_sm + choice * 148;
             let num_meshes = m.i32(sm_ofs + 72)?.max(0) as usize;
@@ -530,6 +571,42 @@ mod tests {
         assert!(read_attachments(R(&data[..380]),1).is_err());
         data[316..320].copy_from_slice(&f32::NAN.to_le_bytes());
         assert!(read_attachments(R(&data),1).is_err());
+    }
+
+    #[test]
+    fn embedded_keyvalues_uses_only_bounded_declared_header_range() {
+        let text = b"mdlkeyvalue { prop_data { health 1 } }\0";
+        let mut data = vec![0u8; 384]; data[..4].copy_from_slice(b"IDST");
+        data[4..8].copy_from_slice(&49i32.to_le_bytes());
+        data[312..316].copy_from_slice(&384i32.to_le_bytes());
+        data[316..320].copy_from_slice(&(text.len() as i32).to_le_bytes());
+        data.extend_from_slice(text);
+        assert_eq!(Model::keyvalues(&data).unwrap().as_bytes(), &text[..text.len() - 1]);
+        assert!(Model::keyvalues(&data[..data.len() - 1]).is_err());
+        data[312..316].copy_from_slice(&(-1i32).to_le_bytes());
+        assert!(Model::keyvalues(&data).is_err());
+        data[312..316].copy_from_slice(&16i32.to_le_bytes());
+        assert!(Model::keyvalues(&data).is_err());
+        data[312..316].copy_from_slice(&384i32.to_le_bytes());
+        data[390] = 0; assert!(Model::keyvalues(&data).is_err());
+        data[316..320].copy_from_slice(&0i32.to_le_bytes());
+        assert_eq!(Model::keyvalues(&data).unwrap(), "");
+        data[4..8].copy_from_slice(&50i32.to_le_bytes());
+        assert!(Model::keyvalues(&data).is_err());
+    }
+
+    #[test]
+    fn authored_entity_body_decodes_each_model_base_independently() {
+        let mut data = vec![0u8; 416];
+        for (at, value) in [(232, 2i32), (236, 384), (388, 2), (392, 1), (404, 3), (408, 2)] {
+            data[at..at + 4].copy_from_slice(&value.to_le_bytes());
+        }
+        assert_eq!(Model::body_choices(&data, 0).unwrap(), vec![0, 0]);
+        assert_eq!(Model::body_choices(&data, 3).unwrap(), vec![1, 1]);
+        assert_eq!(Model::body_choices(&data, 4).unwrap(), vec![0, 2]);
+        assert!(Model::body_choices(&data[..415], 0).is_err());
+        data[408..412].copy_from_slice(&(-1i32).to_le_bytes());
+        assert!(Model::body_choices(&data, 0).is_err());
     }
 
     #[test]

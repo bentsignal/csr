@@ -1,4 +1,4 @@
-//! Presentation-only candidate from the observed Legacy1.38.8.1 M4 profile.
+//! Shared presentation using the accepted Legacy1.38.8.1 M4 profile.
 //! Native public parameters were interp0.1/scale1.6. A delayed forward
 //! direction translates the model; the camera/model orientation and aim ray
 //! remain current. This is not the removed guessed angular low-pass filter.
@@ -8,17 +8,18 @@ const HISTORY_SECONDS: f32 = 0.1;
 const SCALE: f32 = 1.6;
 const MAX_SAMPLES: usize = 1024;
 
-/// Only the observed raw Legacy schema and M4A4 framing are admitted here.
-/// Content packs and other weapons do not inherit an unmeasured response.
-pub(super) fn observed_profile(schema: Option<&[u8; 20]>, def: &weapons::WeaponDefinition) -> bool {
+/// The owner accepted this motion and requested it across the Legacy arsenal.
+/// Retain its schema boundary; packs need their own presentation profile.
+pub(super) fn shared_profile(schema: Option<&[u8; 20]>, def: &weapons::WeaponDefinition) -> bool {
     const SCHEMA: [u8; 20] = [
         0xc1, 0x36, 0x1d, 0x35, 0x18, 0x02, 0xb7, 0xbe, 0x5f, 0x55,
         0x24, 0x5c, 0x33, 0x1f, 0x5f, 0x1d, 0x6b, 0x36, 0xad, 0x35,
     ];
+    let Some(name) = def.class_name.strip_prefix("weapon_") else { return false };
     schema == Some(&SCHEMA)
-        && def.id == content::ContentId::csgo(content::ContentKind::Weapon, "m4a1")
-        && def.class_name == "weapon_m4a1"
-        && def.view_model == "models/weapons/v_rif_m4a1.mdl"
+        && def.id == content::ContentId::csgo(content::ContentKind::Weapon, name)
+        && def.view_model.starts_with("models/weapons/")
+        && def.view_model.ends_with(".mdl")
 }
 
 #[derive(Default)]

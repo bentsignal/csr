@@ -69,6 +69,24 @@ _global.csrDeathNotices.fitHorizontal = function(clip, parent, left, right) {
     clip._x += left - after.xMin;
     return true;
 };
+_global.csrDeathNotices.fitTextBackground = function(panel, parent, textLeft, textWidth, right) {
+    // TextPanel and returned row need not share units. Fit around the actual
+    // text+tab span, retaining the authored RIGHT inset on both sides. A width
+    // delta added to the setter's plain-text box preserves its excess leading
+    // allowance (particularly visible on local-player outlines).
+    var first = {x: textLeft, y: 0};
+    var last = {x: textLeft + textWidth, y: 0};
+    parent.localToGlobal(first);
+    parent.localToGlobal(last);
+    panel.globalToLocal(first);
+    panel.globalToLocal(last);
+    var padding = right - last.x;
+    if (!(last.x > first.x) || !(padding >= 0) || padding > last.x - first.x) { return false; }
+    var left = first.x - padding;
+    return this.fitHorizontal(panel.IDTextBG, panel, left, right) &&
+        this.fitHorizontal(panel.PanelAttacker, panel, left, right) &&
+        this.fitHorizontal(panel.PanelVictim, panel, left, right);
+};
 _global.csrDeathNotices.place = function(row, index) {
     // Public AddPanel returns independent children at y=0. Its caller owns
     // receipt ordering. The movie exposes its HUD-scaled pitch in root units.
@@ -167,18 +185,6 @@ _global.csrDeathNotices.layout = function(row) {
     this.root.SetPanelText(panel, html, row.localVictim, row.localAttacker);
     var delta = field.textWidth - plainWidth;
     if (!(delta > 0)) { return false; }
-    // The installed setter does not include tab advance in its BG measurement.
-    // Resize ONLY its existing art by the measured text delta, keeping its
-    // original right anchor and padding. Original highlight sprites share the
-    // same content rectangle; no replacement rectangle/outline is drawn.
-    // Preserve the original anchor across repeated layout/resize calls even if
-    // SetPanelText resets width without resetting a prior compatibility x.
-    var right = row.backgroundRight;
-    var left = right - (box.xMax - box.xMin) - delta;
-    if (!this.fitHorizontal(background, panel, left, right) ||
-        !this.fitHorizontal(panel.PanelAttacker, panel, left, right) ||
-        !this.fitHorizontal(panel.PanelVictim, panel, left, right)) { return false; }
-
     var format = field.getTextFormat();
     var extent = format.getTextExtent("");
     var gutter = (extent.textFieldWidth - extent.width) / 2;
@@ -187,6 +193,7 @@ _global.csrDeathNotices.layout = function(row) {
     var textLeft = bounds.xMin + gutter;
     if (format.align == "right") { textLeft = bounds.xMax - gutter - field.textWidth; }
     else if (format.align == "center") { textLeft = (bounds.xMin + bounds.xMax - field.textWidth) / 2; }
+    if (!this.fitTextBackground(panel, parent, textLeft, field.textWidth, row.backgroundRight)) { return false; }
     i = 0;
     while (i < icons.length) {
         var icon = icons[i];
@@ -226,6 +233,7 @@ _global.csrDeathNotices.load = function(url) {
         this.loader.removeListener(this);
         mc.onLoaded();
         mc.onResize();
+        _global.csrHudLayout.notices(mc);
         mc._visible = true;
         api.ready = true;
         csrEI.call("csr.DeathNoticesReady", String(mc));
@@ -343,6 +351,7 @@ _global.csrDeathNotices.clear = function() {
 _global.csrDeathNotices.resize = function() {
     if (!this.ready) { return false; }
     this.root.onResize();
+    _global.csrHudLayout.notices(this.root);
     var success = true;
     for (var id in this.rows) {
         var row = this.rows[id];

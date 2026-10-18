@@ -19,6 +19,9 @@ pub use bsp::contents;
 
 mod prop_lighting;
 pub use prop_lighting::PropLightingQuery;
+mod ladders;
+pub mod doors;
+pub mod breakables;
 
 /// Distance kept between a sweep's end position and the surface it hit.
 pub const DIST_EPSILON: f32 = 0.03125;
@@ -151,6 +154,16 @@ pub fn clip_bounds(start: Vec3, end: Vec3, mins: Vec3, maxs: Vec3, low: Vec3, hi
     tr.end=if tr.all_solid {start} else {start.lerp(end,tr.fraction)};
 }
 
+/// Map ordinal of the runtime solid that won the ordinary masked clip query.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HitOwner { Door(usize), Breakable(usize) }
+
+impl HitOwner {
+    pub fn breakable(self) -> Option<usize> {
+        match self { Self::Breakable(index) => Some(index), Self::Door(_) => None }
+    }
+}
+
 /// Names for surface ids (materials / surface props), index = surface id.
 #[derive(Default)]
 pub struct CollisionWorld {
@@ -158,10 +171,22 @@ pub struct CollisionWorld {
     pub convexes: Vec<Convex>,
     pub triangles: Vec<Triangle>,
     pub surfaces: Vec<String>,
+    /// Authored prop doors, separate from the immutable map solids.
+    pub doors: std::sync::Arc<[doors::Door]>,
+    pub breakables: std::sync::Arc<[breakables::Breakable]>,
+    pub breakable_dependencies: std::sync::Arc<[breakables::Dependency]>,
+    /// A session-owned, immutable pose overlay shares the heavy map/grid.
+    base: Option<std::sync::Arc<CollisionWorld>>,
+    /// Per-overlay convex ownership, in the same order as `convexes`.
+    /// Static geometry has no runtime owner.
+    runtime_owners: Vec<Option<HitOwner>>,
     grid: Grid,
     /// Convex indices per BSP static-prop ordinal, including empty entries.
     /// Built alongside the placed hulls; world geometry is never in a range.
     static_prop_convexes: Vec<std::ops::Range<usize>>,
+    /// Authored ladder brushes only. Keeps ordinary movement queries free of
+    /// allocations and avoids scanning world geometry for this small subset.
+    ladder_convexes: Vec<usize>,
     pub mins: Vec3,
     pub maxs: Vec3,
     /// Shapes dropped for invalid geometry.
@@ -185,6 +210,7 @@ impl CollisionWorld {
     }
 
     pub fn surface_name(&self, id: u32) -> &str {
+        if let Some(base) = &self.base { return base.surface_name(id); }
         self.surfaces.get(id as usize).map_or("", String::as_str)
     }
 
@@ -226,6 +252,9 @@ impl CollisionWorld {
 
     /// Builds the broad-phase grid. Call after adding all shapes.
     pub fn finalize(&mut self) {
+        self.ladder_convexes = self.convexes.iter().enumerate()
+            .filter_map(|(index, brush)| (brush.contents & contents::LADDER != 0).then_some(index))
+            .collect();
         let mut mn = Vec3::splat(f32::MAX);
         let mut mx = Vec3::splat(f32::MIN);
         for c in &self.convexes {
@@ -301,7 +330,31 @@ impl CollisionWorld {
         &self, start: Vec3, end: Vec3, mins: Vec3, maxs: Vec3, mask: i32,
         excluded_convexes: Option<&std::ops::Range<usize>>,
     ) -> Trace {
-        if let Some(world)=&self.dynamic { return world.trace_box(start,end,mins,maxs,mask); }
+        self.trace_box_owned(start, end, mins, maxs, mask, excluded_convexes).0
+    }
+
+    fn trace_box_owned(
+        &self, start: Vec3, end: Vec3, mins: Vec3, maxs: Vec3, mask: i32,
+        excluded_convexes: Option<&std::ops::Range<usize>>,
+    ) -> (Trace, Option<HitOwner>) {
+        if let Some(base) = &self.base {
+            let mut tr = base.trace_box_excluding(start, end, mins, maxs, mask, excluded_convexes);
+            let mut owner = None;
+            let offset = (mins + maxs) * 0.5;
+            let ext = (maxs - mins) * 0.5;
+            let s = start + offset;
+            let e = end + offset;
+            for (index, solid) in self.convexes.iter().enumerate() {
+                if solid.contents & mask != 0 && swept_bounds_overlap(s, e, ext, solid.mins, solid.maxs) {
+                    if clip_convex(&solid.planes, s, e, ext, solid.contents, solid.surface, &mut tr) {
+                        owner = self.runtime_owners.get(index).copied().flatten();
+                    }
+                }
+            }
+            tr.end = if tr.all_solid { start } else { start.lerp(end, tr.fraction) };
+            return (tr, owner);
+        }
+        if let Some(world)=&self.dynamic { return (world.trace_box(start,end,mins,maxs,mask), None); }
         let offset = (mins + maxs) * 0.5;
         let ext = (maxs - mins) * 0.5;
         let s = start + offset;
@@ -377,12 +430,25 @@ impl CollisionWorld {
         if tr.all_solid {
             tr.end = start;
         }
-        tr
+        (tr, None)
     }
 
     /// Sweeps a point.
     pub fn trace_ray(&self, start: Vec3, end: Vec3, mask: i32) -> Trace {
         self.trace_box(start, end, Vec3::ZERO, Vec3::ZERO, mask)
+    }
+
+    /// The exact first-hit owner from the same ordered, masked collision query.
+    /// Combat must not infer ownership by approximately matching ray fractions.
+    pub fn trace_breakable_ray(&self, start: Vec3, end: Vec3, mask: i32) -> (Trace, Option<usize>) {
+        let (tr, owner) = self.trace_owned_ray(start, end, mask);
+        (tr, owner.and_then(HitOwner::breakable))
+    }
+
+    /// Shares the same winner, ordering, masks and start-solid semantics as
+    /// `trace_ray` and `trace_breakable_ray`; never a second proximity query.
+    pub fn trace_owned_ray(&self, start: Vec3, end: Vec3, mask: i32) -> (Trace, Option<HitOwner>) {
+        self.trace_box_owned(start, end, Vec3::ZERO, Vec3::ZERO, mask, None)
     }
 
     /// Render-only solid visibility ray from a static prop's lighting sample.
@@ -405,6 +471,15 @@ impl CollisionWorld {
 
     /// Contents at a point (union of all shapes containing it).
     pub fn point_contents(&self, p: Vec3, mask: i32) -> i32 {
+        if let Some(base) = &self.base {
+            let mut out = base.point_contents(p, mask);
+            for solid in &self.convexes {
+                if solid.contents & mask != 0 && solid.planes.iter().all(|pl| pl.normal.dot(p) <= pl.dist) {
+                    out |= solid.contents;
+                }
+            }
+            return out;
+        }
         if let Some(world)=&self.dynamic {return world.point_contents(p,mask);}
         let mut cands = Vec::new();
         self.candidates(p - Vec3::ONE, p + Vec3::ONE, &mut cands);
@@ -425,9 +500,37 @@ fn overlaps(amin: Vec3, amax: Vec3, bmin: Vec3, bmax: Vec3) -> bool {
     amin.x <= bmax.x && amax.x >= bmin.x && amin.y <= bmax.y && amax.y >= bmin.y && amin.z <= bmax.z && amax.z >= bmin.z
 }
 
+/// Continuous slab rejection only; the original convex clipper decides hits.
+/// Use the static grid query's one-unit bounds guard (larger than the clipper's
+/// contact epsilon), and f64 interval arithmetic to avoid rounding a grazing
+/// sweep out. Retain the full segment: later solids can still add start-solid
+/// contents even when an earlier solid already set the hit fraction.
+fn swept_bounds_overlap(s: Vec3, e: Vec3, ext: Vec3, low: Vec3, high: Vec3) -> bool {
+    let mut enter = 0.0f64;
+    let mut leave = 1.0f64;
+    for axis in 0..3 {
+        let a = s[axis] as f64;
+        let delta = e[axis] as f64 - a;
+        let lo = low[axis] as f64 - ext[axis] as f64 - 1.0;
+        let hi = high[axis] as f64 + ext[axis] as f64 + 1.0;
+        if delta == 0.0 {
+            if a < lo || a > hi { return false; }
+        } else {
+            let first = (lo - a) / delta;
+            let last = (hi - a) / delta;
+            enter = enter.max(first.min(last));
+            leave = leave.min(first.max(last));
+            if enter > leave { return false; }
+        }
+    }
+    true
+}
+
 /// Clips a sweep of a centred box with half-extents `ext` against the convex
 /// region `n·x <= d` for every plane, updating `tr` when it hits earlier.
-fn clip_convex(planes: &[Plane], s: Vec3, e: Vec3, ext: Vec3, contents: i32, surface: u32, tr: &mut Trace) {
+// Returns true only when this shape replaces the hit surface. Start-solid
+// contents alone do not change ownership; all-solid and strict earlier hits do.
+fn clip_convex(planes: &[Plane], s: Vec3, e: Vec3, ext: Vec3, contents: i32, surface: u32, tr: &mut Trace) -> bool {
     let mut enter = -1.0f32;
     let mut leave = 1.0f32;
     let mut clip: Option<Plane> = None;
@@ -457,12 +560,12 @@ fn clip_convex(planes: &[Plane], s: Vec3, e: Vec3, ext: Vec3, contents: i32, sur
             let precise_start = signed(s);
             let precise_end = signed(e);
             if precise_start > 0.0 && precise_end >= precise_start {
-                return;
+                return false;
             }
         }
         // Entirely in front of this plane: no contact with the solid.
         if d1 > 0.0 && (d2 >= DIST_EPSILON || d2 >= d1) {
-            return;
+            return false;
         }
         if d1 <= 0.0 && d2 <= 0.0 {
             continue;
@@ -487,8 +590,9 @@ fn clip_convex(planes: &[Plane], s: Vec3, e: Vec3, ext: Vec3, contents: i32, sur
             tr.all_solid = true;
             tr.fraction = 0.0;
             tr.surface = surface;
+            return true;
         }
-        return;
+        return false;
     }
     if enter < leave && enter > -1.0 && enter < tr.fraction {
         if let Some(p) = clip {
@@ -497,8 +601,10 @@ fn clip_convex(planes: &[Plane], s: Vec3, e: Vec3, ext: Vec3, contents: i32, sur
             tr.plane_dist = p.dist;
             tr.contents = contents;
             tr.surface = surface;
+            return true;
         }
     }
+    false
 }
 
 /// Thickness given to triangles behind their front face, so rays and thin
@@ -660,7 +766,18 @@ impl CollisionWorld {
     /// Adds the world brushes, solid brush entities, displacements and solid
     /// static props of a map. `prop_hulls` loads a model's `.phy` hulls.
     pub fn from_bsp(map: &bsp::Bsp, opts: &MapCollisionOptions, prop_hulls: &PropHullLoader) -> Self {
+        Self::from_bsp_with_model_data(map, opts, prop_hulls, &|_| None, &kv::Block::default())
+    }
+
+    /// Mounted MDL declarations opt supported props into the same exact-owner
+    /// health/collision lifecycle as brushes. Missing declarations stay unchanged.
+    pub fn from_bsp_with_model_data(map: &bsp::Bsp, opts: &MapCollisionOptions,
+        prop_hulls: &PropHullLoader, models: &breakables::ModelDataLoader<'_>, presets: &kv::Block) -> Self {
         let mut w = CollisionWorld::new();
+        let props = breakables::load_props(map, prop_hulls, models, presets);
+        // Collect edges before brush loading so linked static brushes are never
+        // left in the immutable grid. Rebase owner ordinals after brush admission.
+        let mut dependencies = breakables::dependencies(map, &props);
 
         // Brushes of model 0 (the world) and of solid brush entities.
         let add_model_brushes = |w: &mut CollisionWorld, model: usize, origin: Vec3| {
@@ -701,9 +818,11 @@ impl CollisionWorld {
             }
         };
         add_model_brushes(&mut w, 0, Vec3::ZERO);
-        for ent in &map.entities {
+        let mut breakables = Vec::new();
+        for (entity, ent) in map.entities.iter().enumerate() {
             let Some(class) = ent.str("classname") else { continue };
-            if !opts.solid_brush_classes.iter().any(|c| c.eq_ignore_ascii_case(class)) {
+            let dependency = dependencies.iter().position(|dep| dep.entity == entity);
+            if dependency.is_none() && !opts.solid_brush_classes.iter().any(|c| c.eq_ignore_ascii_case(class)) {
                 continue;
             }
             // func_brush with "Solidity: never solid" (1).
@@ -715,12 +834,44 @@ impl CollisionWorld {
             if ent.i64("startdisabled") == Some(1) {
                 continue;
             }
+            // CS:GO's authored SF_BUTTON_NOTSOLID applies even when the
+            // button is retained as an OnBreak/Kill dependency. Its interaction
+            // volume must not become a player or bullet collision barrier.
+            if class.eq_ignore_ascii_case("func_button")
+                && ent.i64("spawnflags").unwrap_or(0) & 16384 != 0 {
+                continue;
+            }
             let Some(model) = ent.str("model").and_then(|m| m.strip_prefix('*')).and_then(|n| n.parse::<usize>().ok()) else {
                 continue;
             };
             let origin = ent.str("origin").and_then(bsp::parse_origin).unwrap_or(Vec3::ZERO);
+            let start = w.convexes.len();
             add_model_brushes(&mut w, model, origin);
+            if let Some(index) = dependency {
+                dependencies[index].solids = w.convexes.drain(start..).collect();
+                continue;
+            }
+            if breakables.len() < breakables::MAX_BREAKABLES.saturating_sub(props.len()) {
+                if let Some(mut def) = breakables::Breakable::load(entity, ent, map) {
+                    if w.convexes.len() > start {
+                        def.solids = w.convexes.drain(start..).collect();
+                        breakables.push(def);
+                    }
+                }
+            }
         }
+        for dep in &mut dependencies {
+            for index in &mut dep.killed_by { *index += breakables.len(); }
+        }
+        breakables.extend(props);
+        for def in &mut breakables {
+            if let Some(studio) = &def.studio {
+                let surface = w.surface_id(&studio.model.to_ascii_lowercase());
+                for solid in &mut def.solids { solid.surface = surface; }
+            }
+        }
+        w.breakables = breakables.into();
+        w.breakable_dependencies = dependencies.into();
 
         // Displacements.
         for (fi, face) in map.faces.iter().enumerate() {
@@ -780,6 +931,7 @@ impl CollisionWorld {
             }
             w.static_prop_convexes[prop_ordinal].end = w.convexes.len();
         }
+        w.doors = doors::load(map, prop_hulls, &mut w.surfaces).into();
         w.finalize();
         w
     }

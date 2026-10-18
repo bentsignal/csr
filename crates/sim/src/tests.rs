@@ -3,6 +3,48 @@ use objectives::{BombSite, BuyZone, Zone};
 use weapons::{Side, WeaponClass, WeaponDefinition};
 
 #[test]
+fn bsp_ladder_tick_input_snapshot_prediction_and_life_reset_64_128() {
+    for rate in [64, 128] {
+        let mut w = world();
+        w.set_tick_rate(rate);
+        let c = Arc::get_mut(&mut w.collision).unwrap();
+        c.add_convex(collision::Convex {
+            planes: vec![
+                collision::Plane { normal: Vec3::X, dist: 1. },
+                collision::Plane { normal: -Vec3::X, dist: 0. },
+                collision::Plane { normal: Vec3::Y, dist: 24. },
+                collision::Plane { normal: -Vec3::Y, dist: 24. },
+                collision::Plane { normal: Vec3::Z, dist: 512. },
+                collision::Plane { normal: -Vec3::Z, dist: 0. },
+            ],
+            mins: Vec3::new(0., -24., 0.), maxs: Vec3::new(1., 24., 512.),
+            contents: contents::LADDER | contents::GRATE, surface: 0,
+        });
+        c.finalize();
+        let id = w.add_player("climber", Team::CounterTerrorist);
+        w.player_mut(id).unwrap().movement = PlayerMove::spawn_at(Vec3::new(-16. - collision::DIST_EPSILON, 0., 64.));
+        let input = TickInput { forward_move: 450., ..Default::default() };
+        for _ in 0..16 { w.step(&[(id, input)]); }
+        assert!(w.player(id).unwrap().movement.origin.z > 64.);
+        assert_eq!(w.player(id).unwrap().movement.ladder_normal, Some(-Vec3::X));
+        let snapshot: Snapshot = w.decode(&state::encode(&w.snapshot())).unwrap();
+        assert_eq!(snapshot, w.snapshot());
+        let mut predicted = w.clone();
+        predicted.player_mut(id).unwrap().movement.ladder_normal = None;
+        predicted.restore(snapshot.state);
+        for _ in 0..16 {
+            w.step(&[(id, input)]);
+            predicted.step_prediction(&[(id, input)]);
+            assert_eq!(w.state(), predicted.state());
+        }
+        w.kill(0, None, "world", false, None);
+        assert_eq!(w.player(id).unwrap().movement.ladder_normal, None);
+        w.respawn(id);
+        assert_eq!(w.player(id).unwrap().movement.ladder_normal, None);
+    }
+}
+
+#[test]
 fn disconnected_competitive_player_leaves_bomb_and_cancels_defusing() {
     let mut w = world();
     let t = w.add_player("departing carrier", Team::Terrorist);

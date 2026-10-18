@@ -24,6 +24,8 @@
 pub mod bots;
 pub mod model_pose;
 pub mod death;
+pub mod doors;
+pub mod breakables;
 pub mod loadout;
 pub mod objectives;
 pub mod rewind;
@@ -399,7 +401,7 @@ pub enum GameEvent {
     Fire { player: PlayerId, weapon: String, origin: Vec3, suppressed: bool },
     Tracer { player: PlayerId, start: Vec3, end: Vec3 },
     /// A bullet hit the world. `player` fired it.
-    Impact { player: PlayerId, pos: Vec3, normal: Vec3, surface: u32 },
+    Impact { player: PlayerId, pos: Vec3, normal: Vec3, surface: u32, door: Option<doors::Impact> },
     Damage { attacker: PlayerId, victim: PlayerId, health: i32, group: HitGroup, pos: Vec3 },
     /// `attacker` is [`WORLD`] for the bomb.
     Kill { attacker: PlayerId, victim: PlayerId, weapon: String, headshot: bool, death: death::DeathReceipt },
@@ -430,6 +432,7 @@ pub enum GameEvent {
     /// Fully depleted primary-trigger feedback; no live shot or ammo change.
     /// Appended so earlier event discriminants retain their meaning.
     EmptyTrigger { player: PlayerId, weapon: String, origin: Vec3 },
+    DoorSound { door: u32, cue: doors::Cue, pos: Vec3 },
 }
 
 /// The whole game: map data shared by every copy (`Arc`s), the replicated
@@ -438,6 +441,9 @@ pub enum GameEvent {
 #[derive(Clone)]
 pub struct World {
     pub collision: Arc<CollisionWorld>,
+    /// Replicated pose/lifecycle; immutable definitions stay with the map.
+    pub doors: Vec<doors::State>,
+    pub breakables: Vec<breakables::State>,
     pub catalog: Arc<weapons::Catalog>,
     pub config: MoveConfig,
     pub mode: GameMode,
@@ -498,8 +504,10 @@ impl World {
 
     pub fn with_catalog(collision: Arc<CollisionWorld>, catalog: Arc<weapons::Catalog>) -> Self {
         let rules = RulesConfig::default();
-        Self {
+        let mut world = Self {
             collision,
+            doors: Vec::new(),
+            breakables: Vec::new(),
             catalog,
             config: MoveConfig::default(),
             mode: GameMode::Deathmatch,
@@ -521,7 +529,10 @@ impl World {
             character_hitboxes: Default::default(),
             next_id: 1,
             next_item: 1,
-        }
+        };
+        world.reset_breakables();
+        world.reset_doors();
+        world
     }
 
     /// Sim time in seconds.
@@ -592,6 +603,8 @@ impl World {
     pub fn set_mode(&mut self, mode: GameMode, rules: RulesConfig) {
         self.mode = mode;
         self.rules = rules;
+        self.reset_breakables();
+        self.reset_doors();
         if mode == GameMode::Special { self.players.retain(|p|!p.is_bot); for p in &mut self.players {p.money=0;} }
         match mode {
             GameMode::Competitive => self.start_match(),
@@ -846,6 +859,8 @@ impl World {
 
     fn start_round(&mut self, keep_survivors: bool) {
         let now = self.time();
+        self.reset_breakables();
+        self.reset_doors();
         self.items.clear();
         self.projectiles.clear();
         self.utility_fields.clear();
@@ -1382,7 +1397,6 @@ impl World {
         self.events.clear();
         let time = self.time();
         let dt = self.dt();
-        let collision = self.collision.clone();
 
         match self.mode {
             GameMode::Deathmatch | GameMode::Special => {
@@ -1402,6 +1416,8 @@ impl World {
         // very first attack, before processing this tick's input.
         self.dress_weapons();
         let frozen = self.competitive() && self.round.phase == Phase::Freeze;
+        self.step_doors(inputs, frozen);
+        let collision = self.collision.clone();
 
         // Motion continues on release, while holstered, and on the ground;
         // render frames never advance authoritative recoil.
@@ -1691,7 +1707,7 @@ impl World {
         let mut def = (*w.def).clone();
         let first = w.last_melee_attack.is_none_or(|t| time - t > 0.9);
         let range = if secondary { 32.0 } else { MELEE_RANGE };
-        let tr = self.collision.trace_ray(eye, eye + dir * range, contents::MASK_SHOT);
+        let (tr, breakable) = self.collision.trace_breakable_ray(eye, eye + dir * range, contents::MASK_SHOT);
         let mut best = None;
         for (j, other) in self.players.iter().enumerate() {
             if j == shooter || !other.alive || !team.enemy_of(other.team) { continue; }
@@ -1722,6 +1738,8 @@ impl World {
             self.apply_damage(shooter, victim, &def, distance, HitGroup::Chest, eye + dir * distance, Some(dir));
         }
         if external.is_none() && best.is_none() && tr.hit() {
+            self.damage_breakable(breakable, &tr,
+                if secondary { 65.0 } else if first { 40.0 } else { 25.0 }, breakables::DamageKind::Club);
             if let Some(dynamic) = &self.collision.dynamic {
                 dynamic.damage_block(tr.end, tr.normal, if secondary { 30.0 } else { 15.0 });
             }
@@ -1777,7 +1795,7 @@ impl World {
             let oy = a1.sin() * r1 * inacc + a2.sin() * r2 * spread;
             let dir = (fwd + right * ox + up * oy).normalize();
             let end = eye + dir * range;
-            let tr = self.collision.trace_ray(eye, end, contents::MASK_SHOT);
+            let (tr, owner) = self.collision.trace_owned_ray(eye, end, contents::MASK_SHOT);
             let world_dist = tr.fraction * range;
 
             // The movement hull is broad phase only when authored shapes exist.
@@ -1836,12 +1854,16 @@ impl World {
                 None => {
                     self.events.push(GameEvent::Tracer { player: id, start: eye, end: tr.end });
                     if tr.fraction < 1.0 && !self.collision.is_sky(tr.surface) {
+                        let door = self.door_impact(owner, &tr);
+                        self.damage_breakable(owner.and_then(collision::HitOwner::breakable), &tr,
+                            def.damage * def.range_modifier.powf(world_dist / 500.0), breakables::DamageKind::Bullet);
                         if let Some(dynamic)=&self.collision.dynamic {dynamic.damage_block(tr.end,tr.normal,def.damage as f32 * def.range_modifier.powf(world_dist/500.0));}
                         self.events.push(GameEvent::Impact {
                             player: id,
                             pos: tr.end,
                             normal: tr.normal,
                             surface: tr.surface,
+                            door,
                         });
                     }
                 }
@@ -1907,6 +1929,7 @@ impl World {
         let v = &mut self.players[victim];
         v.health = 0;
         v.alive = false;
+        v.movement.ladder_normal = None;
         for w in &mut v.weapons { w.reset_zoom(now); w.cancel_burst(); }
         v.deaths += 1;
         v.plant_start = None;

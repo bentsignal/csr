@@ -2,10 +2,12 @@
 use serde::{Deserialize, Serialize};
 use sim::{GameEvent, PlayerId, Snapshot, Team, TickInput};
 
-// v24 replicates independent recoil angle/velocity and its cadence anchor.
+// v28 adds bounded door-local cosmetic bullet contacts to the v27 events.
+// v27 combines authoritative door poses/cues, brush-breakable health/removal,
+// and replicated BSP ladder contact for prediction and foley.
 // Older peers must reject the session before attempting snapshot decoding.
-pub const VERSION: u32 = 24;
-pub const PROTOCOL_ID: u64 = 0x4353_5257_0000_0018;
+pub const VERSION: u32 = 28;
+pub const PROTOCOL_ID: u64 = 0x4353_5257_0000_001c;
 pub const CONTROL: u8 = 0;
 pub const INPUT: u8 = 1;
 pub const SNAPSHOT: u8 = 2;
@@ -63,8 +65,10 @@ pub(crate) fn validate_events(batch: &EventBatch) -> Result<(), String> {
                 player,
                 pos,
                 normal,
+                door,
                 ..
-            } => *player != 0 && position(*pos) && position(*normal),
+            } => *player != 0 && position(*pos) && position(*normal)
+                && door.is_none_or(|impact| impact.valid()),
             Damage {
                 victim,
                 health,
@@ -91,6 +95,7 @@ pub(crate) fn validate_events(batch: &EventBatch) -> Result<(), String> {
                 *player != 0 && site.is_ascii_uppercase() && position(*pos)
             }
             BombExploded { pos } => position(*pos),
+            DoorSound { door, pos, .. } => (*door as usize) < sim::doors::MAX_DOORS && position(*pos),
             StatTrakKill { owner: player, .. }
             | Reload { player }
             | Jump { player }
@@ -386,8 +391,16 @@ pub(crate) fn validate_state(
         || world.items.len() > 4096
         || world.projectiles.len() > 4096
         || world.utility_fields.len() > 4096
+        || world.doors.len() > sim::doors::MAX_DOORS
+        || world.breakables.len() > sim::breakables::MAX_BREAKABLES
     {
         return Err("snapshot entity limit exceeded".into());
+    }
+    if world.breakables.iter().any(|state| !state.valid()) {
+        return Err("invalid snapshot breakable state".into());
+    }
+    if world.doors.iter().any(|door| !door.valid()) {
+        return Err("invalid snapshot door state".into());
     }
     let c = &world.config;
     let r = &world.rules;
@@ -439,6 +452,9 @@ pub(crate) fn validate_state(
                 .is_some_and(|tick| tick > world.tick)
             || !actor.movement.origin.is_finite()
             || !actor.movement.velocity.is_finite()
+            || actor.movement.ladder_normal.is_some_and(|normal|
+                !normal.is_finite() || (normal.length_squared() - 1.0).abs() > 0.001
+                    || normal.z.abs() >= 0.7 || actor.movement.on_ground || !actor.alive)
             || !actor.view_angles.is_finite()
             || [
                 actor.movement.duck_amount,
@@ -600,6 +616,70 @@ mod death_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn door_impact_local_frame_roundtrips_and_rejects_unbounded_contacts() {
+        use glam::Vec3;
+        let impact = sim::doors::Impact { door: 0, pos: Vec3::new(-2., 24., 64.), normal: -Vec3::X };
+        let batch = |door| EventBatch { tick: 200, events: vec![GameEvent::Impact {
+            player: 1, pos: Vec3::new(100., 24., 64.), normal: Vec3::Y, surface: 3, door,
+        }] };
+        for contact in [None, Some(impact)] {
+            let events = batch(contact); validate_events(&events).unwrap();
+            assert_eq!(decode::<EventBatch>(&encode(&events).unwrap()).unwrap(), events);
+        }
+        for bad in [sim::doors::Impact { door: sim::doors::MAX_DOORS as u32, ..impact },
+            sim::doors::Impact { pos: Vec3::NAN, ..impact },
+            sim::doors::Impact { pos: Vec3::X * 4097., ..impact },
+            sim::doors::Impact { normal: Vec3::ZERO, ..impact },
+            sim::doors::Impact { normal: Vec3::INFINITY, ..impact },
+            sim::doors::Impact { normal: Vec3::X * 2., ..impact }] {
+            assert!(validate_events(&batch(Some(bad))).is_err());
+        }
+    }
+
+    #[test]
+    fn door_cues_roundtrip_and_reject_nonfinite_or_unbounded_payloads() {
+        use sim::doors::{Cue, State};
+        let batch = EventBatch { tick: 200, events: [Cue::Move, Cue::Open, Cue::Close, Cue::Unlock]
+            .into_iter().map(|cue| GameEvent::DoorSound { door: 0, cue, pos: glam::Vec3::Z * 48.0 }).collect() };
+        validate_events(&batch).unwrap();
+        assert_eq!(decode::<EventBatch>(&encode(&batch).unwrap()).unwrap(), batch);
+        for (door, pos) in [(sim::doors::MAX_DOORS as u32, glam::Vec3::ZERO), (0, glam::Vec3::NAN)] {
+            assert!(validate_events(&EventBatch { tick: 200,
+                events: vec![GameEvent::DoorSound { door, cue: Cue::Open, pos }] }).is_err());
+        }
+        let state = State { angle: -45.0, target: -90.0, return_at: None };
+        assert!(state.valid());
+        for bad in [State { angle: f32::NAN, ..state }, State { target: 181.0, ..state },
+            State { return_at: Some(f32::INFINITY), ..state }, State { return_at: Some(-1.0), ..state }] {
+            assert!(!bad.valid());
+        }
+    }
+
+    #[test]
+    fn breakable_wire_health_roundtrips_and_rejects_invalid_or_unbounded_state() {
+        use sim::breakables::State;
+        let mut world = sim::World::new(std::sync::Arc::new(collision::CollisionWorld::new()));
+        let player = world.add_player("fixture", Team::CounterTerrorist);
+        let welcome = ServerControl::Welcome { version: VERSION, player, tick_rate: world.tick_rate,
+            server_tick: 0, content: ContentManifest { map_id: "csgo_map_fixture".into(),
+                map_name: "fixture".into(), map_hash: "0".repeat(40), catalog_hash: "1".repeat(40) } };
+        let mut state = StateUpdate { acknowledged_input: 0, snapshot: world.snapshot() };
+        for leaf in [State { health: 12.5, destroyed: false }, State { health: 0., destroyed: true }] {
+            state.snapshot.state.breakables = vec![leaf];
+            validate_state(&state, Some(&welcome), 0, 0).unwrap();
+            assert_eq!(decode::<StateUpdate>(&encode(&state).unwrap()).unwrap(), state);
+        }
+        for leaf in [State { health: f32::NAN, destroyed: false }, State { health: f32::INFINITY, destroyed: false },
+            State { health: -1., destroyed: false }, State { health: 1., destroyed: true },
+            State { health: collision::breakables::MAX_HEALTH + 1., destroyed: false }] {
+            state.snapshot.state.breakables = vec![leaf];
+            assert!(validate_state(&state, Some(&welcome), 0, 0).is_err());
+        }
+        state.snapshot.state.breakables = vec![State { health: 1., destroyed: false }; sim::breakables::MAX_BREAKABLES + 1];
+        assert!(validate_state(&state, Some(&welcome), 0, 0).is_err());
+    }
+
     #[test]
     fn recoil_motion_rejects_nonfinite_future_and_wrong_content_state() {
         let catalog = weapons::Catalog::from_items_game(r##"
@@ -772,6 +852,7 @@ mod tests {
                 pos: Vec3::ZERO,
                 normal: Vec3::INFINITY,
                 surface: 0,
+                door: None,
             },
             GameEvent::Tracer {
                 player: 1,
@@ -892,6 +973,37 @@ mod tests {
             snapshot: world.snapshot(),
         };
         assert!(validate_state(&state, Some(&welcome), 0, 0).is_ok());
+        let mut climbing = state.clone();
+        climbing.snapshot.state.players[0].movement.on_ground = false;
+        climbing.snapshot.state.players[0].movement.ladder_normal = Some(-glam::Vec3::X);
+        climbing.snapshot.state.doors.push(sim::doors::State {
+            angle: -45., target: -90., return_at: None,
+        });
+        assert!(validate_state(&climbing, Some(&welcome), 0, 0).is_ok());
+        let decoded: StateUpdate = world.decode(&encode(&climbing).unwrap()).unwrap();
+        assert_eq!(decoded, climbing, "v26 must retain both door and ladder fields");
+        for case in 0..3 {
+            let mut invalid = climbing.clone();
+            let door = &mut invalid.snapshot.state.doors[0];
+            match case {
+                0 => door.angle = f32::NAN,
+                1 => door.target = 181.,
+                _ => door.return_at = Some(-1.),
+            }
+            assert!(validate_state(&invalid, Some(&welcome), 0, 0).is_err(), "door case {case}");
+        }
+        for case in 0..5 {
+            let mut invalid = climbing.clone();
+            let actor = &mut invalid.snapshot.state.players[0];
+            match case {
+                0 => actor.movement.ladder_normal = Some(glam::Vec3::NAN),
+                1 => actor.movement.ladder_normal = Some(glam::Vec3::Z),
+                2 => actor.movement.ladder_normal = Some(glam::Vec3::X * 2.),
+                3 => actor.movement.on_ground = true,
+                _ => actor.alive = false,
+            }
+            assert!(validate_state(&invalid, Some(&welcome), 0, 0).is_err(), "ladder case {case}");
+        }
         let mut invalid = state.clone();
         invalid.snapshot.state.players[0].life_epoch = 0;
         assert!(validate_state(&invalid, Some(&welcome), 0, 0).is_err());

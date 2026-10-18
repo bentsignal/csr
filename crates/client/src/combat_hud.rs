@@ -303,6 +303,7 @@ impl Presentation {
 pub(crate) fn display(
     presentation: Res<crate::kill_feed::Presentation>,
     windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
+    ui_scale: Res<UiScale>,
     mut surfaces: Query<(&Surface, &mut Visibility, &mut Node), Without<Fallback>>,
     mut fallbacks: Query<(&Fallback, &mut Visibility), Without<Surface>>,
 ) {
@@ -315,10 +316,10 @@ pub(crate) fn display(
     let scale = window.scale_factor();
     for (surface, mut visibility, mut node) in &mut surfaces {
         let rect = rects[surface.0 + 1];
-        let left = px(rect.x as f32 / scale);
-        let top = px(rect.y as f32 / scale);
-        let width = px(rect.width as f32 / scale);
-        let height = px(rect.height as f32 / scale);
+        let left = crate::hud_layout::raster_pixel(rect.x, scale, ui_scale.0);
+        let top = crate::hud_layout::raster_pixel(rect.y, scale, ui_scale.0);
+        let width = crate::hud_layout::raster_pixel(rect.width, scale, ui_scale.0);
+        let height = crate::hud_layout::raster_pixel(rect.height, scale, ui_scale.0);
         if node.left != left {
             node.left = left;
         }
@@ -476,6 +477,33 @@ pub(crate) fn crop(frame: &scaleform::Frame, rect: Rect) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn display_maps_each_cropped_region_to_physical_pixels_through_dpi_and_ui_scale() {
+        use bevy::window::{PrimaryWindow, WindowResolution};
+        for (width, height, dpi) in [(1920, 1080, 1.0), (1601, 901, 1.5)] {
+            let mut app = App::new();
+            let mut presentation = crate::kill_feed::Presentation::default();
+            presentation.combat.visible = [true; 2];
+            app.insert_resource(presentation).insert_resource(UiScale(1.25))
+                .add_systems(Update, display);
+            app.world_mut().spawn((PrimaryWindow, Window {
+                resolution: WindowResolution::new(width, height).with_scale_factor_override(dpi),
+                ..default()
+            }));
+            let surfaces = [0, 1].map(|part| app.world_mut().spawn((Surface(part), Node::default(), Visibility::Hidden)).id());
+            app.update();
+            for (part, entity) in surfaces.into_iter().enumerate() {
+                let node = app.world().get::<Node>(entity).unwrap();
+                let rect = regions(width, height)[part + 1];
+                for (value, expected) in [(node.left, rect.x), (node.top, rect.y), (node.width, rect.width), (node.height, rect.height)] {
+                    let physical = value.resolve(dpi * 1.25, 0., Vec2::new(width as f32, height as f32)).unwrap();
+                    assert!((physical - expected as f32).abs() < 0.001);
+                }
+                assert_eq!(*app.world().get::<Visibility>(entity).unwrap(), Visibility::Inherited);
+            }
+        }
+    }
 
     #[test]
     fn same_revision_pixels_submitted_before_show_cannot_freeze_the_hud() {

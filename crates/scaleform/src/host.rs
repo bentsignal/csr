@@ -875,12 +875,13 @@ fn compile_shim() -> Result<Vec<u8>, Error> {
                 "shim.as" => Ok(include_str!("shim.as").to_string()),
                 "death_notice.as" => Ok(include_str!("death_notice.as").to_string()),
                 "combat_hud.as" => Ok(include_str!("combat_hud.as").to_string()),
+                "hud_layout.as" => Ok(include_str!("hud_layout.as").to_string()),
                 "flow_probe.as" => Ok(include_str!("flow_probe.as").to_string()),
                 _ => Err(std::io::Error::new(std::io::ErrorKind::NotFound, path.to_string())),
             }
         }
         fn is_file(&self, path: &str) -> bool {
-            matches!(path, "shim.as" | "death_notice.as" | "combat_hud.as" | "flow_probe.as")
+            matches!(path, "shim.as" | "death_notice.as" | "combat_hud.as" | "hud_layout.as" | "flow_probe.as")
         }
     }
     // SWF 10: Ruffle turns empty strings crossing ExternalInterface into
@@ -888,6 +889,7 @@ fn compile_shim() -> Result<Vec<u8>, Error> {
     let options = rascal::CompileOptions::default().with_swf_version(10);
     let mut builder = rascal::ProgramBuilder::new(Source).with_compile_options(options);
     builder.add_script("shim.as");
+    builder.add_script("hud_layout.as");
     builder.add_script("death_notice.as");
     builder.add_script("combat_hud.as");
     builder.add_script("flow_probe.as");

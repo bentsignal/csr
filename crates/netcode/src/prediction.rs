@@ -68,6 +68,8 @@ impl Predictor {
         let player = *player;
         let ack = initial.acknowledged_input;
         validate_state(&initial, Some(&welcome), ack, ack)?;
+        world.validate_door_state(&initial.snapshot.state.doors)?;
+        world.validate_breakable_state(&initial.snapshot.state.breakables)?;
         let authoritative = initial.snapshot.state;
         world.restore(authoritative.clone());
         world.events.clear();
@@ -159,6 +161,8 @@ impl Predictor {
             return Ok(Reconciliation::IgnoredStale);
         }
         validate_state(&state, Some(&self.welcome), self.last_sent, self.last_ack)?;
+        self.world.validate_door_state(&state.snapshot.state.doors)?;
+        self.world.validate_breakable_state(&state.snapshot.state.breakables)?;
         let before = self
             .world
             .player(self.player)
@@ -237,6 +241,42 @@ mod tests {
                 ..Default::default()
             },
         }
+    }
+
+    #[test]
+    fn breakable_admission_and_correction_reject_wrong_map_state_before_mutation() {
+        use sim::breakables::State;
+        let (mut authority, player, welcome) = fixture(128);
+        let base = Arc::get_mut(&mut authority.collision).unwrap();
+        base.breakables = vec![collision::breakables::Breakable {
+            entity: 1, model: 1, origin: Vec3::ZERO, health: 20., material: 2,
+            prop_data: String::new(), bullet_scale: 1., club_scale: 1., minimum_damage: 0.,
+            trigger_only: false, solids: Vec::new(), studio: None,
+        }].into();
+        authority.breakables = vec![State { health: 20., destroyed: false }];
+        let mut missing = update(&authority, 0);
+        missing.snapshot.state.breakables.clear();
+        assert!(Predictor::new(authority.clone(), welcome.clone(), missing).is_err());
+        let mut predictor = Predictor::new(authority.clone(), welcome, update(&authority, 0)).unwrap();
+        predictor.predict(command(1)).unwrap();
+        authority.step(&[(player, command(1).input)]);
+        let before = predictor.world().state();
+        for states in [Vec::new(), vec![State { health: 21., destroyed: false }],
+            vec![State { health: 0., destroyed: false }]] {
+            let mut invalid = update(&authority, 1);
+            invalid.snapshot.state.breakables = states;
+            assert!(predictor.reconcile(invalid).is_err());
+            assert_eq!(predictor.world().state(), before);
+            assert_eq!(predictor.pending_inputs(), 1);
+        }
+        authority.breakables[0] = State { health: 0., destroyed: true };
+        predictor.reconcile(update(&authority, 1)).unwrap();
+        assert!(predictor.world().breakables[0].broken());
+        assert_eq!(predictor.pending_inputs(), 0);
+        authority.step(&[(player, TickInput::default())]);
+        authority.breakables[0] = State { health: 20., destroyed: false };
+        predictor.reconcile(update(&authority, 1)).unwrap();
+        assert!(!predictor.world().breakables[0].broken());
     }
 
     #[test]
