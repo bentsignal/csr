@@ -4,6 +4,12 @@ Status: **work resumed by the owner on 2026-10-17**. This is the scheduling
 authority. VISION defines the product; older feedback supplies examples and
 regression cases. Maintain priorities through conversation. The GUI is retired.
 
+Current owner-approved pass: lighting and material fidelity, especially proper
+interior lighting, followed by one coherent visual test build. Keep performance
+regression checks alongside it; the broader FPS goal remains open. The owner
+will identify obsolete backlog items as testing proceeds; no backlog audit is
+part of this pass.
+
 ## Objective and working scope
 
 Make the game playable, fun and convincingly like original CS:GO. It is still
