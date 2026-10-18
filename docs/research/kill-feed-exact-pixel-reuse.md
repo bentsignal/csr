@@ -1,7 +1,9 @@
 # Kill-feed exact-pixel upload candidate
 
-This local candidate starts at `6d79cae4b800ef377e2ba23a664e18571f6c52fc`
-(#212). It addresses potential redundant top-image mutation in
+Originally prepared on `6d79cae4b800ef377e2ba23a664e18571f6c52fc`, this work
+was still absent from master after #230. It is now integrated with bounded
+collision scratch reuse and contiguous capture copying in #231. It addresses
+redundant top-image mutation in
 `crates/client/src/kill_feed.rs`; it establishes no FPS improvement or dominant
 HUD bottleneck. Root owns A/B attribution with immutable executables.
 
@@ -36,8 +38,9 @@ unchanged.
 
 ## Pending root verification
 
-No Cargo, build, rustc, native game, UI, Steam, or shared-target work was run for
-this local implementation. Root's active guard release build is unaffected.
+The original source implementation and independent review ran no builds.
+Integrated #231 workspace, Release and runtime checks are pending; the earlier
+collision-only workspace pass does not validate the new HUD changes.
 
 - `cargo test -p client kill_feed::tests` (new notification/admission fixtures).
 - `cargo test -p client combat_hud::tests` (existing #208 receipt/fence fixtures).
