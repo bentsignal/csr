@@ -5,6 +5,28 @@ authority. VISION defines the product. The complete newest observations and
 corrections are in [the October 18 playtest record](PLAYTEST-2026-10-18.md).
 Maintain priorities through conversation; the GUI is retired.
 
+## Approved work order: October 18 follow-up
+
+The owner explicitly approved implementation in this order:
+
+1. **Classic map availability and playability**, including old Train and all
+   requested core historical versions, traversal and material/lighting defects.
+2. **Movement and viewmodel finish**: walking/crouching/backward movement and
+   airborne/landing response while preserving accepted grounded motion.
+3. **Combat hit-sound consistency** across weapons, armor states and maps.
+4. **Grenades**, including original CS:GO release/trajectory/feel and remaining
+   behavior/effect defects. The owner revoked the earlier CS2 throw-feel target.
+   Use clean-room original-game observations and old smoke lineup videos on the
+   matching old maps as end-to-end checks; cover other grenades separately too.
+
+The owner retested bot matches through another launch route and considers the
+reported bot/mode availability issue resolved, probably due to the weapon-motion
+shortcut. Do not spend a new track on it without a normal-menu reproduction.
+Keep ordinary ten-player map support as an admission requirement.
+
+This is authorization to start; do not wait for another scope confirmation.
+Prepare coherent daytime playtests rather than tiny frequent checks.
+
 ## Current direction: October 18
 
 The overnight queue is superseded by this feedback. Nuke and old Dust II
@@ -19,7 +41,7 @@ Do not present this acceptance as proof of steady above-300 FPS on every map.
 - **Classic maps and playability:** prepare the correct 2015-era core map set,
   including old Cache/pre-remake Nuke and appropriate versions of the other
   requested maps. Verify historical identity, dependencies, lighting,
-  navigation and ten-player mode/bot availability. Broaden coverage to Cache,
+  navigation and ordinary ten-player matches. Broaden coverage to Cache,
   Mirage, Cobblestone, Vertigo, Train and Overpass. Fix failed ladders and blocked
   intended passages across maps. Nuke vent ladder and Mirage ladder-room/window
   access are examples, not separate outcomes. Preserve working doors, vents,
@@ -95,8 +117,8 @@ playability priorities is authorized. Reassess through chat as the game improves
   occlusion/vertical placement is medium. Broader classic mixing and event cues
   retain their existing unfinished status.
 - **Grenade throwing:** correct release and trajectories for normal,
-  alternate, running and jump throws. The owner's CS2 throw-feel exception
-  remains; assets, UI and general fidelity remain old CS:GO.
+  alternate, running and jump throws. The October 18 owner direction
+  explicitly targets original CS:GO throw feel and trajectories.
 - **Map interactions:** working ladders, doors/sounds, vents and relevant
   breakable objects on all supported maps through authoritative simulation.
 - **Classic presentation:** retain the requested legitimate original Valve

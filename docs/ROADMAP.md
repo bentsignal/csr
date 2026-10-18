@@ -1,5 +1,11 @@
 # Roadmap
 
+> **October 18 follow-up:** implementation approved: classic maps/playability,
+> then movement/viewmodels, hit-audio consistency, then grenades. Grenade feel
+> now targets original CS:GO and historical lineups; the prior CS2 throw-feel
+> exception is superseded. Bot/mode warning cleared by owner retest.
+
+
 > **October 18 owner direction:** [Morning feedback](PLAYTEST-2026-10-18.md)
 > accepts the major performance improvement as good enough for now. General FPS
 > optimization moves low; core 2015-era maps, working traversal/ten-player modes,
