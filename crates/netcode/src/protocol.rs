@@ -2,10 +2,10 @@
 use serde::{Deserialize, Serialize};
 use sim::{GameEvent, PlayerId, Snapshot, Team, TickInput};
 
-// v24 replicates independent recoil angle/velocity and its cadence anchor.
+// v25 replicates BSP ladder contact in PlayerMove for prediction and foley.
 // Older peers must reject the session before attempting snapshot decoding.
-pub const VERSION: u32 = 24;
-pub const PROTOCOL_ID: u64 = 0x4353_5257_0000_0018;
+pub const VERSION: u32 = 25;
+pub const PROTOCOL_ID: u64 = 0x4353_5257_0000_0019;
 pub const CONTROL: u8 = 0;
 pub const INPUT: u8 = 1;
 pub const SNAPSHOT: u8 = 2;
@@ -439,6 +439,9 @@ pub(crate) fn validate_state(
                 .is_some_and(|tick| tick > world.tick)
             || !actor.movement.origin.is_finite()
             || !actor.movement.velocity.is_finite()
+            || actor.movement.ladder_normal.is_some_and(|normal|
+                !normal.is_finite() || (normal.length_squared() - 1.0).abs() > 0.001
+                    || normal.z.abs() >= 0.7 || actor.movement.on_ground || !actor.alive)
             || !actor.view_angles.is_finite()
             || [
                 actor.movement.duck_amount,
@@ -892,6 +895,22 @@ mod tests {
             snapshot: world.snapshot(),
         };
         assert!(validate_state(&state, Some(&welcome), 0, 0).is_ok());
+        let mut climbing = state.clone();
+        climbing.snapshot.state.players[0].movement.on_ground = false;
+        climbing.snapshot.state.players[0].movement.ladder_normal = Some(-glam::Vec3::X);
+        assert!(validate_state(&climbing, Some(&welcome), 0, 0).is_ok());
+        for case in 0..5 {
+            let mut invalid = climbing.clone();
+            let actor = &mut invalid.snapshot.state.players[0];
+            match case {
+                0 => actor.movement.ladder_normal = Some(glam::Vec3::NAN),
+                1 => actor.movement.ladder_normal = Some(glam::Vec3::Z),
+                2 => actor.movement.ladder_normal = Some(glam::Vec3::X * 2.),
+                3 => actor.movement.on_ground = true,
+                _ => actor.alive = false,
+            }
+            assert!(validate_state(&invalid, Some(&welcome), 0, 0).is_err(), "ladder case {case}");
+        }
         let mut invalid = state.clone();
         invalid.snapshot.state.players[0].life_epoch = 0;
         assert!(validate_state(&invalid, Some(&welcome), 0, 0).is_err());

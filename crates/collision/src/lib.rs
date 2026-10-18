@@ -19,6 +19,7 @@ pub use bsp::contents;
 
 mod prop_lighting;
 pub use prop_lighting::PropLightingQuery;
+mod ladders;
 
 /// Distance kept between a sweep's end position and the surface it hit.
 pub const DIST_EPSILON: f32 = 0.03125;
@@ -162,6 +163,9 @@ pub struct CollisionWorld {
     /// Convex indices per BSP static-prop ordinal, including empty entries.
     /// Built alongside the placed hulls; world geometry is never in a range.
     static_prop_convexes: Vec<std::ops::Range<usize>>,
+    /// Authored ladder brushes only. Keeps ordinary movement queries free of
+    /// allocations and avoids scanning world geometry for this small subset.
+    ladder_convexes: Vec<usize>,
     pub mins: Vec3,
     pub maxs: Vec3,
     /// Shapes dropped for invalid geometry.
@@ -226,6 +230,9 @@ impl CollisionWorld {
 
     /// Builds the broad-phase grid. Call after adding all shapes.
     pub fn finalize(&mut self) {
+        self.ladder_convexes = self.convexes.iter().enumerate()
+            .filter_map(|(index, brush)| (brush.contents & contents::LADDER != 0).then_some(index))
+            .collect();
         let mut mn = Vec3::splat(f32::MAX);
         let mut mx = Vec3::splat(f32::MIN);
         for c in &self.convexes {

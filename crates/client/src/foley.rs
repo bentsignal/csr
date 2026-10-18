@@ -41,6 +41,7 @@ struct PlayerFoley {
     grenade_release: Option<u64>,
     suppressor_transition: Option<sim::weapon::SuppressorTransition>,
     moving: bool,
+    climbing: bool,
     step_timer: f32,
     left: bool,
 }
@@ -307,9 +308,23 @@ pub fn update(
         // Footsteps, alternating feet, with the gear rustle on each.
         let st = foley.players.get_mut(&p.id).unwrap();
         let v = p.movement.velocity;
-        let speed = (v.x * v.x + v.y * v.y).sqrt();
-        if let Some(left) = st.footstep(p.movement.on_ground, speed, elapsed) {
-            let step = surface_step(&level.0, &props, p.movement.origin, left);
+        let climbing = p.movement.ladder_normal.is_some();
+        if st.climbing != climbing {
+            st.climbing = climbing;
+            st.moving = false;
+        }
+        let speed = if climbing { v.length() } else { (v.x * v.x + v.y * v.y).sqrt() };
+        if let Some(left) = st.footstep(p.movement.on_ground || climbing, speed, elapsed) {
+            // The installed surface table declares ladder.StepLeft/Right.
+            // Resolve it through the same soundscript library as ground steps;
+            // no fabricated waveform or alternate game's asset is introduced.
+            let step = if climbing {
+                props.get_declared("ladder").and_then(|s|
+                    if left { s.step_left.clone() } else { s.step_right.clone() })
+                    .unwrap_or_default()
+            } else { surface_step(&level.0, &props, p.movement.origin, left) };
+            if step.is_empty() { continue; }
+            if climbing && !sounds.has(&step) && !sounds.has(&format!("{}{step}", team_prefix(p.team))) { continue; }
             let entry = step_entry(&sounds, p.team, &step, left);
             if std::env::var_os("CSR_SOUND_LOG").is_some() { info!("footstep sim {now:.3} player {} {entry} speed {speed:.1}", p.id); }
             let emit = emit_for(p, &local, p.movement.origin);

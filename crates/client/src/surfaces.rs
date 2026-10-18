@@ -73,7 +73,13 @@ impl SurfaceProps {
     }
 
     pub fn get(&self, prop: &str) -> Option<&SurfaceSounds> {
-        self.props.get(&prop.to_ascii_lowercase()).or_else(|| self.props.get("default"))
+        self.get_declared(prop).or_else(|| self.props.get("default"))
+    }
+
+    /// A special interaction surface must exist in the mounted content;
+    /// substituting default ground audio would misrepresent that interaction.
+    pub fn get_declared(&self, prop: &str) -> Option<&SurfaceSounds> {
+        self.props.get(&prop.to_ascii_lowercase())
     }
 
     /// Property name of a collision surface (material or model path).

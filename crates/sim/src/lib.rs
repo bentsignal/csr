@@ -1907,6 +1907,7 @@ impl World {
         let v = &mut self.players[victim];
         v.health = 0;
         v.alive = false;
+        v.movement.ladder_normal = None;
         for w in &mut v.weapons { w.reset_zoom(now); w.cancel_burst(); }
         v.deaths += 1;
         v.plant_start = None;
