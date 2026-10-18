@@ -11,7 +11,8 @@ use bevy::pbr::{Material, MaterialPipeline, MaterialPipelineKey};
 use bevy::prelude::*;
 use bevy::reflect::TypePath;
 use bevy::render::render_resource::{
-    AsBindGroup, Face, RenderPipelineDescriptor, ShaderType, SpecializedMeshPipelineError,
+    AsBindGroup, BlendComponent, BlendFactor, BlendOperation, BlendState, Face,
+    RenderPipelineDescriptor, ShaderType, SpecializedMeshPipelineError,
 };
 use bevy::shader::ShaderRef;
 
@@ -152,6 +153,7 @@ impl Default for WorldParams {
 pub struct WorldMaterialKey {
     pub cull: bool,
     pub depth_write: bool,
+    pub additive: bool,
     pub shadow_diagnostic: bool,
     pub overlay_order: Option<u8>,
 }
@@ -206,6 +208,7 @@ impl From<&WorldMaterial> for WorldMaterialKey {
         Self {
             cull: m.cull,
             depth_write: !matches!(m.alpha_mode, AlphaMode::Blend | AlphaMode::Add | AlphaMode::Premultiplied),
+            additive: m.alpha_mode == AlphaMode::Add,
             shadow_diagnostic: crate::shadow_diagnostic::enabled(),
             overlay_order: (m.params.flags & flags::OVERLAY != 0)
                 .then_some(((m.params.flags >> flags::OVERLAY_ORDER_SHIFT) & 3) as u8),
@@ -259,6 +262,7 @@ impl Material for WorldMaterial {
         key: MaterialPipelineKey<Self>,
     ) -> Result<(), SpecializedMeshPipelineError> {
         specialize_prop_vertex(descriptor, layout, &pipeline.mesh_pipeline.shader)?;
+        specialize_additive(descriptor, key.bind_group_data.additive);
         descriptor.primitive.cull_mode = if key.bind_group_data.cull { Some(Face::Back) } else { None };
         if key.bind_group_data.shadow_diagnostic {
             if let Some(fragment) = descriptor.fragment.as_mut() {
@@ -276,6 +280,35 @@ impl Material for WorldMaterial {
             }
         }
         Ok(())
+    }
+}
+
+/// Bevy's Add mode shares its premultiplied pipeline with Premultiplied mode.
+/// Its PBR fragment shader distinguishes the two by premultiplying RGB and
+/// zeroing output alpha. WorldMaterial emits straight RGBA instead, so use
+/// SRC_ALPHA:ONE explicitly. Black and zero-opacity texels then preserve the
+/// receiver, including its alpha, rather than darkening it. Keep this forward
+/// only; diagnostic depth targets do not carry fragment color.
+fn specialize_additive(descriptor: &mut RenderPipelineDescriptor, additive: bool) {
+    if !additive || descriptor.vertex.shader_defs.contains(&"PREPASS_PIPELINE".into()) {
+        return;
+    }
+    if let Some(target) = descriptor.fragment.as_mut()
+        .and_then(|fragment| fragment.targets.first_mut())
+        .and_then(Option::as_mut)
+    {
+        target.blend = Some(BlendState {
+            color: BlendComponent {
+                src_factor: BlendFactor::SrcAlpha,
+                dst_factor: BlendFactor::One,
+                operation: BlendOperation::Add,
+            },
+            alpha: BlendComponent {
+                src_factor: BlendFactor::Zero,
+                dst_factor: BlendFactor::One,
+                operation: BlendOperation::Add,
+            },
+        });
     }
 }
 
@@ -318,6 +351,55 @@ mod prop_vertex_tests {
     use super::*;
     use bevy::{asset::RenderAssetUsages, mesh::{MeshVertexBufferLayouts, PrimitiveTopology},
         render::render_resource::FragmentState};
+
+    #[test]
+    fn additive_straight_rgba_preserves_receiver_and_scales_source_coverage() {
+        use bevy::render::render_resource::{ColorTargetState, ColorWrites, TextureFormat};
+        let mut descriptor = RenderPipelineDescriptor {
+            fragment: Some(FragmentState {
+                targets: vec![Some(ColorTargetState {
+                    format: TextureFormat::Rgba16Float,
+                    blend: Some(BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+                    write_mask: ColorWrites::ALL,
+                })],
+                ..default()
+            }),
+            ..default()
+        };
+        let before = descriptor.clone();
+        specialize_additive(&mut descriptor, false);
+        assert_eq!(descriptor, before); // Blend/Premultiplied/opaque untouched.
+        descriptor.vertex.shader_defs.push("PREPASS_PIPELINE".into());
+        let depth = descriptor.clone();
+        specialize_additive(&mut descriptor, true);
+        assert_eq!(descriptor, depth);
+        descriptor.vertex.shader_defs.clear();
+        specialize_additive(&mut descriptor, true);
+        let blend = descriptor.fragment.as_ref().unwrap().targets[0].as_ref().unwrap().blend.unwrap();
+
+        // Evaluate the actual specialized fixed-function factors, not a second
+        // implementation of a proposed shader. Include transparent bright RGB,
+        // opaque black, and fractional texture * material opacity.
+        let factor = |f: BlendFactor, alpha: f32| match f {
+            BlendFactor::Zero => 0., BlendFactor::One => 1.,
+            BlendFactor::SrcAlpha => alpha, BlendFactor::OneMinusSrcAlpha => 1. - alpha,
+            _ => panic!("unexpected blend factor: {f:?}"),
+        };
+        let receiver = Vec4::new(0.2, 0.4, 0.6, 0.75);
+        for (source, expected) in [
+            (Vec4::new(0., 0., 0., 1.), receiver),
+            (Vec4::new(1., 1., 1., 0.), receiver),
+            (Vec4::new(0.8, 0.4, 0.2, 0.5 * 0.25), Vec4::new(0.3, 0.45, 0.625, 0.75)),
+        ] {
+            assert_eq!(blend.color.operation, BlendOperation::Add);
+            assert_eq!(blend.alpha.operation, BlendOperation::Add);
+            let rgb = source.truncate() * factor(blend.color.src_factor, source.w)
+                + receiver.truncate() * factor(blend.color.dst_factor, source.w);
+            let alpha = source.w * factor(blend.alpha.src_factor, source.w)
+                + receiver.w * factor(blend.alpha.dst_factor, source.w);
+            assert!((rgb.extend(alpha) - expected).abs().max_element() < 1e-6);
+        }
+    }
 
     fn layout(packed_attributes: usize) -> MeshVertexBufferLayoutRef {
         let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::MAIN_WORLD);

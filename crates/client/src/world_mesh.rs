@@ -258,8 +258,17 @@ pub fn build_overlays(bsp: &Bsp, atlas: &LightmapAtlas, include: &dyn Fn(usize) 
 pub fn overlay_material(name: &str, order: u8, fs: &vfs::Vfs, textures: &mut TextureCache, images: &mut Assets<Image>, shared: &SharedHandles, exposure: f32) -> Option<WorldMaterial> {
     let mat = vmt::Material::load(name, &|p| fs.read_string(p))?;
     if !matches!(mat.shader.as_str(), "lightmappedgeneric" | "unlitgeneric") { return None; }
-    textures.load(fs, images, mat.base_texture()?, true)?;
+    let base = textures.load(fs, images, mat.base_texture()?, true)?;
     let mut out = material_from_vmt(Some(&mat), fs, textures, images, shared, exposure, true);
+    // Projected decals can author coverage in the VTF without $translucent
+    // (for example an oil stain). Retain explicit blend/cutout modes and alpha
+    // used for another purpose; never infer opacity on ordinary world/props.
+    if mat.flag("$decal") && base.has_alpha && out.alpha_mode == AlphaMode::Opaque
+        && !mat.flag("$selfillum") && !mat.flag("$basealphaenvmapmask")
+    {
+        out.params.flags |= flags::TRANSLUCENT;
+        out.alpha_mode = AlphaMode::Blend;
+    }
     out.params.flags |= flags::OVERLAY | (u32::from(order & 3) << flags::OVERLAY_ORDER_SHIFT);
     Some(out)
 }
@@ -727,7 +736,7 @@ mod authored_transform_tests {
 
     // One synthetic RGBA texel exercises the real texture-load/material path
     // without an install, filesystem writes, renderer or game asset fixture.
-    fn normal_material(mat: Option<&vmt::Material>, lightmapped: bool) -> WorldMaterial {
+    fn normal_fs() -> vfs::Vfs {
         let mut normal = vec![0u8; 84];
         normal[..4].copy_from_slice(b"VTF\0");
         normal[4..8].copy_from_slice(&7u32.to_le_bytes());
@@ -740,14 +749,82 @@ mod authored_transform_tests {
         normal[56] = 1; // one mip, no thumbnail
         normal[57..61].copy_from_slice(&(-1i32).to_le_bytes());
         normal[80..].copy_from_slice(&[128, 128, 255, 64]);
+        let mut opaque = normal.clone();
+        opaque[52..56].copy_from_slice(&(vtf::Format::Rgb888 as i32).to_le_bytes());
+        opaque.truncate(83);
         let mut fs = vfs::Vfs::new();
         fs.push_back("synthetic normal", vfs::Mount::Memory(std::collections::BTreeMap::from([
             ("materials/test/normal.vtf".into(), normal.into()),
+            ("materials/test/opaque.vtf".into(), opaque.into()),
         ])));
+        fs
+    }
+
+    fn normal_material(mat: Option<&vmt::Material>, lightmapped: bool) -> WorldMaterial {
+        let fs = normal_fs();
         let mut images = Assets::<Image>::default();
         let mut textures = TextureCache::new(&mut images);
         let shared = SharedHandles { lightmap: textures.white.clone() };
         material_from_vmt(mat, &fs, &mut textures, &mut images, &shared, 1.0, lightmapped)
+    }
+
+    #[test]
+    fn additive_and_premultiplied_materials_cannot_share_a_pipeline_key() {
+        let mat = vmt::Material::parse_with(
+            r#"UnlitGeneric { "$basetexture" "test/normal" "$additive" "1" "$alpha" ".25" }"#,
+            &|_| None, 0,
+        ).unwrap();
+        let mut out = normal_material(Some(&mat), false);
+        assert_eq!(out.alpha_mode, AlphaMode::Add);
+        assert_ne!(out.params.flags & flags::TRANSLUCENT, 0);
+        assert_eq!(out.params.color.w, 0.25);
+        let additive = crate::material::WorldMaterialKey::from(&out);
+        assert!(additive.additive);
+        assert!(!additive.depth_write);
+        out.alpha_mode = AlphaMode::Premultiplied;
+        let premultiplied = crate::material::WorldMaterialKey::from(&out);
+        assert!(!premultiplied.additive);
+        assert!(!premultiplied.depth_write);
+        assert_ne!(additive, premultiplied);
+    }
+
+    #[test]
+    fn projected_decal_coverage_keeps_explicit_modes_and_other_alpha_uses() {
+        for (declaration, mode, translucent) in [
+            (r#""$decal" "1""#, AlphaMode::Blend, true),
+            (r#""$decal" "0""#, AlphaMode::Opaque, false),
+            (r#""$decal" "1" "$basetexture" "test/opaque""#, AlphaMode::Opaque, false),
+            (r#""$decal" "1" "$alphatest" "1" "$alphatestreference" ".3""#, AlphaMode::Mask(0.3), false),
+            (r#""$decal" "1" "$additive" "1""#, AlphaMode::Add, true),
+            (r#""$decal" "1" "$translucent" "1""#, AlphaMode::Blend, true),
+            (r#""$decal" "1" "$selfillum" "1""#, AlphaMode::Opaque, false),
+            (r#""$decal" "1" "$basealphaenvmapmask" "1""#, AlphaMode::Opaque, false),
+        ] {
+            let text = format!(r#"LightmappedGeneric {{
+                "$basetexture" "test/normal" "$alpha" ".25"
+                "$color" "[.5 .75 1]" {declaration}
+            }}"#);
+            let source = vmt::Material::parse_with(&text, &|_| None, 0).unwrap();
+            let ordinary = normal_material(Some(&source), true);
+            let mut fs = normal_fs();
+            fs.push_back("synthetic decal", vfs::Mount::Memory(std::collections::BTreeMap::from([
+                ("materials/test/decal.vmt".into(), text.into_bytes().into()),
+            ])));
+            let mut images = Assets::<Image>::default();
+            let mut textures = TextureCache::new(&mut images);
+            let shared = SharedHandles { lightmap: textures.white.clone() };
+            let out = overlay_material("test/decal", 2, &fs, &mut textures, &mut images, &shared, 1.).unwrap();
+            assert_eq!(out.alpha_mode, mode, "{declaration}");
+            assert_eq!(out.params.flags & flags::TRANSLUCENT != 0, translucent);
+            assert_eq!(out.params.color, Vec4::new(0.5, 0.75, 1., 0.25));
+            assert_ne!(out.params.flags & flags::LIGHTMAPPED, 0);
+            assert_eq!(crate::material::WorldMaterialKey::from(&out).overlay_order, Some(2));
+            // The inference is confined to projected overlays. The same VMT
+            // on an ordinary brush still has its explicit material mode.
+            if source.flag("$decal") && !source.translucent() && !source.alpha_test() {
+                assert_eq!(ordinary.alpha_mode, AlphaMode::Opaque);
+            }
+        }
     }
 
     #[test]
