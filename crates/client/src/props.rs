@@ -726,7 +726,9 @@ mod lighting_tests {
         assert_eq!(covered.sun, SourceVec3::ZERO);
         assert_eq!(exposed.sun, SUN.color, "geometric back face must not cull a later bumped Sun response");
         assert_eq!(covered.eval(-SourceVec3::Z), exposed.eval(-SourceVec3::Z));
-        assert_eq!(exposed.eval(SourceVec3::Z) - covered.eval(SourceVec3::Z), SUN.color);
+        // Normalization and subtraction can round a unit contribution by one
+        // float ULP; retain a tight comparison of the actual lighting result.
+        assert!((exposed.eval(SourceVec3::Z) - covered.eval(SourceVec3::Z) - SUN.color).abs().max_element() < 1e-6);
         assert_eq!(surface_light(&map, &w, Some(SUN), &instance,
             SourceVec3::new(80., 0., 1.), -SourceVec3::Z, 0), exposed.eval(-SourceVec3::Z));
 
