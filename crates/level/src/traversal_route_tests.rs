@@ -158,7 +158,10 @@ fn mirage_small_ct_window_hole(bytes: Option<Vec<u8>>) {
             world.step(&[(actor, sim::TickInput { view_angles: aim, weapon_slot: 3,
                 buttons: movement::buttons::ATTACK, ..Default::default() })]);
             assert!(world.breakables[cover].broken() && world.breakables[grate].broken(),
-                "{rate}Hz {approach}: reciprocal Break must remove both owners");
+                "{rate}Hz {approach}: reciprocal Break must remove both owners; cover={:?}, grate={:?}, scales={:?}, weapon={:?}, events={:?}",
+                world.breakables[cover], world.breakables[grate],
+                (collision.breakables[cover].club_scale, collision.breakables[cover].minimum_damage),
+                world.player(actor).unwrap().active_weapon(), world.events);
             assert!(!world.collision.trace_box(start, end, movement::DUCK_MINS,
                 movement::DUCK_MAXS, collision::contents::MASK_PLAYERSOLID).hit(),
                 "the authored crouch hull must fit the cleared hole");
