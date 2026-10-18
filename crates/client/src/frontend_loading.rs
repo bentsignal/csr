@@ -1,4 +1,4 @@
-//! Owned loading images from the two pinned pre-rework map BSPs.
+//! Owned loading images from the admitted pinned classic map BSPs.
 //!
 //! Decoding runs on the movie thread, outside the shared frontend-data lock.
 //! No archive bytes or installed artwork are included in the application.
@@ -22,6 +22,31 @@ const PINS: &[Pin] = &[
         name: "de_inferno_2016",
         bytes: 30_300_620,
         sha256: "55BF80411C395623FC46D8EFD9FBF1C23DCE89A92D464050AAD7DBC0D0834588",
+    },
+    Pin {
+        name: "de_nuke_2016",
+        bytes: 24_583_496,
+        sha256: "091E25D8DC34CD95F801A4E6D80D7E2BBD5829D0B81EF7F077F1D79307FA9A3D",
+    },
+    Pin {
+        name: "de_train_2015",
+        bytes: 46_592_888,
+        sha256: "93EC736BC1E74C36F4EEEEFB4C8C1307F2244D68AEB9C25D0EFB8A17F2F4FC38",
+    },
+    Pin {
+        name: "de_vertigo_2017",
+        bytes: 29_929_772,
+        sha256: "C89FA26AAC1ED883E3B8619A5616ECB69F77B719F595F008B0FCD0E961667295",
+    },
+    Pin {
+        name: "de_mirage_2019",
+        bytes: 46_520_604,
+        sha256: "929F09470991A74DF58B8D41F806AB013034E3BF2D478C02EE884BA252143100",
+    },
+    Pin {
+        name: "de_cbble_2018",
+        bytes: 84_669_888,
+        sha256: "EF4AE673B41125DB6E41D66D6CBE5BDE0713F924FDD17EA2071AA002BC52117A",
     },
 ];
 
@@ -116,8 +141,14 @@ impl ArchiveArt {
         }
         let archive = embedded(&bytes)?;
         // This is the actual older overview, never the installed remake radar.
-        let radar_path = format!("resource/overviews/{}_radar_spectate.dds", self.map.base);
-        let radar = archive.read(&radar_path).ok()??;
+        // Some compatibility BSPs (Mirage, Vertigo, Cobble) only contain the
+        // ordinary radar. Both variants belong to this verified older BSP.
+        let spectate_path = format!("resource/overviews/{}_radar_spectate.dds", self.map.base);
+        let normal_path = format!("resource/overviews/{}_radar.dds", self.map.base);
+        let (radar_path, radar) = match archive.read(&spectate_path).ok()? {
+            Some(radar) => (spectate_path, radar),
+            None => (normal_path.clone(), archive.read(&normal_path).ok()??),
+        };
         let radar = scaleform::loading_radar_png(&radar)?;
         // Collection emblems are addressed by the archive's explicit base map;
         // the map title/content identity remains the selected archive.
@@ -129,7 +160,7 @@ impl ArchiveArt {
             return None;
         }
         bevy::log::info!(
-            "Loading archive art: content={} generation-owned spectate={} bsp_sha256={}",
+            "Loading archive art: content={} generation-owned radar={} bsp_sha256={}",
             self.map.content_id(),
             radar_path,
             pin.sha256
@@ -171,18 +202,20 @@ mod tests {
         assert_eq!(inferno.requested(42, &url), None);
         assert_eq!(dust.requested(42, &(url + "/../icon")), None);
         assert!(ArchiveArt::new("de_dust2").is_none());
-        assert!(ArchiveArt::new("de_nuke_2016").is_none());
+        assert!(ArchiveArt::new("de_nuke_2016").is_some());
+        assert!(ArchiveArt::new("de_nuke_2019").is_none());
+        for archive in workshop::OLD_MAPS {
+            assert_eq!(supported(archive.name), archive.menu_supported(), "{}", archive.name);
+        }
     }
 
     #[test]
-    #[ignore = "requires both pinned classic BSPs in CSR_DATA_DIR and CS:GO Legacy"]
-    fn installed_archives_decode_their_actual_embedded_spectate_images() {
+    #[ignore = "requires all admitted pinned classic BSPs in CSR_DATA_DIR and CS:GO Legacy"]
+    fn installed_archives_decode_their_actual_embedded_radar_images() {
         // The frontend uses this exact mount path, including Store::current(),
         // rather than the movie navigator's separate install-only filesystem.
         let (_, fs) = level::mount_game(None).expect("frontend mount stack");
-        let installed = ["de_dust2", "de_inferno", "de_dust2_2017", "de_inferno_2016"]
-            .into_iter()
-            .map(str::to_owned)
+        let installed = PINS.iter().map(|pin| pin.name.to_owned())
             .collect();
         let modes = crate::frontend_game::load(&fs, &installed);
         for pin in PINS {

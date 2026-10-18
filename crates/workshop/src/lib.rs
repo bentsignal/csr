@@ -60,6 +60,17 @@ pub struct OldMap {
 }
 
 impl OldMap {
+    /// Archives admitted to the ordinary picker. This is independent of the
+    /// archive date: later remakes and unresolved dependencies stay available
+    /// to explicit development loads, without being offered as classic matches.
+    /// See docs/OLD-MAPS.md for the retained probe/simulation evidence and gaps.
+    pub fn menu_supported(&self) -> bool {
+        matches!(self.name,
+            "de_dust2_2017" | "de_inferno_2016" | "de_nuke_2016"
+            | "de_train_2015" | "de_vertigo_2017" | "de_mirage_2019"
+            | "de_cbble_2018")
+    }
+
     /// Stable identity for recipes, content packs and server map selection.
     pub fn content_id(&self) -> content::ContentId {
         content::ContentId::csgo(content::ContentKind::Map, self.name)
@@ -158,7 +169,7 @@ pub const OLD_MAPS: &[OldMap] = &[
         name: "de_cache_2019",
         base: "de_cache",
         title: "Cache (2019)",
-        note: "Valve's October 2019 snapshot; August 2018 parity unverified",
+        note: "Pre-remake Cache, archived October 2019; exact 2015 parity unverified",
         workshop_id: 1891729882,
         version: "1.37.1.9",
         size: 72588212,
@@ -178,7 +189,7 @@ pub const OLD_MAPS: &[OldMap] = &[
         name: "de_mirage_2019",
         base: "de_mirage",
         title: "Mirage (2019)",
-        note: "Valve's December 2019 snapshot; August 2018 parity unverified",
+        note: "Valve's December 2019 Mirage snapshot; exact 2015 parity unverified",
         workshop_id: 1935967249,
         version: "1.37.3.2",
         size: 16805449,
@@ -188,7 +199,7 @@ pub const OLD_MAPS: &[OldMap] = &[
         name: "de_overpass_2019",
         base: "de_overpass",
         title: "Overpass (2019)",
-        note: "Valve's July 2019 snapshot; August 2018 parity unverified",
+        note: "Valve's July 2019 Overpass snapshot; exact 2015 parity unverified",
         workshop_id: 1821117172,
         version: "1.37.0.7",
         size: 15074693,
@@ -198,7 +209,7 @@ pub const OLD_MAPS: &[OldMap] = &[
         name: "de_cbble_2018",
         base: "de_cbble",
         title: "Cobblestone (2018)",
-        note: "Valve's October 2018 snapshot",
+        note: "Valve's October 2018 Cobblestone snapshot; exact 2015 parity unverified",
         workshop_id: 1542127528,
         version: "1.36.5.6",
         size: 31389737,

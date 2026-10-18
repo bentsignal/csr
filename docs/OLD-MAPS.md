@@ -4,9 +4,13 @@
 snapshots published by Valve. `csr fetch-map <name|all>` prefetches archives;
 `csr remove-map <name|all>` removes their local copies. Loading a snapshot
 with `probe`, `sim` or `play` fetches it automatically. These commands support
-development and fidelity checks. The classic map picker also offers
-**Dust II (2017)**, the pinned pre-rework archive, as an experimental map.
-Other archives remain hidden pending their gameplay/dependency work.
+development and fidelity checks. The original map picker offers the admitted
+archives: **Dust II (2017), Inferno (2016), Nuke (2016), Train (2015),
+Vertigo (2017), Mirage (2019), and Cobblestone (2018)**. Each uses its own
+archive identity and title beside any installed version. Archive years describe
+compatibility snapshots, not a promise of exact 2015 geometry or materials.
+Cache (2019) and Overpass (2019) remain hidden pending their unresolved model
+dependencies; the other, later snapshots remain development selections.
 
 Choose Dust II (2017) in the original map picker and press GO. The existing
 loading screen reports contacting Steam, download percentage, verification
@@ -137,18 +141,55 @@ of visual parity. Material/lighting and sky fidelity remain Track D work.
 Local logs, CSV results and captures are under
 `%USERPROFILE%\csr-fidelity\workshop-review`, outside the repository.
 
-The Dust II menu pilot uses the existing Track C loading worker and original
-Scaleform card/loading surface. Other archive menu integration still needs
-dependency resolution and matched reference captures. The archive year does
-not establish 2015 parity; the existing material and lighting gaps remain.
+The admitted archives use the existing loading worker and original Scaleform
+card/loading surface. Historical groups remain selectable in implemented modes
+even when Legacy retired the installed base from a mode (notably Cobblestone
+competitive). A match load requires five declared, finite team spawn positions
+per side and usable archived navigation when bots are requested. This checks
+metadata capability, not traversal or ten-player runtime performance.
+
+Loading images are size/SHA-256 bound to the privately inspected archive BSPs.
+Mirage, Vertigo and Cobblestone only embed ordinary radars; these are used when
+the same archive has no spectate radar. Loading and HUD radar lookup never
+substitute the installed remake's overview. All seven loading-image pins still
+need the parent's current-build decode/menu check; data inspection alone is not
+a rendered verification.
+
+Read-only inspection on October 18 found that the new probe's `EmptyTopology`
+records in Cache, Mirage, Overpass and Cobblestone have exactly retraced
+boundaries: each directed edge has its reverse and every compiled triangle has
+zero area. Some retraced paths bend slightly, so collinearity/area thresholds
+would be inappropriate. These records now have the distinct
+`RetracedBoundary` result and remain individually visible in probe output with
+a separate count. Malformed indices, unsupported topology and empty compiled
+topology on an actual enclosed polygon remain failures. No substitute triangle
+fan is introduced; rendering retains no triangles for these records. The
+focused synthetic regression and current-data probes require parent validation.
+
+Cache's three MDL45 parser rejections in the October 18 baseline are separate
+from its missing `darkmetal3` material. Overpass still lacks `gates001`; neither
+exact material path exists in the mounted Legacy pak01 or any of the fourteen
+private archive pakfiles inspected. No alias or invented dependency is supplied.
+
+Valve's [Cache compatibility upload](https://steamcommunity.com/sharedfiles/filedetails/?id=1891729882)
+on October 17, 2019 predates the [replacement Cache release](https://blog.counter-strike.net/2019/10/25894/)
+on October 18. This supports calling it pre-remake Cache; it does not prove
+exact 2015 parity. The [Cobblestone archive](https://steamcommunity.com/sharedfiles/filedetails/?id=1542127528)
+was posted October 18, 2018, before the [October 23 layout update](https://blog.counter-strike.net/uk/2018/10/21959/).
+That supports its selection over current Legacy Cobble, with the same historical
+qualification. Train (2015) is an actual October 2015 snapshot after the 2014
+rebuild; the other pre-rework archives and later Mirage/Overpass snapshots still
+require intervening-version comparison for exact 2015 claims.
+
+The archive year does not establish 2015 parity; material and lighting gaps remain.
 Content packs remain separate Track E work; this archive loader does not
 complete `.csrpack`, file associations, drag-and-drop or server-driven downloads.
 
 The 2026-10-14 menu pilot was rendered through the original pointer controls,
 both with a cached BSP and with an initially empty private archive store.
 Both reached classic Dust II with its archived radar and bots; a ten-round
-simulation again reported zero failures. The current stricter geometry probe
-reports **10 failures**, rather than the historical one in the table above:
+simulation again reported zero failures. That run's stricter geometry probe
+reported **10 failures**, rather than the historical one in the table above:
 the known `greygrid` dependency plus nine `EmptyTopology` primitive faces
 (2034, 2379, 2380, 3224, 6073, 7702, 8061, 9028 and 11133). Inspection of
 their stored indices and vertices found every explicit triangle has zero

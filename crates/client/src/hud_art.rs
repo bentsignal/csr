@@ -58,7 +58,7 @@ pub fn setup(mut commands: Commands, art: Res<UiAssets>, level: Res<crate::Loade
             radar.origin = Vec2::new(number("pos_x"), number("pos_y"));
             radar.scale = number("scale");
             let material = root.str("material").unwrap_or("");
-            if let Some(img) = level.0.vfs.read(&format!("resource/overviews/{}_radar.dds", level.0.name)).or_else(|| level.0.vfs.read(&format!("resource/{material}_radar.dds"))).and_then(|bytes| radar_image(&bytes)) {
+            if let Some(img) = level.0.radar(material).and_then(|bytes| radar_image(&bytes)) {
                 let material = materials.add(crate::radar_view::RadarMaterial {
                     overview: images.add(img),
                     view: crate::radar_view::view(Vec2::splat(0.5), 0.5, false, 0.0),

@@ -39,7 +39,7 @@ fn list() -> i32 {
         };
         println!("{:<20} {:<22} {:<10} {}", m.name, m.title, status, source);
     }
-    println!("\nWorkshop archives are experimental; navigation and fidelity need validation.\nThey are not in the match menu yet. Loading an archive fetches it automatically; `csr fetch-map all` prefetches them.");
+    println!("\nSelected classic archives are offered in the match menu; other snapshots remain development selections.\nArchive dates do not establish exact 2015 parity. Loading an archive fetches it automatically; `csr fetch-map all` prefetches them.");
     0
 }
 

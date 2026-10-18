@@ -85,6 +85,9 @@ fn load_requested_map(
     let level = load_requested_map_content(request, game_dir, progress)?;
     // Validate explicit choices on the worker before entering Match/hosting.
     level.configured_bots(request.options.bot_difficulty)?;
+    if request.pack.is_none() && !request.options.grenade_practice {
+        level::maps::validate_archive_match(&level, request.options.bots)?;
+    }
     Ok(level)
 }
 
