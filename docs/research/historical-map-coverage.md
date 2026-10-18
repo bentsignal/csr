@@ -124,8 +124,17 @@ with the authored historical model context checked. A privately retained,
 legitimately installed original CS:GO content depot is a candidate source;
 another BSP that relies on the same external model does not supply it. Current
 Legacy's installed depot 731 manifest is `1224088799001669801`; it has already
-been checked and is not a new dependency source. An older accessible manifest
-and its actual material contents have **not** been established. Public
+been checked and is not a new dependency source. A subsequent bounded anonymous
+request through original CS:GO server app 740 reached depot 731 manifest
+`6749995636545577991` (May 27, 2015). Only `csgo/pak01_dir.vpk` was downloaded,
+using the official [SteamRE DepotDownloader](https://github.com/SteamRE/DepotDownloader/releases/tag/DepotDownloader_3.4.0).
+The VPK v2 directory passed its three stored MD5 checks; its SHA-256 is
+`bbce2fe734b701e2b92da83644894f2910e9323b6a851609999701a6752b9116`.
+None of its 42,488 entries contains `gates001`, including the required exact
+material path. The listed park-fence MDL/VVD/VTX/PHY sizes and CRC32 values
+match the installed payloads. No numbered segment was downloaded and no
+missing material was recovered. This establishes accessible historical
+transport, **not an unblocked Overpass dependency set**. Public
 [SteamDB history](https://steamdb.info/depot/731/manifests/) requires sign-in
 for older entries, and the current public depot view can show an app-730 stub.
 Do not fetch the current app-730 content or invent an old manifest ID. See the
