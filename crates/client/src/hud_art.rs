@@ -21,6 +21,8 @@ struct InventorySlot(u8);
 #[derive(Component)]
 struct SelectionHint(u8);
 #[derive(Component)]
+struct PlayerTile;
+#[derive(Component)]
 struct ActiveWeaponName;
 
 fn icon(commands: &mut Commands, handle: Handle<Image>, node: Node) -> Entity {
@@ -197,7 +199,7 @@ pub fn update(mut commands: Commands, art: Res<UiAssets>, world: Res<SimWorld>, 
             root.spawn(Node { position_type: PositionType::Absolute, top: hu(0.0), left: if left { Val::Auto } else { percent(50) }, right: if left { percent(50) } else { Val::Auto }, margin: if left { UiRect::right(inset) } else { UiRect::left(inset) }, column_gap: hu(layout::PLAYER_GAP), ..default() }).with_children(|team| {
                 for player in w.players.iter().filter(|p| p.team == side) {
                     if let Some(image) = art.image("avatar") {
-                        team.spawn((ImageNode { color: if player.alive { Color::WHITE } else { Color::srgba(0.3,0.3,0.3,0.5) }, ..ImageNode::new(image) }, Node { width: hu(layout::PLAYER_WIDTH), height: hu(layout::PLAYER_HEIGHT), flex_shrink: 0.0, border: UiRect::bottom(hu(2.0)), ..default() }, BackgroundColor(if left { Color::srgb(0.23,0.36,0.48) } else { Color::srgb(0.46,0.39,0.24) })));
+                        team.spawn((PlayerTile, ImageNode { color: if player.alive { Color::WHITE } else { Color::srgba(0.3,0.3,0.3,0.5) }, ..ImageNode::new(image) }, Node { width: hu(layout::PLAYER_WIDTH), height: hu(layout::PLAYER_HEIGHT), flex_shrink: 0.0, border: UiRect::bottom(hu(2.0)), ..default() }, BackgroundColor(if left { Color::srgb(0.23,0.36,0.48) } else { Color::srgb(0.46,0.39,0.24) })));
                     }
                 }
             });
@@ -323,7 +325,7 @@ mod tests {
                 world.0.players[1].alive = false;
             }
             app.update();
-            let mut tiles = app.world_mut().query::<(&ImageNode, &BackgroundColor)>();
+            let mut tiles = app.world_mut().query_filtered::<(&ImageNode, &BackgroundColor), With<PlayerTile>>();
             let tiles: Vec<_> = tiles.iter(app.world()).map(|(image, background)| (image.color, background.0)).collect();
             assert_eq!(tiles.len(), 2);
             assert!(tiles.contains(&(Color::WHITE, Color::srgb(0.23,0.36,0.48))));
@@ -336,7 +338,7 @@ mod tests {
             }
             app.update();
             assert_ne!(app.world().resource::<Inventory>().root, previous_root);
-            let mut tiles = app.world_mut().query::<(&ImageNode, &BackgroundColor)>();
+            let mut tiles = app.world_mut().query_filtered::<(&ImageNode, &BackgroundColor), With<PlayerTile>>();
             assert_eq!(tiles.iter(app.world()).count(), 2);
             assert!(tiles.iter(app.world()).all(|(image, background)| image.color == Color::WHITE && background.0 == Color::srgb(0.23,0.36,0.48)));
         }
