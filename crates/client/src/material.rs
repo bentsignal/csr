@@ -83,6 +83,8 @@ pub struct WorldParams {
     pub base2_uv: Vec4,
     pub normal2_uv: Vec4,
     pub modulate_uv: Vec4,
+    /// First normal-map UV scale/offset, independent of base and detail UVs.
+    pub normal_uv: Vec4,
     /// Dynamic lighting: +X, -X, +Y, -Y, +Z, -Z (Bevy axes).
     pub ambient_cube: [Vec4; 6],
     /// xyz: direction towards the sun (Bevy axes); w: sun visibility 0..1.
@@ -118,6 +120,7 @@ impl Default for WorldParams {
             base2_uv: Vec4::new(1.0, 1.0, 0.0, 0.0),
             normal2_uv: Vec4::new(1.0, 1.0, 0.0, 0.0),
             modulate_uv: Vec4::new(1.0, 1.0, 0.0, 0.0),
+            normal_uv: Vec4::new(1.0, 1.0, 0.0, 0.0),
             ambient_cube: [Vec4::splat(0.4); 6],
             sun_dir: Vec4::new(0.0, 1.0, 0.0, 0.0),
             sun_color: Vec4::ZERO,

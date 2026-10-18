@@ -25,6 +25,7 @@ struct WorldParams {
     base2_uv: vec4<f32>,
     normal2_uv: vec4<f32>,
     modulate_uv: vec4<f32>,
+    normal_uv: vec4<f32>,
     ambient_cube: array<vec4<f32>, 6>,
     sun_dir: vec4<f32>,
     sun_color: vec4<f32>,
@@ -245,8 +246,10 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
 
     var n = normalize(in.world_normal);
     var weights = vec3<f32>(1.0 / 3.0);
+    // Keep base/detail coordinates independent; normal alpha shares this map.
+    let normal_uv = uv * params.normal_uv.xy + params.normal_uv.zw;
     if (params.flags & NORMAL) != 0u {
-        let b1 = textureSample(normal_tex, normal_samp, uv).rgb;
+        let b1 = textureSample(normal_tex, normal_samp, normal_uv).rgb;
         var tangent_normal = bump_normal(b1);
         weights = bump_weights(b1);
         if (params.flags & NORMAL2) != 0u {
@@ -334,7 +337,7 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
         let fresnel=select(mix(params.fresnel.x,params.fresnel.y,fresnel_t*2.0),mix(params.fresnel.y,params.fresnel.z,(fresnel_t-0.5)*2.0),fresnel_t>0.5);
         let exponent_sample=textureSample(phong_tex,phong_samp,uv);
         let exponent=select(params.phong.x,1.0+exponent_sample.r*149.0,params.phong.z>0.5);
-        let normal_alpha=textureSample(normal_tex,normal_samp,uv).a;
+        let normal_alpha=textureSample(normal_tex,normal_samp,normal_uv).a;
         let mask=select(select(1.0,normal_alpha,(params.flags & NORMAL)!=0u),albedo.a,params.phong.w>0.5);
         let tint=params.phong_tint.rgb*mix(vec3<f32>(1.0),albedo.rgb,params.phong_tint.w*exponent_sample.g);
         let reflected=reflect(-params.sun_dir.xyz,n);

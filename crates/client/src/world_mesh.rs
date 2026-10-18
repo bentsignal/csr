@@ -562,6 +562,7 @@ pub fn material_from_vmt(
     if let Some(info) = mat.str("$bumpmap").and_then(|n| textures.load(fs, images, n, false)) {
         out.normal = info.handle;
         f |= flags::NORMAL;
+        params.normal_uv = authored_uv_transform(mat, "$bumptransform");
         if mat.flag("$ssbump") { f |= flags::SSBUMP; }
         if mat.flag("$ssbumpmathfix") { f |= flags::SSBUMP_MATHFIX; }
     }
@@ -638,6 +639,85 @@ fn authored_uv_transform(mat: &vmt::Material, key: &str) -> Vec4 {
 #[cfg(test)]
 mod authored_transform_tests {
     use super::*;
+
+    // One synthetic RGBA texel exercises the real texture-load/material path
+    // without an install, filesystem writes, renderer or game asset fixture.
+    fn normal_material(mat: Option<&vmt::Material>, lightmapped: bool) -> WorldMaterial {
+        let mut normal = vec![0u8; 84];
+        normal[..4].copy_from_slice(b"VTF\0");
+        normal[4..8].copy_from_slice(&7u32.to_le_bytes());
+        normal[8..12].copy_from_slice(&2u32.to_le_bytes());
+        normal[12..16].copy_from_slice(&80u32.to_le_bytes());
+        for offset in [16, 18, 24, 63] { // width, height, frames, depth
+            normal[offset..offset + 2].copy_from_slice(&1u16.to_le_bytes());
+        }
+        normal[52..56].copy_from_slice(&(vtf::Format::Rgba8888 as i32).to_le_bytes());
+        normal[56] = 1; // one mip, no thumbnail
+        normal[57..61].copy_from_slice(&(-1i32).to_le_bytes());
+        normal[80..].copy_from_slice(&[128, 128, 255, 64]);
+        let mut fs = vfs::Vfs::new();
+        fs.push_back("synthetic normal", vfs::Mount::Memory(std::collections::BTreeMap::from([
+            ("materials/test/normal.vtf".into(), normal.into()),
+        ])));
+        let mut images = Assets::<Image>::default();
+        let mut textures = TextureCache::new(&mut images);
+        let shared = SharedHandles { lightmap: textures.white.clone() };
+        material_from_vmt(mat, &fs, &mut textures, &mut images, &shared, 1.0, lightmapped)
+    }
+
+    #[test]
+    fn first_normal_uses_authored_nuke_scale8_independently_of_detail_and_base() {
+        // Installed concrete/hr_c/hr_concrete_wall_001's evidenced transform.
+        let mat = vmt::Material::parse_with(
+            r#""LightmappedGeneric" {
+                "$bumpmap" "test/normal"
+                "$bumptransform" "center 0 0 scale 8 8 rotate 0 translate 0 0"
+                "$detail" "test/normal" "$detailscale" "8"
+            }"#,
+            &|_| None, 0,
+        ).unwrap();
+        let params = normal_material(Some(&mat), true).params;
+        assert_ne!(params.flags & flags::NORMAL, 0);
+        assert_ne!(params.flags & flags::DETAIL, 0);
+        assert_eq!(params.normal_uv, Vec4::new(8., 8., 0., 0.));
+        assert_eq!(params.detail, Vec4::new(8., 8., 1., 0.));
+        assert_eq!(params.base2_uv, WorldParams::default().base2_uv);
+        let uv = Vec2::new(-0.25, 1.125);
+        let [sx, sy, x, y] = params.normal_uv.to_array();
+        assert_eq!(uv * Vec2::new(sx, sy) + Vec2::new(x, y), Vec2::new(-2., 9.));
+
+        // Lock the actual shader wiring: RGB and Phong alpha share the same
+        // transformed normal coordinates; color/detail still start at raw UV.
+        let shader: String = include_str!("shaders/world.wgsl")
+            .chars().filter(|c| !c.is_ascii_whitespace()).collect();
+        assert!(shader.contains("letnormal_uv=uv*params.normal_uv.xy+params.normal_uv.zw;"));
+        assert_eq!(shader.matches("textureSample(normal_tex,normal_samp,normal_uv)").count(), 2);
+        assert!(shader.contains("textureSample(base_tex,base_samp,uv)"));
+        assert!(shader.contains("textureSample(detail_tex,detail_samp,uv*params.detail.xy)"));
+    }
+
+    #[test]
+    fn first_normal_nonuniform_centered_mapping_and_identity_fallbacks_reach_material() {
+        let identity = Vec4::new(1., 1., 0., 0.);
+        assert_eq!(WorldParams::default().normal_uv, identity);
+        assert_eq!(normal_material(None, true).params.normal_uv, identity);
+        for (declaration, expected) in [
+            ("", identity),
+            (r#""$bumptransform" "translate .125 -.25 rotate 0 scale 2 .5 center .5 .5""#, Vec4::new(2., 0.5, -0.375, 0.)),
+            // Evidenced hazard-stripe scale8,4/rotation90 stays unsupported.
+            (r#""$bumptransform" "center 0 0 scale 8 4 rotate 90 translate 0 0""#, identity),
+            (r#""$bumptransform" "[1 0 0 0 0 1 0 0]""#, identity),
+            (r#""$bumptransform" "scale 8 8""#, identity),
+        ] {
+            let text = format!(r#""VertexLitGeneric" {{ "$bumpmap" "test/normal" "$phong" "1" {declaration} }}"#);
+            let mat = vmt::Material::parse_with(&text, &|_| None, 0).unwrap();
+            let params = normal_material(Some(&mat), false).params;
+            assert_ne!(params.flags & flags::NORMAL, 0, "{declaration}");
+            assert_eq!(params.normal_uv, expected, "{declaration}");
+            assert_eq!(params.normal2_uv, identity);
+            assert!(params.phong.y > 0.0);
+        }
+    }
 
     #[test]
     fn independent_layer_parameters_and_rejected_rotation_keep_their_own_mapping() {

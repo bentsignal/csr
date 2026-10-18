@@ -1,4 +1,4 @@
-// Developer diagnostic shadow depth. This is the first80-byte prefix of
+// Developer diagnostic shadow depth. This is the first 96-byte prefix of
 // WorldParams, not Bevy's StandardMaterial layout. CPU serialization tests
 // protect color/flags/alpha_ref offsets; no lighting/composition policy here.
 #import bevy_pbr::prepass_io::VertexOutput
@@ -17,6 +17,7 @@ struct ShadowParams {
     base2_uv: vec4<f32>,
     normal2_uv: vec4<f32>,
     modulate_uv: vec4<f32>,
+    normal_uv: vec4<f32>,
 };
 @group(#{MATERIAL_BIND_GROUP}) @binding(0) var<uniform> params: ShadowParams;
 @group(#{MATERIAL_BIND_GROUP}) @binding(1) var base_tex: texture_2d<f32>;
