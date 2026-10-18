@@ -213,6 +213,17 @@ impl Batch {
     }
 }
 
+/// Experiment: merge depth-writing opaque/masked props in 1536-unit cells.
+/// Keep sorted/uncertain modes at 768; overlays explicitly disable depth writes
+/// in WorldMaterial even when their alpha mode is opaque. This key never clips
+/// geometry: full merged vertices still determine frustum bounds and PVS.
+fn prop_cell(origin: glam::Vec3, material: Option<&WorldMaterial>) -> [i32; 3] {
+    let coarsen = material.is_some_and(|m|
+        matches!(m.alpha_mode, AlphaMode::Opaque | AlphaMode::Mask(_))
+            && m.params.flags & crate::material::flags::OVERLAY == 0);
+    crate::world_mesh::spatial_cell(if coarsen { origin * 0.5 } else { origin })
+}
+
 /// Whether a studio mesh's triangles need flipping to wind counter-clockwise
 /// around their vertex normals.
 pub fn needs_flip(mesh: &mdl::Mesh) -> bool {
@@ -411,7 +422,7 @@ pub fn spawn(
                     colors.len(), bsp.static_props.models[prop.model as usize]);
             }
             let (_, batch) = batches
-                .entry((material.id(), in_sky.is_some(), crate::world_mesh::spatial_cell(prop.origin), directional_fallback))
+                .entry((material.id(), in_sky.is_some(), prop_cell(prop.origin, materials.get(&material)), directional_fallback))
                 .or_insert_with(|| (material.clone(), Batch::default()));
             let base = batch.positions.len() as u32;
             for (vertex_index, v) in mesh.vertices.iter().enumerate() {
@@ -498,6 +509,66 @@ pub fn spawn(
 mod lighting_tests {
     use super::*;
     use glam::Vec3 as SourceVec3;
+
+    fn cell_material(alpha_mode: AlphaMode) -> WorldMaterial {
+        WorldMaterial {
+            params: Default::default(),
+            base: Default::default(),
+            base2: Default::default(),
+            lightmap: Default::default(),
+            modulate: Default::default(),
+            normal: Default::default(),
+            normal2: Default::default(),
+            prop_light: Default::default(),
+            phong_map: Default::default(),
+            skin_surface: Default::default(),
+            skin_position: Default::default(),
+            detail: Default::default(),
+            self_illum_mask: Default::default(),
+            alpha_mode,
+            cull: true,
+        }
+    }
+
+    #[test]
+    fn opaque_and_masked_prop_cells_merge_across_old_boundaries() {
+        for mode in [AlphaMode::Opaque, AlphaMode::Mask(0.5)] {
+            let material = cell_material(mode);
+            for (coordinate, expected) in [
+                (-1537., -2), (-1536., -1), (-769., -1), (-767., -1),
+                (-1., -1), (0., 0), (767., 0), (769., 0), (1535., 0), (1536., 1),
+            ] {
+                assert_eq!(prop_cell(SourceVec3::splat(coordinate), Some(&material)),
+                    [expected; 3], "{mode:?} at {coordinate}");
+            }
+            for (a, b) in [(767., 769.), (-769., -767.)] {
+                let (a, b) = (SourceVec3::splat(a), SourceVec3::splat(b));
+                assert_ne!(crate::world_mesh::spatial_cell(a), crate::world_mesh::spatial_cell(b));
+                assert_eq!(prop_cell(a, Some(&material)), prop_cell(b, Some(&material)));
+            }
+        }
+    }
+
+    #[test]
+    fn translucent_uncertain_and_non_depth_writing_prop_cells_stay_local() {
+        let mut modes: Vec<_> = [
+            AlphaMode::Blend, AlphaMode::Premultiplied, AlphaMode::Add,
+            AlphaMode::Multiply, AlphaMode::AlphaToCoverage,
+        ].into_iter().map(cell_material).collect();
+        for mode in [AlphaMode::Opaque, AlphaMode::Mask(0.5)] {
+            let mut overlay = cell_material(mode);
+            overlay.params.flags |= crate::material::flags::OVERLAY;
+            modes.push(overlay);
+        }
+        for coordinate in [-1537., -1536., -769., -768., -1., 0., 767., 768., 1536.] {
+            let origin = SourceVec3::splat(coordinate);
+            let original = crate::world_mesh::spatial_cell(origin);
+            for material in &modes {
+                assert_eq!(prop_cell(origin, Some(material)), original, "{material:?}");
+            }
+            assert_eq!(prop_cell(origin, None), original);
+        }
+    }
 
     const SUN: Sun = Sun {
         to_sun: SourceVec3::Z,
