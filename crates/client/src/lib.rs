@@ -455,6 +455,10 @@ fn spawn_level(
         let model = &level.bsp.models[*model];
         model.first_face.max(0) as usize..(model.first_face.max(0) as usize + model.num_faces.max(0) as usize).min(level.bsp.faces.len())
     }).collect();
+    let moving_door_builds: Vec<_> = level.collision.doors.iter().enumerate()
+        .filter_map(|(index, door)| door.brush_model.map(|model|
+            (index, world_mesh::build_brush_model(&level.bsp, &atlas, model, glam::Vec3::ZERO))))
+        .collect();
     let moving_door_faces: std::collections::HashSet<_> = level.collision.doors.iter()
         .filter_map(|door| door.brush_model).flat_map(|index| {
             let model = &level.bsp.models[index];
@@ -605,7 +609,7 @@ fn spawn_level(
         &mut bindposes,
         opts.exposure,
     );
-    doors::spawn(&mut commands, &level, &mut meshes, &mut materials, &mut images,
+    doors::spawn(&mut commands, &level, &moving_door_builds, &mut meshes, &mut materials, &mut images,
         &mut textures, &world_shared, &mut bindposes, opts.exposure);
     prop_breakables::spawn(&mut commands, &level, &mut meshes, &mut materials, &mut images,
         &mut textures, &world_shared, &mut bindposes, opts.exposure);

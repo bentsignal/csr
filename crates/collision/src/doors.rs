@@ -97,15 +97,7 @@ pub(super) fn load(map: &bsp::Bsp, loader: &PropHullLoader<'_>, surfaces: &mut V
             if flags & (64 | 128 | 4 | 1) != 0 || flags & 16 == 0 || flags & 256 == 0
                 || authored_angles != Vec3::ZERO { continue; }
             let Some(index) = authored_model.strip_prefix('*').and_then(|n| n.parse::<usize>().ok()) else { continue; };
-            let Some(brush_def) = map.models.get(index) else { continue; };
-            let face_start = brush_def.first_face.max(0) as usize;
-            let face_end = face_start.saturating_add(brush_def.num_faces.max(0) as usize);
-            // This path's visible leaf is the studio child. Never silently drop
-            // visible brush art that would also need its own moving renderer.
-            if !map.faces.get(face_start..face_end).is_some_and(|faces| faces.iter().all(|face|
-                usize::try_from(face.texinfo).ok().and_then(|i| map.texinfo.get(i))
-                    .is_some_and(|info| info.flags & bsp::surf::NODRAW != 0
-                        || map.texinfo_material(face.texinfo as usize).is_some_and(|name| name.starts_with("tools/"))))) { continue; }
+            if map.models.get(index).is_none() { continue; }
             let Some(name) = ent.str("targetname").filter(|s| !s.is_empty()) else { continue; };
             let children: Vec<_> = map.entities.iter().enumerate().filter(|(_, child)|
                 child.str("parentname").is_some_and(|p| p.eq_ignore_ascii_case(name))).collect();
