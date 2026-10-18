@@ -44,8 +44,11 @@ fn equipment_svg(bytes: &[u8]) -> Option<Image> {
     use resvg::{tiny_skia, usvg};
     if bytes.len() > EQUIPMENT_SVG_BYTES { return None; }
     let text = std::str::from_utf8(bytes).ok()?;
+    // Illustrator-authored Legacy silhouettes declare the public SVG DTD.
+    // Accept that declaration without an external resolver or custom entities.
+    if text.contains("<!ENTITY") { return None; }
     let doc = usvg::roxmltree::Document::parse_with_options(text, usvg::roxmltree::ParsingOptions {
-        allow_dtd: false, nodes_limit: 1024, ..default()
+        allow_dtd: true, nodes_limit: 1024, entity_resolver: None,
     }).ok()?;
     if doc.root_element().tag_name().name() != "svg" { return None; }
     for node in doc.descendants().filter(|node| node.is_element()) {
@@ -198,6 +201,8 @@ mod tests {
         let path = "materials/panorama/images/icons/equipment/fixture_tool.svg";
         fs.push_back("fixture", vfs::Mount::Memory([(path.into(), std::sync::Arc::from(TOY_SVG))].into()));
         let image = equipment_image(&fs, "fixture_tool").unwrap();
+        let declared = format!("<!DOCTYPE svg PUBLIC \"-//W3C//DTD SVG 1.1//EN\" \"http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd\">{}", std::str::from_utf8(TOY_SVG).unwrap());
+        assert!(equipment_svg(declared.as_bytes()).is_some(), "external DTD declaration needs no resolver");
         assert_eq!((image.width(), image.height()), (128, 256));
         assert!(matches!(image.sampler, ImageSampler::Descriptor(ref sampler) if sampler.mag_filter == bevy::image::ImageFilterMode::Linear && sampler.min_filter == bevy::image::ImageFilterMode::Linear));
         let data = image.data.unwrap();
