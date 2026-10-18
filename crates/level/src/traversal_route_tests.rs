@@ -1,6 +1,94 @@
 use super::*;
 use glam::Vec3;
 
+fn private_classic_level(name: &str) -> Level {
+    let (game, fs) = mount_game(None).expect("read-only Legacy dependencies");
+    let id = workshop::find(name).expect("qualified classic map").content_id();
+    Level::load_local_id_from_vfs(&id, game, fs, &workshop::Store::current())
+        .expect("already-cached private classic BSP; no download")
+}
+
+#[test]
+#[ignore = "requires private classic Nuke/Train BSPs via CSR_DATA_DIR and read-only Legacy dependencies"]
+fn cached_classic_silo_and_tanker_roofs_support_falling_players() {
+    for (name, model, local_xy, expected_top, count) in [
+        ("de_nuke_2016", "models/props/props_gameplay/biohazard_tank_highpoly.mdl", (0., 0.), 189., 3),
+        ("de_train_2015", "models/props/de_train/hr_t/train_car_b/train_car_b.mdl", (0., 160.), 150., 26),
+    ] {
+        let level = private_classic_level(name);
+        let bytes = level.vfs.read(&format!("{}.phy", model.trim_end_matches(".mdl"))).unwrap();
+        let phy = mdl::Phy::parse(&bytes).unwrap();
+        assert_eq!(phy.hulls.len(), count, "{model}: leaf support pieces missing");
+        let mut checked = 0;
+        for prop in &level.bsp.static_props.props {
+            if level.bsp.static_props.models[prop.model as usize] != model || prop.solid != 6 { continue; }
+            checked += 1;
+            let rotation = mdl::angles_to_mat3(prop.angles);
+            let placed = |z| prop.origin + rotation * Vec3::new(local_xy.0, local_xy.1, z);
+            let trace = level.collision.trace_box(placed(expected_top + 16.), placed(expected_top - 48.),
+                movement::STAND_MINS, movement::STAND_MAXS, collision::contents::MASK_PLAYERSOLID);
+            assert!(trace.hit() && !trace.start_solid && trace.normal.z > 0.7, "{name}: {prop:?}: {trace:?}");
+            assert!((trace.end.z - prop.origin.z - expected_top).abs() < 0.1,
+                "{name}: support must match authored roof, not a brace: {prop:?}: {trace:?}");
+            for rate in [64, 128] {
+                let mut world = sim::World::new(level.collision.clone());
+                world.set_tick_rate(rate);
+                let actor = world.add_player("roof support", sim::Team::CounterTerrorist);
+                world.player_mut(actor).unwrap().movement = movement::PlayerMove::spawn_at(placed(expected_top + 16.));
+                let mut landed = false;
+                for _ in 0..rate * 2 {
+                    world.step(&[(actor, sim::TickInput { weapon_slot: 3, ..Default::default() })]);
+                    let player = world.player(actor).unwrap();
+                    landed |= player.last_events.landed.is_some();
+                    let at = world.collision.trace_box(player.movement.origin, player.movement.origin,
+                        movement::STAND_MINS, movement::STAND_MAXS, collision::contents::MASK_PLAYERSOLID);
+                    assert!(player.alive && !at.start_solid && !at.all_solid, "{name} {rate}Hz: {at:?}");
+                }
+                let player = world.player(actor).unwrap();
+                assert!(landed && player.movement.on_ground
+                    && (player.movement.origin.z - trace.end.z).abs() < 0.1,
+                    "{name} {rate}Hz: roof landing/idle support failed: {:?}", player.movement);
+            }
+        }
+        assert!(checked > 0, "{name}: exact authored model must be present");
+    }
+}
+
+#[test]
+#[ignore = "requires private classic Cobble BSP via CSR_DATA_DIR and read-only Legacy dependencies"]
+fn cached_classic_cobble_tall_t_ladder_climbs_through_tick_input() {
+    let level = private_classic_level("de_cbble_2018");
+    // Tall authored ladder brush: X -1136..-1104, Y 2488..2490,
+    // Z -140..320. Approach its south face with the ordinary standing hull.
+    let start = Vec3::new(-1120., 2471.96875, -127.96875);
+    for z in [start.z, -64., 0., 64., 128., 192., 256.] {
+        let point = Vec3::new(start.x, start.y, z);
+        assert_eq!(level.collision.ladder_normal(point, movement::STAND_MINS, movement::STAND_MAXS), Some(-Vec3::Y));
+        let at = level.collision.trace_box(point, point, movement::STAND_MINS,
+            movement::STAND_MAXS, collision::contents::MASK_PLAYERSOLID);
+        assert!(!at.start_solid && !at.all_solid, "ladder front at {z}: {at:?}");
+    }
+    for rate in [64, 128] {
+        let mut world = sim::World::new(level.collision.clone());
+        world.set_tick_rate(rate);
+        let actor = world.add_player("tall T ladder", sim::Team::CounterTerrorist);
+        world.player_mut(actor).unwrap().movement = movement::PlayerMove::spawn_at(start);
+        for _ in 0..rate * 4 {
+            world.step(&[(actor, sim::TickInput { view_angles: Vec3::new(0., 90., 0.),
+                forward_move: 450., weapon_slot: 3, ..Default::default() })]);
+            let player = world.player(actor).unwrap();
+            assert!(player.alive);
+            let at = world.collision.trace_box(player.movement.origin, player.movement.origin,
+                movement::STAND_MINS, movement::STAND_MAXS, collision::contents::MASK_PLAYERSOLID);
+            assert!(!at.start_solid && !at.all_solid, "{rate}Hz: {at:?}");
+            if player.movement.origin.z >= 256. { break; }
+            assert_eq!(player.movement.ladder_normal, Some(-Vec3::Y));
+        }
+        assert!(world.player(actor).unwrap().movement.origin.z >= 256.,
+            "{rate}Hz: tall ladder climb failed: {:?}", world.player(actor).unwrap().movement);
+    }
+}
+
 #[test]
 #[ignore = "requires read-only CS:GO Legacy installed Overpass; no native process"]
 fn installed_overpass_initial_competitive_spawns_touch_buy_zones() {

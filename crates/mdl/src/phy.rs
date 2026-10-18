@@ -91,44 +91,71 @@ fn parse_solid(solid: &[u8], hulls: &mut Vec<ConvexHull>) -> io::Result<()> {
     if s.len() < 48 {
         return Err(invalid("phy compact surface too small"));
     }
-    let ledgetree_root = r.i32(32)?.max(0) as usize;
-
-    // Ledges are packed one after another from offset 48. The shared point
-    // array follows the last ledge, so stop at the lowest point offset seen.
-    let mut offset = 48usize;
-    let mut points_start = ledgetree_root.min(s.len());
-    let mut guard = 0;
-    while offset + 16 <= points_start && guard < 100_000 {
-        guard += 1;
+    let tree = usize::try_from(r.i32(32)?).map_err(|_| invalid("negative phy tree offset"))?;
+    if tree < 48 || tree.checked_add(28).is_none_or(|end| end > s.len()) {
+        return Err(invalid("phy ledge tree outside surface"));
+    }
+    // Installed Legacy compact surfaces share points between ledges. A
+    // ledge's packed size counts its referenced points too; it is NOT the
+    // distance to the next ledge. Walking by it skips roof/support pieces
+    // and can decode triangles or points as additional collision geometry.
+    // The 28-byte tree nodes locate the real pieces: the left child follows
+    // a branch, the right child and leaf ledge use node-relative offsets.
+    // Branches may also reference enclosing approximation hulls. Those must
+    // never become solids: they would fill the gaps between concave pieces.
+    let mut pending = vec![tree];
+    let mut visited = std::collections::HashSet::new();
+    let mut ledges = std::collections::BTreeSet::new();
+    while let Some(node) = pending.pop() {
+        if visited.len() >= 100_000 || !visited.insert(node) {
+            return Err(invalid("phy ledge tree repeats or exceeds node limit"));
+        }
+        let end = node.checked_add(28).ok_or_else(|| invalid("phy tree node overflow"))?;
+        let nr = R(s.get(node..end).ok_or_else(|| invalid("phy tree node outside surface"))?);
+        let right = nr.i32(0)?;
+        if right == 0 {
+            let offset = node as i64 + nr.i32(4)? as i64;
+            if let Ok(offset) = usize::try_from(offset) {
+                if offset >= 48 && offset.checked_add(16).is_some_and(|end| end <= tree) {
+                    ledges.insert(offset);
+                }
+            }
+        } else {
+            if right < 56 || right % 28 != 0 {
+                return Err(invalid("invalid phy tree child offset"));
+            }
+            pending.push(node.checked_add(right as usize).ok_or_else(|| invalid("phy tree child overflow"))?);
+            pending.push(end);
+        }
+    }
+    // Stable storage order preserves tie behavior between adjacent pieces.
+    // Restrict every point/triangle read to the geometry before the tree;
+    // finite tree metadata must not be accepted as a vertex on bad input.
+    let geometry = &s[..tree];
+    for offset in ledges {
         let point_offset = r.i32(offset)?;
         let packed = r.i32(offset + 8)? as u32;
         let size = ((packed >> 8) as usize) * 16;
         let n_triangles = r.i16(offset + 12)?.max(0) as usize;
-        // The sequential scan can reach bytes that are not a ledge. Never
-        // decode triangles outside the candidate's declared extent, or walk
-        // past this surface. Keep any valid pieces already read.
-        let Some(next_offset) = offset.checked_add(size) else {
-            break;
-        };
-        if size < 16 || next_offset > s.len() || 16 + n_triangles * 16 > size {
-            break;
+        let triangles_size = 16 + n_triangles * 16;
+        if size < triangles_size || size > s.len()
+            || offset.checked_add(triangles_size).is_none_or(|end| end > tree) {
+            continue;
         }
         let Ok(points_at) = usize::try_from(offset as i64 + point_offset as i64) else {
-            offset = next_offset;
             continue;
         };
-        if points_at > offset {
-            points_start = points_start.min(points_at);
+        if points_at < offset + triangles_size {
+            continue;
         }
         // A bad reference invalidates the entire piece. Substituting ZERO
         // fabricates collision geometry, including mixed valid/invalid hulls
         // which downstream zero-width rejection cannot detect.
         if n_triangles >= 4 {
-            if let Ok(hull) = read_ledge(s, offset, n_triangles, points_at) {
+            if let Ok(hull) = read_ledge(geometry, offset, n_triangles, points_at) {
                 hulls.push(hull);
             }
         }
-        offset = next_offset;
     }
     Ok(())
 }

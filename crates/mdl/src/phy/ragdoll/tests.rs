@@ -7,11 +7,14 @@ fn set_i32(bytes: &mut [u8], at: usize, value: i32) {
 
 // Own asset-free tetrahedron in the public compact-surface layout.
 fn solid() -> Vec<u8> {
-    let mut bytes = vec![0; 28 + 192];
+    let mut bytes = vec![0; 28 + 192 + 28];
     bytes[..4].copy_from_slice(b"VPHY");
     bytes[4..6].copy_from_slice(&256_u16.to_le_bytes());
     let surface = &mut bytes[28..];
     set_i32(surface, 32, 192);
+    // Complete the compact surface with its single leaf tree node. The
+    // static reader follows this reference; articulated parsing stays separate.
+    set_i32(surface, 196, 48 - 192);
     set_i32(surface, 48, 80);
     set_i32(surface, 56, 5 << 8);
     surface[60..62].copy_from_slice(&4_i16.to_le_bytes());
