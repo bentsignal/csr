@@ -462,6 +462,68 @@ mod life_tests {
         }
     }
 
+    // UNRUN: source-only child; root owns Cargo and installed-data checks.
+    #[test]
+    #[ignore = "requires the player's installed CS:GO Legacy; no GPU required"]
+    fn installed_airborne_weapon_switch_records_the_hidden_frame_before_the_delayed_reversal() {
+        let (mut app, id) = installed_app(Some("weapon_m4a1"));
+        // This synthetic frame schedule isolates presentation sampling, not a
+        // native jump law. A look excursion exists ONLY on the replacement
+        // frame. The old same-timestamp switch fixture cannot detect its loss.
+        for step_ms in [5, 10, 30] {
+            for weapon in ["weapon_galilar", "weapon_smokegrenade", "weapon_m4a1"] {
+                let advance = |app: &mut App, millis| {
+                    app.world_mut().resource_mut::<Time>()
+                        .advance_by(std::time::Duration::from_millis(millis));
+                    app.update();
+                };
+                advance(&mut app, 10); // current direction is zero yaw
+                {
+                    let mut world = app.world_mut().resource_mut::<SimWorld>();
+                    let def = Arc::new(world.0.catalog.get(weapon).unwrap().clone());
+                    let player = world.0.player_mut(id).unwrap();
+                    player.weapons = vec![sim::weapon::WeaponState::new(def)];
+                    player.movement.on_ground = false;
+                    player.movement.velocity = glam::Vec3::new(225., 0., 100.);
+                }
+                let authoritative = app.world().resource::<SimWorld>().0.state();
+                app.world_mut().resource_mut::<LocalPlayer>().yaw = 10.;
+                advance(&mut app, 10); // hidden instance creation, excursion
+                assert_mesh_visibility(&app, Visibility::Hidden);
+                let life = app.world().resource::<ViewModelState>().life;
+                app.world_mut().resource_mut::<LocalPlayer>().yaw = 0.;
+                advance(&mut app, 10); // visible again, direction has returned
+                assert_mesh_visibility(&app, Visibility::Inherited);
+                // Ninety milliseconds later, the delayed time reaches the
+                // hidden frame. Coarse/fine following frames must retain it.
+                for _ in 0..90 / step_ms { advance(&mut app, step_ms); }
+                let now = app.world().resource::<Time>().elapsed_secs();
+                let delayed = app.world_mut().resource_mut::<ViewModelState>()
+                    .look_motion.translation(now, glam::Vec3::X);
+                assert!(delayed.length() > 0.2,
+                    "{weapon}, {step_ms}ms: replacement must retain the look excursion");
+                assert_eq!(app.world().resource::<ViewModelState>().life, life);
+                assert_eq!(app.world().resource::<SimWorld>().0.state(), authoritative,
+                    "render frames cannot change airborne simulation state");
+                {
+                    let mut world = app.world_mut().resource_mut::<SimWorld>();
+                    let player = world.0.player_mut(id).unwrap();
+                    player.movement.on_ground = true;
+                    player.movement.velocity.z = 0.;
+                }
+                let landed = app.world().resource::<SimWorld>().0.state();
+                advance(&mut app, 20);
+                let now = app.world().resource::<Time>().elapsed_secs();
+                let settled = app.world_mut().resource_mut::<ViewModelState>()
+                    .look_motion.translation(now, glam::Vec3::X);
+                assert!(settled.length() < 0.00001, "finite look history must settle");
+                assert_eq!(app.world().resource::<ViewModelState>().life, life);
+                assert_eq!(app.world().resource::<SimWorld>().0.state(), landed);
+                assert_mesh_visibility(&app, Visibility::Inherited);
+            }
+        }
+    }
+
     #[test]
     #[ignore = "requires the player's installed CS:GO Legacy; no GPU required"]
     fn installed_magazine_reload_finishes_at_the_authoritative_deadline() {
@@ -959,6 +1021,19 @@ pub fn update(
     if state.owner != Some(p.id) || state.life != Some(p.life_epoch) {
         state.look_motion.clear();
     }
+    let w = p.active_weapon();
+    let shared_motion = show && p.id == local.id && local.spectating.is_none()
+        && p.tracked.is_none() && p.aim.is_none()
+        && w.is_some_and(|w| w.zoom_level == 0
+            && look_motion::shared_profile(level.0.item_schema_sha1(), &w.def));
+    // Record the viewing life on every frame, including the deferred-instance
+    // frame below. Skipping a look reversal while switching weapons loses a
+    // sample that is still needed when the measured delay reaches that frame.
+    let look_translation = if shared_motion {
+        // Flat local look, without recoil punch; camera/aim remain current.
+        let look = movement::angle_vectors(glam::Vec3::new(local.pitch, local.yaw, 0.)).0;
+        state.look_motion.translation(now, look)
+    } else { state.look_motion.clear(); glam::Vec3::ZERO };
     let active = p.active_weapon().map(|w| w.def.class_name.clone()).unwrap_or_default();
 
     let glove=if p.id==local.id{inventory.active("gloves").map(|i|i.weapon.as_str()).unwrap_or("")}else{""};
@@ -1020,7 +1095,6 @@ pub fn update(
     let Some(view) = models.weapons.get(&name) else { return };
 
     // Pick the activity from the weapon state.
-    let w = p.active_weapon();
     let grenade = w.and_then(|w|w.grenade_throw);
     let grenade_key=grenade.map(|s|(s.pull_started_tick,s.phase));
     if grenade_key!=state.grenade_seen {
@@ -1198,16 +1272,6 @@ pub fn update(
         let rear = view.scope_rear.map_or(center, |(position, _)| position);
         offset = offset.lerp(glam::Vec3::new(8.0 - center.x, -rear.y, -rear.z), blend);
     }
-    let shared_motion = show && p.id == local.id && local.spectating.is_none()
-        && p.tracked.is_none() && p.aim.is_none()
-        && w.is_some_and(|w| w.zoom_level == 0
-            && look_motion::shared_profile(level.0.item_schema_sha1(), &w.def));
-    let look_translation = if shared_motion {
-        // The admitted input is flat local look, not simulated recoil punch or
-        // a future tracked hand/head pose. Existing rendered punch stays current.
-        let look = movement::angle_vectors(glam::Vec3::new(local.pitch, local.yaw, 0.)).0;
-        state.look_motion.translation(now, look)
-    } else { state.look_motion.clear(); glam::Vec3::ZERO };
     let settling = if shared_motion {
         settling::Settling::sample(p.movement.velocity,
             movement::angle_vectors(glam::Vec3::new(0., local.yaw, 0.)).0)
