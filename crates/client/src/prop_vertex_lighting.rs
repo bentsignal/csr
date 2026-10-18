@@ -15,9 +15,16 @@ pub(super) fn load(
     ordinal: usize,
     model: &mdl::Model,
 ) -> Option<Vec<Option<Vec<glam::Vec3>>>> {
-    // Matched native observations cover only zero-flag instances. Other prop
-    // lighting modes remain unsupported and must retain the existing fallback.
-    if level.bsp.static_props.props.get(ordinal)?.flags != 0 {
+    // A baked file already incorporates an authored lighting origin (0x02)
+    // and disabled shadow casting (0x10). Installed apartment trims use 0x03;
+    // Mirage cardboard uses 0x10. Discarding their equal-group bake substitutes
+    // approximate ambient/Sun lighting for these authored inputs. Admit these
+    // modes, optionally fading, through the existing identity/payload gates.
+    // This does not widen ambient/Sun fallback or decode directional records.
+    // Fade-only props retain their accepted spatial path until separately
+    // observed; ignored normals and other unsupported modes remain closed.
+    let flags = level.bsp.static_props.props.get(ordinal)?.flags;
+    if flags & !(0x01 | 0x02 | 0x10) != 0 || flags == 0x01 {
         return None;
     }
     let key = InstanceKey::new(
@@ -62,6 +69,56 @@ fn decode(bytes: &[u8]) -> Option<Vec<glam::Vec3>> {
 #[cfg(test)]
 mod tests {
     use super::decode;
+
+    #[test]
+    #[ignore = "requires read-only installed Legacy Inferno; no native process"]
+    fn installed_lighting_origin_trim_uses_scoped_bake_and_keeps_other_modes_closed() {
+        let mut level = level::Level::load("de_inferno", None).unwrap();
+        let (ordinal, prop) = level.bsp.static_props.props.iter().enumerate().find(|(_, prop)| {
+            prop.flags == 3 && level.bsp.static_props.models[usize::from(prop.model)]
+                .contains("/apartment_trims/")
+        }).expect("installed lighting-origin apartment trim");
+        let name = &level.bsp.static_props.models[usize::from(prop.model)];
+        let base = name.trim_end_matches(".mdl");
+        let model = mdl::Model::load(
+            &level.vfs.read(name).unwrap(),
+            &level.vfs.read(&format!("{base}.vvd")).unwrap(),
+            &level.vfs.read(&format!("{base}.dx90.vtx")).unwrap(),
+        ).unwrap();
+        let colors = super::load(&level, ordinal, &model).expect("scoped equal-group trim bake");
+        assert_eq!(colors.len(), model.meshes.len());
+        assert!(colors.iter().zip(&model.meshes).all(|(colors, mesh)|
+            colors.as_ref().is_some_and(|colors| colors.len() == mesh.vertices.len())));
+        for flags in [1, 4, 0x14, 0x20, 0x80, 0xff] {
+            level.bsp.static_props.props[ordinal].flags = flags;
+            assert!(super::load(&level, ordinal, &model).is_none(), "unsupported flags {flags}");
+        }
+        level.bsp.static_props.props[ordinal].flags = 2;
+        assert_eq!(super::load(&level, ordinal, &model).unwrap(), colors);
+        level.bsp.static_props.props[ordinal].flags = 3;
+        assert_eq!(super::load(&level, ordinal, &model).unwrap(), colors);
+    }
+
+    #[test]
+    #[ignore = "requires read-only installed Legacy Mirage; no native process"]
+    fn installed_no_cast_shadow_cardboard_retains_authored_receiver_lighting() {
+        let level = level::Level::load("de_mirage", None).unwrap();
+        let (ordinal, prop) = level.bsp.static_props.props.iter().enumerate().find(|(_, prop)| {
+            prop.flags == 0x10 && level.bsp.static_props.models[usize::from(prop.model)]
+                .contains("/garbage_carboard")
+        }).expect("installed no-cast-shadow cardboard");
+        let name = &level.bsp.static_props.models[usize::from(prop.model)];
+        let base = name.trim_end_matches(".mdl");
+        let model = mdl::Model::load(
+            &level.vfs.read(name).unwrap(),
+            &level.vfs.read(&format!("{base}.vvd")).unwrap(),
+            &level.vfs.read(&format!("{base}.dx90.vtx")).unwrap(),
+        ).unwrap();
+        let colors = super::load(&level, ordinal, &model).expect("scoped equal-group cardboard bake");
+        assert_eq!(colors.len(), model.meshes.len());
+        assert!(colors.iter().zip(&model.meshes).all(|(colors, mesh)|
+            colors.as_ref().is_some_and(|colors| colors.len() == mesh.vertices.len())));
+    }
 
     #[test]
     fn separate_hardware_records_keep_their_channels_and_endpoints() {

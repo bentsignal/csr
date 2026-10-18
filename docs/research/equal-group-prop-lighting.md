@@ -19,11 +19,31 @@ must admit or reject the correspondence along with the color interpretation.
 Only raw flags2, three identical four-byte groups per record, and zero fourth
 bytes qualify. One unsupported record rejects that complete mesh. Only the
 renderer's non-normal-mapped `VERTEX_LIT` material path uses these colors.
-Only static-prop instances with common flags0 qualify; other flag combinations
-have not received matched native admission and retain the existing fallback.
+Matched native admission covers static-prop instances with common flags0.
+The October 18 source candidate also accepts lighting-origin/no-cast-shadow modes as
+described below; all other combinations retain the existing fallback.
 Missing, unsupported, directional, nonzero-control or mismatched data preserves
 the previous ambient-cube/Sun calculation. The MDL library retains its opaque
 payload API; the restricted interpretation lives in the renderer.
+
+## Authored receiver modes, October 18 (runtime validation pending)
+
+Installed modern Inferno apartment trims use common flags3 (authored lighting
+origin plus fading) and carry the same equal-group, zero-control VHV form.
+The zero-flag gate discarded these baked inputs before checking correspondence,
+leaving their lighting on the hull-center fallback. Mirage's cardboard uses
+no-cast-shadow flag0x10 and the same restricted baked form; it previously lost
+that input to an approximate spatial ambient/Sun receiver. Lighting-origin and
+no-cast-shadow modes (optionally fading) now enter the same
+map-scoped identity, model checksum, hardware mesh/count and payload checks.
+This consumes the baked result; it does not estimate a lighting origin, broaden
+spatial fallback eligibility, decode directional records or alter color units.
+Fade-only flags1 and other previously rejected modes remain rejected.
+
+This is a source candidate, not a new native admission. Parent-owned tests and
+matched upper/lower trim views in both apartments must verify the change,
+including instance tint and preservation of accepted Nuke/old Dust II lighting.
+The two new ignored installed-data regressions are also **UNRUN** by the source child.
 
 The proposed interpretation is normalized blue-first8-bit components, with no
 additional gamma or scale operation. The existing exposure, material shader,
