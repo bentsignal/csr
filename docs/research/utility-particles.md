@@ -305,3 +305,26 @@ initializer tests cover axis preservation, offset-independent geometry and
 unopted compatibility; compilation and an ordinary late-smoke render remain
 pending for this separate next-cohort change. The independent installed-format
 audit is private; no third-party assets are committed.
+
+## Preserve authored upright-fire height (October 18 source candidate)
+
+The floor anchor used to overwrite every nonground fire particle's initial
+height with `radius * 0.65`. That lift was a rewrite approximation, absent
+from the installed PCF, and discarded the already loaded positional offsets.
+The floor trace now supplies the local supporting floor height while retaining
+the authored initial height for upright fire. Ground cards keep their existing
+one-unit separation, sampled normal and plane orientation.
+
+Read-only installed metadata already retained privately in
+`csr-fidelity/authored-fire-effects-20261015/fire-definitions-private.json`
+shows fancy-fire offsets of -0.08..-0.04 times radius, center-fire offsets of
+5..15 Source units, and child-flame offsets of 0.1 times radius. Those values
+now reach rendering rather than being replaced with the same upward lift.
+No radius, brightness multiplier, lifetime, emission count, random draw, shader,
+material/lighting implementation, authoritative burn field or fade/ignition/
+extinguishing path changes. Native appearance, remaining bright composition,
+ground flicker and smoke's flat upper silhouette still require rendered review.
+
+The focused height/axis/floor regression is **UNRUN**. This source-only candidate
+was committed without Cargo, tests, game/UI/native runs or a visual parity claim,
+while the parent held the exclusive performance slot.
