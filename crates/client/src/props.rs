@@ -2,9 +2,9 @@
 //!
 //! Static props never move, so every instance is transformed into world
 //! space at load time and merged into one mesh per material (per sky/world
-//! layer). Eligible authored VHV lighting or the existing ambient-cube/Sun
-//! fallback is baked into vertex colours. A few hundred draws replace thousands
-//! of entities.
+//! layer). Eligible authored VHV lighting or spatial ambient-cube/Sun lighting
+//! is baked into vertex colours. Bumped/special-mode props keep their instance
+//! fallback. A few hundred draws replace thousands of entities.
 
 use crate::coords::{rotation_to_bevy, to_bevy};
 use crate::material::WorldMaterial;
@@ -120,6 +120,41 @@ fn prop_light(
             sun: glam::Vec3::ZERO,
         },
     }
+}
+
+/// Spatial fallback for an ordinary, non-bumped static-prop surface. A hull
+/// center can lie in the gap of an arch, or in a different room from one of an
+/// autocombined model's pieces. The actual rendered vertex determines the leaf
+/// and the sun ray; neither the model radius nor a guessed lighting origin does.
+/// Missing leaf samples retain the instance cube, without inheriting its sun.
+fn surface_light(
+    bsp: &bsp::Bsp,
+    collision: &CollisionWorld,
+    sun: Option<Sun>,
+    fallback: &PropLight,
+    position: glam::Vec3,
+    normal: glam::Vec3,
+    prop_ordinal: usize,
+) -> glam::Vec3 {
+    // Resolve a surface exactly on a BSP split towards its visible side. This
+    // is the collision tolerance, not the old multi-inch/radius ray teleport.
+    let sample = position + normal * collision::DIST_EPSILON;
+    let cube = bsp
+        .ambient_cube(sample)
+        .map(|cube| cube.map(glam::Vec3::from))
+        .unwrap_or(fallback.cube);
+    let mut light = PropLight {
+        cube,
+        to_sun: sun.map_or(glam::Vec3::Z, |s| s.to_sun),
+        sun: glam::Vec3::ZERO,
+    };
+    if let Some(s) = sun.filter(|s| normal.dot(s.to_sun) > 0.0) {
+        let tr = collision.trace_prop_lighting_ray(sample, sample + s.to_sun * 16384.0, prop_ordinal);
+        if !tr.start_solid && !tr.all_solid && (!tr.hit() || collision.is_sky(tr.surface)) {
+            light.sun = s.color;
+        }
+    }
+    light.eval(normal)
 }
 
 #[derive(Default)]
@@ -245,6 +280,7 @@ pub fn spawn(
     let mut light_data = vec![0u8; bsp.static_props.props.len().max(1) * PROP_TEXELS * 8];
     let mut authored_meshes = 0usize;
     let mut authored_vertices = 0usize;
+    let mut surface_vertices = 0usize;
     let mut detail_meshes = 0usize;
     let mut tinted_instances = 0usize;
     for (prop_index, prop) in bsp.static_props.props.iter().enumerate() {
@@ -254,6 +290,11 @@ pub fn spawn(
         let scale = if prop.scale > 0.0 { prop.scale } else { 1.0 };
         let center = prop.origin + rot * ((model.hull_min + model.hull_max) * 0.5 * scale);
         let light = prop_light(bsp, collision, sun, center, prop.origin, prop_index);
+        // Exact geometric duplicates at UV/material seams share the query.
+        // No spatial quantization: neighboring vertices can straddle a shadow
+        // or leaf boundary. The cache dies with this placed instance, so another
+        // instance of the same model cannot reuse its lighting/occlusion.
+        let mut surface_cache = HashMap::<([u32; 3], [u32; 3]), glam::Vec3>::new();
         let cube = [0, 1, 4, 5, 3, 2].map(|i| light.cube[i].extend(1.0));
         // Opacity changes need separate native admission and material modes.
         // Unsupported layouts/alpha retain the previous identity modulation.
@@ -305,6 +346,15 @@ pub fn spawn(
                 .filter(|m| m.params.flags & crate::material::flags::VERTEX_LIT != 0
                     && m.params.flags & crate::material::flags::NORMAL == 0)
                 .and_then(|_| authored.as_ref()?.get(mesh_index)?.as_deref());
+            // Normal-mapped props still evaluate their per-instance cube in
+            // world.wgsl. Do not silently remove normal mapping or upload colors
+            // which that shader will discard. Special prop lighting modes also
+            // retain their previous fallback; only ordinary/fading props enter.
+            let spatial_fallback = authored_colors.is_none()
+                && prop.flags & !1 == 0
+                && materials.get(&material).is_some_and(|m|
+                    m.params.flags & crate::material::flags::VERTEX_LIT != 0
+                    && m.params.flags & crate::material::flags::NORMAL == 0);
             if let Some(colors) = authored_colors {
                 // The scoped candidate checked mesh identity/counts; its
                 // individual hardware-order interpretation still needs native
@@ -323,7 +373,17 @@ pub fn spawn(
                 let tangent = tangent_cache.get(&(prop.model, mesh_index)).and_then(|t| t.get(vertex_index)).copied().unwrap_or([1.0,0.0,0.0,1.0]);
                 let t = to_bevy(rot * glam::Vec3::new(tangent[0], tangent[1], tangent[2]));
                 batch.tangents.push([t.x,t.y,t.z,tangent[3]]);
-                let lit = authored_colors.map_or_else(|| light.eval(n_source), |colors| colors[vertex_index]);
+                let lit = if let Some(colors) = authored_colors {
+                    colors[vertex_index]
+                } else if spatial_fallback {
+                    surface_vertices += 1;
+                    let position = prop.origin + rot * (v.position * scale);
+                    let key = (position.to_array().map(f32::to_bits), n_source.to_array().map(f32::to_bits));
+                    *surface_cache.entry(key).or_insert_with(||
+                        surface_light(bsp, collision, sun, &light, position, n_source, prop_index))
+                } else {
+                    light.eval(n_source)
+                };
                 batch.positions.push(affine.transform_point3(to_bevy(v.position)).to_array());
                 batch.normals.push(to_bevy(n_source).to_array());
                 batch.uvs.push(v.uv.to_array());
@@ -367,7 +427,8 @@ pub fn spawn(
         } else { e.insert(clusters); }
         stats.draws += 1;
     }
-    info!("Authored equal-group prop lighting: meshes={authored_meshes} vertices={authored_vertices}; unsupported meshes retain ambient/Sun fallback");
+    info!("Authored equal-group prop lighting: meshes={authored_meshes} vertices={authored_vertices}; unsupported meshes use ambient/Sun fallback");
+    info!("Spatial ambient/Sun prop fallback: vertices={surface_vertices}; bumped/special-mode props retain instance lighting");
     info!("Authored static-prop diffuse tint: nonwhite_instances={tinted_instances}");
     info!("Authored ordinary static-prop detail: meshes={detail_meshes}; unsupported layers retain base material");
     stats
@@ -418,18 +479,22 @@ mod lighting_tests {
     }
 
     fn add_world_box(w: &mut CollisionWorld, bottom: f32, top: f32, material: &str) {
+        add_world_bounds(w, SourceVec3::new(-256.0, -256.0, bottom), SourceVec3::new(256.0, 256.0, top), material);
+    }
+
+    fn add_world_bounds(w: &mut CollisionWorld, mins: SourceVec3, maxs: SourceVec3, material: &str) {
         let surface = w.surface_id(material);
         assert!(w.add_convex(collision::Convex {
             planes: vec![
-                collision::Plane { normal: SourceVec3::X, dist: 256.0 },
-                collision::Plane { normal: -SourceVec3::X, dist: 256.0 },
-                collision::Plane { normal: SourceVec3::Y, dist: 256.0 },
-                collision::Plane { normal: -SourceVec3::Y, dist: 256.0 },
-                collision::Plane { normal: SourceVec3::Z, dist: top },
-                collision::Plane { normal: -SourceVec3::Z, dist: -bottom },
+                collision::Plane { normal: SourceVec3::X, dist: maxs.x },
+                collision::Plane { normal: -SourceVec3::X, dist: -mins.x },
+                collision::Plane { normal: SourceVec3::Y, dist: maxs.y },
+                collision::Plane { normal: -SourceVec3::Y, dist: -mins.y },
+                collision::Plane { normal: SourceVec3::Z, dist: maxs.z },
+                collision::Plane { normal: -SourceVec3::Z, dist: -mins.z },
             ],
-            mins: SourceVec3::new(-256.0, -256.0, bottom),
-            maxs: SourceVec3::new(256.0, 256.0, top),
+            mins,
+            maxs,
             contents: collision::contents::SOLID,
             surface,
         }));
@@ -502,5 +567,108 @@ mod lighting_tests {
         assert!(!tr.start_solid && tr.hit());
         assert!((tr.end.z - 40.0).abs() < 0.1, "{tr:?}");
         assert_eq!(fallback(&map, &w).sun, SourceVec3::ZERO);
+    }
+
+    #[test]
+    fn a_combined_prop_keeps_covered_and_exposed_surfaces_distinct() {
+        let (map, mut w) = fixture(false);
+        // The same long owning hull runs under this partial roof and outside.
+        // Its center is covered, so an instance-wide decision loses the sun
+        // on the exposed portion even after the skipped-roof correction.
+        add_world_bounds(&mut w, SourceVec3::new(-256.0, -256.0, 33.0), SourceVec3::new(32.0, 256.0, 44.0), "partial_roof");
+        w.finalize();
+        let instance = fallback(&map, &w);
+        assert_eq!(instance.sun, SourceVec3::ZERO);
+        let covered = surface_light(&map, &w, Some(SUN), &instance, SourceVec3::new(-80.0, 0.0, 1.0), SourceVec3::Z, 0);
+        let exposed = surface_light(&map, &w, Some(SUN), &instance, SourceVec3::new(80.0, 0.0, 1.0), SourceVec3::Z, 0);
+        assert_eq!(covered, instance.cube[4]);
+        assert_eq!(exposed, instance.cube[4] + SUN.color);
+    }
+
+    #[test]
+    fn an_exposed_center_does_not_illuminate_a_covered_surface() {
+        let (map, mut w) = fixture(false);
+        add_world_bounds(&mut w, SourceVec3::new(32.0, -256.0, 33.0), SourceVec3::new(256.0, 256.0, 44.0), "partial_roof");
+        w.finalize();
+        let instance = fallback(&map, &w);
+        assert_eq!(instance.sun, SUN.color);
+        let covered = surface_light(&map, &w, Some(SUN), &instance, SourceVec3::new(80.0, 0.0, 1.0), SourceVec3::Z, 0);
+        assert_eq!(covered, instance.cube[4], "missing surface ambient must not reintroduce center sunlight");
+    }
+
+    #[test]
+    fn a_surface_in_world_solid_cannot_borrow_center_sunlight() {
+        let (map, mut w) = fixture(false);
+        add_world_bounds(&mut w, SourceVec3::new(32.0, -256.0, -8.0), SourceVec3::new(256.0, 256.0, 8.0), "embedded_surface");
+        w.finalize();
+        let instance = fallback(&map, &w);
+        assert_eq!(instance.sun, SUN.color);
+        let embedded = surface_light(&map, &w, Some(SUN), &instance, SourceVec3::new(80.0, 0.0, 1.0), SourceVec3::Z, 0);
+        assert_eq!(embedded, instance.cube[4]);
+    }
+
+    #[test]
+    fn surface_inside_own_collision_hull_does_not_self_shadow() {
+        let (map, mut w) = fixture(false);
+        w.finalize();
+        let instance = fallback(&map, &w);
+        // Render vertices need not lie on the outside of the simplified hull.
+        // The ordinary ray starts solid here; the placed-owner exclusion is
+        // still required after switching to surface lighting.
+        assert!(w.trace_ray(SourceVec3::Z * collision::DIST_EPSILON, SourceVec3::Z * 16384.0, collision::contents::MASK_SOLID).start_solid);
+        assert_eq!(surface_light(&map, &w, Some(SUN), &instance, SourceVec3::ZERO, SourceVec3::Z, 0), instance.cube[4] + SUN.color);
+    }
+
+    #[test]
+    fn surface_ray_keeps_other_instances_and_displacements_as_occluders() {
+        for other_prop in [false, true] {
+            let (map, mut w) = fixture(other_prop);
+            if !other_prop {
+                w.add_triangle([
+                    SourceVec3::new(-200.0, -100.0, 40.0),
+                    SourceVec3::new(-80.0, 100.0, 40.0),
+                    SourceVec3::new(100.0, -100.0, 40.0),
+                ], collision::contents::SOLID, 0);
+            }
+            w.finalize();
+            let instance = PropLight { cube: [SourceVec3::splat(0.2); 6], to_sun: SUN.to_sun, sun: SUN.color };
+            let actual = surface_light(&map, &w, Some(SUN), &instance, SourceVec3::new(-80.0, 0.0, 1.0), SourceVec3::Z, 0);
+            assert_eq!(actual, instance.cube[4], "other_prop={other_prop}");
+        }
+    }
+
+    #[test]
+    fn surface_ambient_follows_its_own_leaf_and_source_normal() {
+        let (mut map, mut w) = fixture(false);
+        // Two leaves separated at x=0, with independent directional colors.
+        // A single placed mesh can cross this split without changing materials.
+        map.planes.push(bsp::Plane { normal: SourceVec3::X, dist: 0.0, kind: 0 });
+        map.nodes.push(bsp::Node {
+            plane: 0, children: [-1, -2], mins: [-256; 3], maxs: [256; 3],
+            first_face: 0, num_faces: 0,
+        });
+        let leaf = bsp::Leaf {
+            contents: 0, cluster: 0, area: 0, mins: [-256; 3], maxs: [256; 3],
+            first_leaf_face: 0, num_leaf_faces: 0, first_leaf_brush: 0, num_leaf_brushes: 0,
+        };
+        map.leafs = vec![leaf, leaf];
+        map.leaf_ambient_index = vec![(1, 0), (1, 1)];
+        let cube = |scale: f32| std::array::from_fn(|i| [scale * (i + 1) as f32; 3]);
+        map.leaf_ambient = vec![
+            bsp::AmbientSample { cube: cube(0.1), pos: [128; 3] },
+            bsp::AmbientSample { cube: cube(0.01), pos: [128; 3] },
+        ];
+        w.finalize();
+        let instance = fallback(&map, &w);
+        for (x, scale) in [(80.0, 0.1), (-80.0, 0.01)] {
+            for (normal, face) in [(SourceVec3::X, 0), (-SourceVec3::Y, 3), (SourceVec3::Z, 4)] {
+                let actual = surface_light(&map, &w, None, &instance, SourceVec3::new(x, 0.0, 1.0), normal, 0);
+                assert!((actual - SourceVec3::splat(scale * (face + 1) as f32)).abs().max_element() < 1e-6);
+            }
+        }
+        // An absent local sample keeps the previous cube rather than choosing
+        // an arbitrary neighboring leaf or an unrelated authored origin.
+        map.leaf_ambient_index[1] = (0, 0);
+        assert_eq!(surface_light(&map, &w, None, &instance, SourceVec3::new(-80.0, 0.0, 1.0), SourceVec3::Z, 0), instance.cube[4]);
     }
 }
