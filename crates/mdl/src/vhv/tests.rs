@@ -30,6 +30,13 @@ fn fixture(counts: &[u32]) -> Vec<u8> {
     }
     bytes
 }
+fn lod_fixture(spans: &[(u32, u32)]) -> Vec<u8> {
+    let mut bytes = fixture(&spans.iter().map(|&(_, count)| count).collect::<Vec<_>>());
+    for (i, &(lod, _)) in spans.iter().enumerate() {
+        put(&mut bytes, HEADER_BYTES + i * MESH_BYTES, lod);
+    }
+    bytes
+}
 fn key(map: &str, digest: u8, ordinal: u32) -> InstanceKey {
     InstanceKey::new(
         ContentId::csgo(ContentKind::Map, map),
@@ -124,6 +131,124 @@ fn complete_candidate_retains_shuffled_parser_output_without_decoding_order() {
     assert_eq!(span.opaque_records().len(), 3);
     assert_eq!(mesh.source_vertex_indices, [2, 0, 1]);
     assert_eq!(candidate.instance(), &expected);
+}
+
+#[test]
+fn explicit_lod0_selection_keeps_hardware_order_and_the_complete_container() {
+    let (mdl, vvd, vtx) = crate::identity_tests::fixture();
+    let model = Model::load(&mdl, &vvd, &vtx).unwrap();
+    let bytes = lod_fixture(&[(0, 3), (1, 2)]);
+    let expected = key("de_fixture", 1, 2);
+    let scoped = ScopedFile::parse(expected.clone(), "sp_hdr_2.vhv", &bytes).unwrap();
+    assert!(
+        scoped.candidate(&expected, &model).is_err(),
+        "strict API must stay strict",
+    );
+    let candidate = scoped.candidate_lod0(&expected, &model).unwrap();
+    assert_eq!(candidate.instance(), &expected);
+    assert_eq!(candidate.matching_spans().len(), 1);
+    let (span, mesh) = candidate.matching_spans().next().unwrap();
+    assert_eq!(span.lod, 0);
+    assert_eq!(
+        span.opaque_records().copied().collect::<Vec<_>>(),
+        [[1; 12], [2; 12], [3; 12]],
+    );
+    assert_eq!(span.opaque_bytes().as_ptr(), bytes[96..].as_ptr());
+    assert_eq!(
+        mesh.source_vertex_indices, [2, 0, 1],
+        "never sort into VVD order",
+    );
+    assert_eq!(scoped.file().vertex_count, 5, "retain the full container total");
+    assert_eq!(scoped.file().meshes().len(), 2);
+    assert_eq!(
+        scoped.file().meshes()[1].opaque_records().next(),
+        Some(&[14; 12]),
+    );
+}
+
+#[test]
+fn lod0_selection_requires_complete_ordered_blocks_instead_of_filtering_spans() {
+    let expected = key("de_fixture", 1, 0);
+    let model = model(&[2, 1]);
+    let bytes = lod_fixture(&[(0, 2), (0, 1), (1, 1), (1, 1)]);
+    let scoped = ScopedFile::parse(expected.clone(), "sp_hdr_0.vhv", &bytes).unwrap();
+    let candidate = scoped.candidate_lod0(&expected, &model).unwrap();
+    assert_eq!(
+        candidate.matching_spans().map(|(s, _)| s.vertex_count).collect::<Vec<_>>(),
+        [2, 1],
+    );
+    for spans in [
+        &[(0, 2), (0, 1), (1, 1)][..], // incomplete lower block
+        &[(0, 2), (1, 1), (0, 1), (1, 1)][..], // interleaved LODs
+        &[(1, 2), (1, 1), (0, 2), (0, 1)][..], // reversed blocks
+        &[(0, 2), (0, 1), (1, 1), (2, 1)][..], // unsupported third LOD
+        &[(0, 2), (0, 1), (1, 1), (0, 1)][..], // extra LOD0 span
+        &[(0, 2), (0, 1), (1, 1), (1, 0)][..], // empty lower span
+        &[(0, 1), (0, 2), (1, 1), (1, 1)][..], // count order differs
+    ] {
+        let bytes = lod_fixture(spans);
+        let scoped = ScopedFile::parse(expected.clone(), "sp_hdr_0.vhv", &bytes).unwrap();
+        assert!(scoped.candidate_lod0(&expected, &model).is_err(), "layout {spans:?}");
+    }
+}
+
+#[test]
+fn lod0_selection_retains_scope_checksum_and_every_hardware_gate() {
+    let bytes = lod_fixture(&[(0, 2), (0, 1), (1, 1), (1, 1)]);
+    let expected = key("de_a", 1, 0);
+    let scoped = ScopedFile::parse(expected.clone(), "sp_hdr_0.vhv", &bytes).unwrap();
+    let good = model(&[2, 1]);
+    for counts in [&[2usize][..], &[2, 1, 1][..], &[2, 2][..], &[1, 2][..]] {
+        assert!(scoped.candidate_lod0(&expected, &model(counts)).is_err());
+    }
+    for wrong in [key("de_b", 1, 0), key("de_a", 2, 0), key("de_a", 1, 1)] {
+        assert!(scoped.candidate_lod0(&wrong, &good).is_err());
+    }
+    let mut variants = Vec::new();
+    let mut wrong = good.clone();
+    wrong.checksum ^= 1;
+    variants.push(wrong);
+    for identity in [
+        None,
+        Some(HardwareMesh { body_part: 0, sub_model: 1, mesh: 1, lod: 0 }),
+        Some(HardwareMesh { body_part: 0, sub_model: 0, mesh: 1, lod: 1 }),
+        Some(HardwareMesh { body_part: 0, sub_model: 0, mesh: 0, lod: 0 }),
+    ] {
+        let mut wrong = good.clone();
+        wrong.meshes[1].hardware = identity;
+        variants.push(wrong);
+    }
+    let mut wrong = good.clone();
+    wrong.meshes[1].source_vertex_indices.clear();
+    variants.push(wrong);
+    let mut wrong = good.clone();
+    wrong.meshes[1].vertices.clear();
+    variants.push(wrong);
+    for wrong in variants {
+        assert!(scoped.candidate_lod0(&expected, &wrong).is_err());
+    }
+    // Single-LOD data uses the original validation and correspondence.
+    let single = fixture(&[2, 1]);
+    let scoped = ScopedFile::parse(expected.clone(), "sp_hdr_0.vhv", &single).unwrap();
+    assert_eq!(
+        scoped.candidate(&expected, &good).unwrap().matching_spans().len(),
+        scoped.candidate_lod0(&expected, &good).unwrap().matching_spans().len(),
+    );
+}
+
+#[test]
+fn lower_lod_payload_must_pass_container_validation_before_selection() {
+    let bytes = lod_fixture(&[(0, 3), (1, 2)]);
+    let expected = key("de_fixture", 1, 0);
+    for end in 0..bytes.len() {
+        assert!(ScopedFile::parse(expected.clone(), "sp_hdr_0.vhv", &bytes[..end]).is_err());
+    }
+    // Corrupt only the lower-LOD descriptor/header total: no early LOD0 return.
+    for (at, value) in [(76, u32::MAX), (76, 96), (72, u32::MAX), (16, 3)] {
+        let mut corrupt = bytes.clone();
+        put(&mut corrupt, at, value);
+        assert!(ScopedFile::parse(expected.clone(), "sp_hdr_0.vhv", &corrupt).is_err());
+    }
 }
 
 #[test]

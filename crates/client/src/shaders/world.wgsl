@@ -153,6 +153,7 @@ const SSBUMP_MATHFIX: u32 = 4096u;
 const SHADOW_DIAGNOSTIC: u32 = 8192u;
 const TINT_BY_BASE_ALPHA: u32 = 131072u;
 const DETAIL: u32 = 262144u;
+const UNLIT_MULTIPLY: u32 = 524288u;
 // Orthonormal radiosity basis, in texture tangent space.
 const RNM0 = vec3<f32>(0.81649658, 0.0, 0.57735027);
 const RNM1 = vec3<f32>(-0.40824829, 0.70710678, 0.57735027);
@@ -328,7 +329,12 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
 #endif
 
     var blend_weight = 0.0;
-    if (params.flags & BLEND) != 0u {
+    if (params.flags & UNLIT_MULTIPLY) != 0u {
+        // UnlitTwoTexture uses the same raw mesh UVs for two independent
+        // transforms. It multiplies color and coverage, not vertex-alpha mix.
+        let second = textureSample(base2_tex, base2_samp, uv * params.base2_uv.xy + params.base2_uv.zw);
+        albedo *= second;
+    } else if (params.flags & BLEND) != 0u {
         let second = textureSample(base2_tex, base2_samp, uv * params.base2_uv.xy + params.base2_uv.zw);
         var t = vcolor.a;
         if (params.flags & BLEND_MODULATE) != 0u {

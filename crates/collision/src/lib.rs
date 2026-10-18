@@ -217,7 +217,7 @@ pub fn clip_bounds(start: Vec3, end: Vec3, mins: Vec3, maxs: Vec3, low: Vec3, hi
         Plane{normal:Vec3::Z,dist:high.z}, Plane{normal:-Vec3::Z,dist:-low.z}];
     let offset=(mins+maxs)*0.5;
     clip_convex(&planes,start+offset,end+offset,(maxs-mins)*0.5,contents,surface,tr);
-    tr.end=if tr.all_solid {start} else {start.lerp(end,tr.fraction)};
+    tr.end=if tr.all_solid {start} else {start + (end - start) * tr.fraction};
 }
 
 /// Map ordinal of the runtime solid that won the ordinary masked clip query.
@@ -241,6 +241,9 @@ pub struct CollisionWorld {
     pub doors: std::sync::Arc<[doors::Door]>,
     pub breakables: std::sync::Arc<[breakables::Breakable]>,
     pub breakable_dependencies: std::sync::Arc<[breakables::Dependency]>,
+    /// Literal immediate OnBreak -> Break edges between admitted definitions,
+    /// sorted by source then target, with duplicates removed.
+    pub breakable_break_links: std::sync::Arc<[(usize, usize)]>,
     /// A session-owned, immutable pose overlay shares the heavy map/grid.
     base: Option<std::sync::Arc<CollisionWorld>>,
     /// Per-overlay convex ownership, in the same order as `convexes`.
@@ -417,7 +420,9 @@ impl CollisionWorld {
                     }
                 }
             }
-            tr.end = if tr.all_solid { start } else { start.lerp(end, tr.fraction) };
+            // Keep stationary axes bit-exact, as in the static query. Weighted
+            // endpoint sums can round a vertical floor snap sideways into a wall.
+            tr.end = if tr.all_solid { start } else { start + (end - start) * tr.fraction };
             return (tr, owner);
         }
         if let Some(world)=&self.dynamic { return (world.trace_box(start,end,mins,maxs,mask), None); }
@@ -919,6 +924,9 @@ impl CollisionWorld {
             if breakables.len() < breakables::MAX_BREAKABLES.saturating_sub(props.len()) {
                 if let Some(mut def) = breakables::Breakable::load(entity, ent, map) {
                     if w.convexes.len() > start {
+                        // Resolve mounted inherited health before admitting
+                        // immediate Break targets or hashing definitions.
+                        def.apply_prop_data(presets);
                         def.solids = w.convexes.drain(start..).collect();
                         breakables.push(def);
                     }
@@ -935,6 +943,7 @@ impl CollisionWorld {
                 for solid in &mut def.solids { solid.surface = surface; }
             }
         }
+        w.breakable_break_links = breakables::break_links(map, &breakables).into();
         w.breakables = breakables.into();
         w.breakable_dependencies = dependencies.into();
 
@@ -1133,7 +1142,7 @@ mod tests {
         let prop = |model, solid, x| bsp::StaticProp {
             origin: Vec3::new(x, 0.0, 0.0), angles: Vec3::ZERO, model, solid,
             flags: 0, skin: 0, fade_min: 0.0, fade_max: 0.0, scale: 1.0,
-            diffuse_modulation: None,
+            lighting_origin: None, diffuse_modulation: None,
         };
         let mut map = bsp::Bsp {
             static_props: bsp::StaticProps {

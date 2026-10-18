@@ -184,6 +184,7 @@ impl CollisionWorld {
             mins: base.mins, maxs: base.maxs, doors: base.doors.clone(),
             breakables: base.breakables.clone(),
             breakable_dependencies: base.breakable_dependencies.clone(),
+            breakable_break_links: base.breakable_break_links.clone(),
             dynamic: base.dynamic.clone(),
             convexes: solids, runtime_owners: owners, base: Some(base), ..Default::default()
         })

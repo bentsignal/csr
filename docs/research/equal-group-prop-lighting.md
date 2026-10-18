@@ -9,8 +9,10 @@ improvement, not a verified general VHV color decoder or native lighting parity.
 The existing VHV parser checks version, bounded spans, counts and non-overlap.
 The selected map's content identity, BSP SHA1 and static-prop ordinal select
 `sp_hdr_<ordinal>.vhv` from that map's embedded archive only. The candidate
-also requires the model checksum, complete mesh counts, LOD0/default-submodel
-hardware identities and per-mesh hardware vertex counts. The proposed record
+also requires the model checksum, complete selected mesh counts,
+LOD0/default-submodel hardware identities and per-mesh hardware vertex counts.
+Flags0 requires the entire file to match; the new receiver modes may select
+the explicitly supported LOD0 block described below. The proposed record
 correspondence indexes the existing hardware-output vertex traversal, never the
 fixup-resolved VVD vector. Those count/checksum gates do not themselves prove
 individual ordering; multiple spatially separated native prop/vertex regions
@@ -19,11 +21,76 @@ must admit or reject the correspondence along with the color interpretation.
 Only raw flags2, three identical four-byte groups per record, and zero fourth
 bytes qualify. One unsupported record rejects that complete mesh. Only the
 renderer's non-normal-mapped `VERTEX_LIT` material path uses these colors.
-Only static-prop instances with common flags0 qualify; other flag combinations
-have not received matched native admission and retain the existing fallback.
+Matched native admission covers static-prop instances with common flags0.
+The October 18 source candidate also accepts lighting-origin/no-cast-shadow modes as
+described below; all other combinations retain the existing fallback.
 Missing, unsupported, directional, nonzero-control or mismatched data preserves
 the previous ambient-cube/Sun calculation. The MDL library retains its opaque
 payload API; the restricted interpretation lives in the renderer.
+
+## Authored receiver modes, October 18 (runtime validation pending)
+
+Installed modern Inferno apartment trims use common flags3 (authored lighting
+origin plus fading) and carry the same equal-group, zero-control VHV form.
+The zero-flag gate discarded these baked inputs before checking correspondence,
+leaving their lighting on the hull-center fallback. Mirage's cardboard uses
+no-cast-shadow flag0x10 and the same restricted baked form; it previously lost
+that input to an approximate spatial ambient/Sun receiver. Lighting-origin and
+no-cast-shadow modes (optionally fading) now enter the same
+map-scoped identity, model checksum, hardware mesh/count and payload checks.
+This consumes the baked result; it does not estimate a lighting origin, broaden
+spatial fallback eligibility, decode directional records or alter color units.
+Fade-only flags1 and other previously rejected modes remain rejected.
+
+This is a source candidate, not a new native admission. Parent-owned tests and
+matched upper/lower trim views in both apartments must verify the change,
+including instance tint and preservation of accepted Nuke/old Dust II lighting.
+The source child did not run the two ignored installed-data regressions. The
+parent subsequently ran the correct module filter and selected two tests:
+Inferno trim passed, Mirage cardboard failed before any bake was returned.
+
+### LOD0 selection correction (source only; parent validation pending)
+
+The failure exposed a distinction the earlier metadata scan missed. Mirage
+ordinals234/235/236 contain two VHV spans each, for LOD0 and LOD1. Their
+header totals are400/613/613, while their LOD0 counts are270/451/451; the
+LOD1 counts are130/162/162. MDL49 checksums1195020340/887594147/887594147
+match their VVD and VTX headers. `Model::load` emits only LOD0, so the strict
+full-file mesh-count gate rejects these containers even when LOD0 records
+have the expected byte form. The earlier scan of only LOD0 records did not
+demonstrate runtime admission. The parent's first filter selected zero tests;
+only its corrected two-test run establishes the trim pass/cardboard failure.
+
+The shared metadata API now offers an explicit `candidate_lod0` selection.
+It delegates single-LOD files to the unchanged strict `candidate` contract.
+For additional admission it supports only one ordered LOD0 block followed by
+one nonempty LOD1 span per LOD0 mesh. The complete LOD0 block must match every
+model mesh, retaining scope/BSP digest/ordinal, model checksum, default
+submodel, LOD0 hardware identity, strict hardware order and vertex/source-index
+counts. No descriptors or vertices are sorted, renumbered or inferred from VVD
+indices. Partial blocks, interleaved/reversed LODs, extra LOD0 spans, empty
+lower spans and LOD2 or higher remain rejected. This deliberately narrow
+layout is a supported subset, not a claim that other layouts are invalid VHV.
+
+The entire container is parsed before selection: both LODs retain the existing
+byte/mesh limits, payload bounds, non-overlap and full header-total checks.
+LOD1 metadata and payload stay available in the parsed file; they are opaque
+and are never paired with or decoded for LOD0 geometry. Its hardware binding
+is not established by this API. Only the newly admitted flags2/3/16/17/18/19
+use the selector; accepted flags0 keeps strict full-file binding. This limits
+the admission change while native comparisons for the new receiver cohort
+remain pending. It intentionally leaves multi-LOD flags0 props on their
+previous fallback rather than widening their accepted output.
+
+Synthetic fixtures cover the unchanged strict contract, LOD0 selection from
+distinct lower-LOD bytes, retained non-VVD hardware order, complete multi-mesh
+blocks, malformed layouts and lower payloads, identity/count gates and the
+client's flag/raw-flag/equal-group/control restrictions. The ignored Mirage
+fixture now checks all three exact installed instances and their whole
+containers through the actual client load path. All new/updated tests are
+**UNRUN** by this child. Raw flags2, equal groups, zero control bytes and the
+non-normal-mapped material gate are unchanged. No record-order or visible
+fidelity admission follows from selecting the correct LOD alone.
 
 The proposed interpretation is normalized blue-first8-bit components, with no
 additional gamma or scale operation. The existing exposure, material shader,

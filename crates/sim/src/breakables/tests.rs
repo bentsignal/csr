@@ -12,6 +12,10 @@ fn fixture(rate: u32, metadata: &str, door: bool) -> (World, PlayerId) {
 }
 
 fn fixture_with_model(rate: u32, metadata: &str, door: bool, prop_data: Option<&str>) -> (World, PlayerId) {
+    fixture_with_outputs(rate, metadata, door, prop_data, false)
+}
+
+fn fixture_with_outputs(rate: u32, metadata: &str, door: bool, prop_data: Option<&str>, break_pair: bool) -> (World, PlayerId) {
     let mut map = bsp::Bsp::default();
     let doc = kv::parse(&format!(r#"vent {{ classname func_breakable model *1
         origin "0 0 0" {metadata} }}"#)).unwrap();
@@ -53,6 +57,18 @@ fn fixture_with_model(rate: u32, metadata: &str, door: bool, prop_data: Option<&
             origin "0 0 0" angles "0 0 0" rendercolor "121 173 211" skin 2 body 3
             OnBreak "release_fixture,Kill,,0,-1" }"#).unwrap();
         map.entities[0] = doc.block("cover").unwrap().clone();
+        if break_pair {
+            // An invisible movement grate behind the visible studio cover.
+            // Bullet/knife rays only hit the cover; Break removes both owners.
+            map.brushes[0].contents = contents::GRATE;
+            for (key, value) in [("classname", "func_breakable"), ("health", "1"),
+                ("targetname", "paired"), ("spawnflags", "0"), ("rendermode", "10"),
+                ("OnBreak", "cover,Break,,0,-1")] {
+                map.entities.last_mut().unwrap().set(key, kv::Value::Str(value.into()));
+            }
+            map.entities[0].set("targetname", kv::Value::Str("cover".into()));
+            map.entities[0].set("OnBreak", kv::Value::Str("paired,Break,,0,-1".into()));
+        }
     }
     let model_loader = |_: &str| prop_data.map(|data| {
         let text = format!("mdlkeyvalue {{ prop_data {{ {data} }} }}\0");
@@ -65,7 +81,7 @@ fn fixture_with_model(rate: u32, metadata: &str, door: bool, prop_data: Option<&
     let presets = kv::parse(r#"MetalFixture { base BaseFixture } BaseFixture { health 0 "dmg.bullets" 1 "dmg.club" 1 }"#).unwrap();
     let mut collision = CollisionWorld::from_bsp_with_model_data(&map, &MapCollisionOptions::default(),
         &loader, &model_loader, &presets);
-    assert_eq!(collision.breakables.len(), 1);
+    assert_eq!(collision.breakables.len(), if break_pair { 2 } else { 1 });
     let s = 2048.;
     collision.add_triangle([Vec3::new(-s, -s, 0.), Vec3::new(s, -s, 0.), Vec3::new(s, s, 0.)], contents::SOLID, 0);
     collision.add_triangle([Vec3::new(-s, -s, 0.), Vec3::new(s, s, 0.), Vec3::new(-s, s, 0.)], contents::SOLID, 0);
@@ -276,4 +292,84 @@ fn authored_studio_cover_shot_and_knife_remove_linked_brush_and_restore_as_one_s
             assert_eq!(world.breakables, intact.breakables);
         }
     }
+}
+
+#[test]
+fn immediate_break_cycle_removes_unshootable_grate_and_preserves_state_and_owners() {
+    for rate in [64, 128] {
+        for knife in [false, true] {
+            let (mut world, id) = fixture_with_outputs(rate, "health 1 material 2", true,
+                Some(r#"base MetalFixture health 1"#), true);
+            assert_eq!(&*world.collision.breakable_break_links, &[(0, 1), (1, 0)]);
+            assert!(world.collision.breakables[0].studio.is_none());
+            assert!(world.collision.breakables[1].studio.is_some());
+            let (old_trace, old_owner) = world.collision.trace_breakable_ray(
+                Vec3::new(-28., 0., 64.), Vec3::new(28., 0., 64.), contents::MASK_SHOT);
+            assert_eq!(old_owner, Some(1), "grate must remain excluded from combat rays");
+            assert!(blocked(&world));
+            if knife {
+                world.players[0].weapons = vec![WeaponState::new(Arc::new(world.catalog.get("weapon_knife").unwrap().clone()))];
+            }
+            let intact = world.clone();
+            let mut predicted = world.clone();
+            world.step(&[(id, attack())]); predicted.step_prediction(&[(id, attack())]);
+            assert!(world.breakables.iter().all(State::broken));
+            assert!(!blocked(&world), "the invisible movement grate must leave with its cover");
+            assert_eq!(world.state(), predicted.state());
+            assert!(predicted.events.is_empty());
+            assert_eq!(&*world.collision.breakable_break_links, &[(0, 1), (1, 0)],
+                "runtime overlays must retain mounted output links");
+            assert!(blocked(&intact), "another prediction clone still owns an intact pair");
+            assert!(world.validate_breakable_state(&world.breakables).is_ok());
+            let mut partial = world.breakables.clone(); partial[0] = intact.breakables[0];
+            assert!(world.validate_breakable_state(&partial).is_err());
+            let mut restored = intact.clone();
+            restored.restore(world.decode::<crate::WorldState>(&world.encode_state()).unwrap());
+            assert!(!blocked(&restored));
+            let events = world.events.len();
+            let state = world.state();
+            world.damage_breakable(old_owner, &old_trace, 100., DamageKind::Bullet);
+            assert_eq!(world.state(), state, "an obsolete intact-owner hit must not retrigger the cycle");
+            assert_eq!(world.events.len(), events);
+            assert!(world.collision.trace_ray(Vec3::new(64., 0., 64.), Vec3::new(128., 0., 64.), contents::MASK_SHOT).hit(),
+                "an independent door survives removal of the pair");
+            world.start_round(false);
+            assert_eq!(world.breakables, intact.breakables);
+            assert!(blocked(&world));
+        }
+    }
+}
+
+#[test]
+fn immediate_break_fanout_and_recursive_cycle_visit_each_owner_once() {
+    let mut collision = CollisionWorld::new();
+    collision.breakables = (0..5).map(|entity| collision::breakables::Breakable {
+        entity, model: 1, origin: Vec3::ZERO, health: 1., material: 2,
+        prop_data: String::new(), bullet_scale: 1., club_scale: 1., minimum_damage: 0.,
+        trigger_only: false, solids: Vec::new(), studio: None,
+    }).collect::<Vec<_>>().into();
+    // 0 fans out; both paths reach 3, which cycles back to 0 and itself.
+    // Independent owner 4 must survive. No geometry is needed for this unit
+    // check of propagation; the paired-grate test covers TickInput combat.
+    collision.breakable_break_links = vec![(0, 1), (0, 2), (1, 3), (2, 3), (3, 0), (3, 3)].into();
+    let mut world = World::new(Arc::new(collision));
+    let mut hit = collision::Trace::empty(Vec3::ZERO); hit.fraction = 0.5;
+    world.damage_breakable(Some(0), &hit, 1., DamageKind::Bullet);
+    assert!(world.breakables[..4].iter().all(State::broken));
+    assert!(!world.breakables[4].broken());
+    assert!(world.validate_breakable_state(&world.breakables).is_ok());
+    assert!(world.events.is_empty());
+}
+
+#[test]
+fn inherited_indestructible_brush_is_not_admitted_as_an_immediate_break_target() {
+    let (mut world, id) = fixture_with_outputs(128, "health 1 material 2 propdata MetalFixture", false,
+        Some(r#"base MetalFixture health 1"#), true);
+    assert_eq!(world.collision.breakables[0].health, 0., "mounted base overrides the brush health");
+    assert_eq!(world.collision.breakables[1].health, 1., "studio local override retains its health");
+    assert_eq!(&*world.collision.breakable_break_links, &[(0, 1)]);
+    world.step(&[(id, attack())]);
+    assert!(!world.breakables[0].broken() && world.breakables[1].broken());
+    assert!(blocked(&world), "do not remove an authored indestructible brush");
+    assert!(world.validate_breakable_state(&world.breakables).is_ok());
 }

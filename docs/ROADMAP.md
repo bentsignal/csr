@@ -1,5 +1,11 @@
 # Roadmap
 
+> **October 18 follow-up:** implementation approved: classic maps/playability,
+> then movement/viewmodels, hit-audio consistency, then grenades. Grenade feel
+> now targets original CS:GO and historical lineups; the prior CS2 throw-feel
+> exception is superseded. Bot/mode warning cleared by owner retest.
+
+
 > **October 18 owner direction:** [Morning feedback](PLAYTEST-2026-10-18.md)
 > accepts the major performance improvement as good enough for now. General FPS
 > optimization moves low; core 2015-era maps, working traversal/ten-player modes,
@@ -29,6 +35,20 @@ concurrently (one agent or worktree per track), and the dependencies between
 them are listed. Every item ends in a verified state (`cargo test`,
 `csr probe`, `csr sim`, and screenshots for anything visual; see AGENTS.md).
 
+## October 18 map increment
+
+- [x] Offer eight qualified historical core-map snapshots, including authentic
+  October 2015 Cache, using archive-specific identity, navigation and art.
+- [x] Correct flush ladder contacts, linked breakable collision retirement at
+  Mirage's small CT window, and Cobblestone stationary-axis floor snapping.
+- [x] Correct additive/layered unlit map materials, invisible brush rendering,
+  bounded archived prop bakes and authored prop lighting origins.
+- [ ] Finish current-source rendered ten-player admission and owner playtest;
+  historical Overpass is withheld for its missing authentic fence material.
+
+These increments do not complete exact 2015 parity or the full map catalog.
+[Version qualification and remaining dependencies](OLD-MAPS.md).
+
 ## Where we are (assessed 2026-10-17)
 
 The [October17 follow-up](PLAYTEST-2026-10-17.md) confirms bounded menu overlap/Pause fixes but reports transition flicker, restart binding loss, stale HUD binding hints, AWP cooldown/ammo/audio defects and unacceptable sustained FPS. Current ragdolls are accepted for now; custom ragdolls/death-animation work is deferred. Deliver actual verified fixes before requesting another improvement test.
@@ -38,8 +58,9 @@ are retained separately from the October14 ledger. **Priority one is sustained,
 smooth gameplay performance**, especially bots versus solo and degradation over
 a session. Core input/weapons, menu lifecycle, exact old HUD layout and map
 interactions follow; content-pack expansion is deferred. The owner explicitly
-authorizes CS2-feel grenade trajectories and read-only CS2 settings/keybind
-import as narrow exceptions to the historical baseline. No new replacement
+authorized CS2 grenade feel on October 16, then revoked that scope on October
+18 in favor of original CS:GO throws and historical lineups. Read-only CS2
+settings/keybind import remains the narrow exception. No new replacement
 test build is requested until fixes have passed their actual verification.
 
 PF01/PF02 offline [diagnostic log analysis](PERFORMANCE-LOG-ANALYZER.md) now

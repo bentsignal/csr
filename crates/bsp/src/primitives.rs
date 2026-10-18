@@ -66,6 +66,9 @@ pub enum FaceMeshError {
     InvalidIndexCount,
     IndexBudget,
     NonFiniteTriangle,
+    /// Validated triangles have zero area and the stored boundary exactly
+    /// retraces itself. Compiler residue, with no enclosed surface to render.
+    RetracedBoundary,
     EmptyTopology,
 }
 
@@ -205,10 +208,30 @@ impl Bsp {
             }
         }
         if indices.is_empty() {
+            if face.primitive_count() != 0 && retraced_boundary(&positions) {
+                return Err(RetracedBoundary);
+            }
             return Err(EmptyTopology);
         }
         Ok(FaceMesh { positions, indices })
     }
+}
+
+/// Recognize only exact out-and-back boundaries measured in Legacy archives.
+/// Signed polygon area or a tolerance would also accept bow ties/thin surfaces.
+/// Every nonzero edge must have its exact reverse; topology/range validation
+/// and zero triangle areas have already succeeded before this is consulted.
+fn retraced_boundary(positions: &[Vec3]) -> bool {
+    use std::collections::BTreeMap;
+    let key = |v: Vec3| v.to_array().map(|f| if f == 0. { 0 } else { f.to_bits() });
+    let mut edges = BTreeMap::<([u32; 3], [u32; 3]), i32>::new();
+    for i in 0..positions.len() {
+        let (a, b) = (key(positions[i]), key(positions[(i + 1) % positions.len()]));
+        if a == b { continue; }
+        let (edge, sign) = if a < b { ((a, b), 1) } else { ((b, a), -1) };
+        *edges.entry(edge).or_default() += sign;
+    }
+    !edges.is_empty() && edges.values().all(|balance| *balance == 0)
 }
 
 #[cfg(test)]
@@ -385,6 +408,30 @@ mod tests {
             b.face_mesh(&face).unwrap_err(),
             FaceMeshError::EmptyTopology
         );
+    }
+
+    #[test]
+    fn exact_retraced_compiler_boundaries_are_distinct_from_missing_surface_topology() {
+        // Synthetic bent spike: a triangle fan would incorrectly create a
+        // surface even though the compiled triangles and boundary enclose none.
+        let (mut bsp, face) = fixture(&[[0., 0.], [1., 0.01], [2., 0.], [1., 0.01]]);
+        bsp.primitives.push(primitive(0, 0, 6));
+        bsp.primitive_indices = vec![1, 2, 3, 1, 3, 0];
+        assert_eq!(bsp.face_mesh(&face).unwrap_err(), FaceMeshError::RetracedBoundary);
+
+        // Near reversal still encloses a thin surface and must remain an error.
+        bsp.vertices[3].y += 0.0001;
+        bsp.primitive_indices.fill(0);
+        assert_eq!(bsp.face_mesh(&face).unwrap_err(), FaceMeshError::EmptyTopology);
+        let (mut square, face) = square();
+        square.primitive_indices.fill(0);
+        assert_eq!(square.face_mesh(&face).unwrap_err(), FaceMeshError::EmptyTopology);
+
+        // Bad ranges are rejected even on a known retraced boundary.
+        let (mut bsp, face) = fixture(&[[0., 0.], [1., 0.], [2., 0.], [1., 0.]]);
+        bsp.primitives.push(primitive(0, 0, 6));
+        bsp.primitive_indices = vec![1, 2, 4, 1, 3, 0];
+        assert_eq!(bsp.face_mesh(&face).unwrap_err(), FaceMeshError::InvalidVertexIndex);
     }
 
     #[test]

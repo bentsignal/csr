@@ -2,13 +2,15 @@
 use std::collections::HashSet;
 
 /// Pinned pre-rework Source 1 archives, distinct from the installed remakes.
+#[cfg(test)]
 pub(super) const CLASSIC_DUST2: &str = "de_dust2_2017";
 #[cfg(test)]
 const CLASSIC_GROUP: &str = "mg_de_dust2_2017";
+#[cfg(test)]
 const CLASSIC_INFERNO: &str = "de_inferno_2016";
 
 pub(super) fn menu_archive(name: &str) -> bool {
-    matches!(name, CLASSIC_DUST2 | CLASSIC_INFERNO)
+    workshop::find(name).is_some_and(workshop::OldMap::menu_supported)
 }
 
 pub(super) fn load(fs: &vfs::Vfs, installed: &HashSet<String>) -> kv::Block {
@@ -23,9 +25,9 @@ pub(super) fn load(fs: &vfs::Vfs, installed: &HashSet<String>) -> kv::Block {
         .read("resource/flash/sharedlib.swf")
         .and_then(|bytes| scaleform::library_symbols(&bytes).ok())
         .unwrap_or_default();
-    for name in [CLASSIC_DUST2, CLASSIC_INFERNO] {
-        if installed.contains(name) {
-            add_classic_map(&mut root, workshop::find(name).expect("pinned classic map"));
+    for archive in workshop::OLD_MAPS.iter().filter(|archive| archive.menu_supported()) {
+        if installed.contains(archive.name) {
+            add_classic_map(&mut root, archive);
         }
     }
     filter(&mut root, installed, &symbols);
@@ -52,6 +54,11 @@ fn add_classic_map(root: &mut kv::Block, archive: &workshop::OldMap) {
         return;
     };
     let title = archive.title;
+    let qualification = if archive.name.ends_with("_2015") {
+        "Compatibility archive; rewritten rendering and gameplay still require fidelity validation."
+    } else {
+        "Compatibility archive; exact 2015 parity is not established."
+    };
     map.set("name", kv::Value::Str(archive.name.into()));
     map.set("nameID", kv::Value::Str(title.into()));
     group.set("name", kv::Value::Str(classic_group.clone()));
@@ -59,7 +66,7 @@ fn add_classic_map(root: &mut kv::Block, archive: &workshop::OldMap) {
     group.set(
         "tooltipID",
         kv::Value::Str(format!(
-            "{}. Experimental archive.",
+            "{}. {qualification}",
             archive.note.trim_end_matches('.')
         )),
     );
@@ -88,7 +95,10 @@ fn add_classic_map(root: &mut kv::Block, archive: &workshop::OldMap) {
             else {
                 continue;
             };
-            for (_, mode) in &mut modes.entries {
+            for (name, mode) in &mut modes.entries {
+                if !matches!(name.as_str(), "competitive" | "deathmatch") {
+                    continue;
+                }
                 let Some(mode) = mode.as_block_mut() else {
                     continue;
                 };
@@ -97,16 +107,17 @@ fn add_classic_map(root: &mut kv::Block, archive: &workshop::OldMap) {
                         continue;
                     };
                     if groups.get(&classic_group).is_none() {
-                        if let Some(at) = groups
+                        let at = groups
                             .entries
                             .iter()
                             .position(|(name, _)| name == &base_group)
-                        {
-                            groups.entries.insert(
-                                at + 1,
-                                (classic_group.clone(), kv::Value::Str(String::new())),
-                            );
-                        }
+                            .map_or(groups.entries.len(), |at| at + 1);
+                        // A historical map can still support a match after its
+                        // current version was retired from this mode (Cobble).
+                        groups.entries.insert(
+                            at,
+                            (classic_group.clone(), kv::Value::Str(String::new())),
+                        );
                     }
                 }
             }
@@ -496,6 +507,41 @@ mod tests {
         );
         assert!(menu_archive(CLASSIC_INFERNO));
         assert!(!menu_archive("de_inferno_2020"));
+    }
+
+    #[test]
+    fn retired_base_group_does_not_hide_its_playable_historical_map() {
+        // Legacy retains Cobble's card metadata but no longer lists the base
+        // in competitive. No installed Cobble BSP is needed for its archive.
+        let mut root = installed_modes();
+        root.get_mut("maps").unwrap().as_block_mut().unwrap()
+            .set("de_cbble", kv::Value::Block(kv::Block::new()));
+        let group = kv::parse("imagename map-cobble-overall maps { de_cbble 0 }").unwrap();
+        root.get_mut("mapgroups").unwrap().as_block_mut().unwrap()
+            .set("mg_de_cbble", kv::Value::Block(group));
+        let archive = workshop::find("de_cbble_2018").unwrap();
+        add_classic_map(&mut root, archive);
+        filter(&mut root, &HashSet::from([archive.name.into()]),
+            &HashSet::from(["map-cobble-overall".into()]));
+        for (kind, mode) in [("classic", "competitive"), ("gungame", "deathmatch")] {
+            let groups = root.path(&["gameTypes", kind, "gameModes", mode, "mapgroupsSP"])
+                .unwrap().as_block().unwrap();
+            assert_eq!(groups.str("mg_de_cbble_2018"), Some("0"));
+        }
+        assert!(root.block("maps").unwrap().block("de_cbble").is_none());
+        let query = REQUEST.replace("mg_de_dust2", "mg_de_cbble_2018");
+        assert_eq!(offline_selection(&root, &query).unwrap().map, archive.name);
+        assert!(offline_selection(&root, &query.replace("_2018", "_2015")).is_err());
+    }
+
+    #[test]
+    fn archive_menu_admission_excludes_unresolved_dependencies_and_later_remakes() {
+        for name in ["de_nuke_2016", "de_train_2015", "de_vertigo_2017", "de_mirage_2019", "de_cbble_2018", "de_cache_2015"] {
+            assert!(menu_archive(name), "{name}");
+        }
+        for name in ["de_cache_2019", "de_overpass_2015", "de_overpass_2019", "de_nuke_2019", "de_train_2020", "de_canals_2018", "de_train_2014"] {
+            assert!(!menu_archive(name), "{name}");
+        }
     }
 
     #[test]

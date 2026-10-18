@@ -124,3 +124,56 @@ fn consecutive_ladder_brushes_do_not_occlude_each_other() {
     assert!(player.origin.z > 128.);
     assert_eq!(player.ladder_normal, Some(-Vec3::X));
 }
+
+#[test]
+fn flush_clip_beside_and_between_ladder_segments_does_not_block_climbing() {
+    // Own geometry reproducing the installed BSP layouts: a ladder only one
+    // player hull wide with flush clip on either side (Mirage), and a narrow
+    // non-ladder clip seam between two climbing segments (Nuke vents).
+    let mut world = CollisionWorld::new();
+    world.add_convex(box_shape(Vec3::new(-128., -128., -16.), Vec3::new(128., 128., 0.), contents::SOLID));
+    for (bottom, top) in [(0., 128.), (132., 256.)] {
+        world.add_convex(box_shape(Vec3::new(0., -16., bottom), Vec3::new(1., 16., top), contents::LADDER | contents::GRATE));
+    }
+    for (low, high) in [
+        (Vec3::new(0., -32., 0.), Vec3::new(8., -16., 256.)),
+        (Vec3::new(0., 16., 0.), Vec3::new(8., 32., 256.)),
+        (Vec3::new(0., -16., 128.), Vec3::new(1., 16., 132.)),
+    ] {
+        world.add_convex(box_shape(low, high, contents::PLAYERCLIP));
+    }
+    world.finalize();
+    for rate in [64, 128] {
+        // Include positions off center and at the outer edge of the normal
+        // attachment reach. Part of the hull touches flush side clip there.
+        for y in [-4., 0., 4.] {
+            let mut player = at(32.);
+            player.origin.x -= 1.;
+            player.origin.y = y;
+            let forward = MoveInput { forward_move: 450., ..Default::default() };
+            for _ in 0..rate * 2 {
+                tick(&mut player, &world, forward, rate);
+                if player.origin.z > 256. { break; }
+                assert_eq!(player.ladder_normal, Some(-Vec3::X), "{rate}Hz y={y}: {player:?}");
+                let tr = world.trace_box(player.origin, player.origin, STAND_MINS, STAND_MAXS, contents::MASK_PLAYERSOLID);
+                assert!(!tr.start_solid && !tr.all_solid, "{rate}Hz y={y}: {tr:?}");
+            }
+            assert!(player.origin.z > 256., "{rate}Hz y={y}: {player:?}");
+            // The seam remains a real player solid; only attachment changed.
+            let tr = world.trace_box(Vec3::new(-32., y, 130.), Vec3::new(32., y, 130.), Vec3::ZERO, Vec3::ZERO, contents::MASK_PLAYERSOLID);
+            assert!(tr.hit() && tr.contents & contents::PLAYERCLIP != 0);
+        }
+    }
+}
+
+#[test]
+fn a_wall_in_front_of_a_ladder_still_blocks_attachment_at_clearance() {
+    for thickness in [collision::DIST_EPSILON, 0.25, 1.] {
+        let mut world = world();
+        world.add_convex(box_shape(Vec3::new(-thickness, -24., 0.), Vec3::new(0., 24., 256.), contents::PLAYERCLIP));
+        world.finalize();
+        let mut origin = at(32.).origin;
+        origin.x -= thickness;
+        assert_eq!(world.ladder_normal(origin, STAND_MINS, STAND_MAXS), None, "wall thickness {thickness}");
+    }
+}

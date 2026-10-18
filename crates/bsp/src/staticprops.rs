@@ -5,8 +5,8 @@
 //! record per prop. The record size grows with the lump version, so the
 //! stride is derived from the remaining byte count and only the leading
 //! fields shared by every version are decoded (plus uniform scale when the
-//! record is large enough to carry it). Diffuse modulation is exposed only
-//! for the exact version/stride pairs observed in CS:GO Legacy maps.
+//! record is large enough to carry it). Lighting origin and diffuse modulation
+//! are exposed only for exact version/stride pairs observed in CS:GO Legacy.
 
 use crate::lump::{self, Rec};
 use glam::Vec3;
@@ -26,6 +26,11 @@ pub struct StaticProp {
     pub fade_min: f32,
     pub fade_max: f32,
     pub scale: f32,
+    /// Authored lighting sample in world-space Source axes (record offset 44).
+    /// Only observed layouts and finite points are decoded. The receiver must
+    /// also check USE_LIGHTING_ORIGIN (0x02); this is not a model-local offset.
+    /// Public metadata: <https://srctools.readthedocs.io/en/stable/modules/bsp.html#srctools.bsp.StaticProp.lighting>.
+    pub lighting_origin: Option<Vec3>,
     /// Authored RGBA bytes, without inferring a transfer function. Unsupported
     /// record layouts retain `None` rather than guessing from their length.
     pub diffuse_modulation: Option<[u8; 4]>,
@@ -102,7 +107,7 @@ fn parse_sprp(d: &[u8], version: u16) -> io::Result<StaticProps> {
         if stride < 60 {
             return Err(invalid(format!("sprp record too small ({stride} bytes)")));
         }
-        let has_modulation =
+        let observed_layout =
             rest.len() % n == 0 && matches!((version, stride), (10, 76) | (11, 80));
         for chunk in rest.chunks_exact(stride).take(n) {
             let r = Rec(chunk);
@@ -120,7 +125,8 @@ fn parse_sprp(d: &[u8], version: u16) -> io::Result<StaticProps> {
                 } else {
                     1.0
                 },
-                diffuse_modulation: has_modulation.then(|| chunk[64..68].try_into().unwrap()),
+                lighting_origin: observed_layout.then(|| r.vec3(44)).filter(|v| v.is_finite()),
+                diffuse_modulation: observed_layout.then(|| chunk[64..68].try_into().unwrap()),
             });
         }
     }
@@ -134,6 +140,7 @@ fn parse_sprp(d: &[u8], version: u16) -> io::Result<StaticProps> {
 #[cfg(test)]
 mod tests {
     use super::parse_sprp;
+    use glam::Vec3;
 
     // Synthetic records contain no game data. The dictionary/leaf arrays are
     // empty so that the records begin immediately after the three counts.
@@ -161,11 +168,35 @@ mod tests {
     }
 
     #[test]
-    fn unobserved_or_ambiguous_layouts_do_not_invent_a_tint() {
+    fn observed_layouts_decode_world_lighting_origin_without_inferring_its_flag() {
+        for (version, stride) in [(10, 76), (11, 80)] {
+            let mut record = vec![0; stride];
+            for (at, value) in [(0, 1000.0f32), (12, 90.0), (44, -32.0), (48, 64.0), (52, 7.0)] {
+                record[at..at + 4].copy_from_slice(&value.to_le_bytes());
+            }
+            for flags in [0, 2, 3, 16] {
+                record[31] = flags;
+                let parsed = parse_sprp(&fixture(&[record.clone()]), version).unwrap();
+                assert_eq!(parsed.props[0].lighting_origin, Some(Vec3::new(-32.0, 64.0, 7.0)));
+                assert_eq!(parsed.props[0].flags, flags);
+            }
+            for at in [44, 48, 52] {
+                for invalid in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+                    let mut bad = record.clone();
+                    bad[at..at + 4].copy_from_slice(&invalid.to_le_bytes());
+                    assert_eq!(parse_sprp(&fixture(&[bad]), version).unwrap().props[0].lighting_origin, None);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn unobserved_or_ambiguous_layouts_do_not_invent_lighting_inputs() {
         for (version, stride) in [(9, 72), (10, 80), (11, 76), (12, 80)] {
             let record = vec![255; stride];
             let props = parse_sprp(&fixture(&[record]), version).unwrap();
             assert_eq!(props.props[0].diffuse_modulation, None);
+            assert_eq!(props.props[0].lighting_origin, None);
         }
         let mut ambiguous = fixture(&[vec![255; 76], vec![255; 76]]);
         ambiguous.push(0);
@@ -174,5 +205,6 @@ mod tests {
             .props
             .iter()
             .all(|prop| prop.diffuse_modulation.is_none()));
+        assert!(props.props.iter().all(|prop| prop.lighting_origin.is_none()));
     }
 }

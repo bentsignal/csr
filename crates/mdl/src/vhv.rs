@@ -2,8 +2,8 @@
 //!
 //! The observed header is 40 bytes followed by 28-byte mesh descriptors.
 //! Dust2 stores opaque 12-byte records. No color, directional basis, transfer
-//! function or payload-to-vertex ordering is inferred here. This is an additive
-//! data seam; the renderer does not consume it.
+//! function or payload-to-vertex ordering is inferred here. The renderer's
+//! restricted interpretation lives outside this metadata module.
 
 use crate::{HardwareMesh, Model};
 use content::{ContentId, ContentKind};
@@ -205,17 +205,53 @@ impl<'a> ScopedFile<'a> {
         expected: &InstanceKey,
         model: &'m Model,
     ) -> io::Result<Candidate<'s, 'm, 'a>> {
+        self.candidate_spans(expected, model, &self.file.meshes)
+    }
+
+    /// Select LOD0 from the observed two-LOD layout: one complete LOD0 block
+    /// followed by one LOD1 span per LOD0 mesh. Single-LOD files retain the
+    /// strict `candidate` contract. Reject other layouts instead of filtering
+    /// arbitrary LOD values, reordering descriptors or guessing mesh indices.
+    ///
+    /// Parsing has already validated ALL payloads, totals, overlaps and bounds.
+    /// LOD1 remains opaque and is not bound to this LOD0-only model. Neither its
+    /// hardware correspondence nor individual LOD0 record order is proven here.
+    pub fn candidate_lod0<'s, 'm>(
+        &'s self,
+        expected: &InstanceKey,
+        model: &'m Model,
+    ) -> io::Result<Candidate<'s, 'm, 'a>> {
+        let count = model.meshes.len();
+        if self.file.meshes.len() == count {
+            return self.candidate(expected, model);
+        }
+        if count == 0 || count.checked_mul(2) != Some(self.file.meshes.len()) {
+            return Err(invalid("unsupported VHV LOD block counts"));
+        }
+        let (lod0, lod1) = self.file.meshes.split_at(count);
+        if lod1.iter().any(|span| span.lod != 1 || span.vertex_count == 0) {
+            return Err(invalid("unsupported VHV LOD1 block"));
+        }
+        self.candidate_spans(expected, model, lod0)
+    }
+
+    fn candidate_spans<'s, 'm>(
+        &'s self,
+        expected: &InstanceKey,
+        model: &'m Model,
+        spans: &'s [MeshSpan<'a>],
+    ) -> io::Result<Candidate<'s, 'm, 'a>> {
         if &self.instance != expected {
             return Err(invalid("VHV map/instance scope differs"));
         }
         if self.file.checksum != model.checksum {
             return Err(invalid("VHV model checksum differs"));
         }
-        if self.file.meshes.len() != model.meshes.len() {
+        if spans.len() != model.meshes.len() {
             return Err(invalid("VHV/model mesh count differs"));
         }
         let mut previous: Option<HardwareMesh> = None;
-        for (span, mesh) in self.file.meshes.iter().zip(&model.meshes) {
+        for (span, mesh) in spans.iter().zip(&model.meshes) {
             let identity = mesh
                 .hardware
                 .ok_or_else(|| invalid("model mesh has no hardware identity"))?;
@@ -235,22 +271,25 @@ impl<'a> ScopedFile<'a> {
         Ok(Candidate {
             scoped: self,
             model,
+            spans,
         })
     }
 }
 
 /// A checked correspondence candidate, never decoded colors or proof of
-/// individual record-to-vertex order. No renderer consumes this structure.
+/// individual record-to-vertex order. Contains only the explicitly selected
+/// spans; the complete parsed file remains accessible on `ScopedFile`.
 pub struct Candidate<'s, 'm, 'a> {
     scoped: &'s ScopedFile<'a>,
     model: &'m Model,
+    spans: &'s [MeshSpan<'a>],
 }
 impl<'s, 'm, 'a> Candidate<'s, 'm, 'a> {
     pub fn instance(&self) -> &InstanceKey {
         self.scoped.instance()
     }
     pub fn matching_spans(&self) -> impl ExactSizeIterator<Item = (&MeshSpan<'a>, &crate::Mesh)> {
-        self.scoped.file.meshes.iter().zip(self.model.meshes.iter())
+        self.spans.iter().zip(self.model.meshes.iter())
     }
 }
 

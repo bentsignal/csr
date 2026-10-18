@@ -102,7 +102,7 @@ pub(crate) fn read_sets(r: &R<'_>, version: i32, bones: usize) -> io::Result<Vec
     if sets == 0 {
         return Ok(Vec::new());
     }
-    if !matches!(version, 44 | 48 | 49) {
+    if !matches!(version, 44 | 45 | 48 | 49) {
         return Err(invalid(format!("unsupported MDL v{version} hitbox layout")));
     }
     let base = usize::try_from(r.i32(176)?).map_err(|_| invalid("negative hitbox set offset"))?;
@@ -121,11 +121,12 @@ pub(crate) fn read_sets(r: &R<'_>, version: i32, bones: usize) -> io::Result<Vec
         let mut hitboxes = Vec::with_capacity(n);
         for index in 0..n {
             let at = first + index * HITBOX_STRIDE;
-            // The installed v44 static props use this 68-byte AABB layout
-            // with a file-relative name and zero reserved bytes. Do not infer
-            // a newer rotation/capsule extension for other v44 records.
-            if version == 44 && r.0[at + 36..at + HITBOX_STRIDE].iter().any(|&v| v != 0) {
-                return Err(invalid("unsupported MDL v44 hitbox reserved data"));
+            // Legacy v44 props and the v45 props embedded in classic Cache
+            // have 68-byte AABBs with zero reserved bytes. V45 names are
+            // record-relative, unlike the observed file-relative v44 names.
+            // Do not reinterpret reserved data as a newer capsule extension.
+            if matches!(version, 44 | 45) && r.0[at + 36..at + HITBOX_STRIDE].iter().any(|&v| v != 0) {
+                return Err(invalid(format!("unsupported MDL v{version} hitbox reserved data")));
             }
             let bone = r.i32(at)?;
             if bone < 0 || bone as usize >= bones {
@@ -568,8 +569,38 @@ mod tests {
         let mut unterminated = data.clone();
         unterminated[290..].fill(b'x');
         assert!(read_sets(&R(&unterminated), 44, 1).is_err());
-        for version in [43, 45, 46, 47, 50] {
+        for version in [43, 46, 47, 50] {
             assert!(read_sets(&R(&data), version, 1).is_err());
+        }
+    }
+
+    #[test]
+    fn v45_aabbs_use_record_relative_names_and_reject_unknown_extensions() {
+        // Synthetic layout matching the historical static-prop records, with
+        // a nonempty name to distinguish relative from absolute addressing.
+        let mut data = vec![0; 300];
+        put_i32(&mut data, 172, 1);
+        put_i32(&mut data, 176, 180);
+        put_i32(&mut data, 180, 100);
+        put_i32(&mut data, 184, 1);
+        put_i32(&mut data, 188, 12);
+        put_i32(&mut data, 196, 7);
+        for (at, value) in [(200, -8.0), (204, -8.0), (212, 8.0), (216, 8.0), (220, 43.0)] {
+            put_f32(&mut data, at, value);
+        }
+        put_i32(&mut data, 224, 98);
+        data[280..284].copy_from_slice(b"set\0");
+        data[290..294].copy_from_slice(b"box\0");
+        let sets = read_sets(&R(&data), 45, 1).unwrap();
+        let hitbox = &sets[0].hitboxes[0];
+        assert_eq!(sets[0].name, "set");
+        assert_eq!(hitbox.name, "box");
+        assert_eq!((hitbox.bone, hitbox.group, hitbox.radius, hitbox.rotation), (0, 7, -1.0, Vec3::ZERO));
+        assert_eq!((hitbox.min, hitbox.max), (Vec3::new(-8.0, -8.0, 0.0), Vec3::new(8.0, 8.0, 43.0)));
+        for (at, value) in [(192, 1), (224, i32::MAX), (228, 1), (212, (-10.0f32).to_bits() as i32)] {
+            let mut malformed = data.clone();
+            put_i32(&mut malformed, at, value);
+            assert!(read_sets(&R(&malformed), 45, 1).is_err(), "accepted mutation at {at}");
         }
     }
 

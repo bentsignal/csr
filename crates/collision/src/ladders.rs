@@ -38,7 +38,12 @@ impl CollisionWorld {
             // Exclude only this static ladder brush, retaining floors, other
             // walls and the outer world's current door poses.
             let excluded = index..index + 1;
-            let contact = origin - normal * (gap.max(0.0) + DIST_EPSILON);
+            // Stop at the ordinary hull clearance, not inside the face.
+            // Authored clip can share the ladder plane along its sides or
+            // between segments. Penetrating that plane would falsely make
+            // this flush clip an obstruction (especially on narrow ladders).
+            // A solid in front of the face still stops this sweep earlier.
+            let contact = origin - normal * (gap - DIST_EPSILON).max(0.0);
             let obstruction = self.trace_box_excluding(origin, contact, mins, maxs,
                 contents::MASK_PLAYERSOLID, Some(&excluded));
             // Adjacent authored ladder segments can overlap the same player

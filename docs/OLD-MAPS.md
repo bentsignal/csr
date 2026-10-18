@@ -1,12 +1,17 @@
 # Classic map archives
 
-`csr maps` lists the installed maps and fourteen pinned CS:GO compatibility
+`csr maps` lists the installed maps and sixteen pinned CS:GO compatibility
 snapshots published by Valve. `csr fetch-map <name|all>` prefetches archives;
 `csr remove-map <name|all>` removes their local copies. Loading a snapshot
 with `probe`, `sim` or `play` fetches it automatically. These commands support
-development and fidelity checks. The classic map picker also offers
-**Dust II (2017)**, the pinned pre-rework archive, as an experimental map.
-Other archives remain hidden pending their gameplay/dependency work.
+development and fidelity checks. The original map picker offers the admitted
+archives: **Dust II (2017), Inferno (2016), Nuke (2016), Train (2015),
+Vertigo (2017), Mirage (2019), Cobblestone (2018), and Cache (2015)**. Each uses its own
+archive identity and title beside any installed version. Archive years describe
+compatibility snapshots, not a promise of exact 2015 geometry or materials.
+Cache (2019), Overpass (2015) and Overpass (2019) remain hidden pending their
+unresolved model dependencies; the other, later snapshots remain development
+selections. The newer snapshots keep their own names and pins.
 
 Choose Dust II (2017) in the original map picker and press GO. The existing
 loading screen reports contacting Steam, download percentage, verification
@@ -72,12 +77,70 @@ captures before making that claim. Train's rebuild was
 | `de_dust2_2019` | 1773333823 | 1.37.0.1 |
 | `de_inferno_2020` | 2054468706 | 1.37.4.6 |
 | `de_nuke_2019` | 1885085042 | 1.37.1.8 |
+| `de_cache_2015` | 539273673 | 1.35.0.7, October 21, 2015 |
 | `de_cache_2019` | 1891729882 | 1.37.1.9 |
 | `de_train_2020` | 2126172171 | 1.37.5.5 |
 | `de_mirage_2019` | 1935967249 | 1.37.3.2 |
+| `de_overpass_2015` | 534663598 | 1.35.0.6, October 13, 2015 |
 | `de_overpass_2019` | 1821117172 | 1.37.0.7 |
 | `de_cbble_2018` | 1542127528 | 1.36.5.6 |
 | `de_canals_2018` | 1534022416 | 1.36.5.5 |
+
+### Authentic October 2015 pair
+
+Valve's original [Cache upload](https://steamcommunity.com/sharedfiles/filedetails/?id=539273673)
+and [Overpass upload](https://steamcommunity.com/sharedfiles/filedetails/?id=534663598)
+were privately acquired and verified on October 18. Both item records identify
+creator `76561198082857351`, creator/consumer app 730, and original
+`mymaps/de_cache.bsp` / `mymaps/de_overpass.bsp` filenames. These are CS:GO BSP
+compatibility uploads, not CS2 Workshop VPKs. Whole ZIP size/SHA-1 and BSP member
+CRC were checked by the acquiring parent. The catalog pins are:
+
+| Archive | ZIP bytes | ZIP SHA-1 |
+|---|---:|---|
+| `de_cache_2015` | 48,679,788 | `e487d7bea8dbd4a62967026cbb855c1c0df9f956` |
+| `de_overpass_2015` | 14,667,547 | `3f819cd7ad38d6966c11e9963b4f879d99c7ffe6` |
+
+Focused read-only inspection of these two BSPs found:
+
+| Archive | BSP bytes | Pak bytes | Embedded NAV header | Finite T / CT spawns | Dependency result |
+|---|---:|---:|---|---|---|
+| `de_cache_2015` | 86,355,628 | 69,552,432 | v16/subversion 1; 1,197 declared areas | 16 / 16 | No missing inspected model files or world/prop VMT paths |
+| `de_overpass_2015` | 32,716,108 | 14,462,688 | v16/subversion 1; 1,763 declared areas | 20 / 16 | `models/props_urban/gates001` remains unavailable |
+
+Cache 2015 does not reference `models/de_cache/midfloor3.mdl`; its different
+authored map is not a repair of Cache 2019's `darkmetal3` dependency. Inspection
+covered the two maps' static props and entity-referenced model files, authored
+cdmaterials, skin families and mesh material slots. This establishes path
+availability, not successful Rust model parsing, VMT interpretation, texture
+decode, navigation parsing, traversal, rendering or gameplay fidelity.
+
+Overpass 2015 still places nineteen skin-zero instances of the installed Legacy
+`models/props_urban/park_fence_128.mdl`. That MDL49 model declares only
+`models\\props_urban\\`, texture `gates001`, skin family `[0]`, and no VTX material
+replacement. Neither `materials/models/props_urban/gates001.vmt` nor
+`materials/gates001.vmt` exists in this BSP or the inspected Legacy mount. Its
+authored `dev/dev_waterbeneath2` VMT also references an unavailable
+`nature/water_frame01_dudv` bump texture; this is additional source evidence,
+not a claim that the current renderer consumes that parameter. No alias,
+invented material or cross-map archive mount is supplied.
+
+Both new loading-art pins verify the entire BSP's size and SHA-256 first.
+Only the exact Cache 2015 pin permits its observed 69,552,432-byte pak instead
+of the ordinary 64 MiB budget. ZIP expansion, entry limits and bounded decoding
+remain in force. Loading radar reads are capped at the decoder's existing
+32 MiB input budget. Cache embeds a 1024-square RGB24 spectate DDS, unsupported
+by the current decoder, and a DXT5 ordinary radar. The loader tries the same
+verified BSP's ordinary radar when the spectate image cannot decode. Overpass
+only embeds a 1024-square DXT1 ordinary radar. Both installed base collection
+icons exist. Art pins are available for both snapshots independently of normal
+picker admission; Overpass remains a development selection.
+
+The pair's authentic 2015 archive identity does not establish rewritten-game
+parity. Cache 2015 passed the current Release probe, simulation and archived
+loading-image decode. Final rendered ten-player admission and staging remain
+separate from these data and simulation checks. Overpass retains the dependency
+failure and is not admitted to the picker.
 
 ## Verification and remaining work
 
@@ -137,18 +200,54 @@ of visual parity. Material/lighting and sky fidelity remain Track D work.
 Local logs, CSV results and captures are under
 `%USERPROFILE%\csr-fidelity\workshop-review`, outside the repository.
 
-The Dust II menu pilot uses the existing Track C loading worker and original
-Scaleform card/loading surface. Other archive menu integration still needs
-dependency resolution and matched reference captures. The archive year does
-not establish 2015 parity; the existing material and lighting gaps remain.
+The admitted archives use the existing loading worker and original Scaleform
+card/loading surface. Historical groups remain selectable in implemented modes
+even when Legacy retired the installed base from a mode (notably Cobblestone
+competitive). A match load requires five declared, finite team spawn positions
+per side and usable archived navigation when bots are requested. This checks
+metadata capability, not traversal or ten-player runtime performance.
+
+Loading images are size/SHA-256 bound to the privately inspected archive BSPs.
+Mirage, Vertigo and Cobblestone only embed ordinary radars; these are used when
+the same archive has no spectate radar. Loading and HUD radar lookup never
+substitute the installed remake's overview. All eight offered archive loading images decoded successfully in the current
+installed-data fixture. This is not a rendered menu verification.
+
+Read-only inspection on October 18 found that the new probe's `EmptyTopology`
+records in Cache, Mirage, Overpass and Cobblestone have exactly retraced
+boundaries: each directed edge has its reverse and every compiled triangle has
+zero area. Some retraced paths bend slightly, so collinearity/area thresholds
+would be inappropriate. These records now have the distinct
+`RetracedBoundary` result and remain individually visible in probe output with
+a separate count. Malformed indices, unsupported topology and empty compiled
+topology on an actual enclosed polygon remain failures. No substitute triangle
+fan is introduced; rendering retains no triangles for these records. The
+focused synthetic regression and current-data probes passed in this increment.
+
+Cache's three MDL45 parser rejections in the October 18 baseline are separate
+from its missing `darkmetal3` material. Overpass still lacks `gates001`; neither
+exact material path exists in the mounted Legacy pak01 or any of the fourteen
+private archive pakfiles inspected. No alias or invented dependency is supplied.
+
+Valve's [Cache compatibility upload](https://steamcommunity.com/sharedfiles/filedetails/?id=1891729882)
+on October 17, 2019 predates the [replacement Cache release](https://blog.counter-strike.net/2019/10/25894/)
+on October 18. This supports calling it pre-remake Cache; it does not prove
+exact 2015 parity. The [Cobblestone archive](https://steamcommunity.com/sharedfiles/filedetails/?id=1542127528)
+was posted October 18, 2018, before the [October 23 layout update](https://blog.counter-strike.net/uk/2018/10/21959/).
+That supports its selection over current Legacy Cobble, with the same historical
+qualification. Train (2015) is an actual October 2015 snapshot after the 2014
+rebuild; the other pre-rework archives and later Mirage/Overpass snapshots still
+require intervening-version comparison for exact 2015 claims.
+
+The archive year does not establish 2015 parity; material and lighting gaps remain.
 Content packs remain separate Track E work; this archive loader does not
 complete `.csrpack`, file associations, drag-and-drop or server-driven downloads.
 
 The 2026-10-14 menu pilot was rendered through the original pointer controls,
 both with a cached BSP and with an initially empty private archive store.
 Both reached classic Dust II with its archived radar and bots; a ten-round
-simulation again reported zero failures. The current stricter geometry probe
-reports **10 failures**, rather than the historical one in the table above:
+simulation again reported zero failures. That run's stricter geometry probe
+reported **10 failures**, rather than the historical one in the table above:
 the known `greygrid` dependency plus nine `EmptyTopology` primitive faces
 (2034, 2379, 2380, 3224, 6073, 7702, 8061, 9028 and 11133). Inspection of
 their stored indices and vertices found every explicit triangle has zero
@@ -156,3 +255,18 @@ area through repeated positions. The renderer does not invent replacement
 fans, and the probe remains strict. LoadingScreen also requests four
 `undefined` map-art resources; these remain a presentation gap even though
 the match loads successfully. These checks do not establish visual parity.
+
+
+### October 18 playability increment
+
+Release source 4086d67 passed simulations for all eight offered classics,
+including Cobblestone after the stationary-axis floor-snap correction. Seven
+archive probes passed; old Dust retains its documented greygrid failure. Shared
+ladder and linked-breakable corrections have installed/private-classic route
+fixtures at 64 and 128 Hz. Final source validation is recorded with the PR.
+
+The installed Overpass also lacks gates001. Its separate competitive spawn
+failure selected an explicitly disabled Guardian spawn; the loader now excludes
+`enabled=0` team spawns rather than enlarging buy zones. Historical Overpass is
+still withheld. Exact 2015 geometry/material parity and sustained performance
+across the entire catalog remain unproven.

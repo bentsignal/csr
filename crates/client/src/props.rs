@@ -96,27 +96,34 @@ fn supports_surface_lighting(flags: u8) -> bool {
     flags & !(0x01 | 0x10) == 0
 }
 
-/// Map ambient cube at the prop, plus the sun if its center ray reaches sky.
+/// Map ambient cube at the prop, plus the sun if its sample ray reaches sky.
 /// This one-sample fallback remains approximate for large/combined models.
 fn prop_light(
     bsp: &bsp::Bsp,
     collision: &mut collision::PropLightingQuery<'_>,
     sun: Option<Sun>,
     center: glam::Vec3,
-    origin: glam::Vec3,
+    prop: &bsp::StaticProp,
     prop_ordinal: usize,
 ) -> PropLight {
-    let cube = bsp
-        .ambient_cube(center + glam::Vec3::Z * 4.0)
-        .or_else(|| bsp.ambient_cube(origin + glam::Vec3::Z * 16.0))
+    // USE_LIGHTING_ORIGIN supplies a world-space point, not a local offset.
+    // Keep other unsupported receiver modes and unflagged props unchanged.
+    // An explicit point needs no guessed upward nudge: trim centers plus four
+    // units can fall inside a ceiling while their authored sample is in air.
+    let authored_origin = prop.lighting_origin.filter(|point|
+        prop.flags & 0x02 != 0 && prop.flags & !(0x01 | 0x02 | 0x10) == 0 && point.is_finite());
+    let sample = authored_origin.unwrap_or(center);
+    let cube = authored_origin.and_then(|point| bsp.ambient_cube(point))
+        .or_else(|| bsp.ambient_cube(center + glam::Vec3::Z * 4.0))
+        .or_else(|| bsp.ambient_cube(prop.origin + glam::Vec3::Z * 16.0))
         .unwrap_or([[0.3; 3]; 6])
         .map(glam::Vec3::from);
     match sun {
         Some(s) => {
             // Exclude this placed prop's own hulls instead of jumping beyond
             // its radius, which can skip intervening ceilings and walls.
-            let tr = collision.trace_prop_lighting_ray(center, center + s.to_sun * 16384.0, prop_ordinal);
-            // A center inside any remaining solid is not a valid sky sample,
+            let tr = collision.trace_prop_lighting_ray(sample, sample + s.to_sun * 16384.0, prop_ordinal);
+            // A point inside any remaining solid is not a valid sky sample,
             // even if the ray exits it and subsequently hits a sky brush.
             let lit = !tr.start_solid && !tr.all_solid && (!tr.hit() || collision.is_sky(tr.surface));
             PropLight {
@@ -323,7 +330,7 @@ pub fn spawn(
         let rot = mdl::angles_to_mat3(prop.angles);
         let scale = if prop.scale > 0.0 { prop.scale } else { 1.0 };
         let center = prop.origin + rot * ((model.hull_min + model.hull_max) * 0.5 * scale);
-        let light = prop_light(bsp, &mut lighting_query, sun, center, prop.origin, prop_index);
+        let light = prop_light(bsp, &mut lighting_query, sun, center, prop, prop_index);
         // Exact geometric duplicates at UV/material seams share the query.
         // No spatial quantization: neighboring vertices can straddle a shadow
         // or leaf boundary. The cache dies with this placed instance, so another
@@ -511,7 +518,7 @@ mod lighting_tests {
         let prop = bsp::StaticProp {
             origin: SourceVec3::ZERO, angles: SourceVec3::ZERO, model: 0,
             solid: 6, flags: 0, skin: 0, fade_min: 0.0, fade_max: 0.0,
-            scale: 1.0, diffuse_modulation: None,
+            scale: 1.0, lighting_origin: None, diffuse_modulation: None,
         };
         let mut map = bsp::Bsp::default();
         map.static_props.models.push("synthetic_long_prop".into());
@@ -561,7 +568,86 @@ mod lighting_tests {
     }
 
     fn fallback(map: &bsp::Bsp, w: &CollisionWorld) -> PropLight {
-        prop_light(map, &mut w.prepare_prop_lighting(), Some(SUN), SourceVec3::ZERO, SourceVec3::ZERO, 0)
+        prop_light(map, &mut w.prepare_prop_lighting(), Some(SUN), SourceVec3::ZERO, &map.static_props.props[0], 0)
+    }
+
+    #[test]
+    fn decoded_lighting_origin_binds_flag_world_point_normal_and_sun_ray() {
+        let (mut map, mut w) = fixture(false);
+        // A synthetic sprp v11 record, with distinct placement and lighting
+        // points. Decode through the same public parser as a loaded map.
+        let mut bytes = vec![0u8; 12 + 80];
+        bytes[8..12].copy_from_slice(&1u32.to_le_bytes());
+        for (offset, value) in [
+            (0, 80.0f32), (4, -64.0), (16, 90.0),
+            (44, -80.0), (48, 64.0), (52, 1.0), (76, 3.0),
+        ] {
+            bytes[12 + offset..16 + offset].copy_from_slice(&value.to_le_bytes());
+        }
+        let mut directory = vec![0u8; 20];
+        directory[..4].copy_from_slice(&1u32.to_le_bytes());
+        directory[4..8].copy_from_slice(&i32::from_be_bytes(*b"sprp").to_le_bytes());
+        directory[10..12].copy_from_slice(&11u16.to_le_bytes());
+        directory[16..20].copy_from_slice(&(bytes.len() as u32).to_le_bytes());
+        let mut prop = bsp::staticprops::parse(&bytes, &directory).unwrap().props.remove(0);
+        let authored = SourceVec3::new(-80.0, 64.0, 1.0);
+        assert_eq!(prop.lighting_origin, Some(authored));
+
+        // A four-unit nudge, a model transform, or a Bevy-axis conversion
+        // sends the authored point into a different leaf. Cube faces differ
+        // too, so evaluating a model-local/Bevy normal cannot accidentally pass.
+        map.planes = vec![
+            bsp::Plane { normal: SourceVec3::Z, dist: 2.0, kind: 2 },
+            bsp::Plane { normal: SourceVec3::Y, dist: 32.0, kind: 1 },
+            bsp::Plane { normal: SourceVec3::X, dist: 0.0, kind: 0 },
+        ];
+        let node = |plane, children| bsp::Node {
+            plane, children, mins: [-256; 3], maxs: [256; 3], first_face: 0, num_faces: 0,
+        };
+        map.nodes = vec![node(0, [-1, 1]), node(1, [2, -1]), node(2, [-1, -2])];
+        let leaf = bsp::Leaf {
+            contents: 0, cluster: 0, area: 0, mins: [-256; 3], maxs: [256; 3],
+            first_leaf_face: 0, num_leaf_faces: 0, first_leaf_brush: 0, num_leaf_brushes: 0,
+        };
+        map.leafs = vec![leaf, leaf];
+        map.leaf_ambient_index = vec![(1, 0), (1, 1)];
+        let warm: [[f32; 3]; 6] = std::array::from_fn(|i| [0.01 * (i + 1) as f32, 0.005, 0.002]);
+        map.leaf_ambient = vec![
+            bsp::AmbientSample { cube: [[0.3; 3]; 6], pos: [128; 3] },
+            bsp::AmbientSample { cube: warm, pos: [128; 3] },
+        ];
+        add_world_bounds(&mut w, SourceVec3::new(-256.0, -256.0, 33.0),
+            SourceVec3::new(-32.0, 256.0, 44.0), "authored_point_roof");
+        w.finalize();
+        let center = SourceVec3::new(80.0, 0.0, 0.0);
+        let normal = mdl::angles_to_mat3(prop.angles) * SourceVec3::X;
+        for flags in [2, 3, 18, 19] {
+            prop.flags = flags;
+            let light = prop_light(&map, &mut w.prepare_prop_lighting(), Some(SUN), center, &prop, 0);
+            assert_eq!(light.sun, SourceVec3::ZERO, "flags {flags}: ray must start at authored point");
+            assert!((light.eval(normal) - SourceVec3::from(warm[2])).abs().max_element() < 1e-6);
+            assert!(!supports_surface_lighting(flags), "authored point must survive the surface gate");
+        }
+        for flags in [0, 1, 16, 17, 0xff] {
+            prop.flags = flags;
+            let light = prop_light(&map, &mut w.prepare_prop_lighting(), Some(SUN), center, &prop, 0);
+            assert_eq!(light.sun, SUN.color, "flags {flags}: preserve center ray");
+            assert!((light.cube[2] - SourceVec3::splat(0.3)).abs().max_element() < 1e-6);
+        }
+        // Missing layouts/non-finite points retain the existing fallback. A
+        // valid authored point with no cube may borrow its old ambient cube,
+        // but still uses the authored Sun ray.
+        prop.flags = 3;
+        for missing in [None, Some(SourceVec3::splat(f32::NAN))] {
+            prop.lighting_origin = missing;
+            let light = prop_light(&map, &mut w.prepare_prop_lighting(), Some(SUN), center, &prop, 0);
+            assert_eq!(light.sun, SUN.color);
+        }
+        prop.lighting_origin = Some(authored);
+        map.leaf_ambient_index[1] = (0, 0);
+        let light = prop_light(&map, &mut w.prepare_prop_lighting(), Some(SUN), center, &prop, 0);
+        assert_eq!(light.sun, SourceVec3::ZERO);
+        assert!((light.cube[2] - SourceVec3::splat(0.3)).abs().max_element() < 1e-6);
     }
 
     #[test]

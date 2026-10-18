@@ -1,8 +1,8 @@
 //! Installed maps and experimental archives from Valve's Workshop snapshots
 //! (`workshop` crate), listed by `csr maps`. Archives load with
 //! [`crate::Level::load`], which fetches them on first use. The match menu
-//! explicitly offers the pre-rework Dust II and Inferno archives; other archives remain
-//! development/fidelity selections until their dependencies are validated.
+//! offers the admitted classic archives in [`workshop::OldMap::menu_supported`];
+//! other archives remain development/fidelity selections.
 
 use std::path::Path;
 
@@ -49,6 +49,26 @@ pub fn title(name: &str) -> String {
 /// The original map a name is a version of (`de_dust2_2017` → `de_dust2`).
 pub fn base(name: &str) -> &str {
     workshop::find(name).map(|m| m.base).unwrap_or(name)
+}
+
+/// Admission for an archived offline/host match after its own metadata loads.
+/// This does not synthesize navigation or borrow the modern map's spawns.
+pub fn validate_archive_match(level: &crate::Level, bots: u32) -> Result<(), String> {
+    let Some(archive) = workshop::find(&level.name) else { return Ok(()); };
+    if level.id != archive.content_id() { return Ok(()); }
+    if bots > 0 && level.nav.as_ref().is_none_or(|nav| nav.areas.is_empty()) {
+        return Err(format!("{} has no usable archived bot navigation. Return to the map picker and choose another map.", archive.title));
+    }
+    for class in ["info_player_terrorist", "info_player_counterterrorist"] {
+        let count = level.bsp.entities_of_class(class)
+            .filter_map(|entity| entity.str("origin").and_then(bsp::parse_origin))
+            .filter(|origin| origin.is_finite())
+            .count();
+        if count < 5 {
+            return Err(format!("{} does not have the team spawns needed for a ten-player match. Return to the map picker and choose another map.", archive.title));
+        }
+    }
+    Ok(())
 }
 
 /// Every playable map, sorted by name so old versions sit next to the
@@ -141,6 +161,44 @@ pub(crate) fn local_source(entry: &MapEntry, fs: &vfs::Vfs, store: &workshop::St
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn archived_fixture(t_spawns: usize, ct_spawns: usize) -> crate::Level {
+        use std::{collections::BTreeMap, sync::Arc};
+        let archive = workshop::find("de_train_2015").unwrap();
+        let mut entities = String::new();
+        for (class, count) in [("info_player_terrorist", t_spawns), ("info_player_counterterrorist", ct_spawns)] {
+            for index in 0..count {
+                entities.push_str(&format!("{{\"classname\" \"{class}\" \"origin\" \"{} 0 0\"}}\n", index * 64));
+            }
+        }
+        let mut bytes = vec![0; 8 + 64 * 16 + 4];
+        bytes[..4].copy_from_slice(b"VBSP");
+        bytes[4..8].copy_from_slice(&21i32.to_le_bytes());
+        let offset = bytes.len() as i32;
+        bytes[8..12].copy_from_slice(&offset.to_le_bytes());
+        bytes[12..16].copy_from_slice(&(entities.len() as i32).to_le_bytes());
+        bytes.extend_from_slice(entities.as_bytes());
+        let mut fs = vfs::Vfs::new();
+        fs.push_front("fixture", vfs::Mount::Memory(BTreeMap::from([
+            (format!("maps/{}.bsp", archive.name), Arc::<[u8]>::from(bytes)),
+        ])));
+        crate::Level::load_from_vfs(archive.content_id(), archive.name, "no-install".into(), fs).unwrap()
+    }
+
+    #[test]
+    fn archived_match_rejects_missing_navigation_and_incomplete_teams() {
+        let mut level = archived_fixture(5, 5);
+        assert!(validate_archive_match(&level, 0).is_ok());
+        assert!(validate_archive_match(&level, 9).unwrap_err().contains("navigation"));
+        let area = nav::Area {
+            id: 1, flags: 0, nw: glam::Vec3::ZERO, se: glam::Vec3::splat(64.),
+            ne_z: 0., sw_z: 0., connections: Default::default(), place: 0, hiding_spots: Vec::new(),
+        };
+        level.nav = Some(std::sync::Arc::new(nav::NavMesh::from_areas(vec![area])));
+        assert!(validate_archive_match(&level, 9).is_ok());
+        let incomplete = archived_fixture(5, 4);
+        assert!(validate_archive_match(&incomplete, 0).unwrap_err().contains("team spawns"));
+    }
 
     #[test]
     fn lists_installed_and_old_maps_together() {

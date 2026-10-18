@@ -350,6 +350,12 @@ impl Level {
             .map(|bytes| kv::decode_text(&bytes))
     }
 
+    /// Radar bytes share the overview/NAV source boundary. An archive's missing
+    /// radar must not be replaced by the installed remake with the same base.
+    pub fn radar(&self, material: &str) -> Option<Vec<u8>> {
+        radar_resource(&self.vfs, &self.id, &self.name, material, self.metadata_pack.as_deref())
+    }
+
     /// A config file from the game's `cfg/` folder, e.g.
     /// `gamemode_competitive.cfg`.
     pub fn cfg(&self, name: &str) -> Option<String> {
@@ -367,6 +373,17 @@ fn scoped_map_resource(fs: &vfs::Vfs, id: &ContentId, name: &str, folder: &str, 
     }
 }
 
+fn radar_resource(fs: &vfs::Vfs, id: &ContentId, name: &str, material: &str, pack: Option<&str>) -> Option<Vec<u8>> {
+    let old = (pack.is_none() && id.origin == GameOrigin::Csgo).then(|| workshop::find(name)).flatten();
+    let base = old.map_or(name, |archive| archive.base);
+    let paths = [format!("resource/overviews/{base}_radar.dds"), format!("resource/{material}_radar.dds")];
+    paths.iter().find_map(|path| match (old, pack) {
+        (Some(_), _) => fs.read_from("map", path),
+        (_, Some(label)) => fs.read_from("map", path).or_else(|| fs.read_from(label, path)),
+        _ => fs.read(path),
+    })
+}
+
 /// Archived BSPs keep the original map name inside their pakfile. Resolve
 /// their metadata only there, never against the installed version's files.
 fn map_resource(fs: &vfs::Vfs, id: &ContentId, name: &str, folder: &str, extension: &str) -> Option<Vec<u8>> {
@@ -380,6 +397,27 @@ fn map_resource(fs: &vfs::Vfs, id: &ContentId, name: &str, folder: &str, extensi
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn archived_and_private_radars_never_fall_back_to_installed_or_other_pack_art() {
+        use std::collections::BTreeMap;
+        let mut fs = vfs::Vfs::new();
+        let files = |value: &'static [u8]| vfs::Mount::Memory(BTreeMap::from([
+            ("resource/overviews/de_nuke_radar.dds".into(), Arc::<[u8]>::from(value)),
+            ("resource/custom/radar_radar.dds".into(), Arc::<[u8]>::from(value)),
+        ]));
+        fs.push_back("install", files(b"modern"));
+        fs.push_front("pack:unrelated", files(b"unrelated"));
+        let archive = workshop::find("de_nuke_2016").unwrap();
+        assert!(radar_resource(&fs, &archive.content_id(), archive.name, "custom/radar", None).is_none());
+        let private = ContentId::new(GameOrigin::Mod, ContentKind::Map, "nuke");
+        assert!(radar_resource(&fs, &private, "de_nuke", "custom/radar", Some("pack:selected")).is_none());
+        fs.push_front("pack:selected", files(b"private"));
+        assert_eq!(radar_resource(&fs, &private, "de_nuke", "custom/radar", Some("pack:selected")).unwrap(), b"private");
+        fs.push_front("map", files(b"original"));
+        assert_eq!(radar_resource(&fs, &archive.content_id(), archive.name, "custom/radar", None).unwrap(), b"original");
+        assert_eq!(radar_resource(&fs, &private, "de_nuke", "custom/radar", Some("pack:selected")).unwrap(), b"original");
+    }
 
     #[test]
     fn asset_map_metadata_uses_selected_pack_and_never_installed_or_unrelated_data() {
@@ -447,3 +485,5 @@ mod tests {
 mod selection_tests;
 #[cfg(test)]
 mod apartment_route_tests;
+#[cfg(test)]
+mod traversal_route_tests;

@@ -24,6 +24,44 @@ pub fn sky_layer() -> RenderLayers {
 #[derive(Component)]
 pub struct SkyFace;
 
+/// One authored sky input. HDR half floats must bypass the RGBA8/sRGB path.
+pub struct SkyTexture {
+    pub name: String,
+    pub vtf: vtf::Vtf,
+    pub linear_hdr: bool,
+}
+
+/// Resolve only texture names declared by this face's material. Keep a working
+/// base (and the existing compressed-sky path) unchanged, but try the authored
+/// HDR input when the LDR file is absent, as in Legacy's vertigoBlue_hdr.
+/// Shared with the headless probe so a missing declared sky cannot pass silently.
+pub fn load_texture(fs: &vfs::Vfs, mat: &vmt::Material) -> Result<SkyTexture, String> {
+    let mut errors = Vec::new();
+    for (key, linear_hdr) in [("$basetexture", false), ("$hdrcompressedtexture", false), ("$hdrbasetexture", true)] {
+        let Some(name) = mat.str(key) else { continue };
+        let path = vmt::vtf_path(name);
+        let Some(bytes) = fs.read(&path) else {
+            errors.push(format!("missing {path}"));
+            continue;
+        };
+        match vtf::Vtf::parse(&bytes) {
+            Ok(vtf) => {
+                if linear_hdr && vtf.format != vtf::Format::Rgba16161616F {
+                    errors.push(format!("unsupported {key} format {:?}: {path}", vtf.format));
+                    continue;
+                }
+                if vtf.width == 0 || vtf.height == 0 || vtf.depth != 1 || vtf.faces != 1 {
+                    errors.push(format!("unsupported sky dimensions: {path}"));
+                    continue;
+                }
+                return Ok(SkyTexture { name: name.into(), vtf, linear_hdr });
+            }
+            Err(error) => errors.push(format!("bad {path}: {error}")),
+        }
+    }
+    Err(if errors.is_empty() { "no declared sky texture".into() } else { errors.join("; ") })
+}
+
 /// Original six sky textures surround the camera behind the 3D skybox.
 #[allow(clippy::too_many_arguments)]
 pub fn spawn_2d(commands: &mut Commands, level: &level::Level, meshes: &mut Assets<Mesh>, materials: &mut Assets<crate::material::WorldMaterial>, images: &mut Assets<Image>, textures: &mut crate::textures::TextureCache, shared: &crate::world_mesh::SharedHandles) {
@@ -32,8 +70,37 @@ pub fn spawn_2d(commands: &mut Commands, level: &level::Level, meshes: &mut Asse
     // (outward normal, texture right, texture down), all in Source axes.
     let x = glam::Vec3::X; let y = glam::Vec3::Y; let z = glam::Vec3::Z;
     for (suffix, normal, right, down) in [("rt",x,-y,-z),("bk",y,x,-z),("lf",-x,y,-z),("ft",-y,-x,-z),("up",z,x,y),("dn",-z,x,-y)] {
-        let Some(vmt) = vmt::Material::load(&format!("skybox/{name}{suffix}"), &|p| level.vfs.read_string(p)) else { continue };
-        let mut material = crate::world_mesh::material_from_vmt(Some(&vmt), &level.vfs, textures, images, shared, 1.0, false);
+        let face = format!("skybox/{name}{suffix}");
+        let Some(vmt) = vmt::Material::load(&face, &|p| level.vfs.read_string(p)) else {
+            warn!("missing sky material: {face}");
+            continue;
+        };
+        // The generic material translator selects a declared name before it
+        // tries loading it. Resolve the sky separately so a missing LDR name
+        // cannot mask an available authored HDR face or enter its missing cache.
+        let selected = load_texture(&level.vfs, &vmt);
+        let mut sky_vmt = vmt.clone();
+        sky_vmt.params.entries.retain(|(key, _)| !matches!(key.as_str(), "$basetexture" | "$hdrcompressedtexture" | "$hdrbasetexture"));
+        if let Ok(sky) = &selected {
+            if !sky.linear_hdr {
+                sky_vmt.params.set("$basetexture", kv::Value::Str(sky.name.clone()));
+            }
+        }
+        // Keep the existing authored tint/alpha translation. HDR has no base
+        // name here, avoiding even a temporary clamped RGBA8/sRGB upload.
+        let mut material = crate::world_mesh::material_from_vmt(Some(&sky_vmt), &level.vfs, textures, images, shared, 1.0, false);
+        match selected {
+            Ok(sky) if sky.linear_hdr => {
+                material.base = textures.upload_hdr_sky(&sky.vtf, images)
+                    .map_or_else(|| textures.missing.clone(), |info| info.handle);
+            }
+            Ok(_) => {}
+            Err(error) => {
+                material.base = textures.missing.clone();
+                textures.stats_missing += 1;
+                warn!("sky face {face} unavailable: {error}");
+            }
+        }
         material.params.flags = crate::material::flags::UNLIT;
         material.cull = false;
         let corners = [normal-right-down, normal+right-down, normal+right+down, normal-right+down];
@@ -64,10 +131,21 @@ pub fn sky_color(fs: &vfs::Vfs, bsp: &bsp::Bsp) -> Option<Color> {
     let name = bsp.worldspawn()?.str("skyname")?;
     let read = |p: &str| fs.read_string(p);
     let mat = vmt::Material::load(&format!("skybox/{name}up"), &read)?;
-    let tex = mat.base_texture()?;
-    let v = vtf::Vtf::parse(&fs.read(&vmt::vtf_path(tex))?).ok()?;
+    let sky = load_texture(fs, &mat).ok()?;
+    average_color(&sky)
+}
+
+fn average_color(sky: &SkyTexture) -> Option<Color> {
+    let v = &sky.vtf;
     // Smallest mip is a cheap average.
     let level = v.mip_count.saturating_sub(1);
+    if sky.linear_hdr {
+        let px = v.rgba_f32(level, 0, 0)?;
+        let n = px.len().max(1) as f32;
+        let mut sum = [0.0; 3];
+        for c in px { for k in 0..3 { sum[k] += c[k]; } }
+        return Some(Color::linear_rgb(sum[0] / n, sum[1] / n, sum[2] / n));
+    }
     let px = v.rgba8(level, 0, 0)?;
     let n = (px.len() / 4).max(1) as f32;
     let mut sum = [0.0f32; 3];
@@ -77,4 +155,131 @@ pub fn sky_color(fs: &vfs::Vfs, bsp: &bsp::Bsp) -> Option<Color> {
         }
     }
     Some(Color::srgb(sum[0] / n / 255.0, sum[1] / n / 255.0, sum[2] / n / 255.0))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::textures::TextureCache;
+    use bevy::render::render_resource::TextureFormat;
+
+    // Synthetic 7.2 VTF: 2x2 plus 1x1, stored smallest first. Half-float
+    // channels deliberately include >1 radiance, fractional RGB and zero alpha.
+    fn texture(hdr: bool) -> Vec<u8> {
+        let mut bytes = vec![0; 80];
+        bytes[..4].copy_from_slice(b"VTF\0");
+        bytes[4..8].copy_from_slice(&7u32.to_le_bytes());
+        bytes[8..12].copy_from_slice(&2u32.to_le_bytes());
+        bytes[12..16].copy_from_slice(&80u32.to_le_bytes());
+        bytes[16..18].copy_from_slice(&2u16.to_le_bytes());
+        bytes[18..20].copy_from_slice(&2u16.to_le_bytes());
+        bytes[24..26].copy_from_slice(&1u16.to_le_bytes());
+        bytes[52..56].copy_from_slice(&(if hdr { 24i32 } else { 0i32 }).to_le_bytes());
+        bytes[56] = 2;
+        bytes[57..61].copy_from_slice(&(-1i32).to_le_bytes());
+        bytes[63..65].copy_from_slice(&1u16.to_le_bytes());
+        if hdr {
+            for pixel in [[0x4000u16, 0x3800, 0x3400, 0], [0x4200, 0x3c00, 0x3800, 0],
+                [0x4400, 0x3c00, 0x3800, 0], [0x4500, 0x3c00, 0x3800, 0], [0x4600, 0x3c00, 0x3800, 0]] {
+                for channel in pixel { bytes.extend_from_slice(&channel.to_le_bytes()); }
+            }
+        } else {
+            for _ in 0..5 { bytes.extend_from_slice(&[64, 128, 255, 255]); }
+        }
+        bytes
+    }
+
+    fn fs(files: &[(&str, Vec<u8>)]) -> vfs::Vfs {
+        let mut fs = vfs::Vfs::new();
+        fs.push_back("synthetic sky", vfs::Mount::Memory(files.iter()
+            .map(|(path, bytes)| (vmt::vtf_path(path), std::sync::Arc::<[u8]>::from(bytes.clone())))
+            .collect()));
+        fs
+    }
+
+    fn material() -> vmt::Material {
+        vmt::Material::parse_with(r#"Sky {
+            $BaseTexture "test/ldr"
+            // $hdrcompressedtexture "test/not-authored"
+            $HdrBaseTexture "test/hdr"
+        }"#, &|_| None, 0).unwrap()
+    }
+
+    #[test]
+    fn authored_hdr_fallback_preserves_radiance_mips_and_linear_clear_color() {
+        for ldr in [None, Some(b"invalid VTF".to_vec())] {
+            let mut files = vec![("test/hdr", texture(true))];
+            if let Some(bytes) = ldr { files.push(("test/ldr", bytes)); }
+            let sky = load_texture(&fs(&files), &material()).unwrap();
+            assert_eq!(sky.name, "test/hdr");
+            assert!(sky.linear_hdr);
+            assert_eq!(average_color(&sky), Some(Color::linear_rgb(2.0, 0.5, 0.25)));
+            assert_eq!(sky.vtf.rgba_f32(0, 0, 0).unwrap()[0], [3.0, 1.0, 0.5, 0.0]);
+
+            let mut images = Assets::<Image>::default();
+            let mut cache = TextureCache::new(&mut images);
+            let info = cache.upload_hdr_sky(&sky.vtf, &mut images).unwrap();
+            assert!(!info.has_alpha);
+            let image = images.get(&info.handle).unwrap();
+            assert_eq!(image.texture_descriptor.format, TextureFormat::Rgba16Float);
+            assert_eq!(image.texture_descriptor.mip_level_count, 2);
+            let expected = [sky.vtf.level(0, 0, 0).unwrap(), sky.vtf.level(1, 0, 0).unwrap()].concat();
+            assert_eq!(image.data.as_deref(), Some(expected.as_slice()));
+            assert_eq!(cache.stats_missing, 0);
+        }
+    }
+
+    #[test]
+    fn existing_ldr_sky_keeps_selection_and_srgb_clear_color() {
+        let sky = load_texture(&fs(&[("test/ldr", texture(false)), ("test/hdr", texture(true))]), &material()).unwrap();
+        assert_eq!(sky.name, "test/ldr");
+        assert!(!sky.linear_hdr);
+        assert_eq!(average_color(&sky), Some(Color::srgb(64.0 / 255.0, 128.0 / 255.0, 1.0)));
+    }
+
+    #[test]
+    fn missing_and_unsupported_declared_skies_fail_without_an_alias() {
+        let error = load_texture(&fs(&[]), &material()).err().unwrap();
+        assert!(error.contains("missing materials/test/ldr.vtf"));
+        assert!(error.contains("missing materials/test/hdr.vtf"));
+        assert!(!error.contains("not-authored"));
+        let error = load_texture(&fs(&[("test/hdr", texture(false))]), &material()).err().unwrap();
+        assert!(error.contains("unsupported $hdrbasetexture format Rgba8888"));
+    }
+
+    #[test]
+    #[ignore = "requires CSR_SKY_FIXTURE_BSP pointing to private de_vertigo_2017.bsp and read-only Legacy; no native/GPU process"]
+    fn installed_vertigo_six_authored_hdr_faces_upload_without_missing_textures() {
+        let path = std::env::var_os("CSR_SKY_FIXTURE_BSP").expect("set CSR_SKY_FIXTURE_BSP to the private Vertigo BSP");
+        let bsp = bsp::Bsp::parse(&std::fs::read(path).unwrap()).unwrap();
+        let name = bsp.worldspawn().unwrap().str("skyname").unwrap();
+        assert_eq!(name.to_ascii_lowercase(), "vertigoblue_hdr");
+        let game_dir = vfs::find_csgo_dir().expect("installed Legacy or CSR_GAME_DIR");
+        let mut fs = vfs::Vfs::new();
+        fs.mount_game_dir(&game_dir).unwrap();
+        fs.mount_map_pakfile(bsp.pakfile.clone()).unwrap();
+        let mut images = Assets::<Image>::default();
+        let mut cache = TextureCache::new(&mut images);
+        for suffix in ["rt", "bk", "lf", "ft", "up", "dn"] {
+            let face = format!("skybox/{name}{suffix}");
+            let mat = vmt::Material::load(&face, &|p| fs.read_string(p)).unwrap();
+            assert!(fs.read(&vmt::vtf_path(mat.base_texture().unwrap())).is_none());
+            let sky = load_texture(&fs, &mat).unwrap();
+            assert!(sky.linear_hdr, "{face}");
+            assert_eq!(Some(sky.name.as_str()), mat.str("$hdrbasetexture"));
+            assert_eq!((sky.vtf.width, sky.vtf.height, sky.vtf.mip_count), (1024, 1024, 11));
+            for mip in 0..sky.vtf.mip_count {
+                assert!(sky.vtf.rgba_f32(mip, 0, 0).unwrap().iter().flatten().all(|v| v.is_finite()));
+            }
+            let info = cache.upload_hdr_sky(&sky.vtf, &mut images).unwrap();
+            let image = images.get(&info.handle).unwrap();
+            assert_eq!(image.texture_descriptor.format, TextureFormat::Rgba16Float);
+            assert_eq!(image.texture_descriptor.mip_level_count, 11);
+            assert_ne!(info.handle, cache.missing);
+            images.remove(&info.handle);
+        }
+        assert_eq!(cache.stats_decoded, 6);
+        assert_eq!(cache.stats_missing, 0);
+        assert!(sky_color(&fs, &bsp).is_some());
+    }
 }

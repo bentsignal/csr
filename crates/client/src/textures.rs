@@ -110,6 +110,36 @@ impl TextureCache {
         result
     }
 
+    /// Authored uncompressed HDR sky faces are already linear IEEE half floats.
+    /// Keep their full range and mip chain instead of clipping through RGBA8 or
+    /// applying an sRGB transfer function. Six sky faces are uploaded once.
+    pub fn upload_hdr_sky(&mut self, v: &vtf::Vtf, images: &mut Assets<Image>) -> Option<TextureInfo> {
+        if v.format != vtf::Format::Rgba16161616F || v.width == 0 || v.height == 0 || v.depth != 1 || v.faces != 1 {
+            return None;
+        }
+        let mut data = Vec::new();
+        for level in 0..v.mip_count {
+            data.extend_from_slice(v.level(level, 0, 0)?);
+        }
+        // Image::new checks one level's byte count; this data contains all mips.
+        let mut img = Image::new_uninit(
+            Extent3d { width: v.width as u32, height: v.height as u32, depth_or_array_layers: 1 },
+            TextureDimension::D2,
+            TextureFormat::Rgba16Float,
+            RenderAssetUsages::RENDER_WORLD,
+        );
+        img.data = Some(data);
+        img.texture_descriptor.mip_level_count = v.mip_count as u32;
+        img.sampler = sampler_for(v.flags);
+        self.stats_decoded += 1;
+        Some(TextureInfo {
+            handle: images.add(img), width: v.width as u32, height: v.height as u32,
+            // Source sky shader ignores texture alpha (the installed HDR faces
+            // contain zero alpha); sky faces remain opaque.
+            has_alpha: false,
+        })
+    }
+
     fn upload(&mut self, v: &vtf::Vtf, images: &mut Assets<Image>, srgb: bool) -> Option<TextureInfo> {
         let (w, h) = (v.width as u32, v.height as u32);
         if w == 0 || h == 0 {
