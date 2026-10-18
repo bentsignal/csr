@@ -35,7 +35,7 @@ impl Window {
 }
 
 fn scalar<'a>(ent: &'a kv::Block, key: &str) -> Option<&'a str> {
-    let mut values = ent.get_all(key);
+    let mut values = ent.iter().filter_map(|(name, value)| name.eq_ignore_ascii_case(key).then_some(value));
     let value = values.next()?.as_str()?;
     values.next().is_none().then_some(value)
 }
