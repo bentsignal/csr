@@ -396,4 +396,30 @@ mod tests {
         assert_eq!(materials.get(&handle).unwrap().params.color.w, 1.);
         assert_eq!(materials.get(&unrelated).unwrap().params.color, Vec4::ONE);
     }
+
+    #[test]
+    #[ignore = "requires private old Train cache and read-only Legacy dependencies; no graphics"]
+    fn cached_train_white_window_isolated_from_static_batches_and_hidden_nearby() {
+        let (game, fs) = level::mount_game(None).expect("installed Legacy dependencies");
+        let id = workshop::find("de_train_2015").unwrap().content_id();
+        let level = level::Level::load_local_id_from_vfs(&id, game, fs, &workshop::Store::current())
+            .expect("already-cached original Train; no download");
+        let atlas = LightmapAtlas::build(&level.bsp);
+        let mut images = Assets::<Image>::default();
+        let mut textures = TextureCache::new(&mut images);
+        let windows = build(&level, &atlas, &HashSet::new(), &mut textures, &mut images);
+        println!("Train prepared {} authored window blockers", windows.len());
+        let window = windows.iter().find(|window| window.window.model == 70)
+            .expect("the reported white upper B panel must be admitted");
+        assert_eq!(window.window.faces, 16498..16499);
+        assert_eq!(window.window.alpha(glam::Vec3::new(-1040.,-1160.,-32.)), Some(0.));
+        assert_eq!(window.build.triangles, 2);
+        assert_eq!(window.build.meshes.len(), 1);
+        assert_eq!(window.build.meshes[0].0, "cs_havana/white");
+        // Another surface with this material must retain its original contract.
+        let material=vmt::Material::load("cs_havana/white", &|path| level.vfs.read_string(path)).unwrap();
+        assert!(!material.translucent());
+        assert!(windows.iter().flat_map(|window| window.faces()).any(|face| face == 16498));
+    }
+
 }
