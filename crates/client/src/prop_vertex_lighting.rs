@@ -15,10 +15,11 @@ pub(super) fn load(
     ordinal: usize,
     model: &mdl::Model,
 ) -> Option<Vec<Option<Vec<glam::Vec3>>>> {
-    // Preserve the accepted ordinary/no-cast-shadow receiver admission.
-    // A file's existence does not establish that lighting-origin (0x02) props
-    // use this receiver pipeline in native rendering. Keep that mode on its
-    // authored-origin ambient/Sun fallback until separately observed.
+    // A lighting-origin receiver can have authored per-vertex lighting too.
+    // Native Cobble's matching arch and an isolated receiver-only comparison
+    // establish this path for plain 0x02 receivers. Retain the same strict
+    // single-LOD scope/checksum/hardware/control-byte checks as flags0.
+    // A rejected bake still uses the authored-origin ambient/Sun fallback.
     // Fade-only props retain their accepted spatial path until separately
     // observed; ignored normals and other unsupported modes remain closed.
     let flags = level.bsp.static_props.props.get(ordinal)?.flags;
@@ -39,7 +40,7 @@ pub(super) fn load(
 }
 
 fn supports_bake(flags: u8) -> bool {
-    flags & !(0x01 | 0x10) == 0 && flags != 0x01
+    flags == 0x02 || (flags & !(0x01 | 0x10) == 0 && flags != 0x01)
 }
 
 fn scoped_colors(
@@ -57,7 +58,7 @@ fn scoped_colors(
     // Preserve accepted flags0 output/admission. No-cast-shadow receiver
     // modes may select LOD0 from the explicitly supported two-LOD container.
     // No lower-LOD records enter geometry emitted by the LOD0 model loader.
-    let candidate = if flags == 0 {
+    let candidate = if flags == 0 || flags == 0x02 {
         scoped.candidate(key, model)
     } else {
         scoped.candidate_lod0(key, model)
@@ -161,15 +162,15 @@ mod tests {
         assert_eq!(model.meshes[0].source_vertex_indices, [1, 0]);
         let (key, model, bytes) = bake_fixture(false);
         let scoped = ScopedFile::parse(key.clone(), &key.hdr_name(), &bytes).unwrap();
-        for flags in [0, 16, 17] {
+        for flags in [0, 2, 16, 17] {
             assert_eq!(
                 scoped_colors(flags, &key, &model, &scoped),
                 Some(expected.clone()),
             );
         }
-        for flags in [2, 3, 18, 19] {
+        for flags in [3, 18, 19] {
             assert!(scoped_colors(flags, &key, &model, &scoped).is_none(),
-                "lighting-origin mode needs receiver evidence even for a single LOD: {flags}");
+                "combined lighting-origin mode remains unsupported: {flags}");
         }
     }
 
@@ -215,7 +216,7 @@ mod tests {
             &level.vfs.read(&format!("{base}.dx90.vtx")).unwrap(),
         ).unwrap();
         assert!(prop.lighting_origin.is_some_and(|point| point.is_finite()));
-        for flags in [1, 2, 3, 4, 0x12, 0x13, 0x14, 0x20, 0x80, 0xff] {
+        for flags in [1, 3, 4, 0x12, 0x13, 0x14, 0x20, 0x80, 0xff] {
             level.bsp.static_props.props[ordinal].flags = flags;
             assert!(super::load(&level, ordinal, &model).is_none(), "unsupported flags {flags}");
         }
