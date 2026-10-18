@@ -4,11 +4,32 @@ Status: **work resumed by the owner on 2026-10-17**. This is the scheduling
 authority. VISION defines the product; older feedback supplies examples and
 regression cases. Maintain priorities through conversation. The GUI is retired.
 
-Current owner-approved pass: lighting and material fidelity, especially proper
-interior lighting, followed by one coherent visual test build. Keep performance
-regression checks alongside it; the broader FPS goal remains open. The owner
-will identify obsolete backlog items as testing proceeds; no backlog audit is
-part of this pass.
+Current owner-approved overnight queue (October 17, before bed): finish the
+current lighting/material build, then continue independently through the order
+below. Do not stop after one completed item or PR. The owner returns in the
+morning; another owner test is not required to continue authorized work.
+
+1. **Performance**, the top goal. Steady 200–300 FPS on the owner's machine
+   would be substantial progress. Steady above 300 FPS is sufficient to move
+   on, preserving the existing ten-player, across-map and sustained-pacing
+   conditions. Do not chase 500 FPS before progressing through this queue.
+2. **Viewmodels and animations.** Reuse the motion the owner already tested
+   and liked, then make it consistent across weapons and utility. Inspect the
+   existing implementation before redoing completed work; match the original.
+3. **Map interactions.** Ladders, doors and squeaky sounds, breakable vents,
+   firing through doors and visible bullet holes, and normal access to
+   apartments. The owner reports invisible barriers at all modern Inferno
+   apartment entrances and is unsure whether old Inferno is affected too.
+4. **Grenades**, ahead of HUD: throw feel/trajectories and remaining gameplay
+   and effect defects, within the existing CS2 throw-feel exception.
+5. **HUD**, one coherent original-game presentation.
+6. **Audio**, last in this overnight order.
+
+Prioritize implementation and use focused regression checks. The owner's
+playtest is the main acceptance feedback; do not consume the night building
+verification machinery. Preserve config/content and prior accepted fixes.
+The owner will identify obsolete backlog items as testing proceeds; no backlog
+audit is part of this work.
 
 ## Objective and working scope
 
@@ -24,13 +45,14 @@ playability priorities is authorized. Reassess through chat as the game improves
 
 ## Critical: core playability
 
-1. **Performance / FPS.** Target **300–500 FPS on the owner's PC, every
+1. **Performance / FPS.** Long-term target **300–500 FPS on the owner's PC, every
    supported map, with 10 total players (human and/or bots)**, with smooth,
    predictable frame pacing throughout sustained play. A good solo spawn view
    or one optimized Nuke/Dust II case does not complete this outcome. Preserve
    fidelity. Test representative scenes, combat and long sessions; retain worst
    cases as regressions. Support reasonable lower-end playability too. The
-   target has not been achieved.
+   target has not been achieved. For the current queue, the owner's newer
+   steady-above-300 stopping threshold takes precedence over chasing 500.
 2. **Viewmodel and animation feel.** Consistent original look/walk/run motion
    across guns and grenades; continuous jumping and landing; stable hands
    through firing, reload, death, spectating and respawn. The accepted grounded

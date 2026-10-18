@@ -64,7 +64,9 @@ impl Phy {
             p = start + size;
         }
         if let Some(rest) = bytes.get(p..) {
-            phy.text = String::from_utf8_lossy(rest).trim_end_matches('\0').to_string();
+            phy.text = String::from_utf8_lossy(rest)
+                .trim_end_matches('\0')
+                .to_string();
         }
         Ok(phy)
     }
@@ -102,45 +104,80 @@ fn parse_solid(solid: &[u8], hulls: &mut Vec<ConvexHull>) -> io::Result<()> {
         let packed = r.i32(offset + 8)? as u32;
         let size = ((packed >> 8) as usize) * 16;
         let n_triangles = r.i16(offset + 12)?.max(0) as usize;
-        if size == 0 {
+        // The sequential scan can reach bytes that are not a ledge. Never
+        // decode triangles outside the candidate's declared extent, or walk
+        // past this surface. Keep any valid pieces already read.
+        let Some(next_offset) = offset.checked_add(size) else {
+            break;
+        };
+        if size < 16 || next_offset > s.len() || 16 + n_triangles * 16 > size {
             break;
         }
-        let points_at = (offset as i64 + point_offset as i64) as usize;
+        let Ok(points_at) = usize::try_from(offset as i64 + point_offset as i64) else {
+            offset = next_offset;
+            continue;
+        };
         if points_at > offset {
             points_start = points_start.min(points_at);
         }
-
-        let mut hull = ConvexHull::default();
-        let mut remap = std::collections::HashMap::new();
-        for t in 0..n_triangles {
-            let to = offset + 16 + t * 16;
-            let mut tri = [0u32; 3];
-            for (e, slot) in tri.iter_mut().enumerate() {
-                let edge = r.i32(to + 4 + e * 4)? as u32;
-                let point_index = (edge & 0xFFFF) as usize;
-                let next = remap.len() as u32;
-                let idx = *remap.entry(point_index).or_insert_with(|| {
-                    let po = points_at + point_index * 16;
-                    let pt = (|| -> io::Result<Vec3> {
-                        Ok(physics_to_source(r.f32(po)?, r.f32(po + 4)?, r.f32(po + 8)?))
-                    })()
-                    .unwrap_or(Vec3::ZERO);
-                    hull.points.push(pt);
-                    next
-                });
-                *slot = idx;
+        // A bad reference invalidates the entire piece. Substituting ZERO
+        // fabricates collision geometry, including mixed valid/invalid hulls
+        // which downstream zero-width rejection cannot detect.
+        if n_triangles >= 4 {
+            if let Ok(hull) = read_ledge(s, offset, n_triangles, points_at) {
+                hulls.push(hull);
             }
-            hull.triangles.push(tri);
         }
-        // Reject ledges whose points decoded to garbage (misparsed data).
-        let sane = hull
-            .points
-            .iter()
-            .all(|p| p.is_finite() && p.abs().max_element() < 65_536.0);
-        if hull.triangles.len() >= 4 && sane {
-            hulls.push(hull);
-        }
-        offset += size;
+        offset = next_offset;
     }
     Ok(())
 }
+
+fn read_ledge(
+    s: &[u8],
+    offset: usize,
+    n_triangles: usize,
+    points_at: usize,
+) -> io::Result<ConvexHull> {
+    let r = R(s);
+    let mut hull = ConvexHull::default();
+    let mut remap = std::collections::HashMap::new();
+    for t in 0..n_triangles {
+        let to = offset + 16 + t * 16;
+        let mut tri = [0u32; 3];
+        for (e, slot) in tri.iter_mut().enumerate() {
+            let edge = r.i32(to + 4 + e * 4)? as u32;
+            let point_index = (edge & 0xFFFF) as usize;
+            let idx = if let Some(&idx) = remap.get(&point_index) {
+                idx
+            } else {
+                let po = points_at
+                    .checked_add(point_index * 16)
+                    .ok_or_else(|| invalid("phy point offset overflow"))?;
+                let end = po
+                    .checked_add(12)
+                    .ok_or_else(|| invalid("phy point offset overflow"))?;
+                let point = s
+                    .get(po..end)
+                    .ok_or_else(|| invalid("phy point outside surface"))?;
+                let p = R(point).vec3(0)?;
+                let pt = physics_to_source(p.x, p.y, p.z);
+                // Retain the existing coordinate limit, checking after unit
+                // conversion as well as rejecting nonfinite stored values.
+                if !pt.is_finite() || pt.abs().max_element() >= 65_536.0 {
+                    return Err(invalid("phy point is nonfinite or out of range"));
+                }
+                let idx = hull.points.len() as u32;
+                hull.points.push(pt);
+                remap.insert(point_index, idx);
+                idx
+            };
+            *slot = idx;
+        }
+        hull.triangles.push(tri);
+    }
+    Ok(hull)
+}
+
+#[cfg(test)]
+mod tests;

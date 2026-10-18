@@ -445,15 +445,21 @@ fn spawn_level(
     };
     sky::spawn_2d(&mut commands, &level, &mut meshes, &mut materials, &mut images, &mut textures, &world_shared);
     let mut world_draws = 0;
-    let mut world_materials: std::collections::HashMap<String, Handle<WorldMaterial>> = Default::default();
+    let mut world_materials: std::collections::HashMap<String, Option<Handle<WorldMaterial>>> = Default::default();
     for (in_sky, build) in [(false, &main), (true, &skybox)] {
         for (name, mesh) in &build.meshes {
             let mat = world_materials
                 .entry(name.clone())
                 .or_insert_with(|| {
-                    materials.add(world_mesh::world_material(name, &level.vfs, &mut textures, &mut images, &world_shared, opts.exposure))
+                    let source = vmt::Material::load(name, &|path| level.vfs.read_string(path));
+                    // Water needs its own reflection/refraction presentation.
+                    // Until then, omit the opaque fallback at the owner's request.
+                    // The simulation still retains the map's water volumes.
+                    if source.as_ref().is_some_and(vmt::Material::is_water) { return None; }
+                    Some(materials.add(world_mesh::material_from_vmt(source.as_ref(), &level.vfs, &mut textures, &mut images, &world_shared, opts.exposure, true)))
                 })
                 .clone();
+            let Some(mat) = mat else { continue };
             let mut e = commands.spawn((Mesh3d(meshes.add(mesh.clone())), MeshMaterial3d(mat)));
             match (in_sky, sky) {
                 (true, Some(s)) => {

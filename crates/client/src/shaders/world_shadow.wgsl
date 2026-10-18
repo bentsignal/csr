@@ -1,6 +1,6 @@
-// Developer diagnostic shadow depth. This is the first 96-byte prefix of
-// WorldParams, not Bevy's StandardMaterial layout. CPU serialization tests
-// protect color/flags/alpha_ref offsets; no lighting/composition policy here.
+// Developer diagnostic shadow depth. Mirror WorldParams through its appended
+// base_uv field so depth alpha uses the same primary mapping as forward color.
+// CPU serialization tests protect the layout; lighting is not evaluated here.
 #import bevy_pbr::prepass_io::VertexOutput
 // Bevy defines this output only when color prepass outputs or unclipped-depth
 // emulation are required. Native depth-only shadow passes instead return void.
@@ -18,6 +18,23 @@ struct ShadowParams {
     normal2_uv: vec4<f32>,
     modulate_uv: vec4<f32>,
     normal_uv: vec4<f32>,
+    ambient_cube: array<vec4<f32>, 6>,
+    sun_dir: vec4<f32>,
+    sun_color: vec4<f32>,
+    scope_aperture: vec4<f32>,
+    phong: vec4<f32>,
+    phong_tint: vec4<f32>,
+    fresnel: vec4<f32>,
+    rim: vec4<f32>,
+    skin: vec4<f32>,
+    skin_transform: vec4<f32>,
+    skin_colors: array<vec4<f32>,8>,
+    skin_details:vec4<f32>,
+    skin_properties:vec4<f32>,
+    skin_pattern_palette:vec4<f32>,
+    detail: vec4<f32>,
+    self_illum: vec4<f32>,
+    base_uv: vec4<f32>,
 };
 @group(#{MATERIAL_BIND_GROUP}) @binding(0) var<uniform> params: ShadowParams;
 @group(#{MATERIAL_BIND_GROUP}) @binding(1) var base_tex: texture_2d<f32>;
@@ -38,7 +55,9 @@ fn fragment(in: VertexOutput)
 #else
     let uv = vec2<f32>(0.0);
 #endif
-    var alpha = textureSample(base_tex, base_samp, uv).a;
+    let base_uv = select(uv * params.base_uv.xy + params.base_uv.zw, uv,
+        (params.flags & 256u) != 0u || params.skin.x > 0.5);
+    var alpha = textureSample(base_tex, base_samp, base_uv).a;
     if (params.flags & 2u) != 0u {
 #ifdef VERTEX_COLORS
         var weight = in.color.a;

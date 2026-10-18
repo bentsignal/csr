@@ -44,7 +44,7 @@ admission; no brightness fit or per-model coefficient is introduced.
 
 ## Supported scope and fallback
 
-Only ordinary/default LightmappedGeneric world and static VertexLitGeneric
+Only ordinary/default LightmappedGeneric/WorldVertexTransition world and static VertexLitGeneric
 detail are admitted. The shader requires LIGHTMAPPED or VERTEX_LIT and rejects
 DYNAMIC_LIT; skinned characters and weapons retain their old path. Explicit other modes,
 transforms, alternative UV mappings, tints, animation declarations and
@@ -53,6 +53,39 @@ detail-mode, second-detail and detail-alpha-mask declarations also reject.
 Scalar and two-axis positive finite scales and nonnegative finite factors
 are parsed completely. Malformed declarations never become accepted defaults.
 Missing/unloadable detail textures keep the base material.
+
+## Terrain shader admission follow-up (2026-10-17, unverified)
+
+`Material::detail_layer` previously rejected `WorldVertexTransition` before
+reading any of its detail parameters. It now admits the same ordinary single
+detail operator for that shader on lightmapped world geometry. No new blend,
+lightmap, normal, alpha or color-transfer formula is introduced. The existing
+RGB detail stage follows terrain albedo mixing and precedes multiplication by
+irradiance. Explicit second-detail settings remain unsupported, including
+secondary scale/factor/tint/frame controls without a second texture. Non-world
+uses of this shader retain the previous material path.
+
+The installed Legacy Inferno flagstone, cobblestone and plaster transitions
+explicitly request this ordinary detail. Read-only metadata identifies 18
+prospective materials / 1,843 HDR face records within the supported parameter
+subset. Nuke has 10 / 519; Dust II has none. These are source references,
+not rendered admission counts or evidence of improved pixels. A separate
+grass material's three-component detail scale remains rejected.
+
+The original author's [worked terrain-material example](https://www.interlopers.net/tutorials/1802/creating-paint-alpha-1)
+uses `WorldVertexTransition` with one shared `$detail` and `$detailscale`.
+The original installed materials establish the actual scale/factor/mode
+requests. The ordinary operator's clean-room evidence and its existing native
+limitations are described above. Extending its shader admission does not
+establish exact CS:GO two-layer composition or detail transfer.
+
+Two new source regressions cover parser admission/rejection, the actual
+synthetic VTF/material path, independent color/data resources, preserved
+blend/normal/alpha settings and existing RGB operator placement. Both are
+**UNRUN**; compilation, GPU execution, matched route comparisons, performance
+and Nuke preservation belong to the integrating root. The historical captures
+below validate the earlier single-layer change only. New-layer blending,
+layer/border tint transfer and the larger lighting outcome remain open.
 
 One added texture/sampler binding uses the existing cached mip/sampler path.
 WorldParams appends one vector, preserving the shadow shader's 80-byte prefix.
