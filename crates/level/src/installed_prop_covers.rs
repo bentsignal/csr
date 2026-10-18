@@ -123,16 +123,22 @@ fn installed_nuke_cache_covers_decode_and_win_both_faces_before_tick_damage() {
                     }
                     let after = world.collision.trace_owned_ray(from, to, contents::MASK_SHOT);
                     assert_ne!(after.1, Some(HitOwner::Breakable(index)));
-                    // This is a local passage lane, not proof of full player-hull
-                    // traversal. The Nuke button may not remain in that lane.
-                    assert!(!after.0.hit(), "{name} entity {entity}: cover/dependency still blocks the lane: {after:?}");
+                    // Floor-mounted covers can expose an ordinary static floor.
+                    // Removing a cover must restore that exact underlying hit,
+                    // rather than deleting unrelated world geometry to clear a ray.
+                    let underlying = intact.collision.static_world().trace_ray(from, to, contents::MASK_SHOT);
+                    assert_eq!(after.0, underlying,
+                        "{name} entity {entity}: removed cover/dependency differs from underlying world");
+                    if name == "de_nuke" && entity == 237 {
+                        assert!(!underlying.hit(), "the slats passage must be clear");
+                    }
                     assert_eq!(world.collision.breakable_dependencies.len(), intact.collision.breakable_dependencies.len(),
                         "overlay copying retains immutable removal edges");
                     assert_eq!(intact.collision.trace_owned_ray(from, to, contents::MASK_SHOT).1,
                         Some(HitOwner::Breakable(index)), "clone isolation");
                     let broken = world.decode::<sim::WorldState>(&world.encode_state()).unwrap();
                     let mut restored = intact.clone(); restored.restore(broken);
-                    assert!(!restored.collision.trace_ray(from, to, contents::MASK_SHOT).hit());
+                    assert_eq!(restored.collision.trace_ray(from, to, contents::MASK_SHOT), underlying);
                     world.restore(before);
                     assert!(!world.breakables[index].broken());
                     assert_eq!(world.collision.trace_owned_ray(from, to, contents::MASK_SHOT).1, Some(HitOwner::Breakable(index)));

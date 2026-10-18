@@ -85,4 +85,3 @@ Clean-room flag documentation: Facepunch's [September 2019 update](https://gmod.
 records adding CS:GO's 16384 non-solid button flag. No SDK or engine source was
 read. The installed regression retains exact full-world first-hit ownership
 from both cover faces, rather than ignoring a nearer solid during damage.
-
