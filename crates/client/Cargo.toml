@@ -43,6 +43,8 @@ sha2 = "0.10"
 ragdoll = { path = "../ragdoll" }
 
 image = { version = "0.25", default-features = false, features = ["png"] }
+# Runtime-only installed equipment silhouettes; no SVG fonts or raster references.
+resvg = { version = "=0.47.0", default-features = false }
 
 # Same decoders enabled by Bevy audio; validate before Bevy's panic-on-error
 # decoder, and inspect channel count for rodio's spatial downmix adapter.
