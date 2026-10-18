@@ -6,12 +6,9 @@ snapshots published by Valve. `csr fetch-map <name|all>` prefetches archives;
 with `probe`, `sim` or `play` fetches it automatically. These commands support
 development and fidelity checks. The original map picker offers the admitted
 archives: **Dust II (2017), Inferno (2016), Nuke (2016), Train (2015),
-Vertigo (2017), Mirage (2019), and Cobblestone (2018)**. Each uses its own
+Vertigo (2017), Mirage (2019), Cobblestone (2018), and Cache (2015)**. Each uses its own
 archive identity and title beside any installed version. Archive years describe
 compatibility snapshots, not a promise of exact 2015 geometry or materials.
-This source candidate additionally enables **Cache (2015)** in that picker,
-pending the parent's build, probe, simulation, art decode and ordinary ten-player
-render checks before integration/staging. It is not a completed runtime admission.
 Cache (2019), Overpass (2015) and Overpass (2019) remain hidden pending their
 unresolved model dependencies; the other, later snapshots remain development
 selections. The newer snapshots keep their own names and pins.
@@ -89,7 +86,7 @@ captures before making that claim. Train's rebuild was
 | `de_cbble_2018` | 1542127528 | 1.36.5.6 |
 | `de_canals_2018` | 1534022416 | 1.36.5.5 |
 
-### Authentic October 2015 pair: source candidate, runtime checks pending
+### Authentic October 2015 pair
 
 Valve's original [Cache upload](https://steamcommunity.com/sharedfiles/filedetails/?id=539273673)
 and [Overpass upload](https://steamcommunity.com/sharedfiles/filedetails/?id=534663598)
@@ -140,9 +137,10 @@ icons exist. Art pins are available for both snapshots independently of normal
 picker admission; Overpass remains a development selection.
 
 The pair's authentic 2015 archive identity does not establish rewritten-game
-parity. All new current-build probes, simulations, loading-image decodes,
-matched renders and normal ten-player matches remain **unrun in this source
-handoff**. The parent owns these checks before accepting Cache's menu candidate.
+parity. Cache 2015 passed the current Release probe, simulation and archived
+loading-image decode. Final rendered ten-player admission and staging remain
+separate from these data and simulation checks. Overpass retains the dependency
+failure and is not admitted to the picker.
 
 ## Verification and remaining work
 
@@ -212,9 +210,8 @@ metadata capability, not traversal or ten-player runtime performance.
 Loading images are size/SHA-256 bound to the privately inspected archive BSPs.
 Mirage, Vertigo and Cobblestone only embed ordinary radars; these are used when
 the same archive has no spectate radar. Loading and HUD radar lookup never
-substitute the installed remake's overview. The original seven loading-image pins still
-need the parent's current-build decode/menu check; data inspection alone is not
-a rendered verification.
+substitute the installed remake's overview. All eight offered archive loading images decoded successfully in the current
+installed-data fixture. This is not a rendered menu verification.
 
 Read-only inspection on October 18 found that the new probe's `EmptyTopology`
 records in Cache, Mirage, Overpass and Cobblestone have exactly retraced
@@ -225,7 +222,7 @@ would be inappropriate. These records now have the distinct
 a separate count. Malformed indices, unsupported topology and empty compiled
 topology on an actual enclosed polygon remain failures. No substitute triangle
 fan is introduced; rendering retains no triangles for these records. The
-focused synthetic regression and current-data probes require parent validation.
+focused synthetic regression and current-data probes passed in this increment.
 
 Cache's three MDL45 parser rejections in the October 18 baseline are separate
 from its missing `darkmetal3` material. Overpass still lacks `gates001`; neither
@@ -258,3 +255,18 @@ area through repeated positions. The renderer does not invent replacement
 fans, and the probe remains strict. LoadingScreen also requests four
 `undefined` map-art resources; these remain a presentation gap even though
 the match loads successfully. These checks do not establish visual parity.
+
+
+### October 18 playability increment
+
+Release source 4086d67 passed simulations for all eight offered classics,
+including Cobblestone after the stationary-axis floor-snap correction. Seven
+archive probes passed; old Dust retains its documented greygrid failure. Shared
+ladder and linked-breakable corrections have installed/private-classic route
+fixtures at 64 and 128 Hz. Final source validation is recorded with the PR.
+
+The installed Overpass also lacks gates001. Its separate competitive spawn
+failure selected an explicitly disabled Guardian spawn; the loader now excludes
+`enabled=0` team spawns rather than enlarging buy zones. Historical Overpass is
+still withheld. Exact 2015 geometry/material parity and sustained performance
+across the entire catalog remain unproven.
