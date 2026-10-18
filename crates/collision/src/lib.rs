@@ -166,6 +166,9 @@ pub struct CollisionWorld {
     pub breakables: std::sync::Arc<[breakables::Breakable]>,
     /// A session-owned, immutable pose overlay shares the heavy map/grid.
     base: Option<std::sync::Arc<CollisionWorld>>,
+    /// Per-overlay convex ownership, in the same order as `convexes`.
+    /// Static geometry and door leaves have no breakable owner.
+    runtime_breakables: Vec<Option<usize>>,
     grid: Grid,
     /// Convex indices per BSP static-prop ordinal, including empty entries.
     /// Built alongside the placed hulls; world geometry is never in a range.
@@ -316,21 +319,31 @@ impl CollisionWorld {
         &self, start: Vec3, end: Vec3, mins: Vec3, maxs: Vec3, mask: i32,
         excluded_convexes: Option<&std::ops::Range<usize>>,
     ) -> Trace {
+        self.trace_box_owned(start, end, mins, maxs, mask, excluded_convexes).0
+    }
+
+    fn trace_box_owned(
+        &self, start: Vec3, end: Vec3, mins: Vec3, maxs: Vec3, mask: i32,
+        excluded_convexes: Option<&std::ops::Range<usize>>,
+    ) -> (Trace, Option<usize>) {
         if let Some(base) = &self.base {
             let mut tr = base.trace_box_excluding(start, end, mins, maxs, mask, excluded_convexes);
+            let mut owner = None;
             let offset = (mins + maxs) * 0.5;
             let ext = (maxs - mins) * 0.5;
             let s = start + offset;
             let e = end + offset;
-            for solid in &self.convexes {
+            for (index, solid) in self.convexes.iter().enumerate() {
                 if solid.contents & mask != 0 && swept_bounds_overlap(s, e, ext, solid.mins, solid.maxs) {
-                    clip_convex(&solid.planes, s, e, ext, solid.contents, solid.surface, &mut tr);
+                    if clip_convex(&solid.planes, s, e, ext, solid.contents, solid.surface, &mut tr) {
+                        owner = self.runtime_breakables.get(index).copied().flatten();
+                    }
                 }
             }
             tr.end = if tr.all_solid { start } else { start.lerp(end, tr.fraction) };
-            return tr;
+            return (tr, owner);
         }
-        if let Some(world)=&self.dynamic { return world.trace_box(start,end,mins,maxs,mask); }
+        if let Some(world)=&self.dynamic { return (world.trace_box(start,end,mins,maxs,mask), None); }
         let offset = (mins + maxs) * 0.5;
         let ext = (maxs - mins) * 0.5;
         let s = start + offset;
@@ -406,12 +419,18 @@ impl CollisionWorld {
         if tr.all_solid {
             tr.end = start;
         }
-        tr
+        (tr, None)
     }
 
     /// Sweeps a point.
     pub fn trace_ray(&self, start: Vec3, end: Vec3, mask: i32) -> Trace {
         self.trace_box(start, end, Vec3::ZERO, Vec3::ZERO, mask)
+    }
+
+    /// The exact first-hit owner from the same ordered, masked collision query.
+    /// Combat must not infer ownership by approximately matching ray fractions.
+    pub fn trace_breakable_ray(&self, start: Vec3, end: Vec3, mask: i32) -> (Trace, Option<usize>) {
+        self.trace_box_owned(start, end, Vec3::ZERO, Vec3::ZERO, mask, None)
     }
 
     /// Render-only solid visibility ray from a static prop's lighting sample.
@@ -491,7 +510,9 @@ fn swept_bounds_overlap(s: Vec3, e: Vec3, ext: Vec3, low: Vec3, high: Vec3) -> b
 
 /// Clips a sweep of a centred box with half-extents `ext` against the convex
 /// region `n·x <= d` for every plane, updating `tr` when it hits earlier.
-fn clip_convex(planes: &[Plane], s: Vec3, e: Vec3, ext: Vec3, contents: i32, surface: u32, tr: &mut Trace) {
+// Returns true only when this shape replaces the hit surface. Start-solid
+// contents alone do not change ownership; all-solid and strict earlier hits do.
+fn clip_convex(planes: &[Plane], s: Vec3, e: Vec3, ext: Vec3, contents: i32, surface: u32, tr: &mut Trace) -> bool {
     let mut enter = -1.0f32;
     let mut leave = 1.0f32;
     let mut clip: Option<Plane> = None;
@@ -521,12 +542,12 @@ fn clip_convex(planes: &[Plane], s: Vec3, e: Vec3, ext: Vec3, contents: i32, sur
             let precise_start = signed(s);
             let precise_end = signed(e);
             if precise_start > 0.0 && precise_end >= precise_start {
-                return;
+                return false;
             }
         }
         // Entirely in front of this plane: no contact with the solid.
         if d1 > 0.0 && (d2 >= DIST_EPSILON || d2 >= d1) {
-            return;
+            return false;
         }
         if d1 <= 0.0 && d2 <= 0.0 {
             continue;
@@ -551,8 +572,9 @@ fn clip_convex(planes: &[Plane], s: Vec3, e: Vec3, ext: Vec3, contents: i32, sur
             tr.all_solid = true;
             tr.fraction = 0.0;
             tr.surface = surface;
+            return true;
         }
-        return;
+        return false;
     }
     if enter < leave && enter > -1.0 && enter < tr.fraction {
         if let Some(p) = clip {
@@ -561,8 +583,10 @@ fn clip_convex(planes: &[Plane], s: Vec3, e: Vec3, ext: Vec3, contents: i32, sur
             tr.plane_dist = p.dist;
             tr.contents = contents;
             tr.surface = surface;
+            return true;
         }
     }
+    false
 }
 
 /// Thickness given to triangles behind their front face, so rays and thin

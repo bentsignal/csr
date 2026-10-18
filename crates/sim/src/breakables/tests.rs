@@ -3,6 +3,7 @@
 use super::*;
 use crate::{GameEvent, PlayerId, SpawnPoint, Team, TickInput, weapon::WeaponState};
 use collision::{CollisionWorld, MapCollisionOptions, contents};
+use glam::Vec3;
 use movement::buttons;
 use std::sync::Arc;
 
@@ -148,4 +149,62 @@ fn map_admission_rejects_invalid_health_or_removal_and_propdata_inheritance_is_b
     assert_eq!((def.health, def.bullet_scale, def.club_scale), (1., 0.5, 2.));
     def.prop_data = "cycle".into(); def.apply_prop_data(&data);
     assert_eq!(def.health, 1.);
+}
+
+#[test]
+fn combat_damages_only_the_exact_masked_first_brush_owner() {
+    // A wall within the old 1e-6 fraction tolerance, and an exactly flush wall,
+    // must both retain their hit instead of transferring damage to the vent.
+    for front in [-2.004, -2.0] {
+        let (mut world, id) = fixture(128, "health 1", false);
+        world.collision = CollisionWorld::map_arc(&world.collision);
+        let base = Arc::get_mut(&mut world.collision).unwrap();
+        let mut wall = base.breakables[0].solids[0].clone();
+        wall.mins.x = front;
+        wall.maxs.x = front + 0.001;
+        for plane in &mut wall.planes {
+            if plane.normal == -Vec3::X { plane.dist = -front; }
+            if plane.normal == Vec3::X { plane.dist = wall.maxs.x; }
+        }
+        base.add_convex(wall);
+        base.finalize();
+        world.rebuild_door_collision();
+        let start = world.players[0].eye();
+        let end = start + Vec3::X * 8192.;
+        let (hit, owner) = world.collision.trace_breakable_ray(start, end, contents::MASK_SHOT);
+        let vent = collision::doors::ray_fraction(&world.collision.breakables[0].solids, start, end).unwrap();
+        assert!((vent - hit.fraction).abs() <= 0.000001, "exercise the former false match");
+        assert_eq!(owner, None);
+        world.step(&[(id, attack())]);
+        assert!(world.events.iter().any(|e| matches!(e, GameEvent::Fire { .. })));
+        assert_eq!(world.breakables[0].health, 1.);
+    }
+    // A mask-excluded brush must not steal damage from a coincident shot-solid
+    // vent. Among actual equal hits the original convex order wins.
+    for first_contents in [contents::PLAYERCLIP, contents::SOLID] {
+        let (mut world, id) = fixture(128, "health 1", false);
+        world.collision = CollisionWorld::map_arc(&world.collision);
+        let base = Arc::get_mut(&mut world.collision).unwrap();
+        let solids = base.breakables[0].solids.clone();
+        let make = |entity, contents| {
+            let mut solids = solids.clone();
+            for solid in &mut solids { solid.contents = contents; }
+            collision::breakables::Breakable { entity, model: 1, origin: Vec3::ZERO,
+                health: 1., material: 0, prop_data: String::new(), bullet_scale: 1., club_scale: 1.,
+                minimum_damage: 0., trigger_only: false, solids }
+        };
+        base.breakables = vec![make(0, first_contents), make(1, contents::SOLID)].into();
+        world.reset_breakables();
+        world.rebuild_door_collision();
+        let start = world.players[0].eye();
+        let expected = if first_contents == contents::SOLID { 0 } else { 1 };
+        assert_eq!(world.collision.trace_breakable_ray(start, start + Vec3::X * 8192., contents::MASK_SHOT).1,
+            Some(expected));
+        world.step(&[(id, attack())]);
+        assert!(world.breakables[expected].broken());
+        assert!(!world.breakables[1 - expected].broken());
+        assert!(blocked(&world), "the other intact movement-solid owner remains");
+        world.start_round(false);
+        assert!(world.breakables.iter().all(|state| !state.broken()));
+    }
 }

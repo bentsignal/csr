@@ -51,9 +51,14 @@ impl World {
     pub(crate) fn rebuild_door_collision(&mut self) {
         let mut solids: Vec<_> = self.collision.doors.iter().zip(&self.doors)
             .flat_map(|(def, state)| def.solids(state.angle)).collect();
-        solids.extend(self.collision.breakables.iter().zip(&self.breakables)
-            .filter(|(_, state)| !state.broken()).flat_map(|(def, _)| def.solids.iter().cloned()));
-        self.collision = collision::CollisionWorld::with_door_solids(collision::CollisionWorld::map_arc(&self.collision), solids);
+        let mut owners = vec![None; solids.len()];
+        for (index, (def, state)) in self.collision.breakables.iter().zip(&self.breakables).enumerate() {
+            if state.broken() { continue; }
+            solids.extend(def.solids.iter().cloned());
+            owners.resize(solids.len(), Some(index));
+        }
+        self.collision = collision::CollisionWorld::with_runtime_solids(
+            collision::CollisionWorld::map_arc(&self.collision), solids, owners);
     }
 
     fn door_cue(&mut self, index: usize, cue: Cue) {

@@ -1707,7 +1707,7 @@ impl World {
         let mut def = (*w.def).clone();
         let first = w.last_melee_attack.is_none_or(|t| time - t > 0.9);
         let range = if secondary { 32.0 } else { MELEE_RANGE };
-        let tr = self.collision.trace_ray(eye, eye + dir * range, contents::MASK_SHOT);
+        let (tr, breakable) = self.collision.trace_breakable_ray(eye, eye + dir * range, contents::MASK_SHOT);
         let mut best = None;
         for (j, other) in self.players.iter().enumerate() {
             if j == shooter || !other.alive || !team.enemy_of(other.team) { continue; }
@@ -1738,7 +1738,7 @@ impl World {
             self.apply_damage(shooter, victim, &def, distance, HitGroup::Chest, eye + dir * distance, Some(dir));
         }
         if external.is_none() && best.is_none() && tr.hit() {
-            self.damage_breakable(eye, eye + dir * range, &tr,
+            self.damage_breakable(breakable, &tr,
                 if secondary { 65.0 } else if first { 40.0 } else { 25.0 }, breakables::DamageKind::Club);
             if let Some(dynamic) = &self.collision.dynamic {
                 dynamic.damage_block(tr.end, tr.normal, if secondary { 30.0 } else { 15.0 });
@@ -1795,7 +1795,7 @@ impl World {
             let oy = a1.sin() * r1 * inacc + a2.sin() * r2 * spread;
             let dir = (fwd + right * ox + up * oy).normalize();
             let end = eye + dir * range;
-            let tr = self.collision.trace_ray(eye, end, contents::MASK_SHOT);
+            let (tr, breakable) = self.collision.trace_breakable_ray(eye, end, contents::MASK_SHOT);
             let world_dist = tr.fraction * range;
 
             // The movement hull is broad phase only when authored shapes exist.
@@ -1854,7 +1854,7 @@ impl World {
                 None => {
                     self.events.push(GameEvent::Tracer { player: id, start: eye, end: tr.end });
                     if tr.fraction < 1.0 && !self.collision.is_sky(tr.surface) {
-                        self.damage_breakable(eye, end, &tr,
+                        self.damage_breakable(breakable, &tr,
                             def.damage * def.range_modifier.powf(world_dist / 500.0), breakables::DamageKind::Bullet);
                         if let Some(dynamic)=&self.collision.dynamic {dynamic.damage_block(tr.end,tr.normal,def.damage as f32 * def.range_modifier.powf(world_dist/500.0));}
                         self.events.push(GameEvent::Impact {

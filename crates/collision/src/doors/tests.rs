@@ -137,3 +137,29 @@ fn runtime_swept_bounds_rejection_matches_unfiltered_convex_clipping() {
     assert!(crate::swept_bounds_overlap(Vec3::new(-0.02, 0., 0.), Vec3::new(-0.01, 0., 0.),
         Vec3::ZERO, Vec3::ZERO, Vec3::ONE));
 }
+
+#[test]
+fn runtime_hit_ownership_preserves_door_ties_and_start_solid_flags() {
+    let base = fixture();
+    let leaf = base.doors[0].solids(0.);
+    let mut solids = leaf.clone();
+    solids.extend(leaf.clone());
+    let mut owners = vec![None; leaf.len()];
+    owners.resize(solids.len(), Some(0));
+    let world = CollisionWorld::with_runtime_solids(base.clone(), solids, owners);
+    let start = Vec3::new(-16., 24., 64.);
+    let end = Vec3::new(16., 24., 64.);
+    let (tr, owner) = world.trace_breakable_ray(start, end, contents::MASK_SHOT);
+    assert!(tr.hit());
+    assert_eq!(owner, None, "the earlier door wins a coincident breakable tie");
+    let owned = CollisionWorld::with_runtime_solids(base, leaf.clone(), vec![Some(0); leaf.len()]);
+    assert_eq!(owned.trace_breakable_ray(start, end, contents::MASK_SHOT).1, Some(0));
+    let inside = Vec3::new(0., 24., 64.);
+    let (stationary, owner) = owned.trace_breakable_ray(inside, inside, contents::MASK_SHOT);
+    assert!(stationary.start_solid && stationary.all_solid);
+    assert_eq!(owner, Some(0));
+    let (leaving, owner) = owned.trace_breakable_ray(inside, start, contents::MASK_SHOT);
+    assert!(leaving.start_solid && !leaving.all_solid);
+    assert_eq!(owner, None, "start-solid contents alone do not replace a hit surface");
+    assert_eq!(owned.trace_breakable_ray(start, end, contents::WATER).1, None);
+}

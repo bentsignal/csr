@@ -164,12 +164,20 @@ impl CollisionWorld {
     /// `solids` contains current doors AND intact brush breakables. Keeping
     /// one overlay avoids losing either owner when the other changes state.
     pub fn with_door_solids(base: Arc<Self>, solids: Vec<Convex>) -> Arc<Self> {
+        let owners = vec![None; solids.len()];
+        Self::with_runtime_solids(base, solids, owners)
+    }
+
+    /// Preserve each intact breakable's owner through the ordinary clipper,
+    /// including masks and static/door/brush ties. Owners are map ordinals.
+    pub fn with_runtime_solids(base: Arc<Self>, solids: Vec<Convex>, owners: Vec<Option<usize>>) -> Arc<Self> {
+        assert_eq!(solids.len(), owners.len());
         if base.doors.is_empty() && base.breakables.is_empty() { return base; }
         Arc::new(Self {
             mins: base.mins, maxs: base.maxs, doors: base.doors.clone(),
             breakables: base.breakables.clone(),
             dynamic: base.dynamic.clone(),
-            convexes: solids, base: Some(base), ..Default::default()
+            convexes: solids, runtime_breakables: owners, base: Some(base), ..Default::default()
         })
     }
 }
