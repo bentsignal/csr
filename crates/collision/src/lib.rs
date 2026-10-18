@@ -542,8 +542,20 @@ pub fn convex_from_hull(points: &[Vec3], triangles: &[[u32; 3]], contents: i32, 
     let mut mins = Vec3::splat(f32::MAX);
     let mut maxs = Vec3::splat(f32::MIN);
     for p in points {
+        if !p.is_finite() {
+            return None;
+        }
         mins = mins.min(*p);
         maxs = maxs.max(*p);
+    }
+    // A convex solid needs volume. A malformed PHY ledge can have several
+    // distinct point indices which all decode to the same position. Adding
+    // axial bevels to that input would manufacture a point collider: the
+    // player's expanded hull then hits it in an otherwise open doorway.
+    // Reject zero-width inputs before bevel construction, retaining every
+    // positive thickness (including thin authored walls and floors).
+    if !mins.cmplt(maxs).all() {
+        return None;
     }
     let mut planes: Vec<Plane> = Vec::new();
     let add = |dir: Vec3, planes: &mut Vec<Plane>| {
@@ -601,6 +613,9 @@ pub fn convex_from_hull(points: &[Vec3], triangles: &[[u32; 3]], contents: i32, 
         surface,
     })
 }
+
+#[cfg(test)]
+mod prop_volume_tests;
 
 /// Options for building a collision world from a map.
 pub struct MapCollisionOptions {
