@@ -184,6 +184,39 @@ impl Vfs {
         self.read(path).map(|b| kv::decode_text(&b))
     }
 
+    /// Like `read`, with a per-file budget enforced before allocation/decode.
+    /// An oversized winning entry fails closed instead of exposing a lower mount.
+    pub fn read_limited(&self, path: &str, limit: usize) -> Option<Vec<u8>> {
+        use std::io::Read;
+        let path = lookup_path(path)?;
+        for mounted in &self.mounts {
+            let bytes = match &mounted.mount {
+                Mount::Dir(root) => match std::fs::File::open(root.join(&path)) {
+                    Ok(file) => {
+                        if file.metadata().ok()?.len() > limit as u64 { return None; }
+                        let mut bytes = Vec::new();
+                        file.take((limit as u64).saturating_add(1)).read_to_end(&mut bytes).ok()?;
+                        Some(bytes)
+                    }
+                    Err(e) if e.kind() == io::ErrorKind::NotFound => None,
+                    Err(_) => continue,
+                },
+                Mount::Vpk(archive) => {
+                    if archive.entry(&path).is_some_and(|entry| entry.size() > limit) { return None; }
+                    archive.read(&path).ok().flatten()
+                }
+                Mount::Zip(archive) => archive.read_limited(&path, limit).ok()?,
+                Mount::Memory(files) => match files.get(&path) {
+                    Some(bytes) if bytes.len() <= limit => Some(bytes.to_vec()),
+                    Some(_) => return None,
+                    None => None,
+                },
+            };
+            if let Some(bytes) = bytes { return (bytes.len() <= limit).then_some(bytes); }
+        }
+        None
+    }
+
     /// Reads from one named mount without falling back to other sources.
     /// Map-specific metadata in an archived BSP must not resolve to a newer
     /// installed map's navigation or radar just because their names match.
@@ -343,6 +376,17 @@ mod tests {
     use super::*;
 
     #[test]
+    fn limited_reads_bound_memory_without_bypassing_priority() {
+        let mut fs = Vfs::new();
+        fs.push_back("lower", Mount::Memory([("fixture.txt".into(), std::sync::Arc::from(b"low".as_slice()))].into()));
+        fs.push_front("selected", Mount::Memory([("fixture.txt".into(), std::sync::Arc::from(b"selected".as_slice()))].into()));
+        assert!(fs.read_limited("fixture.txt", 7).is_none());
+        assert_eq!(fs.read_limited("fixture.txt", 8).unwrap(), b"selected");
+        assert!(fs.read_limited("../fixture.txt", 8).is_none());
+        assert!(fs.read_limited("absent.txt", 8).is_none());
+    }
+
+    #[test]
     fn metadata_paths_cannot_escape_a_loose_mount() {
         let root = std::env::temp_dir().join(format!("csr-vfs-safe-{}", std::process::id()));
         let inside = root.join("inside");
@@ -357,6 +401,8 @@ mod tests {
             assert!(!fs.exists_from("loose", path), "{path}");
         }
         assert_eq!(fs.read("/SAFE.TXT").unwrap(), b"inside");
+        assert!(fs.read_limited("/SAFE.TXT", 5).is_none());
+        assert_eq!(fs.read_limited("/SAFE.TXT", 6).unwrap(), b"inside");
         assert!(fs.exists_from("loose", "/SAFE.TXT"));
         std::fs::remove_dir_all(root).unwrap();
     }
