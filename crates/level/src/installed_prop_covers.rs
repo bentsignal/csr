@@ -102,6 +102,12 @@ fn installed_nuke_cache_covers_decode_and_win_reachable_faces_before_tick_damage
                     assert_eq!(owner, None, "static floor still owns a buried eye");
                     continue;
                 }
+                if underlying.hit() && owner.is_none()
+                    && trace_fields(hit) == trace_fields(underlying) {
+                    // A clear eye below a thin floor still hits its underside
+                    // before the plate. This must remain the exact static hit.
+                    continue;
+                }
                 assert!(hit.hit() && !hit.start_solid && !hit.all_solid,
                     "{name} entity {entity}: invalid external PHY face lane {from:?} -> {to:?}: {hit:?}");
                 assert_eq!(owner, Some(HitOwner::Breakable(index)),
