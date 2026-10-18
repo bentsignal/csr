@@ -92,6 +92,7 @@ pub mod props;
 mod doors;
 mod breakables;
 mod prop_breakables;
+mod window_fade;
 mod studio_pose;
 pub mod scoreboard;
 pub mod scope;
@@ -278,7 +279,7 @@ impl Plugin for CsgoPlugin {
                     effects::draw,
                     characters::sync,
                     items::sync,
-                    (doors::sync, breakables::sync).chain(),
+                    (doors::sync, breakables::sync, window_fade::update).chain(),
                     (viewmodel::update, utility_fx::update_wick).chain(),
                     tracers::draw,
                     scope::update,
@@ -465,7 +466,11 @@ fn spawn_level(
             let model = &level.bsp.models[index];
             model.first_face.max(0) as usize..(model.first_face.max(0) as usize + model.num_faces.max(0) as usize).min(level.bsp.faces.len())
         }).collect();
-    let main = world_mesh::build(&level.bsp, &atlas, &|f| !sky_faces.contains(&f) && !breakable_faces.contains(&f) && !moving_door_faces.contains(&f));
+    // Fade ownership never takes faces from sky, door or breakable lifecycles.
+    let unavailable = sky_faces.iter().chain(&breakable_faces).chain(&moving_door_faces).copied().collect();
+    let window_builds = window_fade::build(&level, &atlas, &unavailable, &mut textures, &mut images);
+    let window_faces: std::collections::HashSet<_> = window_builds.iter().flat_map(|build| build.faces()).collect();
+    let main = world_mesh::build(&level.bsp, &atlas, &|f| !sky_faces.contains(&f) && !breakable_faces.contains(&f) && !moving_door_faces.contains(&f) && !window_faces.contains(&f));
     let skybox = world_mesh::build(&level.bsp, &atlas, &|f| sky_faces.contains(&f) && !breakable_faces.contains(&f) && !moving_door_faces.contains(&f));
     let breakable_builds: Vec<_> = breakable_models.iter().filter(|(_, _, _, visible)| *visible).map(|(owners, model, origin, _)| {
         let def = &level.bsp.models[*model];
@@ -484,8 +489,10 @@ fn spawn_level(
     let world_shared = world_mesh::SharedHandles {
         lightmap: lightmap.clone(),
     };
+    let window_draws = window_fade::spawn(&mut commands, &level, &window_builds, &mut meshes,
+        &mut materials, &mut images, &mut textures, &world_shared, opts.exposure);
     sky::spawn_2d(&mut commands, &level, &mut meshes, &mut materials, &mut images, &mut textures, &world_shared);
-    let mut world_draws = 0;
+    let mut world_draws = window_draws;
     let mut world_materials: std::collections::HashMap<String, Option<Handle<WorldMaterial>>> = Default::default();
     let mut world_builds = vec![(false, None, &main), (true, None, &skybox)];
     world_builds.extend(breakable_builds.iter().map(|(index, in_sky, build)| (*in_sky, Some(index), build)));
@@ -559,7 +566,7 @@ fn spawn_level(
     ) };
     info!(
         "world: {} tris ({} in 3D skybox) in {world_draws} batches ({t_world:.2}s); props: {} instances, {} tris, {} draws ({} in 3D skybox), {} materials, {} failed models; textures: {} compressed, {} decoded, {} missing ({:.2}s total); sun {:?}; sky {:?}",
-        main.triangles + skybox.triangles + breakable_builds.iter().map(|(_, _, build)| build.triangles).sum::<usize>(),
+        main.triangles + skybox.triangles + breakable_builds.iter().map(|(_, _, build)| build.triangles).sum::<usize>() + window_builds.iter().map(|build| build.triangles()).sum::<usize>(),
         skybox.triangles,
         prop_stats.instances,
         prop_stats.triangles,

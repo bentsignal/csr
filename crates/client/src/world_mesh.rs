@@ -312,7 +312,7 @@ pub fn build(bsp: &Bsp, atlas: &LightmapAtlas, include: &dyn Fn(usize) -> bool) 
 }
 
 /// Same authored topology, UV/lightmaps and materials as world batches, but
-/// isolated by brush entity so a simulated break can hide every owned face.
+/// isolated by brush entity for breakable lifecycle or authored window fade.
 pub fn build_brush_model(bsp: &Bsp, atlas: &LightmapAtlas, model: usize, origin: glam::Vec3) -> WorldBuild {
     build_models(bsp, atlas, &|_| true, vec![(model, origin)])
 }
