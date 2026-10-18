@@ -736,6 +736,8 @@ fn spawn_level(
         Tonemapping::None,
         start,
         sky::sky_layer(),
+        // Tiny auxiliary views avoid indirect draw setup; main-world batching stays enabled.
+        bevy::render::view::NoIndirectDrawing,
         PlayerCamera,
     ));
     commands.spawn((
@@ -778,6 +780,7 @@ fn spawn_level(
         viewmodel::layer(),
         PlayerCamera,
         player::ViewModelCamera,
+        bevy::render::view::NoIndirectDrawing,
         IsDefaultUiCamera,
         menu_blur::PostProcessSettings::default(),
     ));
