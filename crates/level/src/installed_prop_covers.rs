@@ -84,13 +84,11 @@ fn installed_nuke_cache_covers_decode_and_win_both_faces_before_tick_damage() {
             if name == "de_nuke" && entity == 237 {
                 assert_eq!(linked.len(), 1, "vent_a must own the literal immediate Kill dependency");
                 assert_eq!(linked[0].entity, 238);
-                assert!(!linked[0].solids.is_empty(), "linked button must be present before removal");
+                assert_ne!(level.bsp.entities[238].i64("spawnflags").unwrap_or(0) & 16384, 0,
+                    "this installed Nuke button declares SF_BUTTON_NOTSOLID");
+                assert!(linked[0].solids.is_empty(), "the non-solid button must never occlude the cover");
             }
             for (from, to) in [(front, back), (back, front)] {
-                if name == "de_nuke" && entity == 237 {
-                    assert!(collision::doors::ray_fraction(&linked[0].solids, from, to).is_some(),
-                        "the regression lane must exercise the linked invisible button as well as the cover");
-                }
                 let (hit, owner) = intact.collision.trace_owned_ray(from, to, contents::MASK_SHOT);
                 assert!(hit.hit() && !hit.start_solid && !hit.all_solid,
                     "{name} entity {entity}: invalid external PHY face lane {from:?} -> {to:?}: {hit:?}");

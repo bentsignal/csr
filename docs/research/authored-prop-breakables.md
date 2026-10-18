@@ -74,3 +74,15 @@ then inspect the immutable executable on actual Nuke/Cache covers from both
 sides. Verify model/PHY alignment, disappearance, passage, correction and reset;
 retain door, ladder, apartment, PHY, viewmodel and grenade regressions. No
 roadmap or owner acceptance item is marked complete by this source candidate.
+## Non-solid button collision
+
+The installed Nuke vent button declares spawnflags 17441, including
+`SF_BUTTON_NOTSOLID` (16384). Retaining its immediate Kill edge must not add
+its brush volume to player or shot collision. Ordinary solid dependencies
+retain their existing removal behavior.
+
+Clean-room flag documentation: Facepunch's [September 2019 update](https://gmod.facepunch.com/news/september-2019-update)
+records adding CS:GO's 16384 non-solid button flag. No SDK or engine source was
+read. The installed regression retains exact full-world first-hit ownership
+from both cover faces, rather than ignoring a nearer solid during damage.
+

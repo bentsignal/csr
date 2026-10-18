@@ -834,6 +834,13 @@ impl CollisionWorld {
             if ent.i64("startdisabled") == Some(1) {
                 continue;
             }
+            // CS:GO's authored SF_BUTTON_NOTSOLID applies even when the
+            // button is retained as an OnBreak/Kill dependency. Its interaction
+            // volume must not become a player or bullet collision barrier.
+            if class.eq_ignore_ascii_case("func_button")
+                && ent.i64("spawnflags").unwrap_or(0) & 16384 != 0 {
+                continue;
+            }
             let Some(model) = ent.str("model").and_then(|m| m.strip_prefix('*')).and_then(|n| n.parse::<usize>().ok()) else {
                 continue;
             };
