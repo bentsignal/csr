@@ -189,6 +189,11 @@ fn visible_models(bsp: &Bsp) -> Vec<(usize, glam::Vec3)> {
         if model == 0 {
             continue;
         }
+        // Mode 10 is an authored nonvisual brush (for example a lighting
+        // helper behind shutters). Keep its collision, but do not draw it.
+        if ent.i64("rendermode") == Some(10) {
+            continue;
+        }
         // Brushes a game mode enables later (Retakes walls) start hidden.
         if ent.i64("startdisabled") == Some(1) {
             continue;
@@ -406,6 +411,26 @@ fn build_models(bsp: &Bsp, atlas: &LightmapAtlas, include: &dyn Fn(usize) -> boo
 mod compiled_topology_tests {
     use super::*;
     use bevy::mesh::VertexAttributeValues;
+
+    #[test]
+    fn invisible_brushes_keep_metadata_but_never_enter_visual_batches() {
+        let mut bsp = Bsp::default();
+        bsp.entities = [
+            r#"classname func_brush model *1 origin "1 2 3" rendermode 0"#,
+            r#"classname func_brush model *2 origin "4 5 6" rendermode 10"#,
+            r#"classname func_brush model *3 origin "7 8 9" StartDisabled 1"#,
+            r#"classname func_brush model *4 origin "10 11 12""#,
+        ].into_iter().map(|text| kv::parse(text).unwrap()).collect();
+        assert_eq!(visible_models(&bsp), vec![
+            (0, glam::Vec3::ZERO),
+            (1, glam::Vec3::new(1., 2., 3.)),
+            (4, glam::Vec3::new(10., 11., 12.)),
+        ]);
+        // Visual selection must not remove the entity from the map that owns
+        // collision, outputs and authored lighting metadata.
+        assert_eq!(bsp.entities[1].str("model"), Some("*2"));
+        assert_eq!(bsp.entities.len(), 4);
+    }
 
     #[test]
     fn renderer_keeps_compiled_boundary_split_and_original_uv_mapping() {
