@@ -201,6 +201,42 @@ mod tests {
     }
 
     #[test]
+    fn lighting_origin_bake_keeps_identity_and_control_byte_fallbacks() {
+        let (key, model, mut bytes) = bake_fixture(false);
+        let scoped = ScopedFile::parse(key.clone(), &key.hdr_name(), &bytes).unwrap();
+        let wrong_bsp = InstanceKey::new(key.map().clone(), [8; 20], key.ordinal()).unwrap();
+        assert!(scoped_colors(2, &wrong_bsp, &model, &scoped).is_none());
+        let mut stale_model = model.clone();
+        stale_model.checksum += 1;
+        assert!(scoped_colors(2, &key, &stale_model, &scoped).is_none());
+        // Even this now-supported receiver must fall back for unknown record
+        // semantics. Do not silently discard its fourth byte or other groups.
+        bytes[68 + 3] = 1;
+        let scoped = ScopedFile::parse(key.clone(), &key.hdr_name(), &bytes).unwrap();
+        assert_eq!(scoped_colors(2, &key, &model, &scoped), Some(vec![None]));
+    }
+
+    #[test]
+    #[ignore = "requires read-only installed Legacy Cobble; no native process"]
+    fn installed_cobble_authored_origin_arch_uses_its_matching_bake() {
+        let level = level::Level::load("de_cbble", None).unwrap();
+        let (ordinal, prop) = level.bsp.static_props.props.iter().enumerate().find(|(_, prop)| {
+            prop.flags == 2 && prop.origin == glam::Vec3::new(-928., 368., 104.)
+        }).expect("observed authored-origin Cobble arch");
+        let name = &level.bsp.static_props.models[usize::from(prop.model)];
+        assert!(name.ends_with("/arch_g/arch_g.mdl"));
+        let base = name.trim_end_matches(".mdl");
+        let model = mdl::Model::load(
+            &level.vfs.read(name).unwrap(),
+            &level.vfs.read(&format!("{base}.vvd")).unwrap(),
+            &level.vfs.read(&format!("{base}.dx90.vtx")).unwrap(),
+        ).unwrap();
+        let colors = super::load(&level, ordinal, &model).expect("matching scoped bake");
+        assert_eq!(colors.iter().filter_map(|mesh| mesh.as_ref()).map(Vec::len).sum::<usize>(), 926);
+        assert!(colors.iter().all(Option::is_some));
+    }
+
+    #[test]
     #[ignore = "requires read-only installed Legacy Inferno; no native process"]
     fn installed_lighting_origin_trim_retains_its_authored_point_without_admitting_bake() {
         let mut level = level::Level::load("de_inferno", None).unwrap();
