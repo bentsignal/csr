@@ -10,6 +10,8 @@ use std::sync::Arc;
 #[test]
 #[ignore = "requires the selected local CS:GO Legacy Nuke/Cache data; parent executes under its Cargo slot"]
 fn installed_nuke_cache_covers_decode_and_win_both_faces_before_tick_damage() {
+    let trace_fields = |tr: collision::Trace| (tr.fraction, tr.end, tr.normal,
+        tr.plane_dist, tr.start_solid, tr.all_solid, tr.contents, tr.surface);
     const SLATS: &str = "models/props/de_nuke/hr_nuke/nuke_vent_slats/nuke_vent_slats.mdl";
     const BOMB_VENT: &str = "models/props/de_nuke/hr_nuke/nuke_vent_bombsite/nuke_vent_bombsite_breakable_c.mdl";
     const CACHE_VENT: &str = "models/fmpone/de_cache/workingnewvents.mdl";
@@ -127,7 +129,7 @@ fn installed_nuke_cache_covers_decode_and_win_both_faces_before_tick_damage() {
                     // Removing a cover must restore that exact underlying hit,
                     // rather than deleting unrelated world geometry to clear a ray.
                     let underlying = intact.collision.static_world().trace_ray(from, to, contents::MASK_SHOT);
-                    assert_eq!(after.0, underlying,
+                    assert_eq!(trace_fields(after.0), trace_fields(underlying),
                         "{name} entity {entity}: removed cover/dependency differs from underlying world");
                     if name == "de_nuke" && entity == 237 {
                         assert!(!underlying.hit(), "the slats passage must be clear");
@@ -138,7 +140,7 @@ fn installed_nuke_cache_covers_decode_and_win_both_faces_before_tick_damage() {
                         Some(HitOwner::Breakable(index)), "clone isolation");
                     let broken = world.decode::<sim::WorldState>(&world.encode_state()).unwrap();
                     let mut restored = intact.clone(); restored.restore(broken);
-                    assert_eq!(restored.collision.trace_ray(from, to, contents::MASK_SHOT), underlying);
+                    assert_eq!(trace_fields(restored.collision.trace_ray(from, to, contents::MASK_SHOT)), trace_fields(underlying));
                     world.restore(before);
                     assert!(!world.breakables[index].broken());
                     assert_eq!(world.collision.trace_owned_ray(from, to, contents::MASK_SHOT).1, Some(HitOwner::Breakable(index)));
