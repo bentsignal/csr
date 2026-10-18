@@ -140,6 +140,9 @@ fn centered_row(top: Val, bottom: Val) -> Node {
 }
 
 pub fn setup(mut commands: Commands) {
+    // Skip the entire tree, including opaque/background-only nodes. Skipping
+    // update alone leaves the timer plate painted over HUD-free map captures.
+    if std::env::var_os("CSR_NO_HUD").is_some() { return; }
     // Crosshair: four green bars with a gap, CS:GO "classic static" style,
     // plus a hit marker (hidden until a hit).
     let color = Color::srgb(0.2, 1.0, 0.2);
