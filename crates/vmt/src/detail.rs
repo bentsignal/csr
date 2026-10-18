@@ -98,6 +98,12 @@ impl Material {
                 let scale = match values.as_slice() {
                     [v] if !text.starts_with('[') => [*v; 2],
                     [s, t] => [*s, *t],
+                    // Legacy materials also spell a uniform scalar as a
+                    // three-component vector (including prop AO layers).
+                    // This has the same UV scale whichever component a
+                    // scalar reader selects. Do not guess how nonuniform
+                    // three-component declarations map onto two UV axes.
+                    [s, t, r] if s == t && t == r => [*s; 2],
                     _ => return Err(DetailError::Scale),
                 };
                 if scale.iter().any(|v| !v.is_finite() || *v <= 0.0) {
@@ -188,6 +194,40 @@ mod tests {
         .unwrap();
         assert_eq!(world_other_mode.detail_layer(), Err(DetailError::Mode));
     }
+
+    #[test]
+    fn uniform_three_component_scales_retain_authored_ao_and_grain_layers() {
+        for shader in ["VertexLitGeneric", "LightmappedGeneric", "WorldVertexTransition"] {
+            for scale in [1.0f32, 6., 15., 0.25] {
+                let parse = |declaration: &str| Material::parse_with(
+                    &format!(r#"{shader} {{
+                        "$basetexture" "synthetic/base"
+                        "$detail" "synthetic/ao" "$detailblendmode" "0"
+                        "$detailblendfactor" ".4" "$detailscale" "{declaration}"
+                    }}"#), &|_| None, 0,
+                ).unwrap();
+                let scalar = parse(&scale.to_string());
+                let vector = parse(&format!("[ {scale} {scale} {scale} ]"));
+                assert_eq!(vector.detail_layer(), scalar.detail_layer());
+                assert_eq!(vector.detail_layer().unwrap(), Some(DetailLayer {
+                    texture: "synthetic/ao", scale: [scale; 2], factor: 0.4,
+                }));
+            }
+        }
+        // Patch resolution must preserve the scale along with the layer,
+        // without broadening admission of alternate detail operations.
+        let base = r#"VertexLitGeneric {
+            "$detail" "synthetic/ao" "$detailscale" "[1 1 1]"
+        }"#;
+        let read = |path: &str| (path == "materials/synthetic/base.vmt").then(|| base.to_owned());
+        let patched = Material::parse_with(r#"Patch {
+            include "materials/synthetic/base.vmt"
+            replace { "$detailblendfactor" ".5" }
+        }"#, &read, 0).unwrap();
+        assert_eq!(patched.detail_layer().unwrap(), Some(DetailLayer {
+            texture: "synthetic/ao", scale: [1.; 2], factor: 0.5,
+        }));
+    }
     #[test]
     fn malformed_or_unsupported_declarations_do_not_become_defaults() {
         for scale in [
@@ -196,6 +236,17 @@ mod tests {
             "0",
             "-1",
             "[1 2 3]",
+            "[1 1 2]",
+            "[1 2 1]",
+            "[2 1 1]",
+            "[1 1 NaN]",
+            "[1 1 inf]",
+            "[0 0 0]",
+            "[-1 -1 -1]",
+            "[NaN NaN NaN]",
+            "[inf inf inf]",
+            "[1 1 1 1]",
+            "[1 1 1] trailing",
             "[2]",
             "[1 garbage]",
             "[1 2] trailing",
@@ -270,7 +321,7 @@ mod tests {
             (r#""$detailtint2" "[1 1 1]""#, DetailError::Mode),
             (r#""$detailframe2" "0""#, DetailError::Mode),
             (r#""$detailblendmode" "2""#, DetailError::Mode),
-            (r#""$detailscale" "[8 8 8]""#, DetailError::Scale),
+            (r#""$detailscale" "[8 8 4]""#, DetailError::Scale),
             (r#""$detailtint" "[.5 .5 .5]""#, DetailError::Tint),
             (r#"Proxies { AnimatedTexture { animatedtexturevar "$detail" } }"#, DetailError::Animation),
         ] {
