@@ -92,3 +92,30 @@ fn only_literal_immediate_kill_edges_remove_supported_static_dependencies() {
     map.entities[0].set("OnBreak", kv::Value::Str("shared\u{1b}Kill\u{1b}\u{1b}0\u{1b}-1".into()));
     assert_eq!(dependencies(&map, &defs)[0].killed_by, vec![0, 1]);
 }
+
+#[test]
+fn immediate_break_links_resolve_only_admitted_targets_and_deduplicate_outputs() {
+    let mut map = bsp::Bsp::default();
+    map.entities.push(prop(r#"targetname cover OnBreak "paired,Break,,0,-1"
+        OnBreak "paired,Break,,0,1" OnBreak "delayed,Break,,1,-1"
+        OnBreak "argument,Break,x,0,-1" OnBreak "wild*,Break,,0,-1"
+        OnBreak "exhausted,Break,,0,0" OnBreak "missing,Break,,0,-1"
+        OnBreak "paired,Kill,,0,-1""#));
+    for name in ["paired", "delayed", "argument", "wildcard", "exhausted"] {
+        map.entities.push(prop(&format!(r#"targetname {name} OnBreak "cover,Break,,0,-1""#)));
+    }
+    // A named entity without admitted model declarations is never a target.
+    let mut missing = prop("targetname missing");
+    missing.set("solid", kv::Value::Str("0".into())); map.entities.push(missing);
+    let mut defs = load_props(&map, &|_| Some(vec![hull()]),
+        &|_| Some(mdl(r#"health 1 "dmg.bullets" 1 "dmg.club" 1"#)), &kv::Block::default());
+    assert_eq!(defs.len(), 6);
+    assert_eq!(break_links(&map, &defs), vec![(0, 1), (1, 0), (2, 0), (3, 0), (4, 0), (5, 0)]);
+    // ESC separators and mixed case follow the same exact-literal rules.
+    map.entities[0].set("OnBreak", kv::Value::Str("PAIRED\u{1b}bReAk\u{1b}\u{1b}0\u{1b}-1".into()));
+    assert_eq!(break_links(&map, &defs)[0], (0, 1));
+    for (health, material, trigger_only) in [(0., -1, false), (1., 7, false), (1., -1, true)] {
+        defs[1].health = health; defs[1].material = material; defs[1].trigger_only = trigger_only;
+        assert!(!break_links(&map, &defs).iter().any(|&(_, target)| target == 1));
+    }
+}

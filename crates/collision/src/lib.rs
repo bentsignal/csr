@@ -241,6 +241,9 @@ pub struct CollisionWorld {
     pub doors: std::sync::Arc<[doors::Door]>,
     pub breakables: std::sync::Arc<[breakables::Breakable]>,
     pub breakable_dependencies: std::sync::Arc<[breakables::Dependency]>,
+    /// Literal immediate OnBreak -> Break edges between admitted definitions,
+    /// sorted by source then target, with duplicates removed.
+    pub breakable_break_links: std::sync::Arc<[(usize, usize)]>,
     /// A session-owned, immutable pose overlay shares the heavy map/grid.
     base: Option<std::sync::Arc<CollisionWorld>>,
     /// Per-overlay convex ownership, in the same order as `convexes`.
@@ -919,6 +922,9 @@ impl CollisionWorld {
             if breakables.len() < breakables::MAX_BREAKABLES.saturating_sub(props.len()) {
                 if let Some(mut def) = breakables::Breakable::load(entity, ent, map) {
                     if w.convexes.len() > start {
+                        // Resolve mounted inherited health before admitting
+                        // immediate Break targets or hashing definitions.
+                        def.apply_prop_data(presets);
                         def.solids = w.convexes.drain(start..).collect();
                         breakables.push(def);
                     }
@@ -935,6 +941,7 @@ impl CollisionWorld {
                 for solid in &mut def.solids { solid.surface = surface; }
             }
         }
+        w.breakable_break_links = breakables::break_links(map, &breakables).into();
         w.breakables = breakables.into();
         w.breakable_dependencies = dependencies.into();
 

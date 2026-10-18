@@ -176,13 +176,12 @@ pub(super) fn load_props(map: &bsp::Bsp, hulls: &crate::PropHullLoader<'_>,
     out
 }
 
-/// Only literal, immediate, argument-free Kill outputs are supported here.
 /// Delayed/scripted outputs retain the existing path; no general I/O executor.
-fn immediate_kills(ent: &kv::Block) -> impl Iterator<Item = &str> {
-    ent.get_all("OnBreak").take(64).filter_map(|value| {
+fn immediate_outputs<'a>(ent: &'a kv::Block, input: &'a str) -> impl Iterator<Item = &'a str> {
+    ent.get_all("OnBreak").take(64).filter_map(move |value| {
         let output = value.as_str()?;
         let parts: Vec<_> = output.split(if output.contains('\u{1b}') { '\u{1b}' } else { ',' }).collect();
-        if parts.len() != 5 || !parts[1].eq_ignore_ascii_case("Kill") || !parts[2].is_empty()
+        if parts.len() != 5 || !parts[1].eq_ignore_ascii_case(input) || !parts[2].is_empty()
             || parts[3].parse::<f32>().ok()? != 0.0
             || !parts[4].parse::<i32>().ok().is_some_and(|v| v == -1 || v > 0)
             || parts[0].is_empty() || parts[0].chars().any(|c| "!*?".contains(c)) { return None; }
@@ -190,10 +189,27 @@ fn immediate_kills(ent: &kv::Block) -> impl Iterator<Item = &str> {
     })
 }
 
+/// Resolve only admitted, destructible targets. The state vector owns their
+/// removal, including reciprocal links, so prediction/restore need no I/O state.
+pub(super) fn break_links(map: &bsp::Bsp, defs: &[Breakable]) -> Vec<(usize, usize)> {
+    let mut out = Vec::new();
+    for (source, def) in defs.iter().enumerate() {
+        let names: Vec<_> = immediate_outputs(&map.entities[def.entity], "Break").collect();
+        for (target, other) in defs.iter().enumerate() {
+            if other.health <= 0.0 || other.material == 7 || other.trigger_only { continue; }
+            if map.entities[other.entity].str("targetname")
+                .is_some_and(|name| names.iter().any(|s| s.eq_ignore_ascii_case(name))) {
+                out.push((source, target));
+            }
+        }
+    }
+    out
+}
+
 pub(super) fn dependencies(map: &bsp::Bsp, defs: &[Breakable]) -> Vec<Dependency> {
     let mut out: Vec<Dependency> = Vec::new();
     for (index, def) in defs.iter().enumerate() {
-        for name in immediate_kills(&map.entities[def.entity]) {
+        for name in immediate_outputs(&map.entities[def.entity], "Kill") {
             for (entity, ent) in map.entities.iter().enumerate() {
                 if !ent.str("targetname").is_some_and(|s| s.eq_ignore_ascii_case(name)) { continue; }
                 let class = ent.str("classname").unwrap_or("");

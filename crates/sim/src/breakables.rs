@@ -30,6 +30,10 @@ impl World {
                         && (state.destroyed || state.health != def.health))) {
             return Err("snapshot breakables differ from mounted map".into());
         }
+        if self.collision.breakable_break_links.iter().any(|&(source, target)|
+            states[source].broken() && !states[target].broken()) {
+            return Err("snapshot breakables violate immediate Break links".into());
+        }
         Ok(())
     }
 
@@ -55,6 +59,21 @@ impl World {
         state.health = (state.health - amount).max(0.0);
         if state.health == 0.0 {
             state.destroyed = true;
+            // Process each newly destroyed owner once. Cycles, self-links and
+            // duplicate paths terminate without repeated outputs or rebuilds.
+            let mut pending = vec![index];
+            while let Some(source) = pending.pop() {
+                let links = &self.collision.breakable_break_links;
+                let first = links.partition_point(|&(from, _)| from < source);
+                let last = links.partition_point(|&(from, _)| from <= source);
+                for &(_, target) in &links[first..last] {
+                    let state = &mut self.breakables[target];
+                    if state.broken() { continue; }
+                    state.health = 0.0;
+                    state.destroyed = true;
+                    pending.push(target);
+                }
+            }
             // Only the small runtime geometry is rebuilt, never the map/grid.
             // Subsequent pellets and later players this tick see the opening.
             self.rebuild_door_collision();

@@ -21,7 +21,7 @@ pub(super) fn bind(collision: &CollisionWorld, previous: Option<[u8; 20]>) -> Op
     if collision.breakables.is_empty() { return previous; }
     previous.map(|previous| {
         let mut hash = Sha1::new();
-        hash.update(b"csr-authored-breakable-definitions-v2\0");
+        hash.update(b"csr-authored-breakable-definitions-v3\0");
         hash.update(previous);
         hash.update((collision.breakables.len() as u64).to_le_bytes());
         for def in collision.breakables.iter() {
@@ -52,6 +52,11 @@ pub(super) fn bind(collision: &CollisionWorld, previous: Option<[u8; 20]>) -> Op
             for &index in &dep.killed_by { hash.update((index as u64).to_le_bytes()); }
             solids(&mut hash, &dep.solids);
         }
+        hash.update((collision.breakable_break_links.len() as u64).to_le_bytes());
+        for &(source, target) in collision.breakable_break_links.iter() {
+            hash.update((source as u64).to_le_bytes());
+            hash.update((target as u64).to_le_bytes());
+        }
         hash.finalize().into()
     })
 }
@@ -73,6 +78,7 @@ mod tests {
                 angles: Vec3::ZERO, scale: 1., skin: 0, body: 0, tint: Vec3::ONE }) }].into();
         world.breakable_dependencies = vec![Dependency { entity: 5, model: 1, origin: Vec3::ZERO,
             killed_by: vec![0], solids: vec![solid] }].into();
+        world.breakable_break_links = vec![(0, 0)].into();
         world
     }
 
@@ -83,7 +89,7 @@ mod tests {
         assert_eq!(bind(&fixture(), previous), baseline);
         assert_eq!(bind(&fixture(), None), None);
         assert_eq!(bind(&CollisionWorld::new(), previous), previous);
-        for change in 0..14 {
+        for change in 0..17 {
             let mut world = fixture();
             let def = &mut Arc::get_mut(&mut world.breakables).unwrap()[0];
             match change {
@@ -100,7 +106,10 @@ mod tests {
                 10 => Arc::get_mut(&mut world.breakable_dependencies).unwrap()[0].killed_by.clear(),
                 11 => Arc::get_mut(&mut world.breakable_dependencies).unwrap()[0].solids[0].planes[0].dist = 2.,
                 12 => world.breakable_dependencies = Arc::from([]),
-                _ => def.entity += 1,
+                13 => def.entity += 1,
+                14 => Arc::get_mut(&mut world.breakable_break_links).unwrap()[0].0 = 1,
+                15 => Arc::get_mut(&mut world.breakable_break_links).unwrap()[0].1 = 1,
+                _ => world.breakable_break_links = Arc::from([]),
             }
             assert_ne!(bind(&world, previous), baseline, "unbound definition change {change}");
         }
