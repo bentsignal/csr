@@ -367,6 +367,7 @@ pub fn run(opts: ClientOptions) -> i32 {
     .add_plugins(CsgoPlugin)
     .insert_state(if browser_flow::enabled() || remote_flow::enabled() || pack_ui::proof_enabled() || frontend_flow::enabled() || std::env::var("CSR_TEST_MENU").as_deref() == Ok("main") { AppState::Menu }
         else if opts.direct || opts.screenshot.is_some() { AppState::Loading } else { AppState::Menu });
+    input_latency::configure_main_frame(&mut app);
     bot_performance::install(&mut app);
     material::install_lighting(&mut app);
     input_latency::install_frame_log(&mut app);

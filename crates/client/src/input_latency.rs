@@ -242,6 +242,20 @@ pub(crate) fn desktop_plugins() -> PluginGroupBuilder {
     DefaultPlugins.build()
 }
 
+pub(crate) fn configure_main_frame(app: &mut App) {
+    // These frame schedules contain many short systems. Run their existing
+    // dependency order directly on the main thread instead of dispatching
+    // each system to the compute pool. Parallel queries inside systems keep
+    // their pool, and fixed simulation and pipelined rendering are unchanged.
+    let sequential = |schedule: &mut bevy::ecs::schedule::Schedule| {
+        schedule.set_executor(bevy::ecs::schedule::SingleThreadedExecutor::new());
+    };
+    app.edit_schedule(PreUpdate, sequential)
+        .edit_schedule(Update, sequential)
+        .edit_schedule(PostUpdate, sequential);
+    info!("desktop main frame executor: sequential PreUpdate/Update/PostUpdate; fixed and render schedules retained");
+}
+
 pub(crate) fn surface_frame_latency() -> Option<NonZeroU32> {
     // This is a backend hint, not a guarantee about the OS compositor/scanout.
     NonZeroU32::new(1)
