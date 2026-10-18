@@ -436,8 +436,14 @@ fn cached_classic_vertigo_parented_doors_open_and_admit_full_player_hulls() {
         assert!((world.doors[index].angle.abs()-90.).abs()<0.01,
             "{rate}Hz entity{} failed to open: {:?} from{start:?}", entity, world.doors[index]);
         let player = world.player(actor).unwrap(); let (mins,maxs)=player.movement.hull();
-        let inside = start - outside * 97.;
-        let trace = world.collision.trace_box(start, inside, mins, maxs, collision::contents::MASK_PLAYERSOLID);
+        // The mounted toilet body has an authored ~5.68-unit floor lip and
+        // a seat at the back. A horizontal floor-height sweep is not a walking
+        // route: let normal step movement cross the lip, and stop before the
+        // seat. Check full standing clearance above the existing 18-unit step.
+        let step = Vec3::Z * 18.;
+        let inside = start - outside * 80.;
+        let trace = world.collision.trace_box(start + step, inside + step,
+            mins, maxs, collision::contents::MASK_PLAYERSOLID);
         assert!(!trace.hit() && !trace.start_solid,
             "{rate}Hz entity{} open leaf must admit full hull: {trace:?}", entity);
         for _ in 0..rate { world.step(&[(actor, sim::TickInput {
