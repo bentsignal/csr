@@ -1,6 +1,6 @@
 //! Bounded impact/blood effects and damage feedback from simulation events.
 use crate::{
-    coords::to_bevy,
+    coords::{rotation_to_bevy, to_bevy},
     effects::Effects,
     player::{LocalPlayer, SimWorld},
 };
@@ -27,6 +27,39 @@ pub struct ImpactFx {
 }
 #[derive(Component)]
 pub struct ImpactArtwork(pub content::ContentId);
+
+/// A map-owned cosmetic contact, independent of the firing player's lifetime.
+/// No parent/skeleton lookup or render-frame collision query selects its owner.
+#[derive(Component)]
+pub(crate) struct DoorImpactMark {
+    map: content::ContentId,
+    impact: sim::doors::Impact,
+    surface: u32,
+}
+
+impl DoorImpactMark {
+    fn pose(&self, map: &content::ContentId, collision: &collision::CollisionWorld,
+        states: &[sim::doors::State]) -> Option<Transform> {
+        if self.map != *map || !self.impact.valid() { return None; }
+        let def = collision.doors.get(self.impact.door as usize)?;
+        let state = states.get(self.impact.door as usize)?;
+        if self.surface != def.surface || self.impact.pos.length() > def.radius + 0.25 { return None; }
+        let rotation = def.rotation(state.angle);
+        let normal = self.impact.normal.normalize_or_zero();
+        Some(Transform::from_translation(to_bevy(def.origin + rotation * (self.impact.pos + normal * 0.12)))
+            .with_rotation(rotation_to_bevy(rotation) * Quat::from_rotation_arc(Vec3::Z, to_bevy(normal))))
+    }
+}
+
+/// Several fixed ticks may accumulate before one render. Contacts before the
+/// latest round reset belong to the previous world, even if processed together.
+fn reset_feedback(events: &mut Vec<sim::GameEvent>) -> bool {
+    let Some(reset) = events.iter().rposition(|event| matches!(event, sim::GameEvent::RoundStart { .. }))
+        else { return false; };
+    events.drain(..reset);
+    true
+}
+
 #[derive(Component)]
 pub struct HurtEdge(pub u8);
 #[derive(Resource, Default)]
@@ -318,7 +351,7 @@ pub fn update(
     local: Res<LocalPlayer>,
     level: Res<crate::LoadedLevel>,
     time: Res<Time>,
-    mut particles: Query<(Entity, &mut Transform, &mut ImpactFx)>,
+    mut particles: Query<(Entity, &mut Transform, &mut ImpactFx, Option<&DoorImpactMark>)>,
     mut edges: Query<(&HurtEdge, &mut Node, &mut BackgroundColor)>,
 ) {
     let _frame_scope = crate::input_latency::frame_scope("feedback");
@@ -327,12 +360,9 @@ pub fn update(
     let eye = to_bevy(local.render_eye);
     let mut budget = MAX_FEEDBACK_FX.saturating_sub(particles.iter().count());
     let mut retired = HashSet::new();
-    let reset = effects
-        .feedback
-        .iter()
-        .any(|e| matches!(e, sim::GameEvent::RoundStart { .. }));
+    let reset = reset_feedback(&mut effects.feedback);
     if reset {
-        for (e, _, _) in &particles {
+        for (e, _, _, _) in &particles {
             commands.entity(e).despawn();
         }
         hurt.time = None;
@@ -345,6 +375,7 @@ pub fn update(
                 pos,
                 normal,
                 surface,
+                door,
                 ..
             } => {
                 if level.0.collision.is_sky(surface) {
@@ -354,17 +385,26 @@ pub fn update(
                 if let Some(decal) = props.get(&prop).and_then(|p| p.game_material.as_deref())
                     .and_then(|code| assets.decals.choose(code)) {
                     let normal = to_bevy(normal).normalize_or_zero();
+                    let attachment = door.map(|impact| DoorImpactMark { map: level.0.id.clone(), impact, surface });
+                    let pose = match &attachment {
+                        Some(mark) => mark.pose(&level.0.id, &level.0.collision, &world.0.doors),
+                        None => (normal.length_squared() > 0.5 && pos.is_finite()).then(||
+                            Transform::from_translation(to_bevy(pos) + normal * 0.12)
+                                .with_rotation(Quat::from_rotation_arc(Vec3::Z, normal))),
+                    };
                     if normal.length_squared() > 0.5 && pos.is_finite()
+                        && pose.is_some()
                         && reserve_impact_slot(&mut commands, &mut budget, &mut retired,
-                            particles.iter().filter(|_| !reset).map(|(e, _, fx)| (e, fx.born))) {
+                            particles.iter().filter(|_| !reset).map(|(e, _, fx, _)| (e, fx.born))) {
                         if std::env::var_os("CSR_WEAPON_TRACE").is_some() {
                             info!("impact artwork: {:?} at {:?}; surface={prop}, game_material={:?}", decal.id, pos, props.get(&prop).and_then(|p| p.game_material.as_deref()));
                         }
                         let mut mark = commands.spawn((Mesh3d(decal.mesh), MeshMaterial3d(decal.material), ImpactArtwork(decal.id),
-                            Transform::from_translation(to_bevy(pos) + normal * 0.12)
-                                .with_rotation(Quat::from_rotation_arc(Vec3::Z, normal)),
+                            pose.unwrap(),
                             ImpactFx { born: now, life: 30., velocity: Vec3::ZERO, billboard: false }));
-                        if let Some(index) = level.0.collision.breakables.iter()
+                        if let Some(attachment) = attachment {
+                            mark.insert(attachment);
+                        } else if let Some(index) = level.0.collision.breakables.iter()
                             .position(|def| def.contains_surface(pos, crate::coords::to_source(normal))) {
                             mark.insert(crate::breakables::BreakableMesh(vec![index]));
                         }
@@ -422,11 +462,18 @@ pub fn update(
         }
     }
     if !reset {
-        for (e, mut transform, mut fx) in &mut particles {
+        for (e, mut transform, mut fx, attachment) in &mut particles {
             if retired.contains(&e) { continue; }
             if now - fx.born > fx.life {
                 commands.entity(e).despawn();
                 continue;
+            }
+            if let Some(mark) = attachment {
+                let Some(pose) = mark.pose(&level.0.id, &level.0.collision, &world.0.doors) else {
+                    commands.entity(e).despawn();
+                    continue;
+                };
+                *transform = pose;
             }
             if fx.billboard {
                 transform.translation += fx.velocity * dt;
@@ -500,6 +547,85 @@ mod tests {
 #[cfg(test)]
 mod decal_tests {
     use super::*;
+
+    fn door_mark() -> (DoorImpactMark, collision::CollisionWorld, Vec<sim::doors::State>) {
+        let mut map = bsp::Bsp::default();
+        let doc = kv::parse(r#"door { classname prop_door_rotating model models/fixture_leaf.mdl
+            origin "100 200 32" angles "12 27 9" }"#).unwrap();
+        map.entities.push(doc.block("door").unwrap().clone());
+        let hull = mdl::ConvexHull {
+            points: vec![glam::Vec3::new(-2., 0., 0.), glam::Vec3::new(2., 0., 0.),
+                glam::Vec3::new(2., 48., 0.), glam::Vec3::new(-2., 48., 0.),
+                glam::Vec3::new(-2., 0., 96.), glam::Vec3::new(2., 0., 96.),
+                glam::Vec3::new(2., 48., 96.), glam::Vec3::new(-2., 48., 96.)],
+            triangles: vec![[0, 2, 1], [0, 3, 2], [4, 5, 6], [4, 6, 7], [0, 1, 5], [0, 5, 4],
+                [1, 2, 6], [1, 6, 5], [2, 3, 7], [2, 7, 6], [3, 0, 4], [3, 4, 7]],
+        };
+        let collision = collision::CollisionWorld::from_bsp(&map, &collision::MapCollisionOptions::default(),
+            &|_| Some(vec![hull.clone()]));
+        let mark = DoorImpactMark {
+            map: content::ContentId::csgo(content::ContentKind::Map, "fixture"),
+            impact: sim::doors::Impact { door: 0, pos: glam::Vec3::new(-2., 24., 64.), normal: -glam::Vec3::X },
+            surface: collision.doors[0].surface,
+        };
+        (mark, collision, vec![sim::doors::State { angle: 0., target: 0., return_at: None }])
+    }
+
+    #[test]
+    fn mounted_door_mark_follows_hinge_position_normal_and_texture_roll_both_ways() {
+        let (mark, collision, mut states) = door_mark();
+        let closed = mark.pose(&mark.map, &collision, &states).unwrap();
+        let def = &collision.doors[0];
+        let hinge = to_bevy(def.origin);
+        for angle in [-37., -90., -37., 0.] {
+            states[0].angle = angle;
+            let pose = mark.pose(&mark.map, &collision, &states).unwrap();
+            let swing = rotation_to_bevy(def.rotation(angle) * def.rotation(0.).transpose());
+            assert!((pose.translation - (hinge + swing * (closed.translation - hinge))).length() < 0.001);
+            for axis in [Vec3::Z, Vec3::X] {
+                assert!((pose.rotation * axis - swing * (closed.rotation * axis)).length() < 0.001);
+            }
+        }
+        assert!((mark.pose(&mark.map, &collision, &states).unwrap().translation - closed.translation).length() < 0.001);
+        assert!(mark.pose(&mark.map, &collision, &[]).is_none());
+        let new_map = content::ContentId::csgo(content::ContentKind::Map, "another_map");
+        assert!(mark.pose(&new_map, &collision, &states).is_none(), "ordinals cannot cross map ContentIds");
+        let invalid = DoorImpactMark { surface: mark.surface + 1, ..mark };
+        assert!(invalid.pose(&invalid.map, &collision, &states).is_none());
+    }
+
+    #[test]
+    fn accumulated_impacts_before_latest_round_reset_are_not_respawned() {
+        let impact = sim::GameEvent::Impact { player: 1, pos: glam::Vec3::ZERO, normal: glam::Vec3::X,
+            surface: 0, door: Some(sim::doors::Impact { door: 0, pos: glam::Vec3::ZERO, normal: glam::Vec3::X }) };
+        let mut events = vec![impact.clone(), sim::GameEvent::RoundStart { round: 2 }, impact.clone(),
+            sim::GameEvent::RoundStart { round: 3 }, impact.clone()];
+        assert!(reset_feedback(&mut events));
+        assert_eq!(events, vec![sim::GameEvent::RoundStart { round: 3 }, impact.clone()]);
+        events.remove(0);
+        assert!(!reset_feedback(&mut events)); assert_eq!(events, vec![impact]);
+    }
+
+    #[test]
+    fn leaving_match_despawns_door_artwork_and_its_attachment_together() {
+        use crate::session::{AppState, MatchEntity};
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, bevy::state::app::StatesPlugin))
+            .insert_state(AppState::Match)
+            .add_observer(crate::session::own_entity::<Transform>)
+            .add_systems(OnExit(AppState::Match), crate::session::clear_match);
+        app.update();
+        let (mark, _, _) = door_mark();
+        let entity = app.world_mut().spawn((mark, Transform::default(),
+            ImpactArtwork(content::ContentId::csgo(content::ContentKind::Material, "impact.fixture")),
+            ImpactFx { born: 1., life: 30., velocity: Vec3::ZERO, billboard: false })).id();
+        app.world_mut().flush();
+        assert!(app.world().get::<MatchEntity>(entity).is_some());
+        app.world_mut().resource_mut::<NextState<AppState>>().set(AppState::Menu);
+        app.update();
+        assert!(app.world().get_entity(entity).is_err());
+        assert_eq!(app.world_mut().query::<&DoorImpactMark>().iter(app.world()).count(), 0);
+    }
 
     #[test]
     fn new_impact_marks_replace_distinct_old_effects_at_the_entity_limit() {
