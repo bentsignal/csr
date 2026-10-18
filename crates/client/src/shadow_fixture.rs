@@ -120,9 +120,7 @@ pub fn run() -> i32 {
     )
     .add_plugins(MaterialPlugin::<WorldMaterial>::default());
     embedded_asset!(&mut app, "shaders/world.wgsl");
-    if enabled() {
-        embedded_asset!(&mut app, "shaders/world_shadow.wgsl");
-    }
+    embedded_asset!(&mut app, "shaders/world_shadow.wgsl");
     if remote_render_gate::install(&mut app).is_err() {
         return 2;
     }

@@ -1,9 +1,9 @@
-// Developer diagnostic shadow depth. Mirror WorldParams through its appended
-// base_uv field so depth alpha uses the same primary mapping as forward color.
+// World depth prepass and developer diagnostic shadow depth. Mirror WorldParams
+// through base_uv so depth alpha uses the same primary mapping as forward color.
 // CPU serialization tests protect the layout; lighting is not evaluated here.
 #import bevy_pbr::prepass_io::VertexOutput
 // Bevy defines this output only when color prepass outputs or unclipped-depth
-// emulation are required. Native depth-only shadow passes instead return void.
+// emulation are required. Native depth-only passes instead return void.
 #ifdef PREPASS_FRAGMENT
 #import bevy_pbr::prepass_io::FragmentOutput
 #endif
@@ -58,6 +58,11 @@ fn fragment(in: VertexOutput)
     let base_uv = select(uv * params.base_uv.xy + params.base_uv.zw, uv,
         (params.flags & 256u) != 0u || params.skin.x > 0.5);
     var alpha = textureSample(base_tex, base_samp, base_uv).a;
+    // Cosmetic cutout precedes the terrain transition in forward color too.
+    if params.skin_details.w > 0.5 && params.skin_details.z > 0.0 {
+        let grain=fract(sin(dot(floor(uv*512.0),vec2<f32>(12.9898,78.233)))*43758.5453);
+        alpha*=smoothstep(params.skin_details.z-0.05,params.skin_details.z+0.1,grain);
+    }
     if (params.flags & 2u) != 0u {
 #ifdef VERTEX_COLORS
         var weight = in.color.a;

@@ -237,7 +237,7 @@ impl Material for WorldMaterial {
     }
 
     fn enable_prepass() -> bool {
-        false
+        true
     }
 
     fn enable_shadows() -> bool {
@@ -245,11 +245,10 @@ impl Material for WorldMaterial {
     }
 
     fn prepass_fragment_shader() -> ShaderRef {
-        if crate::shadow_diagnostic::enabled() {
-            crate::shadow_diagnostic::SHADOW_SHADER.into()
-        } else {
-            ShaderRef::Default
-        }
+        // The ordinary depth prepass and diagnostic shadows need the same
+        // authored UVs, terrain transition and alpha cutoff as forward color.
+        // Bevy's StandardMaterial prepass cannot interpret WorldParams.
+        crate::shadow_diagnostic::SHADOW_SHADER.into()
     }
 
     fn specialize(

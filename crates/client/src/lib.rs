@@ -203,6 +203,7 @@ pub struct CsgoPlugin;
 impl Plugin for CsgoPlugin {
     fn build(&self, app: &mut App) {
         embedded_asset!(app, "shaders/world.wgsl");
+        embedded_asset!(app, "shaders/world_shadow.wgsl");
         embedded_asset!(app, "shaders/radar.wgsl");
         embedded_asset!(app, "shaders/particle.wgsl");
         app.add_plugins(menu_blur::PostProcessPlugin)
@@ -757,6 +758,7 @@ fn spawn_level(
         PlayerCamera,
         audio::spatial_listener(),
         player::WorldPlayerCamera,
+        bevy::core_pipeline::prepass::DepthPrepass,
     ));
     // Viewmodel camera: drawn last with its own depth buffer and FOV.
     commands.spawn((

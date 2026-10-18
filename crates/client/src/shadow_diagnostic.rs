@@ -12,7 +12,7 @@ use crate::{
     visibility::MapClusters,
 };
 use bevy::{
-    asset::{AssetId, embedded_asset},
+    asset::AssetId,
     camera::visibility::{RenderLayers, VisibilitySystems},
     light::{CascadeShadowConfigBuilder, DirectionalLight, SimulationLightSystems},
     prelude::*,
@@ -48,7 +48,6 @@ pub fn install(app: &mut App) {
     if !enabled() {
         return;
     }
-    embedded_asset!(app, "shaders/world_shadow.wgsl");
     app.init_resource::<DiagnosticState>().add_systems(
         PostUpdate,
         update_scope
