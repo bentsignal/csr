@@ -137,6 +137,12 @@ impl Material {
         self.str("$basetexture2")
     }
 
+    /// UnlitTwoTexture multiplies `$texture2` with its base. This is a
+    /// different parameter and operation from terrain's `$basetexture2`.
+    pub fn unlit_texture2(&self) -> Option<&str> {
+        (self.shader == "unlittwotexture").then(|| self.str("$texture2")).flatten()
+    }
+
     pub fn translucent(&self) -> bool {
         self.flag("$translucent") || self.flag("$additive")
     }
@@ -264,6 +270,34 @@ mod tests {
         assert!(m.alpha_test());
         assert_eq!(m.str("$envmap"), Some("env_cubemap"));
         assert_eq!(m.color("$color"), Some([1.0, 0.0, 0.0]));
+    }
+
+    #[test]
+    fn unlit_second_texture_is_shader_scoped_and_survives_patch_resolution() {
+        let read = reader(HashMap::from([(
+            "materials/test/unlit.vmt",
+            r#"UnlitTwoTexture {
+                "$baseTexture" "test/base" "$Texture2" "test/mask"
+                "$basetexture2" "test/terrain"
+                "Proxies" { "TextureScroll" { "texturescrollvar" "$texture2transform" } }
+            }"#,
+        )]));
+        let m = Material::parse_with(
+            r#"Patch { include "materials/test/unlit.vmt" replace { "$texture2" "test/replacement" } }"#,
+            &read, 0,
+        ).unwrap();
+        assert!(m.is_unlit());
+        assert_eq!(m.unlit_texture2(), Some("test/replacement"));
+        assert_eq!(m.base_texture2(), Some("test/terrain"));
+        assert!(m.params.get("proxies").and_then(Value::as_block).is_some());
+        for text in [
+            r#"WorldVertexTransition { "$texture2" "test/mask" }"#,
+            r#"UnlitGeneric { "$texture2" "test/mask" }"#,
+            r#"UnlitTwoTexture { "$basetexture2" "test/terrain" }"#,
+            r#"UnlitTwoTexture { "$texture2" { invalid "block" } }"#,
+        ] {
+            assert_eq!(Material::parse_with(text, &|_| None, 0).unwrap().unlit_texture2(), None);
+        }
     }
 
     #[test]

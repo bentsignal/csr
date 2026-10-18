@@ -560,7 +560,7 @@ pub fn material_from_vmt(
         out.params.flags = if lightmapped { flags::LIGHTMAPPED } else { flags::VERTEX_LIT };
         return out;
     };
-    if matches!(mat.shader.as_str(), "lightmappedgeneric" | "worldvertextransition" | "vertexlitgeneric") {
+    if matches!(mat.shader.as_str(), "lightmappedgeneric" | "worldvertextransition" | "vertexlitgeneric" | "unlittwotexture") {
         // Transform only the primary color sampler, never another authored UV
         // channel. The shaders retain raw base UVs for dynamic/cosmetic paths.
         params.base_uv = authored_uv_transform(mat, "$basetexturetransform");
@@ -583,7 +583,24 @@ pub fn material_from_vmt(
     if mat.is_unlit() {
         f |= flags::UNLIT;
     }
-    if let Some(info) = mat.base_texture2().and_then(|n| textures.load(fs, images, n, true)) {
+    if mat.shader == "unlittwotexture" {
+        // Reuse the secondary color binding without enabling terrain blending.
+        // Both transforms start at raw mesh UVs, independently of each other.
+        if let Some(name) = mat.unlit_texture2() {
+            if let Some(info) = textures.load(fs, images, name, true) {
+                out.base2 = info.handle;
+                f |= flags::UNLIT_MULTIPLY;
+                params.base2_uv = authored_uv_transform(mat, "$texture2transform");
+            } else {
+                warn!("UnlitTwoTexture second texture unavailable; retaining base material: {name}");
+            }
+        }
+        // Static authored transforms remain useful without a proxy evaluator.
+        // Do not invent time, scroll scale or phase from a snapshot of a VMT.
+        if mat.params.get_all("proxies").any(references_texture_transform) {
+            warn!("UnlitTwoTexture texture-transform proxy unsupported; retaining static authored UVs");
+        }
+    } else if let Some(info) = mat.base_texture2().and_then(|n| textures.load(fs, images, n, true)) {
         out.base2 = info.handle;
         f |= flags::BLEND;
         params.base2_uv = authored_uv_transform(mat, "$basetexturetransform2");
@@ -703,6 +720,16 @@ fn references_self_illum(value: &kv::Value) -> bool {
     }
 }
 
+fn references_texture_transform(value: &kv::Value) -> bool {
+    match value {
+        kv::Value::Str(text) => {
+            let text = text.to_ascii_lowercase();
+            text.contains("$texture2transform") || text.contains("$basetexturetransform")
+        }
+        kv::Value::Block(block) => block.iter().any(|(_, value)| references_texture_transform(value)),
+    }
+}
+
 fn authored_uv_transform(mat: &vmt::Material, key: &str) -> Vec4 {
     let identity = Vec4::new(1.0, 1.0, 0.0, 0.0);
     let Some(text) = mat.str(key) else { return identity };
@@ -766,6 +793,136 @@ mod authored_transform_tests {
         let mut textures = TextureCache::new(&mut images);
         let shared = SharedHandles { lightmap: textures.white.clone() };
         material_from_vmt(mat, &fs, &mut textures, &mut images, &shared, 1.0, lightmapped)
+    }
+
+    #[test]
+    fn unlit_two_texture_binds_authored_mask_and_independent_uvs_without_terrain_blend() {
+        let mat = vmt::Material::parse_with(r#"UnlitTwoTexture {
+            "$basetexture" "test/normal" "$texture2" "test/opaque"
+            "$basetexturetransform" "center .5 .5 scale 2 .5 rotate 0 translate .125 -.25"
+            "$texture2transform" "center 0 0 scale 3 4 rotate 0 translate .25 -.5"
+            "$basetexture2" "missing/terrain"
+            "$basetexturetransform2" "center 0 0 scale 99 99 rotate 0 translate 0 0"
+            "$blendmodulatetexture" "test/normal"
+            "$nocull" "1" "$additive" "1" "$alpha" ".25" "$color" "[.5 .75 1]"
+        }"#, &|_| None, 0).unwrap();
+        let fs = normal_fs();
+        let mut images = Assets::<Image>::default();
+        let mut textures = TextureCache::new(&mut images);
+        let shared = SharedHandles { lightmap: textures.white.clone() };
+        let base = textures.load(&fs, &mut images, "test/normal", true).unwrap().handle;
+        let second = textures.load(&fs, &mut images, "test/opaque", true).unwrap().handle;
+        for lightmapped in [true, false] {
+            let out = material_from_vmt(Some(&mat), &fs, &mut textures, &mut images, &shared, 1., lightmapped);
+            assert_eq!(out.base, base);
+            assert_eq!(out.base2, second);
+            assert_ne!(out.base, out.base2);
+            assert_eq!(out.params.flags & (flags::UNLIT | flags::UNLIT_MULTIPLY), flags::UNLIT | flags::UNLIT_MULTIPLY);
+            assert_eq!(out.params.flags & (flags::BLEND | flags::BLEND_MODULATE | flags::LIGHTMAPPED), 0);
+            assert_eq!(out.params.color, Vec4::new(0.5, 0.75, 1., 0.25));
+            assert_eq!(out.alpha_mode, AlphaMode::Add);
+            assert!(!out.cull);
+            assert_gpu_base_uv(&out.params, Vec4::new(2., 0.5, -0.375, 0.));
+            assert_eq!(out.params.base2_uv, Vec4::new(3., 4., 0.25, -0.5));
+            // Verify the existing secondary transform actually reaches its
+            // uniform slot; no new binding or uniform schema is introduced.
+            let bytes = gpu_params(&out.params);
+            let uv2: [f32; 4] = std::array::from_fn(|i| {
+                f32::from_le_bytes(bytes[32 + i * 4..36 + i * 4].try_into().unwrap())
+            });
+            assert_eq!(uv2, [3., 4., 0.25, -0.5]);
+            assert_eq!(bytes.len(), 560);
+        }
+        // The unsupported terrain name above must not even be loaded.
+        assert_eq!(textures.stats_missing, 0);
+    }
+
+    #[test]
+    fn unlit_two_texture_static_fallback_and_other_material_layers_stay_separate() {
+        let identity = WorldParams::default().base2_uv;
+        for declaration in [
+            "",
+            r#""$texture2" "missing/mask""#,
+            r#""$basetexture2" "test/opaque""#,
+            r#""$texture2" { invalid "block" }"#,
+        ] {
+            let mat = vmt::Material::parse_with(
+                &format!(r#"UnlitTwoTexture {{ "$basetexture" "test/normal" {declaration} }}"#),
+                &|_| None, 0,
+            ).unwrap();
+            let out = normal_material(Some(&mat), true);
+            assert_eq!(out.params.flags, flags::UNLIT);
+            assert_eq!(out.params.base2_uv, identity);
+        }
+        // Unsupported animated writes retain the authored static transform.
+        // Invalid static transforms retain the existing identity fallback.
+        for (transform, expected) in [
+            ("", identity),
+            (r#""$texture2transform" "center 0 0 scale 2 3 rotate 0 translate .25 -.5""#, Vec4::new(2., 3., 0.25, -0.5)),
+            (r#""$texture2transform" "center 0 0 scale 2 3 rotate 90 translate 0 0""#, identity),
+            (r#""$texture2transform" "scale 2 3""#, identity),
+        ] {
+            let mat = vmt::Material::parse_with(&format!(r#"UnlitTwoTexture {{
+                "$basetexture" "test/normal" "$texture2" "test/opaque" {transform}
+                "Proxies" {{ "TextureScroll" {{
+                    "texturescrollvar" "$texture2transform" "texturescrollrate" ".03" "texturescrollangle" "-30"
+                }} }}
+            }}"#), &|_| None, 0).unwrap();
+            let out = normal_material(Some(&mat), true);
+            assert_eq!(out.params.flags, flags::UNLIT | flags::UNLIT_MULTIPLY);
+            assert_eq!(out.params.base2_uv, expected);
+            assert!(mat.params.get_all("proxies").any(references_texture_transform));
+        }
+        let fs = normal_fs();
+        let mut images = Assets::<Image>::default();
+        let mut textures = TextureCache::new(&mut images);
+        let shared = SharedHandles { lightmap: textures.white.clone() };
+        for shader in ["WorldVertexTransition", "LightmappedGeneric", "VertexLitGeneric", "UnlitGeneric"] {
+            let parse = |extra: &str| vmt::Material::parse_with(&format!(r#"{shader} {{
+                "$basetexture" "test/normal" "$basetexture2" "test/opaque"
+                "$basetexturetransform2" "center 0 0 scale 2 3 rotate 0 translate .25 -.5"
+                "$blendmodulatetexture" "test/normal"
+                "$bumpmap" "test/normal" "$bumpmap2" "test/normal"
+                "$detail" "test/normal" "$detailscale" "4" "$selfillum" "1" {extra}
+            }}"#), &|_| None, 0).unwrap();
+            let before = material_from_vmt(Some(&parse("")), &fs, &mut textures, &mut images, &shared, 1., true);
+            let after = material_from_vmt(Some(&parse(r#""$texture2" "test/normal"
+                "$texture2transform" "center 0 0 scale 99 99 rotate 0 translate 0 0""#)),
+                &fs, &mut textures, &mut images, &shared, 1., true);
+            assert_eq!(gpu_params(&before.params), gpu_params(&after.params), "{shader}");
+            assert_eq!(before.params.flags & flags::UNLIT_MULTIPLY, 0);
+            assert_ne!(after.params.flags & flags::BLEND, 0);
+            assert_eq!(after.params.base2_uv, Vec4::new(2., 3., 0.25, -0.5));
+            assert_eq!(before.base2, after.base2);
+            assert_eq!(before.normal, after.normal);
+            assert_eq!(before.normal2, after.normal2);
+            assert_eq!(before.detail, after.detail);
+            assert_eq!(before.self_illum_mask, after.self_illum_mask);
+        }
+    }
+
+    #[test]
+    #[ignore = "requires read-only installed Legacy Cache pakfile; no native process"]
+    fn installed_cache_unlit_two_texture_uses_second_mask_and_reports_static_proxy_limit() {
+        let level = level::Level::load("de_cache", None).unwrap();
+        let mat = vmt::Material::load("fmpone/newcache/nc_beam/vollight", &|p| level.vfs.read_string(p)).unwrap();
+        assert_eq!(mat.shader, "unlittwotexture");
+        assert_eq!(mat.base_texture(), Some("de_subzero/vol_lightmask02"));
+        assert_eq!(mat.unlit_texture2().map(str::to_ascii_lowercase).as_deref(), Some("models/effects/dust01"));
+        assert!(mat.params.get_all("proxies").any(references_texture_transform));
+        let mut images = Assets::<Image>::default();
+        let mut textures = TextureCache::new(&mut images);
+        let shared = SharedHandles { lightmap: textures.white.clone() };
+        let out = material_from_vmt(Some(&mat), &level.vfs, &mut textures, &mut images, &shared, 1., true);
+        assert_eq!(out.params.flags, flags::UNLIT | flags::UNLIT_MULTIPLY | flags::TRANSLUCENT);
+        assert_ne!(out.base, textures.missing);
+        assert_ne!(out.base2, textures.white);
+        assert_ne!(out.base, out.base2);
+        assert_eq!(textures.stats_missing, 0);
+        assert_gpu_base_uv(&out.params, WorldParams::default().base_uv);
+        assert_eq!(out.params.base2_uv, WorldParams::default().base2_uv);
+        assert_eq!(out.alpha_mode, AlphaMode::Add);
+        assert!(!out.cull);
     }
 
     #[test]

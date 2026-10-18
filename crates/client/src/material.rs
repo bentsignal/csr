@@ -4,6 +4,7 @@
 //! textures blended by vertex alpha, sharpened by `$blendmodulatetexture`),
 //! `UnlitGeneric`, and `VertexLitGeneric` props lit by the map's ambient
 //! cube plus the sun.
+//! `UnlitTwoTexture` multiplies two independently mapped color textures.
 
 use bevy::asset::Asset;
 use bevy::mesh::MeshVertexBufferLayoutRef;
@@ -70,6 +71,8 @@ pub mod flags {
     pub const TINT_BY_BASE_ALPHA: u32 = 1 << 17;
     /// Ordinary authored detail modulation; opacity and lighting are separate.
     pub const DETAIL: u32 = 1 << 18;
+    /// UnlitTwoTexture's `$texture2` multiplies RGBA; never terrain blending.
+    pub const UNLIT_MULTIPLY: u32 = 1 << 19;
 }
 
 #[derive(Clone, Copy, Debug, ShaderType)]
@@ -110,7 +113,7 @@ pub struct WorldParams {
     pub detail: Vec4,
     /// Authored self-illumination tint; w: 0 disabled, 1 base alpha, 2 RGB mask.
     pub self_illum: Vec4,
-    /// Primary color UV scale/offset for ordinary lit world/static props only.
+    /// Primary color UV scale/offset for ordinary lit surfaces and UnlitTwoTexture.
     /// Appended to preserve existing lighting and diagnostic-prefix offsets.
     pub base_uv: Vec4,
 }
