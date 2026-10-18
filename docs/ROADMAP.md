@@ -721,6 +721,11 @@ parity and the gameplay gaps listed above remain unfinished.
   cadence is still provisional; native burst/tap timing is not established.
   [PR #90](https://github.com/bentsignal/global-offensive/pull/90).
 - [x] Remove look-driven viewmodel lag; retain authored weapon animations.
+- [ ] Validate the shared accepted M4 look/speed-settling presentation across
+  weapons and utility, including airborne continuity and authored absolute
+  animation tracks. Source candidate reuses accepted coefficients and the held
+  compressed-track sampler; all compilation/tests/render checks remain UNRUN.
+  [Scope and preserved measured evidence](VIEWMODEL_MOTION.md).
 - [x] Tick-authoritative M4A1-S/USP-S suppressor toggling, installed transition
   clips and cues, shot-time sound routing and held/dropped bodypart visibility;
   landed in `aefad89`, [PR #105](https://github.com/bentsignal/global-offensive/pull/105).

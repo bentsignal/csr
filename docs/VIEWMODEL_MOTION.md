@@ -1,5 +1,47 @@
 # Observed viewmodel motion
 
+## Current shared-motion candidate (October 17 overnight queue)
+
+The owner accepted the grounded M4A4 motion and requested its reuse across guns
+and utility. The source candidate now applies that same finite-history look
+translation and forward-speed settling to canonical weapons in the observed
+Legacy schema. The delay, scale, reference speed, rotation and translation below
+are unchanged. There are no weapon-specific motion coefficients. This widens
+the owner's accepted presentation; it does not establish new native measurements
+for each weapon or historical bob parity.
+
+Settling follows actual planar forward velocity through air and crouch changes.
+Ground/duck flags no longer force its transform to identity, so takeoff and
+landing retain the accepted pose at the same planar speed. Vertical velocity
+adds no invented jump offset. Actual speed changes still change the pose by
+the existing law. No temporal filter, periodic bob or new air/landing curve was
+added. Look history belongs to the viewed player/life and survives weapon
+replacement; actual owner/life changes still clear it. Scoped, hidden,
+spectated and tracked views remain neutral, and camera/aim remain current.
+Content packs retain their own ContentId boundary instead of inheriting this
+Legacy profile automatically.
+
+The existing owner/pose visibility guards and authored inspection transitions
+remain. The held `3f49cae` absolute-sequence sampler is reused: compressed-out
+tracks restore decoded rest values, explicit zero-weight masks retain their
+pose, and delta clips keep their existing path. Magazine reload presentation
+returns to idle when simulation reload state ends; local inspect requests do
+not affect spectator targets. Simulation, AWP zoom/cooldown and input bindings
+are unchanged.
+
+**Source-only; compilation, all tests and rendered/native checks UNRUN.** Focused
+fixtures cover unchanged walk scaling, planar jump continuity, shared profile
+admission, weapon-switch history, absolute tracks/masks, installed Galil fire
+variants and authoritative reload completion. Existing life/visibility and
+inspect/reload fixtures remain required. Root owns build/GPU verification and
+owner review. No priority outcome is marked complete by this candidate.
+
+## Original measured admission and evidence
+
+The sections below retain the original bounded measurement/verification record.
+Their M4-only and standing-ground-only gates describe that earlier admission;
+the current source candidate's wider reuse is described above.
+
 CT09 currently has a bounded presentation candidate for the installed M4A4.
 Its model origin uses the time-interpolated forward history 0.1 seconds
 earlier, scaled by 1.6. In the current camera frame, the delayed transverse

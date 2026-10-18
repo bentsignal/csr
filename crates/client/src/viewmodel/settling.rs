@@ -1,4 +1,4 @@
-//! Bounded standing-forward M4A4 speed-settling presentation.
+//! Shared forward speed-settling using the accepted M4A4 presentation.
 //! This is the observed cycle mean, not the still-unmeasured periodic bob.
 //! Camera/aim, weapon animation and simulated movement are not modified.
 use glam::{Mat3, Vec3};
@@ -22,11 +22,12 @@ impl Default for Settling {
 }
 
 impl Settling {
-    /// Only standing, grounded, forward velocity was observed. Other motion
-    /// domains do not silently acquire an invented bob response. Coasting is
-    /// driven by actual velocity, so releasing W does not reset the pose early.
-    pub fn sample(velocity: Vec3, forward: Vec3, grounded: bool, duck_amount: f32) -> Self {
-        if !velocity.is_finite() || !forward.is_finite() || !grounded || duck_amount != 0. {
+    /// Continue the same planar-speed response across takeoff, landing and
+    /// crouch transitions. Ground flags and vertical jump velocity cannot
+    /// switch the accepted held pose to identity. No new air curve or rate.
+    /// Coasting still follows actual velocity rather than movement buttons.
+    pub fn sample(velocity: Vec3, forward: Vec3) -> Self {
+        if !velocity.is_finite() || !forward.is_finite() {
             return Self::default();
         }
         let v = velocity.truncate();
@@ -60,16 +61,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn zero_and_unobserved_motion_domains_are_neutral_without_history() {
-        for (velocity, forward, grounded, duck) in [
-            (Vec3::ZERO, Vec3::X, true, 0.),
-            (-Vec3::X * 225., Vec3::X, true, 0.),
-            (Vec3::Y * 225., Vec3::X, true, 0.),
-            (Vec3::X * 225., Vec3::X, false, 0.),
-            (Vec3::X * 225., Vec3::X, true, 1.),
-            (Vec3::splat(f32::NAN), Vec3::X, true, 0.),
+    fn zero_backward_transverse_and_invalid_motion_remain_neutral() {
+        for (velocity, forward) in [
+            (Vec3::ZERO, Vec3::X),
+            (-Vec3::X * 225., Vec3::X),
+            (Vec3::Y * 225., Vec3::X),
+            (Vec3::splat(f32::NAN), Vec3::X),
         ] {
-            let pose = Settling::sample(velocity, forward, grounded, duck);
+            let pose = Settling::sample(velocity, forward);
             assert_eq!(pose.rotation, Mat3::IDENTITY);
             assert_eq!(pose.translation, Vec3::ZERO);
             assert_eq!(pose.weight, 0.);
@@ -77,10 +76,24 @@ mod tests {
     }
 
     #[test]
+    fn takeoff_apex_and_landing_reuse_the_exact_grounded_planar_pose() {
+        let ground = Settling::sample(Vec3::X * 225., Vec3::X);
+        for vertical in [301., 100., 0., -100., -301.] {
+            let airborne = Settling::sample(Vec3::new(225., 0., vertical), Vec3::X);
+            assert_eq!(airborne.rotation, ground.rotation);
+            assert_eq!(airborne.translation, ground.translation);
+            assert_eq!(airborne.weight, ground.weight);
+        }
+        // Changes in actual planar speed still use the accepted walk scaling.
+        let walk = Settling::sample(Vec3::new(117., 0., -301.), Vec3::X);
+        assert!((walk.translation - ground.translation * 0.52).length() < 0.00001);
+    }
+
+    #[test]
     fn eye_frame_offset_and_model_rotate_together_under_arbitrary_current_view() {
         // Synthetic geometry, not installed game vertices. This catches the
         // wrong pivot/order and a world-fixed lowering vector after turning.
-        let pose = Settling::sample(Vec3::X * 225., Vec3::X, true, 0.);
+        let pose = Settling::sample(Vec3::X * 225., Vec3::X);
         let offset = Vec3::new(1., -1., -1.);
         let point = Vec3::new(30., -5., -2.);
         let current = mdl::angles_to_mat3(Vec3::new(-17., 123., 0.));
@@ -94,14 +107,14 @@ mod tests {
 
     #[test]
     fn observed_walk_scales_the_cycle_mean_and_speed_above_reference_is_not_extrapolated() {
-        let run = Settling::sample(Vec3::X * 225., Vec3::X, true, 0.);
-        let walk = Settling::sample(Vec3::Y * 117., Vec3::Y, true, 0.);
+        let run = Settling::sample(Vec3::X * 225., Vec3::X);
+        let walk = Settling::sample(Vec3::Y * 117., Vec3::Y);
         assert!((walk.translation - run.translation * 0.52).length() < 0.00001);
         assert!((walk.weight - 0.52).abs() < 0.00001);
-        let fast = Settling::sample(Vec3::X * 450., Vec3::X, true, 0.);
+        let fast = Settling::sample(Vec3::X * 450., Vec3::X);
         assert_eq!(fast.rotation, run.rotation);
         assert_eq!(fast.translation, run.translation);
-        let transverse = Settling::sample(Vec3::new(117., 200., 0.), Vec3::X, true, 0.);
+        let transverse = Settling::sample(Vec3::new(117., 200., 0.), Vec3::X);
         assert!((transverse.translation - walk.translation).length() < 0.00001);
     }
 }
