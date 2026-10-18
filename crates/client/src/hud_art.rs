@@ -273,7 +273,7 @@ mod tests {
                 assert_eq!(band.top, hu(layout::INVENTORY_ICON_HEIGHT));
                 assert_eq!(band.height, hu(layout::INVENTORY_PITCH + layout::INVENTORY_HINT_TOP - layout::INVENTORY_ICON_HEIGHT));
                 assert_eq!(children.len(), 1);
-                for &child in children.iter() {
+                for child in children.iter() {
                     let text_layout = world.get::<TextLayout>(child).unwrap();
                     assert_eq!(text_layout.linebreak, LineBreak::NoWrap);
                     assert_eq!(text_layout.justify, Justify::Right);
