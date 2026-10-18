@@ -16,8 +16,12 @@ impl<W: TraceWorld + ?Sized> Mover<'_, W> {
         let Some(normal) = self.world.ladder_normal(self.pm.origin, mins, maxs) else { return false };
         // A jump launches away from the face. Do not immediately catch the
         // same face while the jump key is held or that launch is moving out.
-        if previous.is_none() && (input.buttons & buttons::JUMP != 0
-            || self.pm.velocity.dot(normal) > 1.0) { return false; }
+        // Crossing a side edge can expose that brush's narrow end face. Keep
+        // the outward travel instead of converting it into another climb on
+        // the end face, which would trap a player strafing off the ladder.
+        if (previous.is_none() && input.buttons & buttons::JUMP != 0)
+            || (previous != Some(normal) && self.pm.velocity.dot(normal) > 1.0)
+        { return false; }
 
         self.pm.on_ground = false;
         self.pm.ground_ticks = 0;
