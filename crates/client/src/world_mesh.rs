@@ -739,6 +739,85 @@ mod authored_transform_tests {
     }
 
     #[test]
+    fn ordinary_world_transition_projects_its_blended_normal_once() {
+        // Synthetic opposed slopes cancel to a flat surface. Under the RNM
+        // contract, that surface weights each of the orthonormal basis axes
+        // equally, independently of which pair of slopes produced it.
+        let basis = [
+            Vec3::new((2.0f32 / 3.0).sqrt(), 0., (1.0f32 / 3.0).sqrt()),
+            Vec3::new(-(1.0f32 / 6.0).sqrt(), 0.5f32.sqrt(), (1.0f32 / 3.0).sqrt()),
+            Vec3::new(-(1.0f32 / 6.0).sqrt(), -0.5f32.sqrt(), (1.0f32 / 3.0).sqrt()),
+        ];
+        let project = |normal: Vec3| {
+            let weights = Vec3::from_array(basis.map(|b| normal.dot(b).max(0.).powi(2)));
+            weights / weights.element_sum()
+        };
+        let first = Vec3::new(0.75f32.sqrt(), 0., 0.5);
+        let second = Vec3::new(-0.75f32.sqrt(), 0., 0.5);
+        let normal = first.lerp(second, 0.5).normalize();
+        let weights = project(normal);
+        assert!((normal - Vec3::Z).length() < 1e-6);
+        assert!((weights - Vec3::splat(1. / 3.)).length() < 1e-6);
+        let old_weights = project(first).lerp(project(second), 0.5);
+        assert!((old_weights - Vec3::new(0.5, 0.25, 0.25)).length() < 1e-6);
+        // It corrects directional response, not brightness: the same correction
+        // can increase or decrease light according to its incoming direction.
+        assert!(weights.dot(Vec3::new(0.2, 1., 1.)) > old_weights.dot(Vec3::new(0.2, 1., 1.)));
+        assert!(weights.dot(Vec3::new(1., 0.2, 0.2)) < old_weights.dot(Vec3::new(1., 0.2, 0.2)));
+        for t in [0., 1.] {
+            let chosen = first.lerp(second, t).normalize();
+            assert!((project(chosen) - project(if t == 0. { first } else { second })).length() < 1e-6);
+        }
+
+        // Protect the actual shader data flow as well as the numerical oracle:
+        // only an ordinary lightmapped color transition replaces interpolated
+        // weights with the projection of the normal it already selected.
+        let shader: String = include_str!("shaders/world.wgsl")
+            .chars().filter(|c| !c.is_ascii_whitespace()).collect();
+        let (_, transition) = shader.split_once("if(params.flags&NORMAL2)!=0u{").unwrap();
+        assert!(transition.contains("tangent_normal=normalize(mix(tangent_normal,bump_normal(b2),blend_weight));"));
+        assert!(transition.contains("if(params.flags&(LIGHTMAPPED|BLEND|SSBUMP))==(LIGHTMAPPED|BLEND){weights=rnm_weights(tangent_normal);}"));
+
+        let mat = vmt::Material::parse_with(
+            r#"WorldVertexTransition {
+                "$basetexture2" "test/normal"
+                "$bumpmap" "test/normal" "$bumpmap2" "test/normal"
+            }"#, &|_| None, 0,
+        ).unwrap();
+        let flags = normal_material(Some(&mat), true).params.flags;
+        let required = flags::LIGHTMAPPED | flags::BLEND | flags::NORMAL | flags::NORMAL2;
+        assert_eq!(flags & required, required);
+        assert_eq!(flags & flags::SSBUMP, 0);
+    }
+
+    #[test]
+    fn ssbump_transitions_keep_directional_visibility_and_mathfix() {
+        // Visibility is not a normal vector. A shadowed texel must lose energy
+        // even when its reconstructed direction matches the unshadowed one.
+        let first = Vec3::new(0.15, 0.3, 0.45);
+        let second = first * 0.2;
+        let mixed = first.lerp(second, 0.5);
+        assert!((mixed.element_sum() - 0.54).abs() < 1e-6);
+        assert!(mixed.element_sum() < first.element_sum());
+        let corrected = mixed * (1.0f32 / 3.0).sqrt();
+        assert!((corrected.element_sum() - 0.54 / 3.0f32.sqrt()).abs() < 1e-6);
+
+        let shader: String = include_str!("shaders/world.wgsl")
+            .chars().filter(|c| !c.is_ascii_whitespace()).collect();
+        assert!(shader.contains("weights=mix(weights,bump_weights(b2),blend_weight);"));
+        assert!(shader.contains("if(params.flags&SSBUMP)!=0u{returnsample*select(1.0,0.57735027,(params.flags&SSBUMP_MATHFIX)!=0u);}"));
+        let mat = vmt::Material::parse_with(
+            r#"WorldVertexTransition {
+                "$basetexture2" "test/normal"
+                "$bumpmap" "test/normal" "$bumpmap2" "test/normal"
+                "$ssbump" "1" "$ssbumpmathfix" "1"
+            }"#, &|_| None, 0,
+        ).unwrap();
+        let flags = normal_material(Some(&mat), true).params.flags;
+        assert_eq!(flags & (flags::SSBUMP | flags::SSBUMP_MATHFIX), flags::SSBUMP | flags::SSBUMP_MATHFIX);
+    }
+
+    #[test]
     fn authored_luminous_regions_keep_alpha_and_separate_mask_contracts() {
         fn parse(text: &str) -> vmt::Material {
             vmt::Material::parse_with(text, &|_| None, 0).unwrap()

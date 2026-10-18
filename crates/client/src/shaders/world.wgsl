@@ -355,7 +355,18 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
         if (params.flags & NORMAL2) != 0u {
             let b2 = textureSample(normal2_tex, normal2_samp, uv * params.normal2_uv.xy + params.normal2_uv.zw).rgb;
             tangent_normal = normalize(mix(tangent_normal, bump_normal(b2), blend_weight));
-            weights = mix(weights, bump_weights(b2), blend_weight);
+            // Ordinary RGB maps describe normals, not RNM visibility weights.
+            // Project the chosen surface normal once: interpolating squared
+            // projections instead retains lighting from the two unblended
+            // slopes even where their tangential components cancel. SSBump
+            // already stores visibility, including occlusion, so stays linear.
+            // Restrict this to world color transitions; prop/dynamic lighting
+            // and single-layer materials retain their existing composition.
+            if (params.flags & (LIGHTMAPPED | BLEND | SSBUMP)) == (LIGHTMAPPED | BLEND) {
+                weights = rnm_weights(tangent_normal);
+            } else {
+                weights = mix(weights, bump_weights(b2), blend_weight);
+            }
         }
 #ifdef VERTEX_TANGENTS
         let t = normalize(in.world_tangent.xyz - n * dot(n, in.world_tangent.xyz));
