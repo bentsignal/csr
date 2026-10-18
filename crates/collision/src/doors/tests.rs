@@ -81,3 +81,59 @@ fn door_overlay_respects_masks_and_static_exclusions_without_excluding_the_leaf(
     assert_eq!(closed.point_contents(inside, contents::WATER), 0);
     assert_eq!(open.point_contents(inside, contents::MASK_SHOT), 0);
 }
+
+#[test]
+fn runtime_swept_bounds_rejection_matches_unfiltered_convex_clipping() {
+    let base = fixture();
+    let mut solids = base.doors[0].solids(37.);
+    // Same contact twice, with different surfaces: first-winner ties survive.
+    let mut duplicate = solids[0].clone();
+    duplicate.surface = 0;
+    solids.push(duplicate);
+    let mut remote = solids[0].clone();
+    let translation = Vec3::new(4096., -4096., 8192.);
+    remote.mins += translation;
+    remote.maxs += translation;
+    for plane in &mut remote.planes { plane.dist += plane.normal.dot(translation); }
+    solids.push(remote);
+    let world = CollisionWorld::with_door_solids(base, solids);
+    let excluded = 0..1;
+    for (mins, maxs) in [(Vec3::ZERO, Vec3::ZERO),
+        (Vec3::new(-16., -16., 0.), Vec3::new(16., 16., 72.))] {
+        for mask in [contents::MASK_SHOT, contents::MASK_PLAYERSOLID, contents::WATER] {
+            for exclusion in [None, Some(&excluded)] {
+                for start in [Vec3::new(-64., 24., 64.), Vec3::new(-12., 16., 64.),
+                    Vec3::new(0., 24., 64.), translation + Vec3::new(-12., 16., 64.)] {
+                    for end in [start, start + Vec3::X * 128., start - Vec3::X * 128.,
+                        Vec3::new(8192., 8192., 64.), start + Vec3::Z * 0.01] {
+                        let offset = (mins + maxs) * 0.5;
+                        let ext = (maxs - mins) * 0.5;
+                        let mut expected = world.base.as_ref().unwrap()
+                            .trace_box_excluding(start, end, mins, maxs, mask, exclusion);
+                        for solid in &world.convexes {
+                            if solid.contents & mask != 0 {
+                                clip_convex(&solid.planes, start + offset, end + offset, ext,
+                                    solid.contents, solid.surface, &mut expected);
+                            }
+                        }
+                        expected.end = if expected.all_solid { start } else { start.lerp(end, expected.fraction) };
+                        let actual = world.trace_box_excluding(start, end, mins, maxs, mask, exclusion);
+                        assert_eq!(actual.fraction.to_bits(), expected.fraction.to_bits());
+                        assert_eq!(actual.end, expected.end);
+                        assert_eq!(actual.normal, expected.normal);
+                        assert_eq!(actual.plane_dist.to_bits(), expected.plane_dist.to_bits());
+                        assert_eq!((actual.start_solid, actual.all_solid, actual.contents, actual.surface),
+                            (expected.start_solid, expected.all_solid, expected.contents, expected.surface));
+                    }
+                }
+            }
+        }
+    }
+    // Inside the enclosing sweep AABB, but away from the diagonal segment.
+    assert!(!crate::swept_bounds_overlap(Vec3::ZERO, Vec3::splat(8192.), Vec3::ZERO,
+        Vec3::new(4000., 0., 0.), Vec3::new(4100., 64., 64.)));
+    // The clipper admits a short approaching ray within DIST_EPSILON even
+    // without crossing the geometric face. Broad phase must retain it too.
+    assert!(crate::swept_bounds_overlap(Vec3::new(-0.02, 0., 0.), Vec3::new(-0.01, 0., 0.),
+        Vec3::ZERO, Vec3::ZERO, Vec3::ONE));
+}

@@ -320,9 +320,11 @@ impl CollisionWorld {
             let mut tr = base.trace_box_excluding(start, end, mins, maxs, mask, excluded_convexes);
             let offset = (mins + maxs) * 0.5;
             let ext = (maxs - mins) * 0.5;
+            let s = start + offset;
+            let e = end + offset;
             for solid in &self.convexes {
-                if solid.contents & mask != 0 {
-                    clip_convex(&solid.planes, start + offset, end + offset, ext, solid.contents, solid.surface, &mut tr);
+                if solid.contents & mask != 0 && swept_bounds_overlap(s, e, ext, solid.mins, solid.maxs) {
+                    clip_convex(&solid.planes, s, e, ext, solid.contents, solid.surface, &mut tr);
                 }
             }
             tr.end = if tr.all_solid { start } else { start.lerp(end, tr.fraction) };
@@ -459,6 +461,32 @@ impl CollisionWorld {
 
 fn overlaps(amin: Vec3, amax: Vec3, bmin: Vec3, bmax: Vec3) -> bool {
     amin.x <= bmax.x && amax.x >= bmin.x && amin.y <= bmax.y && amax.y >= bmin.y && amin.z <= bmax.z && amax.z >= bmin.z
+}
+
+/// Continuous slab rejection only; the original convex clipper decides hits.
+/// Use the static grid query's one-unit bounds guard (larger than the clipper's
+/// contact epsilon), and f64 interval arithmetic to avoid rounding a grazing
+/// sweep out. Retain the full segment: later solids can still add start-solid
+/// contents even when an earlier solid already set the hit fraction.
+fn swept_bounds_overlap(s: Vec3, e: Vec3, ext: Vec3, low: Vec3, high: Vec3) -> bool {
+    let mut enter = 0.0f64;
+    let mut leave = 1.0f64;
+    for axis in 0..3 {
+        let a = s[axis] as f64;
+        let delta = e[axis] as f64 - a;
+        let lo = low[axis] as f64 - ext[axis] as f64 - 1.0;
+        let hi = high[axis] as f64 + ext[axis] as f64 + 1.0;
+        if delta == 0.0 {
+            if a < lo || a > hi { return false; }
+        } else {
+            let first = (lo - a) / delta;
+            let last = (hi - a) / delta;
+            enter = enter.max(first.min(last));
+            leave = leave.min(first.max(last));
+            if enter > leave { return false; }
+        }
+    }
+    true
 }
 
 /// Clips a sweep of a centred box with half-extents `ext` against the convex
