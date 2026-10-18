@@ -24,6 +24,8 @@ struct SelectionHint(u8);
 struct PlayerTile;
 #[derive(Component)]
 struct ActiveWeaponName;
+#[derive(Component)]
+struct MissingWeaponArt;
 
 fn icon(commands: &mut Commands, handle: Handle<Image>, node: Node) -> Entity {
     commands.spawn((ImageNode::new(handle), node)).id()
@@ -176,7 +178,12 @@ pub fn update(mut commands: Commands, art: Res<UiAssets>, world: Res<SimWorld>, 
                                 if let Some(image) = art.image(key).or_else(|| art.image("knife_default_ct").filter(|_| key.contains("knife"))) {
                                     icons.spawn((ImageNode { color, ..ImageNode::new(image) }, Node { width: hu(width), height: hu(layout::INVENTORY_ICON_HEIGHT), flex_shrink: 0.0, ..default() }));
                                 } else {
-                                    icons.spawn((Text::new(loc.weapon_name(&weapon.def)), TextColor(color), TextFont { font: bevy::text::FontSource::Handle(art.regular.clone()), font_size: hf(12.0), ..default() }));
+                                    // Missing/unsupported art still has a name,
+                                    // but its intrinsic text width must never
+                                    // expand a utility cell or crowd its peers.
+                                    icons.spawn((MissingWeaponArt, Node { width: hu(width), height: hu(layout::INVENTORY_ICON_HEIGHT), flex_shrink: 0.0, overflow: Overflow::clip(), ..default() })).with_children(|cell| {
+                                        cell.spawn((Text::new(loc.weapon_name(&weapon.def)), TextLayout::new(Justify::Center, LineBreak::WordOrCharacter), TextColor(color), TextFont { font: bevy::text::FontSource::Handle(art.regular.clone()), font_size: hf(12.0), ..default() }, Node { position_type: PositionType::Absolute, width: percent(100), top: hu(0.0), ..default() }));
+                                    });
                                 }
                             }
                         });
@@ -229,12 +236,13 @@ mod tests {
             9102 { name weapon_knife baseitem 1 }
             9103 { name weapon_hegrenade baseitem 1 }
             9104 { name weapon_flashbang baseitem 1 }
+            9105 { name weapon_incgrenade baseitem 1 }
         } }"#).unwrap();
         let mut world = sim::World::new(Arc::new(collision::CollisionWorld::new()));
         let id = world.add_player("local fixture", sim::Team::CounterTerrorist);
         world.add_player("other fixture", sim::Team::Terrorist);
         world.players[0].alive = true;
-        world.players[0].weapons = ["weapon_glock", "weapon_knife", "weapon_hegrenade", "weapon_flashbang"]
+        world.players[0].weapons = ["weapon_glock", "weapon_knife", "weapon_hegrenade", "weapon_flashbang", "weapon_incgrenade"]
             .map(|name| sim::weapon::WeaponState::new(Arc::new(catalog.get(name).unwrap().clone()))).to_vec();
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
@@ -257,6 +265,18 @@ mod tests {
             let mut rows = world.query::<(&InventorySlot, &Node)>();
             let mut geometry: Vec<_> = rows.iter(world).map(|(slot, node)| (slot.0, node.width, node.height)).collect();
             geometry.sort_by_key(|row| row.0);
+            let mut missing = world.query_filtered::<(&Node, &Children), With<MissingWeaponArt>>();
+            assert_eq!(missing.iter(world).count(), 1);
+            for (cell, children) in missing.iter(world) {
+                assert_eq!((cell.width, cell.height), (hu(layout::INVENTORY_ICON_HEIGHT), hu(layout::INVENTORY_ICON_HEIGHT)));
+                assert_eq!(cell.flex_shrink, 0.0);
+                assert_eq!(cell.overflow, Overflow::clip());
+                assert_eq!(children.len(), 1);
+                let child = children.iter().next().unwrap();
+                assert!(!world.get::<Text>(child).unwrap().0.is_empty(), "retain the localized fallback label");
+                assert_eq!(world.get::<TextLayout>(child).unwrap().linebreak, LineBreak::WordOrCharacter);
+                assert_eq!(world.get::<Node>(child).unwrap().width, percent(100));
+            }
             // Policy regression only: MinimalPlugins does not shape glyphs,
             // compute UI bounds or prove font fit. Root's render gate does.
             let mut hints = world.query::<(&SelectionHint, &Text, &TextLayout, &Node)>();
