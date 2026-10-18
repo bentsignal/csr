@@ -242,6 +242,19 @@ pub(crate) fn desktop_plugins() -> PluginGroupBuilder {
     DefaultPlugins.build()
 }
 
+pub(crate) fn configure_render_schedule(app: &mut App) {
+    // Keep the pipelined render thread, but run its ordered ECS systems on
+    // that thread rather than dispatching each system through the task pool.
+    // Parallel queries inside systems and the main world's executor retain
+    // their normal policies; this changes neither simulation nor render sets.
+    if let Some(render) = app.get_sub_app_mut(bevy::render::RenderApp) {
+        if let Some(schedule) = render.get_schedule_mut(bevy::render::Render) {
+            schedule.set_executor(bevy::ecs::schedule::SingleThreadedExecutor::new());
+            info!("desktop render schedule executor: sequential; pipelined rendering retained");
+        }
+    }
+}
+
 pub(crate) fn surface_frame_latency() -> Option<NonZeroU32> {
     // This is a backend hint, not a guarantee about the OS compositor/scanout.
     NonZeroU32::new(1)
