@@ -303,7 +303,7 @@ pub fn spawn(
     stats.failed_models = models.values().filter(|m| m.is_none()).count();
 
     // One material per resolved VMT, shared by every prop that uses it.
-    let mut material_cache: HashMap<String, Handle<WorldMaterial>> = HashMap::new();
+    let mut material_cache: HashMap<String, Option<Handle<WorldMaterial>>> = HashMap::new();
     let mut batches: HashMap<(AssetId<WorldMaterial>, bool, [i32; 3], bool), (Handle<WorldMaterial>, Batch)> = HashMap::new();
 
     // Six ambient faces, Sun direction/color, then per-instance diffuse tint.
@@ -369,10 +369,17 @@ pub fn spawn(
                 .entry(key)
                 .or_insert_with(|| {
                     let vmt = candidates.iter().find_map(|c| vmt::Material::load(c, &read));
+                    // Unsupported water/refraction effects otherwise become
+                    // opaque white geometry. Omit their visual mesh until the
+                    // corresponding renderer exists; collision stays intact.
+                    if vmt.as_ref().is_some_and(|m| m.is_water() || m.shader == "refract") {
+                        return None;
+                    }
                     stats.materials += 1;
-                    materials.add(material_from_vmt(vmt.as_ref(), fs, textures, images, shared, exposure, false))
+                    Some(materials.add(material_from_vmt(vmt.as_ref(), fs, textures, images, shared, exposure, false)))
                 })
                 .clone();
+            let Some(material) = material else { continue; };
             if let Some(m) = materials.get(&material).filter(|m| m.params.flags & crate::material::flags::DETAIL != 0) {
                 detail_meshes += 1;
                 debug!("Authored prop detail: instance={prop_index} mesh={mesh_index} flags={} scale={},{} factor={} model={}", m.params.flags, m.params.detail.x, m.params.detail.y, m.params.detail.z, bsp.static_props.models[prop.model as usize]);
@@ -460,7 +467,7 @@ pub fn spawn(
         Extent3d { width: PROP_TEXELS as u32, height: bsp.static_props.props.len().max(1) as u32, depth_or_array_layers: 1 },
         TextureDimension::D2, light_data, TextureFormat::Rgba16Float, RenderAssetUsages::RENDER_WORLD,
     ));
-    for handle in material_cache.values() {
+    for handle in material_cache.values().flatten() {
         if let Some(mut mat) = materials.get_mut(handle) { mat.prop_light = lighting.clone(); }
     }
     for ((_, in_sky, _, _), (material, batch)) in batches {
