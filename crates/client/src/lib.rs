@@ -455,8 +455,13 @@ fn spawn_level(
         let model = &level.bsp.models[*model];
         model.first_face.max(0) as usize..(model.first_face.max(0) as usize + model.num_faces.max(0) as usize).min(level.bsp.faces.len())
     }).collect();
-    let main = world_mesh::build(&level.bsp, &atlas, &|f| !sky_faces.contains(&f) && !breakable_faces.contains(&f));
-    let skybox = world_mesh::build(&level.bsp, &atlas, &|f| sky_faces.contains(&f) && !breakable_faces.contains(&f));
+    let moving_door_faces: std::collections::HashSet<_> = level.collision.doors.iter()
+        .filter_map(|door| door.brush_model).flat_map(|index| {
+            let model = &level.bsp.models[index];
+            model.first_face.max(0) as usize..(model.first_face.max(0) as usize + model.num_faces.max(0) as usize).min(level.bsp.faces.len())
+        }).collect();
+    let main = world_mesh::build(&level.bsp, &atlas, &|f| !sky_faces.contains(&f) && !breakable_faces.contains(&f) && !moving_door_faces.contains(&f));
+    let skybox = world_mesh::build(&level.bsp, &atlas, &|f| sky_faces.contains(&f) && !breakable_faces.contains(&f) && !moving_door_faces.contains(&f));
     let breakable_builds: Vec<_> = breakable_models.iter().filter(|(_, _, _, visible)| *visible).map(|(owners, model, origin, _)| {
         let def = &level.bsp.models[*model];
         (owners.clone(), sky_faces.contains(&(def.first_face.max(0) as usize)),

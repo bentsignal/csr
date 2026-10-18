@@ -24,7 +24,8 @@ impl DoorScene {
 }
 
 fn transform(def: &collision::doors::Door, angle: f32) -> Mat4 {
-    Mat4::from_rotation_translation(rotation_to_bevy(def.rotation(angle)), to_bevy(def.origin))
+    let (origin, rotation) = def.visual_pose(angle);
+    Mat4::from_rotation_translation(rotation_to_bevy(rotation), to_bevy(origin))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -43,7 +44,7 @@ pub(crate) fn spawn(
     let mut scene = DoorScene::default();
     let sun = crate::props::Sun::from_bsp(&level.bsp);
     for def in level.collision.doors.iter() {
-        let ent = &level.bsp.entities[def.entity];
+        let ent = &level.bsp.entities[def.visual_entity];
         let skin = ent.i64("skin").unwrap_or(0).max(0) as usize;
         let asset = cache.entry((def.model.clone(), skin)).or_insert_with(|| {
             let fs = &level.vfs;

@@ -13,6 +13,12 @@ pub const MAX_DOORS: usize = 256;
 pub struct Door {
     pub entity: usize,
     pub model: String,
+    /// A bounded rotating brush may carry one studio visual, positioned in the
+    /// closed hinge frame. Collision remains the authored brush, not its AABB.
+    pub brush_model: Option<usize>,
+    pub visual_entity: usize,
+    pub visual_offset: Vec3,
+    pub visual_angles: Vec3,
     pub origin: Vec3,
     pub angles: Vec3,
     pub distance: f32,
@@ -35,6 +41,12 @@ pub struct Door {
 impl Door {
     pub fn rotation(&self, angle: f32) -> Mat3 {
         Mat3::from_rotation_z(angle.to_radians()) * mdl::angles_to_mat3(self.angles)
+    }
+
+    pub fn visual_pose(&self, angle: f32) -> (Vec3, Mat3) {
+        let swing = Mat3::from_rotation_z(angle.to_radians());
+        (self.origin + swing * self.visual_offset,
+            swing * mdl::angles_to_mat3(self.visual_angles))
     }
 
     pub fn solids(&self, angle: f32) -> Vec<Convex> {
@@ -67,15 +79,50 @@ pub(super) fn load(map: &bsp::Bsp, loader: &PropHullLoader<'_>, surfaces: &mut V
     let mut names = Vec::new();
     for (entity, ent) in map.entities.iter().enumerate() {
         if doors.len() >= MAX_DOORS { break; }
-        if ent.str("classname") != Some("prop_door_rotating") || ent.i64("startdisabled") == Some(1) { continue; }
+        let brush = ent.str("classname") == Some("func_door_rotating");
+        if (!brush && ent.str("classname") != Some("prop_door_rotating"))
+            || ent.i64("startdisabled") == Some(1) { continue; }
         // Parented/script-driven machinery needs an entity I/O path; do not
         // make it independently usable at an incorrect world-space hinge.
         if ent.str("parentname").is_some_and(|s| !s.is_empty()) { continue; }
-        let Some(model) = ent.str("model").filter(|s| !s.starts_with('*')) else { continue; };
+        let Some(authored_model) = ent.str("model") else { continue; };
         let Some(origin) = ent.str("origin").and_then(bsp::parse_origin) else { continue; };
-        let angles = ent.str("angles").and_then(bsp::parse_origin).unwrap_or(Vec3::ZERO);
-        if !origin.is_finite() || origin.abs().max_element() >= 131_072.0 || !angles.is_finite() { continue; }
-        let Some(mut hulls) = loader(model) else { continue; };
+        let authored_angles = ent.str("angles").and_then(bsp::parse_origin).unwrap_or(Vec3::ZERO);
+        if !origin.is_finite() || origin.abs().max_element() >= 131_072.0 || !authored_angles.is_finite() { continue; }
+        let (model, brush_model, visual_entity, visual_offset, visual_angles, angles, mut hulls) = if brush {
+            // Admit the observed vertical-hinge, one-way, use-operated brush
+            // with exactly one directly parented studio leaf. Other machinery
+            // retains its previous handling until its I/O/axis is supported.
+            let flags = ent.i64("spawnflags").unwrap_or(0);
+            if flags & (64 | 128 | 4 | 1) != 0 || flags & 16 == 0 || flags & 256 == 0
+                || authored_angles != Vec3::ZERO { continue; }
+            let Some(index) = authored_model.strip_prefix('*').and_then(|n| n.parse::<usize>().ok()) else { continue; };
+            let Some(brush_def) = map.models.get(index) else { continue; };
+            let face_start = brush_def.first_face.max(0) as usize;
+            let face_end = face_start.saturating_add(brush_def.num_faces.max(0) as usize);
+            // This path's visible leaf is the studio child. Never silently drop
+            // visible brush art that would also need its own moving renderer.
+            if !map.faces.get(face_start..face_end).is_some_and(|faces| faces.iter().all(|face|
+                usize::try_from(face.texinfo).ok().and_then(|i| map.texinfo.get(i))
+                    .is_some_and(|info| info.flags & bsp::surf::NODRAW != 0
+                        || map.texinfo_material(face.texinfo as usize).is_some_and(|name| name.starts_with("tools/"))))) { continue; }
+            let Some(name) = ent.str("targetname").filter(|s| !s.is_empty()) else { continue; };
+            let children: Vec<_> = map.entities.iter().enumerate().filter(|(_, child)|
+                child.str("parentname").is_some_and(|p| p.eq_ignore_ascii_case(name))).collect();
+            let [(child_index, child)] = children.as_slice() else { continue; };
+            if child.str("classname") != Some("prop_dynamic") || child.i64("startdisabled") == Some(1)
+                || child.i64("solid") != Some(6) { continue; }
+            let Some(model) = child.str("model").filter(|s| !s.starts_with('*')) else { continue; };
+            let Some(child_origin) = child.str("origin").and_then(bsp::parse_origin).filter(|v| v.is_finite()) else { continue; };
+            let child_angles = child.str("angles").and_then(bsp::parse_origin).unwrap_or(Vec3::ZERO);
+            if !child_angles.is_finite() || child_origin.distance(origin) > 4096.0 { continue; }
+            let Some(hulls) = brush_hulls(map, index) else { continue; };
+            (model, Some(index), *child_index, child_origin - origin, child_angles, Vec3::ZERO, hulls)
+        } else {
+            if authored_model.starts_with('*') { continue; }
+            let Some(hulls) = loader(authored_model) else { continue; };
+            (authored_model, None, entity, Vec3::ZERO, authored_angles, authored_angles, hulls)
+        };
         // Preserve the shared malformed/zero-volume PHY rejection.
         hulls.retain(|h| convex_from_hull(&h.points, &h.triangles, contents::SOLID, 0).is_some());
         if hulls.is_empty() { continue; }
@@ -102,10 +149,14 @@ pub(super) fn load(map: &bsp::Bsp, loader: &PropHullLoader<'_>, surfaces: &mut V
         let cue = |key| ent.str(key).filter(|s| !s.eq_ignore_ascii_case("none")).unwrap_or("").to_owned();
         names.push((ent.str("targetname").unwrap_or("").to_owned(), ent.str("slavename").unwrap_or("").to_owned()));
         doors.push(Door {
-            entity, model: model.to_owned(), origin, angles, distance,
+            entity, model: model.to_owned(), brush_model, visual_entity, visual_offset, visual_angles,
+            origin, angles, distance,
             speed: finite("speed", 100.0).clamp(1.0, 720.0),
-            return_delay: finite("returndelay", -1.0).clamp(-1.0, 3600.0),
-            initial_angle, open_direction: ent.i64("opendir").unwrap_or(0),
+            return_delay: if brush && ent.i64("spawnflags").unwrap_or(0) & 32 != 0 { -1.0 }
+                else { finite(if brush { "wait" } else { "returndelay" }, -1.0).clamp(-1.0, 3600.0) },
+            initial_angle, open_direction: if brush {
+                if ent.i64("spawnflags").unwrap_or(0) & 2 != 0 { 2 } else { 1 }
+            } else { ent.i64("opendir").unwrap_or(0) },
             locked: ent.i64("spawnflags").unwrap_or(0) & 2048 != 0,
             group: doors.len(), move_sound: cue("soundmoveoverride"),
             unlock_sound: cue("soundunlockedoverride"),
@@ -128,6 +179,60 @@ pub(super) fn load(map: &bsp::Bsp, loader: &PropHullLoader<'_>, surfaces: &mut V
         }
     }
     doors
+}
+
+/// Recover the bounded compiled brush convexes in their local hinge frame.
+/// Plane triplets supply vertices; each plane's ordered polygon supplies edges
+/// for swept-box bevels. Do not substitute a visible mesh or model bounds.
+fn brush_hulls(map: &bsp::Bsp, model: usize) -> Option<Vec<mdl::ConvexHull>> {
+    let model = map.models.get(model)?;
+    let mut brushes = Vec::new();
+    crate::collect_leaf_brushes(map, model.head_node, &mut brushes);
+    brushes.sort_unstable(); brushes.dedup();
+    if brushes.is_empty() || brushes.len() > 64 { return None; }
+    let mut hulls = Vec::new();
+    for index in brushes {
+        let brush = map.brushes.get(index as usize)?;
+        if brush.contents & contents::MASK_SOLID == 0 { continue; }
+        let first = usize::try_from(brush.first_side).ok()?;
+        let count = usize::try_from(brush.num_sides).ok()?;
+        if !(4..=64).contains(&count) { return None; }
+        let mut planes = Vec::new();
+        for side in map.brush_sides.get(first..first.checked_add(count)?)? {
+            if side.bevel { continue; }
+            let plane = map.planes.get(side.plane as usize)?;
+            if !plane.normal.is_finite() || !plane.dist.is_finite() { return None; }
+            planes.push((plane.normal, plane.dist));
+        }
+        let mut points: Vec<Vec3> = Vec::new();
+        for a in 0..planes.len() { for b in a+1..planes.len() { for c in b+1..planes.len() {
+            let (na, da) = planes[a]; let (nb, db) = planes[b]; let (nc, dc) = planes[c];
+            let det = na.dot(nb.cross(nc));
+            if det.abs() < 1e-6 { continue; }
+            let point = (nb.cross(nc) * da + nc.cross(na) * db + na.cross(nb) * dc) / det;
+            if !point.is_finite() || point.abs().max_element() > 4096.0 { continue; }
+            if planes.iter().any(|(n, d)| n.dot(point) - d > 0.01) { continue; }
+            if !points.iter().any(|p| p.distance_squared(point) < 1e-6) { points.push(point); }
+        } } }
+        if points.len() < 4 || points.len() > 256 { return None; }
+        let mut triangles = Vec::new();
+        for (normal, dist) in planes {
+            let mut face: Vec<usize> = points.iter().enumerate()
+                .filter(|(_, p)| (normal.dot(**p) - dist).abs() < 0.01).map(|(i, _)| i).collect();
+            if face.len() < 3 { continue; }
+            let center = face.iter().map(|&i| points[i]).sum::<Vec3>() / face.len() as f32;
+            let u = (points[face[0]] - center).normalize_or_zero();
+            let v = normal.cross(u);
+            face.sort_by(|&a, &b| {
+                let pa = points[a] - center; let pb = points[b] - center;
+                pa.dot(v).atan2(pa.dot(u)).total_cmp(&pb.dot(v).atan2(pb.dot(u)))
+            });
+            for i in 1..face.len()-1 { triangles.push([face[0] as u32, face[i] as u32, face[i+1] as u32]); }
+        }
+        convex_from_hull(&points, &triangles, contents::SOLID, 0)?;
+        hulls.push(mdl::ConvexHull { points, triangles });
+    }
+    (!hulls.is_empty()).then_some(hulls)
 }
 
 /// Exact stationary player-hull contact against one proposed door pose.
