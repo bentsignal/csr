@@ -61,6 +61,13 @@ full `.csrpack` manifest and installation workflow remain Track E work.
 
 ## Which version?
 
+The [historical coverage research](research/historical-map-coverage.md) separates
+meaningful CS:GO generations from patch snapshots. Two additional private
+Overpass references (February 2014 and January 2015) were acquired and verified;
+both still require the original `models/props_urban/gates001` fence material.
+They add historical evidence, not picker entries. The eight offered maps and
+their identities remain unchanged.
+
 Names use Valve's archive year. Upload date and build version do **not**
 establish August 2018 parity. Compare intervening update notes and reference
 captures before making that claim. Train's rebuild was

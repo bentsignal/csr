@@ -12,6 +12,7 @@ struct Leaf {
     instance: SkinnedInstance,
     pose: Arc<Vec<glam::Mat4>>,
     angle: f32,
+    brushes: Vec<Entity>,
 }
 
 #[derive(Resource, Default)]
@@ -24,13 +25,15 @@ impl DoorScene {
 }
 
 fn transform(def: &collision::doors::Door, angle: f32) -> Mat4 {
-    Mat4::from_rotation_translation(rotation_to_bevy(def.rotation(angle)), to_bevy(def.origin))
+    let (origin, rotation) = def.visual_pose(angle);
+    Mat4::from_rotation_translation(rotation_to_bevy(rotation), to_bevy(origin))
 }
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn spawn(
     commands: &mut Commands,
     level: &level::Level,
+    brush_builds: &[(usize, crate::world_mesh::WorldBuild)],
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<WorldMaterial>,
     images: &mut Assets<Image>,
@@ -42,8 +45,8 @@ pub(crate) fn spawn(
     let mut cache = HashMap::<(String, usize), Option<(SkinnedAsset, Arc<Vec<glam::Mat4>>)>>::new();
     let mut scene = DoorScene::default();
     let sun = crate::props::Sun::from_bsp(&level.bsp);
-    for def in level.collision.doors.iter() {
-        let ent = &level.bsp.entities[def.entity];
+    for (index, def) in level.collision.doors.iter().enumerate() {
+        let ent = &level.bsp.entities[def.visual_entity];
         let skin = ent.i64("skin").unwrap_or(0).max(0) as usize;
         let asset = cache.entry((def.model.clone(), skin)).or_insert_with(|| {
             let fs = &level.vfs;
@@ -71,7 +74,22 @@ pub(crate) fn spawn(
         for entity in &instance.meshes {
             commands.entity(*entity).insert(StudioLight { cube, sun_dir, sun_color, tint: Vec4::new(tint.x, tint.y, tint.z, 1.0) });
         }
-        scene.leaves.push(Some(Leaf { asset, instance, pose, angle: def.initial_angle }));
+        // Brush lock indicators and any other authored surfaces share the hinge
+        // but retain their original UVs/lightmaps, separately from studio bones.
+        let mut brushes = Vec::new();
+        if let Some((_, build)) = brush_builds.iter().find(|(owner, _)| *owner == index) {
+            for (name, mesh) in &build.meshes {
+                let source = vmt::Material::load(name, &|path| level.vfs.read_string(path));
+                let material = crate::world_mesh::material_from_vmt(source.as_ref(), &level.vfs,
+                    textures, images, shared, exposure, true);
+                let entity = commands.spawn((Mesh3d(meshes.add(mesh.clone())),
+                    MeshMaterial3d(materials.add(material)),
+                    Transform::from_rotation(rotation_to_bevy(def.rotation(def.initial_angle)))
+                        .with_translation(to_bevy(def.origin)))).id();
+                brushes.push(entity);
+            }
+        }
+        scene.leaves.push(Some(Leaf { asset, instance, pose, angle: def.initial_angle, brushes }));
     }
     commands.insert_resource(scene);
 }
@@ -94,6 +112,12 @@ pub(crate) fn sync(
         let Some(leaf) = leaf else { continue; };
         if leaf.angle == state.angle { continue; }
         skinning::apply_pose(&leaf.instance, transform(def, state.angle), &leaf.pose, &mut transforms);
+        for entity in &leaf.brushes {
+            if let Ok(mut transform) = transforms.get_mut(*entity) {
+                *transform = Transform::from_rotation(rotation_to_bevy(def.rotation(state.angle)))
+                    .with_translation(to_bevy(def.origin));
+            }
+        }
         leaf.angle = state.angle;
     }
     for (entity, handle, light) in &lights {

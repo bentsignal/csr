@@ -40,6 +40,9 @@ pub struct Crosshair(pub u8);
 pub struct ProgressBar;
 
 #[derive(Component)]
+pub struct TimerPlate;
+
+#[derive(Component)]
 pub struct ProgressFill;
 
 const HUD_YELLOW: Color = Color::srgb(0.88, 0.89, 0.87);
@@ -140,6 +143,9 @@ fn centered_row(top: Val, bottom: Val) -> Node {
 }
 
 pub fn setup(mut commands: Commands) {
+    // Skip the entire tree, including opaque/background-only nodes. Skipping
+    // update alone leaves the timer plate painted over HUD-free map captures.
+    if std::env::var_os("CSR_NO_HUD").is_some() { return; }
     // Crosshair: four green bars with a gap, CS:GO "classic static" style,
     // plus a hit marker (hidden until a hit).
     let color = Color::srgb(0.2, 1.0, 0.2);
@@ -305,6 +311,7 @@ pub fn setup(mut commands: Commands) {
                     ..default()
                 },
                 BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.45)),
+                TimerPlate,
             ))
             .with_children(|row| {
                 row.spawn((Text::new(""), TextFont { font_size: hf(20.0), ..default() }, TextColor(Color::WHITE), HudText::Timer));
@@ -392,6 +399,7 @@ pub fn update(
     mut markers: Query<&mut Visibility, (With<HitMarker>, Without<ProgressBar>)>,
     mut bar: Query<&mut Visibility, (With<ProgressBar>, Without<HitMarker>)>,
     mut fill: Query<&mut Node, With<ProgressFill>>,
+    mut timer_plates: Query<&mut BackgroundColor, With<TimerPlate>>,
 ) {
     let _frame_scope = crate::input_latency::frame_scope("hud");
     static DEBUG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
@@ -411,6 +419,12 @@ pub fn update(
     // The player whose HUD we show (a spectated teammate's while dead).
     let p = local.spectating.and_then(|s| w.player(s)).unwrap_or(me);
     let competitive = w.competitive();
+    // Deathmatch has no score/timer text in this strip. Its otherwise empty
+    // plate looked like a square painted into the sky on every map.
+    for mut plate in &mut timer_plates {
+        let color = if competitive { Color::srgba(0.0, 0.0, 0.0, 0.45) } else { Color::NONE };
+        if plate.0 != color { plate.0 = color; }
+    }
 
     // Plant / defuse progress for the viewed player.
     let progress: Option<(String, f32)> = if let Some(start) = p.plant_start {

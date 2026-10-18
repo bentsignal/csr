@@ -844,6 +844,7 @@ impl CollisionWorld {
     pub fn from_bsp_with_model_data(map: &bsp::Bsp, opts: &MapCollisionOptions,
         prop_hulls: &PropHullLoader, models: &breakables::ModelDataLoader<'_>, presets: &kv::Block) -> Self {
         let mut w = CollisionWorld::new();
+        w.doors = doors::load(map, prop_hulls, &mut w.surfaces).into();
         let props = breakables::load_props(map, prop_hulls, models, presets);
         // Collect edges before brush loading so linked static brushes are never
         // left in the immutable grid. Rebase owner ordinals after brush admission.
@@ -890,6 +891,8 @@ impl CollisionWorld {
         add_model_brushes(&mut w, 0, Vec3::ZERO);
         let mut breakables = Vec::new();
         for (entity, ent) in map.entities.iter().enumerate() {
+            // Admitted moving brushes belong only to the tick-owned overlay.
+            if w.doors.iter().any(|door| door.brush_model.is_some() && door.entity == entity) { continue; }
             let Some(class) = ent.str("classname") else { continue };
             let dependency = dependencies.iter().position(|dep| dep.entity == entity);
             if dependency.is_none() && !opts.solid_brush_classes.iter().any(|c| c.eq_ignore_ascii_case(class)) {
@@ -1005,7 +1008,6 @@ impl CollisionWorld {
             }
             w.static_prop_convexes[prop_ordinal].end = w.convexes.len();
         }
-        w.doors = doors::load(map, prop_hulls, &mut w.surfaces).into();
         w.finalize();
         w
     }

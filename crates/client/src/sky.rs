@@ -24,6 +24,25 @@ pub fn sky_layer() -> RenderLayers {
 #[derive(Component)]
 pub struct SkyFace;
 
+/// (suffix, outward normal, texture right, texture down), in Source axes.
+fn cube_faces() -> [(&'static str, glam::Vec3, glam::Vec3, glam::Vec3); 6] {
+    let x = glam::Vec3::X; let y = glam::Vec3::Y; let z = glam::Vec3::Z;
+    // Authored top-edge correspondence with the existing cardinal sides:
+    // rt top = up bottom; bk top = up left; lf top = reversed up top;
+    // ft top = reversed up right. This requires up's U=-Y, V=+X, not
+    // U=+X, V=+Y. Verified against Legacy's Vertigo, daylight and Aztec
+    // texture bytes. Uploads and Bevy UVs both retain top-left row order.
+    // Keep the side/cardinal and bottom mappings until native parity or
+    // distinguishable authored edges establish a separate correction.
+    [("rt",x,-y,-z),("bk",y,x,-z),("lf",-x,y,-z),("ft",-y,-x,-z),("up",z,-y,x),("dn",-z,x,-y)]
+}
+
+fn face_corners(normal: glam::Vec3, right: glam::Vec3, down: glam::Vec3) -> [glam::Vec3; 4] {
+    [normal-right-down, normal+right-down, normal+right+down, normal-right+down]
+}
+
+const FACE_UVS: [[f32; 2]; 4] = [[0.0,0.0],[1.0,0.0],[1.0,1.0],[0.0,1.0]];
+
 /// One authored sky input. HDR half floats must bypass the RGBA8/sRGB path.
 pub struct SkyTexture {
     pub name: String,
@@ -67,9 +86,7 @@ pub fn load_texture(fs: &vfs::Vfs, mat: &vmt::Material) -> Result<SkyTexture, St
 pub fn spawn_2d(commands: &mut Commands, level: &level::Level, meshes: &mut Assets<Mesh>, materials: &mut Assets<crate::material::WorldMaterial>, images: &mut Assets<Image>, textures: &mut crate::textures::TextureCache, shared: &crate::world_mesh::SharedHandles) {
     use bevy::{asset::RenderAssetUsages, mesh::{Indices, PrimitiveTopology}};
     let Some(name) = level.bsp.worldspawn().and_then(|w| w.str("skyname")) else { return };
-    // (outward normal, texture right, texture down), all in Source axes.
-    let x = glam::Vec3::X; let y = glam::Vec3::Y; let z = glam::Vec3::Z;
-    for (suffix, normal, right, down) in [("rt",x,-y,-z),("bk",y,x,-z),("lf",-x,y,-z),("ft",-y,-x,-z),("up",z,x,y),("dn",-z,x,-y)] {
+    for (suffix, normal, right, down) in cube_faces() {
         let face = format!("skybox/{name}{suffix}");
         let Some(vmt) = vmt::Material::load(&face, &|p| level.vfs.read_string(p)) else {
             warn!("missing sky material: {face}");
@@ -103,11 +120,11 @@ pub fn spawn_2d(commands: &mut Commands, level: &level::Level, meshes: &mut Asse
         }
         material.params.flags = crate::material::flags::UNLIT;
         material.cull = false;
-        let corners = [normal-right-down, normal+right-down, normal+right+down, normal-right+down];
+        let corners = face_corners(normal, right, down);
         let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::RENDER_WORLD);
         mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, corners.map(|p| to_bevy(p * 180_000.0).to_array()).to_vec());
         mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, vec![to_bevy(-normal).to_array();4]);
-        mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, vec![[0.0,0.0],[1.0,0.0],[1.0,1.0],[0.0,1.0]]);
+        mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, FACE_UVS.to_vec());
         mesh.insert_indices(Indices::U32(vec![0,1,2,0,2,3]));
         commands.spawn((Mesh3d(meshes.add(mesh)), MeshMaterial3d(materials.add(material)), Transform::default(), sky_layer(), SkyFace));
     }
@@ -203,6 +220,88 @@ mod tests {
             // $hdrcompressedtexture "test/not-authored"
             $HdrBaseTexture "test/hdr"
         }"#, &|_| None, 0).unwrap()
+    }
+
+    /// Asset-free directional ramp in the authored five-face layout. These
+    /// image-space rays encode the measured edge correspondences independently
+    /// of cube_faces/face_corners; deriving the fixture from those helpers would
+    /// make a rotated cap pass. Bottom orientation is outside this correction.
+    fn directional_fixture(suffix: &str) -> Vec<u8> {
+        let mut bytes = texture(false);
+        bytes.truncate(80);
+        bytes[16..18].copy_from_slice(&9u16.to_le_bytes());
+        bytes[18..20].copy_from_slice(&9u16.to_le_bytes());
+        bytes[56] = 1;
+        for row in 0..9 {
+            for col in 0..9 {
+                let u = col as f32 / 4.0 - 1.0;
+                let v = row as f32 / 4.0 - 1.0;
+                let ray = match suffix {
+                    "rt" => [1.0, -u, -v],
+                    "bk" => [u, 1.0, -v],
+                    "lf" => [-1.0, u, -v],
+                    "ft" => [-u, -1.0, -v],
+                    "up" => [v, -u, 1.0],
+                    _ => panic!("no directional fixture for {suffix}"),
+                };
+                bytes.extend(ray.map(|c| ((c + 1.0) * 127.5).round() as u8));
+                bytes.push(255);
+            }
+        }
+        bytes
+    }
+
+    fn sample_fixture(pixels: &[u8], uv: glam::Vec2) -> glam::Vec3 {
+        let p = uv * 8.0;
+        let x = (p.x.floor() as usize).min(7);
+        let y = (p.y.floor() as usize).min(7);
+        let pixel = |col, row| {
+            let i = (row * 9 + col) * 4;
+            glam::Vec3::new(pixels[i] as f32, pixels[i + 1] as f32, pixels[i + 2] as f32) / 255.0
+        };
+        pixel(x, y).lerp(pixel(x + 1, y), p.x - x as f32)
+            .lerp(pixel(x, y + 1).lerp(pixel(x + 1, y + 1), p.x - x as f32), p.y - y as f32)
+    }
+
+    #[test]
+    fn directional_sky_fixture_is_continuous_across_cap_and_side_mesh_edges() {
+        let faces = cube_faces();
+        let mut images = Assets::<Image>::default();
+        let mut cache = TextureCache::new(&mut images);
+        let mut pixels = Vec::new();
+        for (suffix, _, _, _) in &faces[..5] {
+            let name = format!("test/directional_{suffix}");
+            let bytes = directional_fixture(suffix);
+            let fixture_fs = fs(&[(&name, bytes)]);
+            let info = cache.load(&fixture_fs, &mut images, &name, true).unwrap();
+            let image = images.get(&info.handle).unwrap();
+            assert_eq!(image.texture_descriptor.format, TextureFormat::Rgba8UnormSrgb);
+            pixels.push(image.data.clone().unwrap());
+        }
+        let mut cap_edges = 0;
+        let mut side_edges = 0;
+        for a in 0..5 {
+            let (_, an, ar, ad) = faces[a];
+            let ac = face_corners(an, ar, ad);
+            for b in a + 1..5 {
+                let (_, bn, br, bd) = faces[b];
+                let bc = face_corners(bn, br, bd);
+                let shared: Vec<_> = (0..4).flat_map(|i| (0..4).map(move |j| (i, j)))
+                    .filter(|&(i, j)| ac[i] == bc[j]).collect();
+                if shared.len() != 2 { continue; }
+                if b == 4 { cap_edges += 1; } else { side_edges += 1; }
+                let [(a0, b0), (a1, b1)] = shared.as_slice() else { unreachable!() };
+                for t in [0.0, 0.13, 0.37, 0.69, 1.0] {
+                    let uv = |i, j| glam::Vec2::from_array(FACE_UVS[i])
+                        .lerp(glam::Vec2::from_array(FACE_UVS[j]), t);
+                    let ca = sample_fixture(&pixels[a], uv(*a0, *a1));
+                    let cb = sample_fixture(&pixels[b], uv(*b0, *b1));
+                    assert!((ca - cb).abs().max_element() < 1.0 / 255.0,
+                        "{} / {} at {t}: {ca:?} != {cb:?}", faces[a].0, faces[b].0);
+                }
+            }
+        }
+        assert_eq!((cap_edges, side_edges), (4, 4));
     }
 
     #[test]

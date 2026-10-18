@@ -238,3 +238,100 @@ fn tick_input_impacts_capture_shot_pose_and_survive_prediction_restore_and_death
         assert!(world.door_impact(owner, &tr).is_none(), "no decal for an undefined start-solid contact");
     }
 }
+
+
+/// Compiled brush plus a separately positioned visual leaf, deliberately with
+/// no PHY. This exercises map admission, tick collision and snapshot together.
+fn brush_fixture(rate: u32) -> (World, PlayerId) {
+    brush_fixture_with_contents(rate, contents::SOLID)
+}
+
+fn brush_fixture_with_contents(rate: u32, mask: i32) -> (World, PlayerId) {
+    let mut map = bsp::Bsp::default();
+    let doc = kv::parse(r#"
+        hinge { classname func_door_rotating model *1 targetname hinge
+            origin "100 200 50" angles "0 0 0" spawnflags 65842
+            speed 180 distance 90 wait 4 }
+        leaf { classname prop_dynamic parentname hinge model models/fixture.mdl
+            origin "100 224 2" angles "0 90 0" solid 6 }
+    "#).unwrap();
+    map.entities = ["hinge", "leaf"].map(|name| doc.block(name).unwrap().clone()).into();
+    let mins = Vec3::new(-2., 0., -50.); let maxs = Vec3::new(2., 48., 46.);
+    map.models = vec![
+        bsp::Model { mins, maxs, origin: Vec3::ZERO, head_node: -1, first_face: 0, num_faces: 0 },
+        bsp::Model { mins, maxs, origin: Vec3::ZERO, head_node: -2, first_face: 0, num_faces: 0 },
+    ];
+    let leaf = bsp::Leaf { contents: 0, cluster: -1, area: 0, mins: [0; 3], maxs: [0; 3],
+        first_leaf_face: 0, num_leaf_faces: 0, first_leaf_brush: 0, num_leaf_brushes: 0 };
+    map.leafs = vec![leaf, bsp::Leaf { num_leaf_brushes: 1, ..leaf }];
+    map.leaf_brushes = vec![0];
+    map.planes = [Vec3::X, -Vec3::X, Vec3::Y, -Vec3::Y, Vec3::Z, -Vec3::Z]
+        .into_iter().zip([maxs.x, -mins.x, maxs.y, -mins.y, maxs.z, -mins.z])
+        .map(|(normal, dist)| bsp::Plane { normal, dist, kind: 0 }).collect();
+    map.brush_sides = (0..6).map(|plane| bsp::BrushSide { plane, texinfo: -1, dispinfo: -1, bevel: false }).collect();
+    map.brushes = vec![bsp::Brush { first_side: 0, num_sides: 6, contents: mask }];
+    let mut collision = CollisionWorld::from_bsp(&map, &MapCollisionOptions::default(), &|_| None);
+    assert_eq!(collision.doors.len(), 1);
+    let size = 2048.;
+    collision.add_triangle([Vec3::new(-size,-size,0.), Vec3::new(size,-size,0.), Vec3::new(size,size,0.)], contents::SOLID, 0);
+    collision.add_triangle([Vec3::new(-size,-size,0.), Vec3::new(size,size,0.), Vec3::new(-size,size,0.)], contents::SOLID, 0);
+    collision.finalize();
+    let mut world = World::new(Arc::new(collision)); world.set_tick_rate(rate);
+    world.spawns.push(SpawnPoint { origin: Vec3::new(40.,224.,1.), yaw: 0., team: Team::CounterTerrorist });
+    let id = world.add_player("fixture", Team::CounterTerrorist);
+    (world, id)
+}
+
+#[test]
+fn parented_visual_brush_door_moves_collision_once_and_preserves_toggle_and_snapshot() {
+    for rate in [64, 128] {
+        let (mut world, id) = brush_fixture(rate);
+        let def = &world.collision.doors[0];
+        assert_eq!(def.brush_model, Some(1)); assert_eq!(def.visual_entity, 1);
+        let (closed, _) = def.visual_pose(0.);
+        assert!((closed - Vec3::new(100.,224.,2.)).length() < 1e-5);
+        let (opened, rotation) = def.visual_pose(-90.);
+        assert!((opened - Vec3::new(124.,200.,2.)).length() < 1e-4);
+        assert!((rotation * Vec3::X - Vec3::X).length() < 1e-4);
+        let ray = |world: &World| world.collision.trace_owned_ray(Vec3::new(40.,224.,64.),
+            Vec3::new(180.,224.,64.), contents::MASK_SHOT);
+        assert_eq!(ray(&world).1, Some(collision::HitOwner::Door(0)));
+        let untouched = world.clone();
+        for _ in 0..rate * 6 { world.step(&[(id, use_input(0.))]); }
+        assert_eq!(world.doors[0].angle, -90.);
+        assert!(!ray(&world).0.hit(), "the closed brush must not remain in immutable collision");
+        assert!(ray(&untouched).0.hit());
+        let state = world.decode(&world.encode_state()).unwrap();
+        let mut restored = brush_fixture(rate).0; restored.restore(state);
+        assert_eq!(world.state(), restored.state());
+        for _ in 0..rate {
+            let input = [(id, TickInput { forward_move: 450., ..Default::default() })];
+            world.step(&input); restored.step_prediction(&input);
+            assert_eq!(world.state(), restored.state());
+        }
+        assert!(world.player(id).unwrap().movement.origin.x > 180.);
+    }
+}
+
+
+#[test]
+fn moving_brush_preserves_grate_and_player_clip_masks_across_rotations() {
+    for contents in [collision::contents::GRATE, collision::contents::PLAYERCLIP] {
+        let (mut world, _) = brush_fixture_with_contents(128, contents);
+        for angle in [0., -45., -90.] {
+            world.doors[0].angle=angle; world.doors[0].target=angle;
+            world.rebuild_door_collision();
+            let def=&world.collision.doors[0];
+            let center=def.center_at(angle);
+            let normal=def.rotation(angle)*Vec3::X;
+            let a=center-normal*60.; let b=center+normal*60.;
+            assert!(world.collision.trace_ray(a,b,collision::contents::MASK_PLAYERSOLID).hit());
+            assert!(!world.collision.trace_ray(a,b,collision::contents::MASK_SHOT).hit());
+            let state=world.decode(&world.encode_state()).unwrap();
+            let mut restored=brush_fixture_with_contents(128,contents).0;
+            restored.restore(state);
+            assert_eq!(restored.state(),world.state());
+            assert!(!restored.collision.trace_ray(a,b,collision::contents::MASK_SHOT).hit());
+        }
+    }
+}

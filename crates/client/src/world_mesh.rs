@@ -312,7 +312,7 @@ pub fn build(bsp: &Bsp, atlas: &LightmapAtlas, include: &dyn Fn(usize) -> bool) 
 }
 
 /// Same authored topology, UV/lightmaps and materials as world batches, but
-/// isolated by brush entity so a simulated break can hide every owned face.
+/// isolated by brush entity for breakable lifecycle or authored window fade.
 pub fn build_brush_model(bsp: &Bsp, atlas: &LightmapAtlas, model: usize, origin: glam::Vec3) -> WorldBuild {
     build_models(bsp, atlas, &|_| true, vec![(model, origin)])
 }
@@ -1299,6 +1299,40 @@ mod authored_transform_tests {
         assert_eq!(unsupported.params.detail, before.params.detail);
         let not_terrain = normal_material(Some(&parse(r#""$detail" "test/normal""#)), false);
         assert_eq!(not_terrain.params.flags & flags::DETAIL, 0);
+    }
+
+    #[test]
+    fn uniform_detail_vector_preserves_prop_ao_uvs_and_lighting_inputs() {
+        let parse = |scale: &str| vmt::Material::parse_with(
+            &format!(r#"VertexLitGeneric {{
+                "$basetexture" "test/normal" "$bumpmap" "test/normal"
+                "$basetexturetransform" "center .5 .5 scale 10 10 rotate 0 translate 0 0"
+                "$bumptransform" "center .5 .5 scale 10 10 rotate 0 translate 0 0"
+                "$detail" "test/normal" "$detailscale" "{scale}"
+                "$detailblendmode" "0" "$detailblendfactor" "1"
+                "$blendtintbybasealpha" "1" "$color" "[.6 .7 .8]"
+            }}"#), &|_| None, 0,
+        ).unwrap();
+        let scalar = normal_material(Some(&parse("1")), false);
+        let vector = normal_material(Some(&parse("[1 1 1]")), false);
+        assert_ne!(vector.params.flags & flags::DETAIL, 0);
+        assert_ne!(vector.params.flags & flags::NORMAL, 0);
+        assert_ne!(vector.params.flags & flags::VERTEX_LIT, 0);
+        assert_ne!(vector.params.flags & flags::TINT_BY_BASE_ALPHA, 0);
+        assert_eq!(vector.params.detail, Vec4::new(1., 1., 1., 0.));
+        assert_eq!(vector.params.base_uv, Vec4::new(10., 10., -4.5, -4.5));
+        assert_eq!(vector.params.normal_uv, vector.params.base_uv);
+        assert_eq!(vector.params.flags, scalar.params.flags);
+        assert_eq!(vector.params.detail, scalar.params.detail);
+        assert_eq!(vector.params.color, scalar.params.color);
+        assert_eq!(vector.alpha_mode, scalar.alpha_mode);
+        // AO stays at raw model UVs and in the existing data texture binding;
+        // it does not inherit the tiled color/normal scale or replace a bake.
+        assert_ne!(vector.detail, vector.base);
+        assert_eq!(vector.detail, vector.normal);
+        assert_eq!(vector.params.exposure, scalar.params.exposure);
+        let unsupported = normal_material(Some(&parse("[1 1 2]")), false);
+        assert_eq!(unsupported.params.flags & flags::DETAIL, 0);
     }
 
     #[test]
