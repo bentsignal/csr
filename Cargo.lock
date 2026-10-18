@@ -2043,6 +2043,7 @@ version = "0.3.0"
 dependencies = [
  "bsp",
  "glam 0.32.1",
+ "kv",
  "mdl",
 ]
 

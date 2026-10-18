@@ -10,3 +10,6 @@ authors.workspace = true
 glam.workspace = true
 bsp.workspace = true
 mdl.workspace = true
+
+[dev-dependencies]
+kv.workspace = true

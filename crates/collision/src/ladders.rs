@@ -11,14 +11,15 @@ impl CollisionWorld {
     /// Caps do not attach, so walking over the top returns to normal movement.
     pub fn ladder_normal(&self, origin: Vec3, mins: Vec3, maxs: Vec3) -> Option<Vec3> {
         // Dynamic backends retain their own climbable policy.
-        if self.dynamic.is_some() || self.ladder_convexes.is_empty() { return None; }
+        let brushes = self.static_world();
+        if self.dynamic.is_some() || brushes.ladder_convexes.is_empty() { return None; }
         let center = origin + (mins + maxs) * 0.5;
         let ext = (maxs - mins) * 0.5;
         let low = origin + mins - Vec3::splat(REACH);
         let high = origin + maxs + Vec3::splat(REACH);
         let mut closest: Option<(f32, Vec3)> = None;
-        for &index in &self.ladder_convexes {
-            let brush = &self.convexes[index];
+        for &index in &brushes.ladder_convexes {
+            let brush = &brushes.convexes[index];
             if !overlaps(low, high, brush.mins, brush.maxs) { continue; }
             let mut face: Option<(f32, Vec3)> = None;
             let mut outside = false;
@@ -34,7 +35,8 @@ impl CollisionWorld {
             let Some((gap, normal)) = face else { continue };
             if normal.z.abs() >= 0.7 || gap < -REACH { continue; }
             // A nearby ladder behind another solid must not catch the player.
-            // Exclude only this ladder brush, retaining floors and other walls.
+            // Exclude only this static ladder brush, retaining floors, other
+            // walls and the outer world's current door poses.
             let excluded = index..index + 1;
             let contact = origin - normal * (gap.max(0.0) + DIST_EPSILON);
             let obstruction = self.trace_box_excluding(origin, contact, mins, maxs,

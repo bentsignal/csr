@@ -170,3 +170,6 @@ impl CollisionWorld {
         })
     }
 }
+
+#[cfg(test)]
+mod tests;

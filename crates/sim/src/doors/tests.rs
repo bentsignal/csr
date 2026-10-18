@@ -153,3 +153,42 @@ fn automatic_return_round_reset_and_map_dependent_state_admission() {
     bad[0].angle = 100.;
     assert!(world.validate_door_state(&bad).is_err());
 }
+
+#[test]
+fn door_use_and_ladder_climbing_survive_combined_snapshot_prediction_64_128() {
+    for rate in [64, 128] {
+        let (mut world, user) = fixture(rate, "");
+        world.collision = CollisionWorld::map_arc(&world.collision);
+        let base = Arc::get_mut(&mut world.collision).unwrap();
+        // A separate route in the same map. Adding any supported door must
+        // not disable the authored ladder index for the whole level.
+        let shape = hull();
+        let points: Vec<_> = shape.points.iter().map(|p|
+            Vec3::new((p.x + 2.) * 0.25, p.y + 200., p.z * 4.)).collect();
+        base.add_convex(collision::convex_from_hull(&points, &shape.triangles,
+            contents::LADDER | contents::GRATE, 0).unwrap());
+        base.finalize();
+        world.rebuild_door_collision();
+        let climber = world.add_player("climber", Team::CounterTerrorist);
+        world.player_mut(climber).unwrap().movement = movement::PlayerMove::spawn_at(
+            Vec3::new(-16. - collision::DIST_EPSILON, 224., 64.));
+        let inputs = [(user, use_input(0.)), (climber, TickInput {
+            forward_move: 450., ..Default::default()
+        })];
+        world.step(&inputs);
+        assert_ne!(world.doors[0].angle, 0.);
+        assert_eq!(world.player(climber).unwrap().movement.ladder_normal, Some(-Vec3::X));
+        let state: crate::WorldState = world.decode(&world.encode_state()).unwrap();
+        let mut predicted = world.clone();
+        predicted.restore(state);
+        for _ in 0..rate / 2 {
+            world.step(&inputs);
+            predicted.step_prediction(&inputs);
+            assert_eq!(world.state(), predicted.state());
+            assert_eq!(world.player(climber).unwrap().movement.ladder_normal, Some(-Vec3::X));
+            assert!(predicted.events.is_empty());
+        }
+        assert!(world.player(climber).unwrap().movement.origin.z > 128.);
+        assert!(!blocked(&world));
+    }
+}

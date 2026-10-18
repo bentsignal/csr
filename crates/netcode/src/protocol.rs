@@ -2,8 +2,8 @@
 use serde::{Deserialize, Serialize};
 use sim::{GameEvent, PlayerId, Snapshot, Team, TickInput};
 
-// v26 adds authoritative rotating-door state and door sound cues. The held
-// ladder candidate uses v25; integrating both must retain this v26 wire gate.
+// v26 combines authoritative rotating-door state/cues with v25's replicated
+// BSP ladder contact in PlayerMove for prediction and foley.
 // Older peers must reject the session before attempting snapshot decoding.
 pub const VERSION: u32 = 26;
 pub const PROTOCOL_ID: u64 = 0x4353_5257_0000_001a;
@@ -923,7 +923,22 @@ mod tests {
         let mut climbing = state.clone();
         climbing.snapshot.state.players[0].movement.on_ground = false;
         climbing.snapshot.state.players[0].movement.ladder_normal = Some(-glam::Vec3::X);
+        climbing.snapshot.state.doors.push(sim::doors::State {
+            angle: -45., target: -90., return_at: None,
+        });
         assert!(validate_state(&climbing, Some(&welcome), 0, 0).is_ok());
+        let decoded: StateUpdate = world.decode(&encode(&climbing).unwrap()).unwrap();
+        assert_eq!(decoded, climbing, "v26 must retain both door and ladder fields");
+        for case in 0..3 {
+            let mut invalid = climbing.clone();
+            let door = &mut invalid.snapshot.state.doors[0];
+            match case {
+                0 => door.angle = f32::NAN,
+                1 => door.target = 181.,
+                _ => door.return_at = Some(-1.),
+            }
+            assert!(validate_state(&invalid, Some(&welcome), 0, 0).is_err(), "door case {case}");
+        }
         for case in 0..5 {
             let mut invalid = climbing.clone();
             let actor = &mut invalid.snapshot.state.players[0];
