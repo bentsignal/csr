@@ -736,7 +736,7 @@ fn spawn_level(
         Tonemapping::None,
         start,
         sky::sky_layer(),
-        // Tiny auxiliary views avoid indirect draw setup; main-world batching stays enabled.
+        // Auxiliary views use direct submission without indirect draw setup.
         bevy::render::view::NoIndirectDrawing,
         PlayerCamera,
     ));
@@ -759,6 +759,7 @@ fn spawn_level(
         PlayerCamera,
         audio::spatial_listener(),
         player::WorldPlayerCamera,
+        bevy::render::view::NoIndirectDrawing,
     ));
     // Viewmodel camera: drawn last with its own depth buffer and FOV.
     commands.spawn((
