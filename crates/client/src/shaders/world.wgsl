@@ -95,7 +95,11 @@ fn spatial_prop_irradiance(in: SpatialPropOutput, n: vec3<f32>) -> vec3<f32> {
     let ambient = n2.x * select(in.cube1, in.cube0, n.x >= 0.0)
         + n2.y * select(in.cube3, in.cube2, n.y >= 0.0)
         + n2.z * select(in.cube5, in.cube4, n.z >= 0.0);
+#ifdef BINDLESS
+    let dir = textureLoad(bindless_textures_2d[material_bindings.prop_light], vec2<i32>(6, i32(in.uv_b.x)), 0).xyz;
+#else
     let dir = textureLoad(prop_light, vec2<i32>(6, i32(in.uv_b.x)), 0).xyz;
+#endif
     return ambient + in.sun * max(dot(n, dir), 0.0);
 }
 #endif
@@ -167,6 +171,45 @@ fn ambient_light(n: vec3<f32>) -> vec3<f32> {
     return c;
 }
 
+#ifdef BINDLESS
+#import bevy_pbr::mesh_bindings::mesh
+#import bevy_render::bindless::{bindless_samplers_filtering, bindless_textures_2d, bindless_textures_2d_array}
+
+// Field order is the original binding number, shared by forward and shadow.
+struct WorldMaterialBindings {
+    params: u32, // 0
+    base_tex: u32, // 1
+    base_samp: u32, // 2
+    base2_tex: u32, // 3
+    base2_samp: u32, // 4
+    light_tex: u32, // 5
+    light_samp: u32, // 6
+    mod_tex: u32, // 7
+    mod_samp: u32, // 8
+    normal_tex: u32, // 9
+    normal_samp: u32, // 10
+    normal2_tex: u32, // 11
+    normal2_samp: u32, // 12
+    prop_light: u32, // 13
+    phong_tex: u32, // 14
+    phong_samp: u32, // 15
+    skin_surface: u32, // 16
+    skin_surface_samp: u32, // 17
+    skin_position: u32, // 18
+    skin_position_samp: u32, // 19
+    detail_tex: u32, // 20
+    detail_samp: u32, // 21
+    self_illum_tex: u32, // 22
+    self_illum_samp: u32, // 23
+};
+
+@group(#{MATERIAL_BIND_GROUP}) @binding(0) var<storage> material_indices: array<WorldMaterialBindings>;
+@group(#{MATERIAL_BIND_GROUP}) @binding(10) var<storage> material_params: array<WorldParams>;
+// Private storage belongs to one shader invocation. Initialize before any
+// fragment helper runs; the static-prop vertex entry point does not use it.
+var<private> material_bindings: WorldMaterialBindings;
+var<private> params: WorldParams;
+#else
 @group(#{MATERIAL_BIND_GROUP}) @binding(0) var<uniform> params: WorldParams;
 @group(#{MATERIAL_BIND_GROUP}) @binding(1) var base_tex: texture_2d<f32>;
 @group(#{MATERIAL_BIND_GROUP}) @binding(2) var base_samp: sampler;
@@ -195,6 +238,7 @@ fn ambient_light(n: vec3<f32>) -> vec3<f32> {
 @group(#{MATERIAL_BIND_GROUP}) @binding(21) var detail_samp: sampler;
 @group(#{MATERIAL_BIND_GROUP}) @binding(22) var self_illum_tex: texture_2d<f32>;
 @group(#{MATERIAL_BIND_GROUP}) @binding(23) var self_illum_samp: sampler;
+#endif // BINDLESS
 fn paint_coords(uv:vec2<f32>)->vec2<f32>{
     let p=(uv-vec2<f32>(0.5))*params.skin_transform.xy;
     return vec2<f32>(p.x*params.skin.z-p.y*params.skin.w,p.x*params.skin.w+p.y*params.skin.z)+vec2<f32>(0.5)+params.skin_transform.zw;
@@ -221,11 +265,25 @@ fn prop_irradiance(n: vec3<f32>, id: i32) -> vec3<f32> {
     let ix = select(1, 0, n.x >= 0.0);
     let iy = select(3, 2, n.y >= 0.0);
     let iz = select(5, 4, n.z >= 0.0);
+#ifdef BINDLESS
+    let ambient = n2.x * textureLoad(bindless_textures_2d[material_bindings.prop_light], vec2<i32>(ix, id), 0).rgb
+        + n2.y * textureLoad(bindless_textures_2d[material_bindings.prop_light], vec2<i32>(iy, id), 0).rgb
+        + n2.z * textureLoad(bindless_textures_2d[material_bindings.prop_light], vec2<i32>(iz, id), 0).rgb;
+#else
     let ambient = n2.x * textureLoad(prop_light, vec2<i32>(ix, id), 0).rgb
         + n2.y * textureLoad(prop_light, vec2<i32>(iy, id), 0).rgb
         + n2.z * textureLoad(prop_light, vec2<i32>(iz, id), 0).rgb;
+#endif
+#ifdef BINDLESS
+    let sun = textureLoad(bindless_textures_2d[material_bindings.prop_light], vec2<i32>(7, id), 0).rgb;
+#else
     let sun = textureLoad(prop_light, vec2<i32>(7, id), 0).rgb;
+#endif
+#ifdef BINDLESS
+    let dir = textureLoad(bindless_textures_2d[material_bindings.prop_light], vec2<i32>(6, id), 0).xyz;
+#else
     let dir = textureLoad(prop_light, vec2<i32>(6, id), 0).xyz;
+#endif
     return ambient + sun * max(dot(n, dir), 0.0);
 }
 
@@ -247,6 +305,11 @@ fn fragment(in: SpatialPropOutput) -> @location(0) vec4<f32> {
 #else
 fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
 #endif
+#ifdef BINDLESS
+    let material_slot = mesh[in.instance_index].material_and_lightmap_bind_group_slot & 0xffffu;
+    material_bindings = material_indices[material_slot];
+    params = material_params[material_bindings.params];
+#endif
 #ifdef VERTEX_UVS_A
     let uv = in.uv;
 #else
@@ -256,7 +319,11 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     // existing coordinates. Other samplers still start from raw mesh UVs.
     let base_uv = select(uv * params.base_uv.xy + params.base_uv.zw, uv,
         (params.flags & DYNAMIC_LIT) != 0u || params.skin.x > 0.5);
+#ifdef BINDLESS
+    var albedo = textureSample(bindless_textures_2d[material_bindings.base_tex], bindless_samplers_filtering[material_bindings.base_samp], base_uv);
+#else
     var albedo = textureSample(base_tex, base_samp, base_uv);
+#endif
     let self_illum_alpha = albedo.a;
     // Preserve the authored mask independently of opacity/cosmetic processing.
     let tint_weight = select(1.0, albedo.a, (params.flags & TINT_BY_BASE_ALPHA) != 0u);
@@ -268,19 +335,41 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     // Keep alpha and normal/specular maps from the original weapon material.
     if params.skin.x > 0.5 {
         let style = u32(params.skin.x);
+#ifdef BINDLESS
+        let mask = textureSample(bindless_textures_2d[material_bindings.mod_tex], bindless_samplers_filtering[material_bindings.mod_samp], uv);
+#else
         let mask = textureSample(mod_tex, mod_samp, uv);
+#endif
         let centered = (uv - vec2<f32>(0.5)) * params.skin_transform.xy;
         let rotated = vec2<f32>(centered.x*params.skin.z-centered.y*params.skin.w,
                                centered.x*params.skin.w+centered.y*params.skin.z);
         let paint_uv = rotated + vec2<f32>(0.5) + params.skin_transform.zw;
+#ifdef BINDLESS
+        var pattern = textureSample(bindless_textures_2d[material_bindings.base2_tex], bindless_samplers_filtering[material_bindings.base2_samp], paint_uv);
+#else
         var pattern = textureSample(base2_tex, base2_samp, paint_uv);
+#endif
         if (style==3u || style==6u) && params.skin_properties.y>0.5 {
+#ifdef BINDLESS
+            let pos=textureSample(bindless_textures_2d[material_bindings.skin_position],bindless_samplers_filtering[material_bindings.skin_position_samp],uv).rgb;
+#else
             let pos=textureSample(skin_position,skin_position_samp,uv).rgb;
+#endif
+#ifdef BINDLESS
+            let normal=abs(textureSample(bindless_textures_2d[material_bindings.skin_surface],bindless_samplers_filtering[material_bindings.skin_surface_samp],uv).rgb*2.0-1.0);
+#else
             let normal=abs(textureSample(skin_surface,skin_surface_samp,uv).rgb*2.0-1.0);
+#endif
             let weights=pow(normal,vec3<f32>(4.0))/max(dot(pow(normal,vec3<f32>(4.0)),vec3<f32>(1.0)),0.00001);
+#ifdef BINDLESS
+            pattern=textureSample(bindless_textures_2d[material_bindings.base2_tex],bindless_samplers_filtering[material_bindings.base2_samp],paint_coords(pos.yz))*weights.x
+                +textureSample(bindless_textures_2d[material_bindings.base2_tex],bindless_samplers_filtering[material_bindings.base2_samp],paint_coords(pos.xz))*weights.y
+                +textureSample(bindless_textures_2d[material_bindings.base2_tex],bindless_samplers_filtering[material_bindings.base2_samp],paint_coords(pos.xy))*weights.z;
+#else
             pattern=textureSample(base2_tex,base2_samp,paint_coords(pos.yz))*weights.x
                 +textureSample(base2_tex,base2_samp,paint_coords(pos.xz))*weights.y
                 +textureSample(base2_tex,base2_samp,paint_coords(pos.xy))*weights.z;
+#endif
         }
         var paint = pattern.rgb;
         if style <= 6u {
@@ -305,12 +394,20 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
             }
         }
         if style>=4u && style<=6u {paint*=max(params.skin_properties.x,1.0);}
+#ifdef BINDLESS
+        let authored=textureSample(bindless_textures_2d[material_bindings.normal2_tex], bindless_samplers_filtering[material_bindings.normal2_samp], uv);
+#else
         let authored=textureSample(normal2_tex, normal2_samp, uv);
+#endif
         let ao=authored.r;
         // Authored surface/grunge maps drive edge wear; UV noise is only the fallback.
         let grain = fract(sin(dot(floor(paint_uv*1024.0),vec2<f32>(12.9898,78.233)))*43758.5453);
         let wear = params.skin.y * 0.65;
+#ifdef BINDLESS
+        let surface=textureSample(bindless_textures_2d[material_bindings.skin_surface],bindless_samplers_filtering[material_bindings.skin_surface_samp],uv);
+#else
         let surface=textureSample(skin_surface,skin_surface_samp,uv);
+#endif
         let damage=select(mask.a*0.55+grain*0.45,select(authored.g*0.65+grain*0.35,surface.r,style==10u),params.skin_details.y>0.5);
         let exposed = smoothstep(1.0-wear,1.0,damage);
         if style == 10u {albedo=vec4<f32>(paint*0.45,albedo.a);}
@@ -329,11 +426,19 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
 
     var blend_weight = 0.0;
     if (params.flags & BLEND) != 0u {
+#ifdef BINDLESS
+        let second = textureSample(bindless_textures_2d[material_bindings.base2_tex], bindless_samplers_filtering[material_bindings.base2_samp], uv * params.base2_uv.xy + params.base2_uv.zw);
+#else
         let second = textureSample(base2_tex, base2_samp, uv * params.base2_uv.xy + params.base2_uv.zw);
+#endif
         var t = vcolor.a;
         if (params.flags & BLEND_MODULATE) != 0u {
             // Blend modulation: G = blend centre, R = softness.
+#ifdef BINDLESS
+            let m = textureSample(bindless_textures_2d[material_bindings.mod_tex], bindless_samplers_filtering[material_bindings.mod_samp], uv * params.modulate_uv.xy + params.modulate_uv.zw);
+#else
             let m = textureSample(mod_tex, mod_samp, uv * params.modulate_uv.xy + params.modulate_uv.zw);
+#endif
             let lo = clamp(m.g - m.r, 0.0, 1.0);
             let hi = clamp(m.g + m.r, 0.0, 1.0);
             t = smoothstep(lo, hi + 0.0001, t);
@@ -354,11 +459,19 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     // Keep base/detail coordinates independent; normal alpha shares this map.
     let normal_uv = uv * params.normal_uv.xy + params.normal_uv.zw;
     if (params.flags & NORMAL) != 0u {
+#ifdef BINDLESS
+        let b1 = textureSample(bindless_textures_2d[material_bindings.normal_tex], bindless_samplers_filtering[material_bindings.normal_samp], normal_uv).rgb;
+#else
         let b1 = textureSample(normal_tex, normal_samp, normal_uv).rgb;
+#endif
         var tangent_normal = bump_normal(b1);
         weights = bump_weights(b1);
         if (params.flags & NORMAL2) != 0u {
+#ifdef BINDLESS
+            let b2 = textureSample(bindless_textures_2d[material_bindings.normal2_tex], bindless_samplers_filtering[material_bindings.normal2_samp], uv * params.normal2_uv.xy + params.normal2_uv.zw).rgb;
+#else
             let b2 = textureSample(normal2_tex, normal2_samp, uv * params.normal2_uv.xy + params.normal2_uv.zw).rgb;
+#endif
             tangent_normal = normalize(mix(tangent_normal, bump_normal(b2), blend_weight));
             // Ordinary RGB maps describe normals, not RNM visibility weights.
             // Project the chosen surface normal once: interpolating squared
@@ -398,11 +511,21 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
 #endif
     if (params.flags & LIGHTMAPPED) != 0u {
 #ifdef VERTEX_UVS_B
+#ifdef BINDLESS
+        light = textureSample(bindless_textures_2d_array[material_bindings.light_tex], bindless_samplers_filtering[material_bindings.light_samp], in.uv_b, 0).rgb;
+#else
         light = textureSample(light_tex, light_samp, in.uv_b, 0).rgb;
+#endif
         if (params.flags & NORMAL) != 0u {
+#ifdef BINDLESS
+            light = textureSample(bindless_textures_2d_array[material_bindings.light_tex], bindless_samplers_filtering[material_bindings.light_samp], in.uv_b, 1).rgb * weights.x
+                + textureSample(bindless_textures_2d_array[material_bindings.light_tex], bindless_samplers_filtering[material_bindings.light_samp], in.uv_b, 2).rgb * weights.y
+                + textureSample(bindless_textures_2d_array[material_bindings.light_tex], bindless_samplers_filtering[material_bindings.light_samp], in.uv_b, 3).rgb * weights.z;
+#else
             light = textureSample(light_tex, light_samp, in.uv_b, 1).rgb * weights.x
                 + textureSample(light_tex, light_samp, in.uv_b, 2).rgb * weights.y
                 + textureSample(light_tex, light_samp, in.uv_b, 3).rgb * weights.z;
+#endif
         }
         light *= params.lightmap_scale;
 #endif
@@ -417,8 +540,16 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
 #endif
         // Tint belongs to this placed prop, not its shared material or lighting.
         // Other material users retain their existing one-texel identity default.
+#ifdef BINDLESS
+        if textureDimensions(bindless_textures_2d[material_bindings.prop_light], 0).x >= 9u {
+#else
         if textureDimensions(prop_light, 0).x >= 9u {
+#endif
+#ifdef BINDLESS
+            let tint = textureLoad(bindless_textures_2d[material_bindings.prop_light], vec2<i32>(8, i32(round(in.uv_b.x))), 0).rgb;
+#else
             let tint = textureLoad(prop_light, vec2<i32>(8, i32(round(in.uv_b.x))), 0).rgb;
+#endif
             diffuse_tint *= tint;
         }
 #endif
@@ -436,9 +567,17 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     albedo = vec4<f32>(albedo.rgb * mix(vec3<f32>(1.0), diffuse_tint, tint_weight), albedo.a);
     if params.skin_details.w>0.5 && params.skin_properties.z>0.5 {
         let eye=normalize(view.world_position.xyz-in.world_position.xyz);
+#ifdef BINDLESS
+        let mask=textureSample(bindless_textures_2d[material_bindings.mod_tex],bindless_samplers_filtering[material_bindings.mod_samp],uv);
+#else
         let mask=textureSample(mod_tex,mod_samp,uv);
+#endif
         let angle=clamp(1.0-abs(dot(n,eye)),0.0,1.0);
+#ifdef BINDLESS
+        let spectrum=textureSample(bindless_textures_2d[material_bindings.base2_tex],bindless_samplers_filtering[material_bindings.base2_samp],vec2<f32>(fract(angle+mask.g),mask.b));
+#else
         let spectrum=textureSample(base2_tex,base2_samp,vec2<f32>(fract(angle+mask.g),mask.b));
+#endif
         albedo=vec4<f32>(mix(albedo.rgb,albedo.rgb*spectrum.rgb*2.0,mask.r),albedo.a);
     }
     // Ordinary authored detail covers lit world surfaces and static props.
@@ -446,7 +585,11 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     // blend masks, normal data, opacity and lightmap irradiance stay separate.
     // Dynamic/skinned character and weapon materials keep their fallback.
     if (params.flags & DETAIL) != 0u && (params.flags & (LIGHTMAPPED | VERTEX_LIT)) != 0u && (params.flags & DYNAMIC_LIT) == 0u {
+#ifdef BINDLESS
+        let grain = textureSample(bindless_textures_2d[material_bindings.detail_tex], bindless_samplers_filtering[material_bindings.detail_samp], uv * params.detail.xy).rgb;
+#else
         let grain = textureSample(detail_tex, detail_samp, uv * params.detail.xy).rgb;
+#endif
         // Ordinary detail uses a neutral midpoint. Sampling as data preserves
         // 0.5 as identity; the authored factor controls the modulation strength.
         albedo = vec4<f32>(albedo.rgb * mix(vec3<f32>(1.0), 2.0 * grain, params.detail.z), albedo.a);
@@ -457,9 +600,17 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
         let nv=clamp(dot(n,v),0.0,1.0);
         let fresnel_t=1.0-nv;
         let fresnel=select(mix(params.fresnel.x,params.fresnel.y,fresnel_t*2.0),mix(params.fresnel.y,params.fresnel.z,(fresnel_t-0.5)*2.0),fresnel_t>0.5);
+#ifdef BINDLESS
+        let exponent_sample=textureSample(bindless_textures_2d[material_bindings.phong_tex],bindless_samplers_filtering[material_bindings.phong_samp],uv);
+#else
         let exponent_sample=textureSample(phong_tex,phong_samp,uv);
+#endif
         let exponent=select(params.phong.x,1.0+exponent_sample.r*149.0,params.phong.z>0.5);
+#ifdef BINDLESS
+        let normal_alpha=textureSample(bindless_textures_2d[material_bindings.normal_tex],bindless_samplers_filtering[material_bindings.normal_samp],normal_uv).a;
+#else
         let normal_alpha=textureSample(normal_tex,normal_samp,normal_uv).a;
+#endif
         let mask=select(select(1.0,normal_alpha,(params.flags & NORMAL)!=0u),albedo.a,params.phong.w>0.5);
         let tint=params.phong_tint.rgb*mix(vec3<f32>(1.0),albedo.rgb,params.phong_tint.w*exponent_sample.g);
         let reflected=reflect(-params.sun_dir.xyz,n);
@@ -471,7 +622,11 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     if params.self_illum.w > 0.5 {
         var mask = vec3<f32>(self_illum_alpha);
         if params.self_illum.w > 1.5 {
+#ifdef BINDLESS
+            mask = textureSample(bindless_textures_2d[material_bindings.self_illum_tex], bindless_samplers_filtering[material_bindings.self_illum_samp], uv).rgb;
+#else
             mask = textureSample(self_illum_tex, self_illum_samp, uv).rgb;
+#endif
         }
         // Preserve the lit surface outside the authored luminous region.
         // This does not add scene lights; surrounding light is already baked.

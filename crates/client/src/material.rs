@@ -158,8 +158,12 @@ pub struct WorldMaterialKey {
 
 #[derive(Asset, TypePath, AsBindGroup, Debug, Clone)]
 #[bind_group_data(WorldMaterialKey)]
+// Bound total resources per slab. The derive's conservative support check
+// counts all 12 textures and 11 samplers against the sampler-array limit;
+// Auto (2048 on Windows) would unnecessarily exclude many bindless devices.
+#[bindless(limit(64))]
+#[data(0, WorldParams, binding_array(10))]
 pub struct WorldMaterial {
-    #[uniform(0)]
     pub params: WorldParams,
     #[texture(1)]
     #[sampler(2)]
@@ -199,6 +203,12 @@ pub struct WorldMaterial {
     pub self_illum_mask: Handle<Image>,
     pub alpha_mode: AlphaMode,
     pub cull: bool,
+}
+
+impl From<&WorldMaterial> for WorldParams {
+    fn from(material: &WorldMaterial) -> Self {
+        material.params
+    }
 }
 
 impl From<&WorldMaterial> for WorldMaterialKey {
@@ -372,7 +382,83 @@ mod prop_vertex_tests {
 #[cfg(test)]
 mod uniform_tests {
     use super::*;
-    use bevy::render::render_resource::encase::UniformBuffer;
+    use bevy::render::render_resource::{BindlessResourceType, encase::{StorageBuffer, UniformBuffer}};
+
+    #[test]
+    fn packed_slots_have_the_same_bytes_and_stride_as_uniform_fallbacks() {
+        let slots = vec![
+            WorldParams {
+                flags: flags::LIGHTMAPPED | flags::NORMAL,
+                ambient_cube: std::array::from_fn(|i| Vec4::splat(i as f32 + 0.25)),
+                base_uv: Vec4::new(2., 3., -0.5, 0.75),
+                ..default()
+            },
+            WorldParams {
+                flags: flags::DYNAMIC_LIT,
+                scope_aperture: Vec4::new(1280., 720., 200., 0.),
+                skin_colors: std::array::from_fn(|i| Vec4::splat(i as f32 + 1.5)),
+                base_uv: Vec4::new(4., 5., 0.25, -0.75),
+                ..default()
+            },
+        ];
+        let mut expected = Vec::new();
+        for params in &slots {
+            let mut uniform = UniformBuffer::new(Vec::new());
+            uniform.write(params).unwrap();
+            expected.extend(uniform.into_inner());
+        }
+        let mut packed = StorageBuffer::new(Vec::new());
+        packed.write(&slots).unwrap();
+        assert_eq!(packed.into_inner(), expected);
+        assert_eq!(expected.len() as u64, 2 * WorldParams::min_size().get());
+    }
+
+    #[test]
+    fn both_shader_index_tables_match_derived_resources_and_fallback_bindings() {
+        fn fields(shader: &str) -> Vec<&str> {
+            shader.split_once("struct WorldMaterialBindings {").unwrap().1
+                .split_once("};").unwrap().0.lines()
+                .filter_map(|line| line.split_once(':').map(|(name, _)| name.trim()))
+                .collect()
+        }
+        let descriptor = WorldMaterial::bindless_descriptor().unwrap();
+        let forward = include_str!("shaders/world.wgsl");
+        let shadow = include_str!("shaders/world_shadow.wgsl");
+        let index_fields = fields(forward);
+        assert_eq!(index_fields, fields(shadow));
+        assert_eq!(index_fields.len(), descriptor.resources.len());
+        let mut covered = vec![false; index_fields.len()];
+        for shader in [forward, shadow] {
+            for line in shader.lines().filter(|line| {
+                line.starts_with("@group(#{MATERIAL_BIND_GROUP})") && !line.contains("var<storage>")
+            }) {
+                let index: usize = line.split_once("@binding(").unwrap().1
+                    .split_once(')').unwrap().0.parse().unwrap();
+                let declaration = line.split_once(" var").unwrap().1;
+                let (name, ty) = declaration.strip_prefix("<uniform>")
+                    .unwrap_or(declaration).trim().trim_end_matches(';').split_once(':').unwrap();
+                assert_eq!(index_fields[index], name.trim());
+                let resource = match ty.trim() {
+                    "WorldParams" | "ShadowParams" => BindlessResourceType::DataBuffer,
+                    "texture_2d<f32>" => BindlessResourceType::Texture2d,
+                    "texture_2d_array<f32>" => BindlessResourceType::Texture2dArray,
+                    "sampler" => BindlessResourceType::SamplerFiltering,
+                    ty => panic!("unexpected material resource {ty}"),
+                };
+                assert_eq!(descriptor.resources[index], resource);
+                covered[index] = true;
+            }
+        }
+        assert!(covered.into_iter().all(|bound| bound));
+        assert_eq!(descriptor.index_tables.len(), 1);
+        assert_eq!(descriptor.index_tables[0].indices.start.0, 0);
+        assert_eq!(descriptor.index_tables[0].indices.end.0 as usize, index_fields.len());
+        assert_eq!(descriptor.index_tables[0].binding_number.0, 0);
+        assert_eq!(descriptor.buffers.len(), 1);
+        assert_eq!(descriptor.buffers[0].bindless_index.0, 0);
+        assert_eq!(descriptor.buffers[0].binding_number.0, 10);
+        assert_eq!(descriptor.buffers[0].size, Some(WorldParams::min_size().get() as usize));
+    }
 
     #[test]
     fn primary_base_mapping_is_appended_and_both_shader_layouts_match() {
