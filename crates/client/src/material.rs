@@ -29,9 +29,14 @@ pub(crate) fn camera_clusters() -> bevy::light::cluster::ClusterConfig {
 }
 
 pub(crate) fn install_lighting(app: &mut App) {
+    app.add_systems(Startup, report_material_bindings);
     if std::env::var_os("CSR_TEST_LIGHT_CLUSTERS").is_none() {
         app.add_systems(Startup, disable_unused_gpu_clusters);
     }
+}
+
+fn report_material_bindings(device: Res<bevy::render::renderer::RenderDevice>) {
+    info!(bindless = WorldMaterial::bindless_supported(&device), "world material binding mode");
 }
 
 fn disable_unused_gpu_clusters(mut settings: ResMut<bevy::light::cluster::GlobalClusterSettings>) {
