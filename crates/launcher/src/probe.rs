@@ -41,13 +41,19 @@ pub fn run(map: &str) -> i32 {
     let mut failures = 0;
     let mut primitive_faces = 0;
     let mut primitive_triangles = 0;
+    let mut retraced_boundaries = 0;
     for (index, face) in bsp.faces.iter().enumerate().filter(|(_, face)| face.dispinfo < 0 && face.primitive_count() != 0) {
         match bsp.face_mesh(face) {
             Ok(mesh) => { primitive_faces += 1; primitive_triangles += mesh.indices.len() / 3; }
+            Err(bsp::FaceMeshError::RetracedBoundary) => {
+                retraced_boundaries += 1;
+                println!("  primitive face {index}: exact retraced boundary (zero-area compiled triangles)");
+            }
             Err(error) => { failures += 1; println!("  primitive face {index}: {error}"); }
         }
     }
     println!("compiled primitives: {primitive_faces} faces checked, {primitive_triangles} triangles");
+    println!("compiled zero-area retraced boundaries: {retraced_boundaries} (no surface triangles)");
     let mut displacement_lightmaps = 0;
     for (i, face) in bsp.faces.iter().enumerate().filter(|(_, f)| f.dispinfo >= 0) {
         if let (Some(mesh), Some((width, height, _))) = (bsp.displacement(i), bsp.face_lightmap(face)) {
