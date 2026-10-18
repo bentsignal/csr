@@ -481,7 +481,9 @@ mod life_tests {
         {
             let mut world = app.world_mut().resource_mut::<SimWorld>();
             let end = world.0.player(id).unwrap().active_weapon().unwrap().reload_end.unwrap();
-            while world.0.time() <= end {
+            // World::step processes the current tick, then advances its clock.
+            // Include the first processed tick at/after a fractional deadline.
+            while world.0.time() < end + world.0.dt() {
                 world.0.step(&[(id, sim::TickInput::default())]);
             }
             assert!(world.0.player(id).unwrap().active_weapon().unwrap().reload_end.is_none());
