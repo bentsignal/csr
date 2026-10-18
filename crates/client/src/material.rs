@@ -109,6 +109,9 @@ pub struct WorldParams {
     pub detail: Vec4,
     /// Authored self-illumination tint; w: 0 disabled, 1 base alpha, 2 RGB mask.
     pub self_illum: Vec4,
+    /// Primary color UV scale/offset for ordinary lit world/static props only.
+    /// Appended to preserve existing lighting and diagnostic-prefix offsets.
+    pub base_uv: Vec4,
 }
 
 impl Default for WorldParams {
@@ -139,6 +142,7 @@ impl Default for WorldParams {
             skin_pattern_palette:Vec4::new(1.,2.,3.,4.),
             detail: Vec4::new(1.0, 1.0, 0.0, 0.0),
             self_illum: Vec4::ZERO,
+            base_uv: Vec4::new(1.0, 1.0, 0.0, 0.0),
         }
     }
 }
@@ -362,5 +366,41 @@ mod prop_vertex_tests {
             specialize_prop_vertex(&mut descriptor, &layout(count), &bevy_default).unwrap();
             assert_eq!(descriptor, before);
         }
+    }
+}
+
+#[cfg(test)]
+mod uniform_tests {
+    use super::*;
+    use bevy::render::render_resource::encase::UniformBuffer;
+
+    #[test]
+    fn primary_base_mapping_is_appended_and_both_shader_layouts_match() {
+        let params = WorldParams {
+            base_uv: Vec4::new(10., 10., -4.5, -4.5),
+            ..default()
+        };
+        let mut buffer = UniformBuffer::new(Vec::new());
+        buffer.write(&params).unwrap();
+        let bytes = buffer.into_inner();
+        assert_eq!(bytes.len(), 560);
+        let read_vec4 = |offset: usize| std::array::from_fn::<_, 4, _>(|i| {
+            f32::from_le_bytes(bytes[offset + i * 4..offset + i * 4 + 4].try_into().unwrap())
+        });
+        // Appending retains all existing prefix/lighting/composition offsets.
+        assert_eq!(read_vec4(96), params.ambient_cube[0].to_array());
+        assert_eq!(read_vec4(528), params.self_illum.to_array());
+        assert_eq!(read_vec4(544), params.base_uv.to_array());
+        assert_eq!(WorldParams::default().base_uv, Vec4::new(1., 1., 0., 0.));
+
+        let fields = |shader: &str| -> Vec<String> {
+            shader.split_once("Params {").unwrap().1.split_once("};").unwrap().0
+                .lines().map(|line| line.split_whitespace().collect::<String>())
+                .filter(|line| !line.is_empty()).collect()
+        };
+        let forward = fields(include_str!("shaders/world.wgsl"));
+        let shadow = fields(include_str!("shaders/world_shadow.wgsl"));
+        assert_eq!(forward, shadow);
+        assert_eq!(forward.last().unwrap(), "base_uv:vec4<f32>,");
     }
 }

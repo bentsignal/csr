@@ -134,6 +134,7 @@ struct WorldParams {
     skin_pattern_palette:vec4<f32>,
     detail: vec4<f32>,
     self_illum: vec4<f32>,
+    base_uv: vec4<f32>,
 };
 
 
@@ -251,7 +252,11 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
 #else
     let uv = vec2<f32>(0.0);
 #endif
-    var albedo = textureSample(base_tex, base_samp, uv);
+    // Keep dynamic weapons/characters and cosmetic composition on their
+    // existing coordinates. Other samplers still start from raw mesh UVs.
+    let base_uv = select(uv * params.base_uv.xy + params.base_uv.zw, uv,
+        (params.flags & DYNAMIC_LIT) != 0u || params.skin.x > 0.5);
+    var albedo = textureSample(base_tex, base_samp, base_uv);
     let self_illum_alpha = albedo.a;
     // Preserve the authored mask independently of opacity/cosmetic processing.
     let tint_weight = select(1.0, albedo.a, (params.flags & TINT_BY_BASE_ALPHA) != 0u);

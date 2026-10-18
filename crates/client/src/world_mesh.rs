@@ -529,6 +529,11 @@ pub fn material_from_vmt(
         out.params.flags = if lightmapped { flags::LIGHTMAPPED } else { flags::VERTEX_LIT };
         return out;
     };
+    if matches!(mat.shader.as_str(), "lightmappedgeneric" | "worldvertextransition" | "vertexlitgeneric") {
+        // Transform only the primary color sampler, never another authored UV
+        // channel. The shaders retain raw base UVs for dynamic/cosmetic paths.
+        params.base_uv = authored_uv_transform(mat, "$basetexturetransform");
+    }
     let base_name = mat
         .base_texture()
         .or_else(|| mat.str("$hdrcompressedtexture"))
@@ -683,6 +688,21 @@ fn authored_uv_transform(mat: &vmt::Material, key: &str) -> Vec4 {
 mod authored_transform_tests {
     use super::*;
 
+    fn gpu_params(params: &WorldParams) -> Vec<u8> {
+        let mut buffer = bevy::render::render_resource::encase::UniformBuffer::new(Vec::new());
+        buffer.write(params).unwrap();
+        buffer.into_inner()
+    }
+
+    fn assert_gpu_base_uv(params: &WorldParams, expected: Vec4) {
+        assert_eq!(params.base_uv, expected);
+        let bytes = gpu_params(params);
+        let serialized: [f32; 4] = std::array::from_fn(|i| {
+            f32::from_le_bytes(bytes[544 + i * 4..548 + i * 4].try_into().unwrap())
+        });
+        assert_eq!(serialized, expected.to_array());
+    }
+
     // One synthetic RGBA texel exercises the real texture-load/material path
     // without an install, filesystem writes, renderer or game asset fixture.
     fn normal_material(mat: Option<&vmt::Material>, lightmapped: bool) -> WorldMaterial {
@@ -709,6 +729,133 @@ mod authored_transform_tests {
     }
 
     #[test]
+    fn primary_base_centered_mapping_and_unsupported_fallback_reach_gpu_params() {
+        let identity = Vec4::new(1., 1., 0., 0.);
+        assert_gpu_base_uv(&normal_material(None, true).params, identity);
+        for (declaration, expected) in [
+            ("", identity),
+            (r#""$basetexturetransform" "center 0.5 0.5 scale 10 10 rotate 0 translate 0 0""#, Vec4::new(10., 10., -4.5, -4.5)),
+            (r#""$basetexturetransform" "translate 0.125 -0.25 rotate 0 scale 2 0.5 center 0.5 0.5""#, Vec4::new(2., 0.5, -0.375, 0.)),
+            (r#""$basetexturetransform" "center 0 0 scale 2 2 rotate 90 translate 0 0""#, identity),
+            (r#""$basetexturetransform" "center 0 0 scale -2 2 rotate 0 translate 0 0""#, identity),
+            (r#""$basetexturetransform" "center 0 0 scale NaN 2 rotate 0 translate 0 0""#, identity),
+            (r#""$basetexturetransform" "[1 0 0 0 0 1 0 0]""#, identity),
+            (r#""$basetexturetransform" "scale 2 2""#, identity),
+            (r#""$basetexturetransform" { "scale" "2 2" }"#, identity),
+        ] {
+            for (shader, lightmapped) in [("LightmappedGeneric", true), ("VertexLitGeneric", false)] {
+                let mat = vmt::Material::parse_with(
+                    &format!(r#""{shader}" {{ "$basetexture" "test/normal" {declaration} }}"#),
+                    &|_| None, 0,
+                ).unwrap();
+                let out = normal_material(Some(&mat), lightmapped);
+                assert_gpu_base_uv(&out.params, expected);
+                assert_eq!(out.alpha_mode, AlphaMode::Opaque);
+            }
+        }
+        for shader in ["UnlitGeneric", "Water", "WeaponDecal"] {
+            let mat = vmt::Material::parse_with(
+                &format!(r#""{shader}" {{ "$basetexturetransform" "center 0.5 0.5 scale 10 10 rotate 0 translate 0 0" }}"#),
+                &|_| None, 0,
+            ).unwrap();
+            assert_gpu_base_uv(&normal_material(Some(&mat), false).params, identity);
+        }
+    }
+
+    #[test]
+    fn primary_base_mapping_preserves_every_independently_authored_channel() {
+        let parse = |transform: &str| vmt::Material::parse_with(
+            &format!(r#""WorldVertexTransition" {{
+                "$basetexture" "test/normal"
+                "$basetexture2" "test/normal"
+                "$basetexturetransform2" "center 0 0 scale 3 4 rotate 0 translate 0.25 -0.5"
+                "$bumpmap" "test/normal"
+                "$bumptransform" "center 0 0 scale 8 8 rotate 0 translate 0 0"
+                "$bumpmap2" "test/normal"
+                "$bumptransform2" "center 0.5 0.5 scale 2 0.5 rotate 0 translate 0.125 -0.25"
+                "$blendmodulatetexture" "test/normal"
+                "$blendmodulatetransform" "center 0 0 scale 0.65 0.65 rotate 0 translate 0 0"
+                "$detail" "test/normal" "$detailscale" "[5 6]"
+                {transform}
+            }}"#), &|_| None, 0,
+        ).unwrap();
+        let before = normal_material(Some(&parse("")), true).params;
+        let params = normal_material(Some(&parse(
+            r#""$basetexturetransform" "center 0.5 0.5 scale 2 2 rotate 0 translate 0 0""#,
+        )), true).params;
+        assert_gpu_base_uv(&params, Vec4::new(2., 2., -0.5, -0.5));
+        assert_eq!(params.base2_uv, Vec4::new(3., 4., 0.25, -0.5));
+        assert_eq!(params.normal_uv, Vec4::new(8., 8., 0., 0.));
+        assert_eq!(params.normal2_uv, Vec4::new(2., 0.5, -0.375, 0.));
+        assert_eq!(params.modulate_uv, Vec4::new(0.65, 0.65, 0., 0.));
+        assert_eq!(params.detail, Vec4::new(5., 6., 1., 0.));
+        // Only the appended primary transform may differ in the GPU buffer.
+        assert_eq!(gpu_params(&params)[..544], gpu_params(&before)[..544]);
+
+        let shader: String = include_str!("shaders/world.wgsl")
+            .chars().filter(|c| !c.is_ascii_whitespace()).collect();
+        assert!(shader.contains("uv*params.base2_uv.xy+params.base2_uv.zw"));
+        assert!(shader.contains("letnormal_uv=uv*params.normal_uv.xy+params.normal_uv.zw;"));
+        assert!(shader.contains("uv*params.normal2_uv.xy+params.normal2_uv.zw"));
+        assert!(shader.contains("uv*params.modulate_uv.xy+params.modulate_uv.zw"));
+        assert!(shader.contains("textureSample(detail_tex,detail_samp,uv*params.detail.xy)"));
+    }
+
+    #[test]
+    fn primary_base_alpha_consumers_share_color_mapping_and_dynamic_paths_keep_raw_uvs() {
+        let mat = vmt::Material::parse_with(r#""VertexLitGeneric" {
+            "$basetexture" "test/normal" "$blendtintbybasealpha" "1" "$selfillum" "1"
+            "$basetexturetransform" "center 0.5 0.5 scale 2 2 rotate 0 translate 0 0"
+        }"#, &|_| None, 0).unwrap();
+        let params = normal_material(Some(&mat), false).params;
+        assert_gpu_base_uv(&params, Vec4::new(2., 2., -0.5, -0.5));
+        assert_ne!(params.flags & flags::TINT_BY_BASE_ALPHA, 0);
+        assert_eq!(params.self_illum.w, 1.);
+        let forward: String = include_str!("shaders/world.wgsl")
+            .chars().filter(|c| !c.is_ascii_whitespace()).collect();
+        let shadow: String = include_str!("shaders/world_shadow.wgsl")
+            .chars().filter(|c| !c.is_ascii_whitespace()).collect();
+        for (shader, dynamic) in [(&forward, "DYNAMIC_LIT"), (&shadow, "256u")] {
+            assert!(shader.contains(&format!("letbase_uv=select(uv*params.base_uv.xy+params.base_uv.zw,uv,(params.flags&{dynamic})!=0u||params.skin.x>0.5);")));
+            assert_eq!(shader.matches("textureSample(base_tex,base_samp,base_uv)").count(), 1);
+            assert!(!shader.contains("textureSample(base_tex,base_samp,uv)"));
+        }
+        assert!(forward.contains("letself_illum_alpha=albedo.a;"));
+        assert!(forward.contains("lettint_weight=select(1.0,albedo.a,(params.flags&TINT_BY_BASE_ALPHA)!=0u);"));
+        assert!(forward.contains("varmask=vec3<f32>(self_illum_alpha);"));
+        // A separately authored RGB mask retains its own existing coordinates.
+        assert!(forward.contains("textureSample(self_illum_tex,self_illum_samp,uv).rgb"));
+    }
+
+    #[test]
+    #[ignore = "requires read-only installed CS:GO Legacy fountain materials; no GPU required"]
+    fn installed_inferno_fountain_primary_mapping_reaches_gpu_params() {
+        let dir = vfs::find_csgo_dir().expect("CS:GO Legacy install");
+        let mut fs = vfs::Vfs::new();
+        fs.mount_game_dir(&dir).unwrap();
+        let read = |path: &str| fs.read(path).and_then(|bytes| String::from_utf8(bytes).ok());
+        let mut images = Assets::<Image>::default();
+        let mut textures = TextureCache::new(&mut images);
+        let shared = SharedHandles { lightmap: textures.white.clone() };
+        for (name, scale) in [("metal", 10.), ("fountain_a_basin", 2.), ("tiles_a2", 6.), ("brick_d1", 1.)] {
+            let mat = vmt::Material::load(
+                &format!("models/props/de_inferno/hr_i/fountain_a_basin/{name}"), &read,
+            ).expect(name);
+            assert_eq!(mat.shader, "vertexlitgeneric");
+            let out = material_from_vmt(Some(&mat), &fs, &mut textures, &mut images, &shared, 1., false);
+            assert_ne!(out.base, textures.missing, "{name}");
+            let offset = 0.5 * (1. - scale);
+            assert_gpu_base_uv(&out.params, Vec4::new(scale, scale, offset, offset));
+            assert_eq!(out.params.base2_uv, Vec4::new(1., 1., 0., 0.));
+            assert_eq!(out.params.normal_uv, Vec4::new(1., 1., 0., 0.));
+            if name == "fountain_a_basin" {
+                assert_ne!(out.params.flags & flags::DETAIL, 0);
+                assert_eq!(out.params.detail, Vec4::new(1., 1., 1., 0.));
+            }
+        }
+    }
+
+    #[test]
     fn first_normal_uses_authored_nuke_scale8_independently_of_detail_and_base() {
         // Installed concrete/hr_c/hr_concrete_wall_001's evidenced transform.
         let mat = vmt::Material::parse_with(
@@ -730,12 +877,12 @@ mod authored_transform_tests {
         assert_eq!(uv * Vec2::new(sx, sy) + Vec2::new(x, y), Vec2::new(-2., 9.));
 
         // Lock the actual shader wiring: RGB and Phong alpha share the same
-        // transformed normal coordinates; color/detail still start at raw UV.
+        // transformed normal coordinates; color/detail retain independent UVs.
         let shader: String = include_str!("shaders/world.wgsl")
             .chars().filter(|c| !c.is_ascii_whitespace()).collect();
         assert!(shader.contains("letnormal_uv=uv*params.normal_uv.xy+params.normal_uv.zw;"));
         assert_eq!(shader.matches("textureSample(normal_tex,normal_samp,normal_uv)").count(), 2);
-        assert!(shader.contains("textureSample(base_tex,base_samp,uv)"));
+        assert!(shader.contains("textureSample(base_tex,base_samp,base_uv)"));
         assert!(shader.contains("textureSample(detail_tex,detail_samp,uv*params.detail.xy)"));
     }
 
