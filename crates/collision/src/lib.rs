@@ -1142,7 +1142,7 @@ mod tests {
         let prop = |model, solid, x| bsp::StaticProp {
             origin: Vec3::new(x, 0.0, 0.0), angles: Vec3::ZERO, model, solid,
             flags: 0, skin: 0, fade_min: 0.0, fade_max: 0.0, scale: 1.0,
-            diffuse_modulation: None,
+            lighting_origin: None, diffuse_modulation: None,
         };
         let mut map = bsp::Bsp {
             static_props: bsp::StaticProps {

@@ -15,12 +15,10 @@ pub(super) fn load(
     ordinal: usize,
     model: &mdl::Model,
 ) -> Option<Vec<Option<Vec<glam::Vec3>>>> {
-    // A baked file already incorporates an authored lighting origin (0x02)
-    // and disabled shadow casting (0x10). Installed apartment trims use 0x03;
-    // Mirage cardboard uses 0x10. Discarding their equal-group bake substitutes
-    // approximate ambient/Sun lighting for these authored inputs. Admit these
-    // modes, optionally fading, through the existing identity/payload gates.
-    // This does not widen ambient/Sun fallback or decode directional records.
+    // Preserve the accepted ordinary/no-cast-shadow receiver admission.
+    // A file's existence does not establish that lighting-origin (0x02) props
+    // use this receiver pipeline in native rendering. Keep that mode on its
+    // authored-origin ambient/Sun fallback until separately observed.
     // Fade-only props retain their accepted spatial path until separately
     // observed; ignored normals and other unsupported modes remain closed.
     let flags = level.bsp.static_props.props.get(ordinal)?.flags;
@@ -41,7 +39,7 @@ pub(super) fn load(
 }
 
 fn supports_bake(flags: u8) -> bool {
-    flags & !(0x01 | 0x02 | 0x10) == 0 && flags != 0x01
+    flags & !(0x01 | 0x10) == 0 && flags != 0x01
 }
 
 fn scoped_colors(
@@ -56,7 +54,7 @@ fn scoped_colors(
     if scoped.file().raw_flags != 2 {
         return None;
     }
-    // Preserve accepted flags0 output/admission. Only the new authored receiver
+    // Preserve accepted flags0 output/admission. No-cast-shadow receiver
     // modes may select LOD0 from the explicitly supported two-LOD container.
     // No lower-LOD records enter geometry emitted by the LOD0 model loader.
     let candidate = if flags == 0 {
@@ -154,7 +152,7 @@ mod tests {
         ])];
         for flags in 0..=u8::MAX {
             let colors = scoped_colors(flags, &key, &model, &scoped);
-            if [2, 3, 16, 17, 18, 19].contains(&flags) {
+            if [16, 17].contains(&flags) {
                 assert_eq!(colors.as_ref(), Some(&expected), "receiver flags {flags}");
             } else {
                 assert!(colors.is_none(), "previously rejected flags {flags}");
@@ -163,11 +161,15 @@ mod tests {
         assert_eq!(model.meshes[0].source_vertex_indices, [1, 0]);
         let (key, model, bytes) = bake_fixture(false);
         let scoped = ScopedFile::parse(key.clone(), &key.hdr_name(), &bytes).unwrap();
-        for flags in [0, 2, 3, 16, 17, 18, 19] {
+        for flags in [0, 16, 17] {
             assert_eq!(
                 scoped_colors(flags, &key, &model, &scoped),
                 Some(expected.clone()),
             );
+        }
+        for flags in [2, 3, 18, 19] {
+            assert!(scoped_colors(flags, &key, &model, &scoped).is_none(),
+                "lighting-origin mode needs receiver evidence even for a single LOD: {flags}");
         }
     }
 
@@ -199,7 +201,7 @@ mod tests {
 
     #[test]
     #[ignore = "requires read-only installed Legacy Inferno; no native process"]
-    fn installed_lighting_origin_trim_uses_scoped_bake_and_keeps_other_modes_closed() {
+    fn installed_lighting_origin_trim_retains_its_authored_point_without_admitting_bake() {
         let mut level = level::Level::load("de_inferno", None).unwrap();
         let (ordinal, prop) = level.bsp.static_props.props.iter().enumerate().find(|(_, prop)| {
             prop.flags == 3 && level.bsp.static_props.models[usize::from(prop.model)]
@@ -212,18 +214,11 @@ mod tests {
             &level.vfs.read(&format!("{base}.vvd")).unwrap(),
             &level.vfs.read(&format!("{base}.dx90.vtx")).unwrap(),
         ).unwrap();
-        let colors = super::load(&level, ordinal, &model).expect("scoped equal-group trim bake");
-        assert_eq!(colors.len(), model.meshes.len());
-        assert!(colors.iter().zip(&model.meshes).all(|(colors, mesh)|
-            colors.as_ref().is_some_and(|colors| colors.len() == mesh.vertices.len())));
-        for flags in [1, 4, 0x14, 0x20, 0x80, 0xff] {
+        assert!(prop.lighting_origin.is_some_and(|point| point.is_finite()));
+        for flags in [1, 2, 3, 4, 0x12, 0x13, 0x14, 0x20, 0x80, 0xff] {
             level.bsp.static_props.props[ordinal].flags = flags;
             assert!(super::load(&level, ordinal, &model).is_none(), "unsupported flags {flags}");
         }
-        level.bsp.static_props.props[ordinal].flags = 2;
-        assert_eq!(super::load(&level, ordinal, &model).unwrap(), colors);
-        level.bsp.static_props.props[ordinal].flags = 3;
-        assert_eq!(super::load(&level, ordinal, &model).unwrap(), colors);
     }
 
     #[test]

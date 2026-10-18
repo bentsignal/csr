@@ -60,6 +60,7 @@ fn collapsed_prop_piece_does_not_seal_a_doorway_or_remove_its_frame() {
                     fade_min: 0.,
                     fade_max: 0.,
                     scale: 1.,
+                    lighting_origin: None,
                     diffuse_modulation: None,
                 }],
                 ..Default::default()
