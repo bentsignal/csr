@@ -17,6 +17,9 @@ use glam::{Mat3, Vec3};
 
 pub use bsp::contents;
 
+mod prop_lighting;
+pub use prop_lighting::PropLightingQuery;
+
 /// Distance kept between a sweep's end position and the surface it hit.
 pub const DIST_EPSILON: f32 = 0.03125;
 const GRID_CELL: f32 = 128.0;
@@ -392,6 +395,12 @@ impl CollisionWorld {
             start, end, Vec3::ZERO, Vec3::ZERO, contents::MASK_SOLID,
             self.static_prop_convexes.get(prop_ordinal),
         )
+    }
+
+    /// Prepare temporary render-only acceleration for many exact lighting rays.
+    /// Call after `finalize`; drop it after baking the map's prop lighting.
+    pub fn prepare_prop_lighting(&self) -> PropLightingQuery<'_> {
+        PropLightingQuery::new(self)
     }
 
     /// Contents at a point (union of all shapes containing it).

@@ -92,7 +92,7 @@ impl PropLight {
 /// This one-sample fallback remains approximate for large/combined models.
 fn prop_light(
     bsp: &bsp::Bsp,
-    collision: &CollisionWorld,
+    collision: &mut collision::PropLightingQuery<'_>,
     sun: Option<Sun>,
     center: glam::Vec3,
     origin: glam::Vec3,
@@ -132,7 +132,7 @@ fn prop_light(
 /// Missing leaf samples retain the instance cube, without inheriting its sun.
 fn surface_light(
     bsp: &bsp::Bsp,
-    collision: &CollisionWorld,
+    collision: &mut collision::PropLightingQuery<'_>,
     sun: Option<Sun>,
     fallback: &PropLight,
     position: glam::Vec3,
@@ -148,7 +148,7 @@ fn surface_light(
 /// normal. A geometric back face can still have a sun-facing perturbed normal.
 fn surface_directional_light(
     bsp: &bsp::Bsp,
-    collision: &CollisionWorld,
+    collision: &mut collision::PropLightingQuery<'_>,
     sun: Option<Sun>,
     fallback: &PropLight,
     position: glam::Vec3,
@@ -307,13 +307,15 @@ pub fn spawn(
     let mut directional_vertices = 0usize;
     let mut detail_meshes = 0usize;
     let mut tinted_instances = 0usize;
+    // Temporary, map-wide BVH and ray scratch; gameplay keeps the normal grid.
+    let mut lighting_query = collision.prepare_prop_lighting();
     for (prop_index, prop) in bsp.static_props.props.iter().enumerate() {
         let Some(Some((model, flips))) = models.get(&prop.model) else { continue };
         let authored = vertex_lighting::load(level, prop_index, model);
         let rot = mdl::angles_to_mat3(prop.angles);
         let scale = if prop.scale > 0.0 { prop.scale } else { 1.0 };
         let center = prop.origin + rot * ((model.hull_min + model.hull_max) * 0.5 * scale);
-        let light = prop_light(bsp, collision, sun, center, prop.origin, prop_index);
+        let light = prop_light(bsp, &mut lighting_query, sun, center, prop.origin, prop_index);
         // Exact geometric duplicates at UV/material seams share the query.
         // No spatial quantization: neighboring vertices can straddle a shadow
         // or leaf boundary. The cache dies with this placed instance, so another
@@ -408,13 +410,13 @@ pub fn spawn(
                     let position = prop.origin + rot * (v.position * scale);
                     let key = (position.to_array().map(f32::to_bits), n_source.to_array().map(f32::to_bits));
                     *surface_cache.entry(key).or_insert_with(||
-                        surface_light(bsp, collision, sun, &light, position, n_source, prop_index))
+                        surface_light(bsp, &mut lighting_query, sun, &light, position, n_source, prop_index))
                 } else if directional_fallback {
                     directional_vertices += 1;
                     let position = prop.origin + rot * (v.position * scale);
                     let key = (position.to_array().map(f32::to_bits), n_source.to_array().map(f32::to_bits));
                     let surface = directional_cache.entry(key).or_insert_with(||
-                        surface_directional_light(bsp, collision, sun, &light, position, n_source, prop_index));
+                        surface_directional_light(bsp, &mut lighting_query, sun, &light, position, n_source, prop_index));
                     for (values, packed) in batch.irradiance.iter_mut().zip(irradiance::pack(surface)) {
                         values.push(packed);
                     }
@@ -441,6 +443,8 @@ pub fn spawn(
         }
         stats.instances += 1;
     }
+
+    drop(lighting_query);
 
     use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
     let lighting = images.add(Image::new(
@@ -541,7 +545,7 @@ mod lighting_tests {
     }
 
     fn fallback(map: &bsp::Bsp, w: &CollisionWorld) -> PropLight {
-        prop_light(map, w, Some(SUN), SourceVec3::ZERO, SourceVec3::ZERO, 0)
+        prop_light(map, &mut w.prepare_prop_lighting(), Some(SUN), SourceVec3::ZERO, SourceVec3::ZERO, 0)
     }
 
     #[test]
@@ -619,8 +623,8 @@ mod lighting_tests {
         w.finalize();
         let instance = fallback(&map, &w);
         assert_eq!(instance.sun, SourceVec3::ZERO);
-        let covered = surface_light(&map, &w, Some(SUN), &instance, SourceVec3::new(-80.0, 0.0, 1.0), SourceVec3::Z, 0);
-        let exposed = surface_light(&map, &w, Some(SUN), &instance, SourceVec3::new(80.0, 0.0, 1.0), SourceVec3::Z, 0);
+        let covered = surface_light(&map, &mut w.prepare_prop_lighting(), Some(SUN), &instance, SourceVec3::new(-80.0, 0.0, 1.0), SourceVec3::Z, 0);
+        let exposed = surface_light(&map, &mut w.prepare_prop_lighting(), Some(SUN), &instance, SourceVec3::new(80.0, 0.0, 1.0), SourceVec3::Z, 0);
         assert_eq!(covered, instance.cube[4]);
         assert_eq!(exposed, instance.cube[4] + SUN.color);
     }
@@ -632,7 +636,7 @@ mod lighting_tests {
         w.finalize();
         let instance = fallback(&map, &w);
         assert_eq!(instance.sun, SUN.color);
-        let covered = surface_light(&map, &w, Some(SUN), &instance, SourceVec3::new(80.0, 0.0, 1.0), SourceVec3::Z, 0);
+        let covered = surface_light(&map, &mut w.prepare_prop_lighting(), Some(SUN), &instance, SourceVec3::new(80.0, 0.0, 1.0), SourceVec3::Z, 0);
         assert_eq!(covered, instance.cube[4], "missing surface ambient must not reintroduce center sunlight");
     }
 
@@ -643,7 +647,7 @@ mod lighting_tests {
         w.finalize();
         let instance = fallback(&map, &w);
         assert_eq!(instance.sun, SUN.color);
-        let embedded = surface_light(&map, &w, Some(SUN), &instance, SourceVec3::new(80.0, 0.0, 1.0), SourceVec3::Z, 0);
+        let embedded = surface_light(&map, &mut w.prepare_prop_lighting(), Some(SUN), &instance, SourceVec3::new(80.0, 0.0, 1.0), SourceVec3::Z, 0);
         assert_eq!(embedded, instance.cube[4]);
     }
 
@@ -656,7 +660,7 @@ mod lighting_tests {
         // The ordinary ray starts solid here; the placed-owner exclusion is
         // still required after switching to surface lighting.
         assert!(w.trace_ray(SourceVec3::Z * collision::DIST_EPSILON, SourceVec3::Z * 16384.0, collision::contents::MASK_SOLID).start_solid);
-        assert_eq!(surface_light(&map, &w, Some(SUN), &instance, SourceVec3::ZERO, SourceVec3::Z, 0), instance.cube[4] + SUN.color);
+        assert_eq!(surface_light(&map, &mut w.prepare_prop_lighting(), Some(SUN), &instance, SourceVec3::ZERO, SourceVec3::Z, 0), instance.cube[4] + SUN.color);
     }
 
     #[test]
@@ -672,7 +676,7 @@ mod lighting_tests {
             }
             w.finalize();
             let instance = PropLight { cube: [SourceVec3::splat(0.2); 6], to_sun: SUN.to_sun, sun: SUN.color };
-            let actual = surface_light(&map, &w, Some(SUN), &instance, SourceVec3::new(-80.0, 0.0, 1.0), SourceVec3::Z, 0);
+            let actual = surface_light(&map, &mut w.prepare_prop_lighting(), Some(SUN), &instance, SourceVec3::new(-80.0, 0.0, 1.0), SourceVec3::Z, 0);
             assert_eq!(actual, instance.cube[4], "other_prop={other_prop}");
         }
     }
@@ -702,14 +706,14 @@ mod lighting_tests {
         let instance = fallback(&map, &w);
         for (x, scale) in [(80.0, 0.1), (-80.0, 0.01)] {
             for (normal, face) in [(SourceVec3::X, 0), (-SourceVec3::Y, 3), (SourceVec3::Z, 4)] {
-                let actual = surface_light(&map, &w, None, &instance, SourceVec3::new(x, 0.0, 1.0), normal, 0);
+                let actual = surface_light(&map, &mut w.prepare_prop_lighting(), None, &instance, SourceVec3::new(x, 0.0, 1.0), normal, 0);
                 assert!((actual - SourceVec3::splat(scale * (face + 1) as f32)).abs().max_element() < 1e-6);
             }
         }
         // An absent local sample keeps the previous cube rather than choosing
         // an arbitrary neighboring leaf or an unrelated authored origin.
         map.leaf_ambient_index[1] = (0, 0);
-        assert_eq!(surface_light(&map, &w, None, &instance, SourceVec3::new(-80.0, 0.0, 1.0), SourceVec3::Z, 0), instance.cube[4]);
+        assert_eq!(surface_light(&map, &mut w.prepare_prop_lighting(), None, &instance, SourceVec3::new(-80.0, 0.0, 1.0), SourceVec3::Z, 0), instance.cube[4]);
     }
 
     #[test]
@@ -719,7 +723,7 @@ mod lighting_tests {
         w.finalize();
         let instance = fallback(&map, &w);
         assert_eq!(instance.sun, SourceVec3::ZERO);
-        let sample = |x| surface_directional_light(&map, &w, Some(SUN), &instance,
+        let sample = |x| surface_directional_light(&map, &mut w.prepare_prop_lighting(), Some(SUN), &instance,
             SourceVec3::new(x, 0., 1.), -SourceVec3::Z, 0);
         let covered = sample(-80.);
         let exposed = sample(80.);
@@ -729,7 +733,7 @@ mod lighting_tests {
         // Normalization and subtraction can round a unit contribution by one
         // float ULP; retain a tight comparison of the actual lighting result.
         assert!((exposed.eval(SourceVec3::Z) - covered.eval(SourceVec3::Z) - SUN.color).abs().max_element() < 1e-6);
-        assert_eq!(surface_light(&map, &w, Some(SUN), &instance,
+        assert_eq!(surface_light(&map, &mut w.prepare_prop_lighting(), Some(SUN), &instance,
             SourceVec3::new(80., 0., 1.), -SourceVec3::Z, 0), exposed.eval(-SourceVec3::Z));
 
         // A missing surface cube may retain ambient, but an exposed instance
@@ -739,7 +743,7 @@ mod lighting_tests {
             if !other_prop { add_world_box(&mut w, -8., 8., "world_solid"); }
             w.finalize();
             let fallback = PropLight { cube: instance.cube, sun: SUN.color, to_sun: SUN.to_sun };
-            let local = surface_directional_light(&map, &w, Some(SUN), &fallback,
+            let local = surface_directional_light(&map, &mut w.prepare_prop_lighting(), Some(SUN), &fallback,
                 SourceVec3::ZERO, -SourceVec3::Z, 0);
             assert_eq!(local.sun, SourceVec3::ZERO, "other_prop={other_prop}");
             assert_eq!(local.cube, instance.cube);
