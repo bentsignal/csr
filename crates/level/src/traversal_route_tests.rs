@@ -119,6 +119,9 @@ fn mirage_small_ct_window_hole(bytes: Option<Vec<u8>>) {
     };
     let propdata = fs.read_string("scripts/propdata.txt").and_then(|text| kv::parse(&text).ok()).unwrap_or_default();
     let presets = propdata.block("PropData.txt").unwrap_or(&propdata);
+    let catalog = Arc::new(weapons::Catalog::from_items_game(
+        &fs.read_string("scripts/items/items_game.txt").expect("installed weapon schema")
+    ).expect("installed weapon catalog"));
     let collision = Arc::new(CollisionWorld::from_bsp_with_model_data(&map,
         &MapCollisionOptions::default(), &loader, &|model| fs.read(model), presets));
     let owner = |name: &str| collision.breakables.iter().position(|def|
@@ -139,7 +142,7 @@ fn mirage_small_ct_window_hole(bytes: Option<Vec<u8>>) {
     let end = Vec3::new(-1284., -974., -167.96875);
     for rate in [64, 128] {
         for approach in ["crouch", "jump then duck", "duck then jump"] {
-            let mut world = sim::World::new(collision.clone());
+            let mut world = sim::World::with_catalog(collision.clone(), catalog.clone());
             world.set_tick_rate(rate);
             let actor = world.add_player("small window hole", sim::Team::CounterTerrorist);
             world.player_mut(actor).unwrap().movement = movement::PlayerMove::spawn_at(start);
