@@ -110,7 +110,9 @@ pub(super) fn load(map: &bsp::Bsp, loader: &PropHullLoader<'_>, surfaces: &mut V
                 child.str("parentname").is_some_and(|p| p.eq_ignore_ascii_case(name))).collect();
             let [(child_index, child)] = children.as_slice() else { continue; };
             if child.str("classname") != Some("prop_dynamic") || child.i64("startdisabled") == Some(1)
-                || child.i64("solid") != Some(6) { continue; }
+                || child.i64("solid") != Some(6) || child.i64("rendermode").unwrap_or(0) != 0
+                || child.f32("modelscale").unwrap_or(1.0) != 1.0
+                || child.i64("setbodygroup").unwrap_or(0) != 0 { continue; }
             let Some(model) = child.str("model").filter(|s| !s.starts_with('*')) else { continue; };
             let Some(child_origin) = child.str("origin").and_then(bsp::parse_origin).filter(|v| v.is_finite()) else { continue; };
             let child_angles = child.str("angles").and_then(bsp::parse_origin).unwrap_or(Vec3::ZERO);
@@ -245,7 +247,18 @@ fn brush_hulls(map: &bsp::Bsp, model: usize) -> Option<Vec<(mdl::ConvexHull, i32
             });
             for i in 1..face.len()-1 { triangles.push([face[0] as u32, face[i] as u32, face[i+1] as u32]); }
         }
-        convex_from_hull(&points, &triangles, contents::SOLID, 0)?;
+        // An unbounded/incomplete half-space set can have some finite
+        // intersections. It is not an admitted closed collider: every triangle
+        // edge, including triangulation diagonals, must have two incident faces.
+        let mut edges = std::collections::BTreeMap::new();
+        for triangle in &triangles {
+            for edge in 0..3 {
+                let (a, b) = (triangle[edge], triangle[(edge + 1) % 3]);
+                *edges.entry((a.min(b), a.max(b))).or_insert(0usize) += 1;
+            }
+        }
+        if edges.is_empty() || edges.values().any(|&count| count != 2) { return None; }
+        convex_from_hull(&points, &triangles, brush.contents, 0)?;
         hulls.push((mdl::ConvexHull { points, triangles }, brush.contents, material));
     }
     (!hulls.is_empty()).then_some(hulls)
