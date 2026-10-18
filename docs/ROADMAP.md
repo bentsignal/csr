@@ -1,5 +1,13 @@
 # Roadmap
 
+> **October 18 owner direction:** [Morning feedback](PLAYTEST-2026-10-18.md)
+> accepts the major performance improvement as good enough for now. General FPS
+> optimization moves low; core 2015-era maps, working traversal/ten-player modes,
+> movement speed, airborne viewmodel finish and hit-audio consistency are high.
+> [OWNER-PRIORITIES.md](OWNER-PRIORITIES.md) supersedes older priority statements
+> below. Daytime reviews should cover coherent batches, not tiny frequent tests.
+
+
 October 17 rendering progress: restore Bevy's render thread so simulation and
 rendering overlap. A private same-binary PLAY comparison at 2560x1440 with ten
 participants sampled about 97 FPS serial versus 143 FPS pipelined in one fixed
