@@ -8,6 +8,8 @@ const BOUNCES: &[(Kind, &str, &str)] = &[
     (Kind::Flash, "flashbang_bounce", "Flashbang.Bounce"),
     (Kind::Smoke, "smokegrenade_bounce", "SmokeGrenade.Bounce"),
     (Kind::Incendiary, "incgrenade_bounce", "IncGrenade.Bounce"),
+    // Owned Legacy decoy observations request the flashbang contact waves.
+    (Kind::Decoy, "decoy_bounce", "Flashbang.Bounce"),
 ];
 
 pub(super) fn bounce_id(kind: Kind) -> Option<ContentId> {
@@ -30,8 +32,7 @@ pub(super) fn import(library: &mut SoundLibrary) {
             library.entries.insert(ContentId::csgo(ContentKind::Sound, name).to_string(), sound);
         }
     }
-    // No Decoy/Molotov bounce identity was found in installed soundscripts.
-    // Missing cues stay silent rather than borrowing an unsupported sound.
+    // Molotov contact identity remains unobserved. Missing entries stay silent.
 }
 
 #[cfg(test)]
@@ -45,6 +46,7 @@ mod tests {
                 &b"game_sounds_manifest { precache_file scripts/contact.txt }"[..])),
             ("scripts/contact.txt".into(), std::sync::Arc::from(
                 &br#"HEGrenade.Bounce { wave private/contact.wav volume 0.37 pitch 98 soundlevel SNDLVL_65dB }
+                    Flashbang.Bounce { wave private/decoy_contact.wav volume 0.6 pitch 100 soundlevel SNDLVL_75dB }
                     BaseGrenade.Explode { wave private/expiry.wav volume 0.81 pitch 99 soundlevel SNDLVL_140dB
                         operator_stacks { start_stack { play_distant_version_1 { entry_name BaseGrenade.ExplodeDistant } } } }
                     BaseGrenade.ExplodeDistant { wave private/expiry_distant.wav }"#[..])),
@@ -65,7 +67,13 @@ mod tests {
         assert_eq!(expiry.soundlevel, original.soundlevel);
         assert_eq!(expiry.distant.as_deref(), Some("basegrenade.explodedistant"));
         assert!(sounds.entries.get(expiry.distant.as_ref().unwrap()).unwrap().distant_layer);
-        assert!(bounce_id(Kind::Decoy).is_none() && bounce_id(Kind::Molotov).is_none());
-        assert!(!sounds.entries.contains_key(&bounce_id(Kind::Flash).unwrap().to_string()));
+        let decoy = sounds.entries.get(&bounce_id(Kind::Decoy).unwrap().to_string()).unwrap();
+        let flash = sounds.entries.get("flashbang.bounce").unwrap();
+        assert_eq!(decoy.waves, flash.waves);
+        assert_eq!(decoy.volume, flash.volume);
+        assert_eq!(decoy.pitch, flash.pitch);
+        assert_eq!(decoy.soundlevel, flash.soundlevel);
+        assert!(bounce_id(Kind::Molotov).is_none());
+        assert!(!sounds.entries.contains_key(&bounce_id(Kind::Smoke).unwrap().to_string()));
     }
 }
