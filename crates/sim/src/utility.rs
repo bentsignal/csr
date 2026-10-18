@@ -9,6 +9,7 @@ const FIRE_DAMAGE_RADIUS: f32 = 140.0;
 mod throw_state;
 pub use throw_state::{ThrowMode,ThrowPhase,ThrowState};
 mod bot_lob;
+mod decoy;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Kind {
@@ -356,7 +357,7 @@ impl World {
                         + if kind == Kind::Smoke {
                             18.0
                         } else if kind == Kind::Decoy {
-                            15.0
+                            decoy::LIFETIME_SECONDS
                         } else {
                             7.0
                         },
@@ -379,9 +380,8 @@ impl World {
         self.utility_fields.retain(|f| {
             f.until > time && !(f.kind.fire() && smokes.iter().any(|s| s.distance(f.pos) < 180.0))
         });
-        // Decoys fire twice a second; fire burns about five times a second.
-        if self.tick % (self.tick_rate as u64 / 2).max(1) == 0 {
-            for f in self.utility_fields.iter().filter(|f| f.kind == Kind::Decoy) {
+        for f in self.utility_fields.iter().filter(|f| f.kind == Kind::Decoy) {
+            if decoy::shot_due(f, self.tick, self.tick_rate) {
                 if let Some(weapon) = &f.decoy_weapon { self.events.push(GameEvent::DecoyShot {
                     player: f.owner,
                     pos: f.pos,
