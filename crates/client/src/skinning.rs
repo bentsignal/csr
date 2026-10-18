@@ -133,6 +133,9 @@ pub fn build_asset(
             let mut mat = material_from_vmt(vmt.as_ref(), fs, textures, images, shared, exposure, false);
             if dynamic_lit {
                 mat.params.flags = (mat.params.flags & !crate::material::flags::VERTEX_LIT) | crate::material::flags::DYNAMIC_LIT;
+                // Dynamic Phong/rim/emission composition is unvalidated;
+                // preserve existing weapon/character presentation this pass.
+                mat.params.self_illum = Vec4::ZERO;
             }
             (meshes.add(m), materials.add(mat))
         })
