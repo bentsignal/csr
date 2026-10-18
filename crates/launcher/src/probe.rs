@@ -106,6 +106,37 @@ pub fn run(map: &str) -> i32 {
     }
     println!("world shaders: {shaders:?}");
 
+    // Sky tool surfaces do not reference the six background materials. Check
+    // worldspawn's declared sky with the renderer's actual fallback selection.
+    if let Some(name) = bsp.worldspawn().and_then(|w| w.str("skyname")) {
+        let mut sky_faces = 0;
+        for suffix in ["rt", "bk", "lf", "ft", "up", "dn"] {
+            let face = format!("skybox/{name}{suffix}");
+            let result = vmt::Material::load(&face, &read)
+                .ok_or_else(|| "missing material".to_string())
+                .and_then(|mat| client::sky::load_texture(fs, &mat));
+            match result {
+                Ok(sky) => {
+                    let v = &sky.vtf;
+                    let decodable = (0..v.mip_count).all(|mip| {
+                        if sky.linear_hdr { v.rgba_f32(mip, 0, 0).is_some() }
+                        else { v.rgba8(mip, 0, 0).is_some() }
+                    });
+                    if decodable {
+                        sky_faces += 1;
+                        *formats.entry(format!("{:?}", v.format)).or_default() += 1;
+                        println!("  sky {face}: {} ({:?}, linear HDR {})", sky.name, v.format, sky.linear_hdr);
+                    } else {
+                        failures += 1;
+                        println!("  sky {face}: texture cannot decode: {}", sky.name);
+                    }
+                }
+                Err(error) => { failures += 1; println!("  sky {face}: {error}"); }
+            }
+        }
+        println!("sky faces: {sky_faces}/6 loaded and decoded");
+    }
+
     let t = Instant::now();
     let (mut ok, mut tris) = (0, 0usize);
     for (model_index, name) in bsp.static_props.models.iter().enumerate() {
