@@ -52,3 +52,6 @@ fn sequence_zero(model: &mdl::Model, ani: Option<&[u8]>) -> io::Result<Vec<Mat4>
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod installed;
