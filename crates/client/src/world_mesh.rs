@@ -607,7 +607,8 @@ pub fn material_from_vmt(
         f |= flags::TINT_BY_BASE_ALPHA;
     }
     match mat.detail_layer() {
-        Ok(Some(detail)) if detail.factor > 0.0 => {
+        Ok(Some(detail)) if detail.factor > 0.0
+            && (mat.shader != "worldvertextransition" || lightmapped) => {
             if let Some(info) = textures.load(fs, images, detail.texture, false) {
                 out.detail = info.handle;
                 params.detail = Vec4::new(detail.scale[0], detail.scale[1], detail.factor, 0.0);
@@ -815,6 +816,61 @@ mod authored_transform_tests {
         ).unwrap();
         let flags = normal_material(Some(&mat), true).params.flags;
         assert_eq!(flags & (flags::SSBUMP | flags::SSBUMP_MATHFIX), flags::SSBUMP | flags::SSBUMP_MATHFIX);
+    }
+
+    #[test]
+    fn terrain_detail_reaches_the_existing_lit_rgb_operator_without_changing_masks() {
+        let parse = |detail: &str| vmt::Material::parse_with(
+            &format!(r#"WorldVertexTransition {{
+                "$basetexture" "test/normal" "$basetexture2" "test/normal"
+                "$bumpmap" "test/normal" "$bumpmap2" "test/normal"
+                "$blendmodulatetexture" "test/normal" "$alpha" ".75"
+                {detail}
+            }}"#),
+            &|_| None, 0,
+        ).unwrap();
+        let before = normal_material(Some(&parse("")), true);
+        let out = normal_material(Some(&parse(r#"
+            "$detail" "test/normal" "$detailscale" "[8 8]"
+            "$detailblendfactor" ".5" "$detailblendmode" "0"
+        "#)), true);
+        assert_eq!(out.params.flags, before.params.flags | flags::DETAIL);
+        assert_eq!(out.params.detail, Vec4::new(8., 8., 0.5, 0.));
+        assert_eq!(out.params.color, before.params.color);
+        assert_eq!(out.alpha_mode, before.alpha_mode);
+        assert_eq!(out.base, out.base2);
+        assert_eq!(out.normal, out.normal2);
+        assert_eq!(out.normal, out.modulate);
+        // One VTF used as color and data must not share an sRGB resource.
+        assert_ne!(out.detail, out.base);
+        assert_eq!(out.detail, out.modulate);
+
+        // The existing operator is RGB-only, after terrain mixing and before
+        // lighting. With factor .5, .5 detail remains identity, .25 detail
+        // multiplies by .75 and .75 detail by 1.25. This is not a gain fitted
+        // to a map or an interpolation of normals/alpha as if they were color.
+        let detail_rgb = |rgb: Vec3, grain: Vec3| rgb * (Vec3::ONE * 0.5 + grain);
+        let a = Vec3::new(0.2, 0.4, 0.6);
+        let b = Vec3::new(0.8, 0.3, 0.1);
+        for weight in [0., 0.25, 1.] {
+            let composed = a.lerp(b, weight);
+            assert_eq!(detail_rgb(composed, Vec3::splat(0.5)), composed);
+            assert!((detail_rgb(composed, Vec3::splat(0.25)) - composed * 0.75).length() < 1e-6);
+            assert!((detail_rgb(composed, Vec3::splat(0.75)) - composed * 1.25).length() < 1e-6);
+        }
+        let shader: String = include_str!("shaders/world.wgsl")
+            .chars().filter(|c| !c.is_ascii_whitespace()).collect();
+        let blend = shader.find("albedo=mix(albedo,second,t);").unwrap();
+        let detail = shader.find("letgrain=textureSample(detail_tex,detail_samp,uv*params.detail.xy).rgb;").unwrap();
+        let lighting = shader.find("varrgb=albedo.rgb*light;").unwrap();
+        assert!(blend < detail && detail < lighting);
+        assert!(shader.contains("albedo=vec4<f32>(albedo.rgb*mix(vec3<f32>(1.0),2.0*grain,params.detail.z),albedo.a);"));
+
+        let unsupported = normal_material(Some(&parse(r#""$detail" "test/normal" "$detail2" "test/normal""#)), true);
+        assert_eq!(unsupported.params.flags, before.params.flags);
+        assert_eq!(unsupported.params.detail, before.params.detail);
+        let not_terrain = normal_material(Some(&parse(r#""$detail" "test/normal""#)), false);
+        assert_eq!(not_terrain.params.flags & flags::DETAIL, 0);
     }
 
     #[test]

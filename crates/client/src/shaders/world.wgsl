@@ -437,6 +437,8 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
         albedo=vec4<f32>(mix(albedo.rgb,albedo.rgb*spectrum.rgb*2.0,mask.r),albedo.a);
     }
     // Ordinary authored detail covers lit world surfaces and static props.
+    // Terrain's ordinary single detail layer modulates the composed RGB;
+    // blend masks, normal data, opacity and lightmap irradiance stay separate.
     // Dynamic/skinned character and weapon materials keep their fallback.
     if (params.flags & DETAIL) != 0u && (params.flags & (LIGHTMAPPED | VERTEX_LIT)) != 0u && (params.flags & DYNAMIC_LIT) == 0u {
         let grain = textureSample(detail_tex, detail_samp, uv * params.detail.xy).rgb;

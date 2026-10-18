@@ -30,7 +30,7 @@ impl Material {
         };
         if !matches!(
             self.shader.as_str(),
-            "vertexlitgeneric" | "lightmappedgeneric"
+            "vertexlitgeneric" | "lightmappedgeneric" | "worldvertextransition"
         ) {
             return Err(DetailError::Shader);
         }
@@ -40,6 +40,15 @@ impl Material {
         if self
             .str("$detailblendmode")
             .is_some_and(|v| v.trim().parse::<i32>() != Ok(0))
+        {
+            return Err(DetailError::Mode);
+        }
+        // WorldVertexTransition can author per-layer detail controls. This
+        // ordinary single-detail path cannot silently apply its first layer's
+        // scale/strength/tint to a separately configured second layer.
+        if self.shader == "worldvertextransition"
+            && ["$detailscale2", "$detailblendfactor2", "$detailtint2", "$detailframe2"]
+                .iter().any(|key| self.str(key).is_some())
         {
             return Err(DetailError::Mode);
         }
@@ -232,6 +241,44 @@ mod tests {
                 material(&format!(r#""$detail" "grain" {declaration}"#)).detail_layer(),
                 Err(error)
             );
+        }
+    }
+
+    #[test]
+    fn world_transition_keeps_its_authored_ordinary_detail() {
+        // Installed Inferno's flagstone/plaster transitions declare the same
+        // ordinary detail operator as the single-layer world materials. The
+        // shader name must not discard the entire authored detail layer.
+        let m = Material::parse_with(
+            r#"WorldVertexTransition {
+                "$basetexture" "test/stone" "$basetexture2" "test/plaster"
+                "$detail" "test/grain" "$detailscale" "[8 8]"
+                "$detailblendfactor" ".5" "$detailblendmode" "0"
+            }"#,
+            &|_| None, 0,
+        ).unwrap();
+        assert_eq!(m.detail_layer().unwrap(), Some(DetailLayer {
+            texture: "test/grain", scale: [8.; 2], factor: 0.5,
+        }));
+
+        // Supporting this shader does not admit a second detail layer, an
+        // alternate operator, animated detail, or malformed coordinates.
+        for (declaration, expected) in [
+            (r#""$detail2" "test/other""#, DetailError::Mode),
+            (r#""$detailscale2" "4""#, DetailError::Mode),
+            (r#""$detailblendfactor2" ".25""#, DetailError::Mode),
+            (r#""$detailtint2" "[1 1 1]""#, DetailError::Mode),
+            (r#""$detailframe2" "0""#, DetailError::Mode),
+            (r#""$detailblendmode" "2""#, DetailError::Mode),
+            (r#""$detailscale" "[8 8 8]""#, DetailError::Scale),
+            (r#""$detailtint" "[.5 .5 .5]""#, DetailError::Tint),
+            (r#"Proxies { AnimatedTexture { animatedtexturevar "$detail" } }"#, DetailError::Animation),
+        ] {
+            let m = Material::parse_with(
+                &format!(r#"WorldVertexTransition {{ "$detail" "test/grain" {declaration} }}"#),
+                &|_| None, 0,
+            ).unwrap();
+            assert_eq!(m.detail_layer(), Err(expected), "{declaration}");
         }
     }
 }
