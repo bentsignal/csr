@@ -17,7 +17,7 @@ pub(crate) fn spawn(commands: &mut Commands, level: &level::Level,
     meshes: &mut Assets<Mesh>, materials: &mut Assets<WorldMaterial>, images: &mut Assets<Image>,
     textures: &mut TextureCache, shared: &SharedHandles,
     bindposes: &mut Assets<SkinnedMeshInverseBindposes>, exposure: f32) {
-    let mut cache = HashMap::<(String, usize, u32), Option<SkinnedAsset>>::new();
+    let mut cache = HashMap::<(String, usize, u32), Option<(SkinnedAsset, Arc<Vec<glam::Mat4>>)>>::new();
     let sun = crate::props::Sun::from_bsp(&level.bsp);
     for (index, def) in level.collision.breakables.iter().enumerate() {
         let Some(studio) = &def.studio else { continue; };
@@ -27,14 +27,14 @@ pub(crate) fn spawn(commands: &mut Commands, level: &level::Level,
             let mut model = mdl::Model::load_with_body_value(&fs.read(&studio.model)?,
                 &fs.read(&format!("{base}.vvd"))?, &fs.read(&format!("{base}.dx90.vtx"))?, studio.body).ok()?;
             if studio.skin < model.skins.len() { model.skins.swap(0, studio.skin); }
-            Some(skinning::build_asset(Arc::new(model), fs, meshes, materials, images,
-                textures, shared, bindposes, exposure, true))
+            let pose = Arc::new(crate::studio_pose::initial(&model, fs));
+            Some((skinning::build_asset(Arc::new(model), fs, meshes, materials, images,
+                textures, shared, bindposes, exposure, true), pose))
         }).clone();
-        let Some(asset) = asset else {
+        let Some((asset, pose)) = asset else {
             warn!("Map breakable model unavailable: {} (entity {})", studio.model, def.entity);
             continue;
         };
-        let pose = mdl::skeleton::model_space(&asset.model.bones, &mdl::skeleton::rest_pose(&asset.model.bones));
         let transform = Mat4::from_scale_rotation_translation(Vec3::splat(studio.scale),
             rotation_to_bevy(mdl::angles_to_mat3(studio.angles)), to_bevy(def.origin));
         let instance = skinning::spawn(commands, &asset, None, Some(&mut *materials));
@@ -50,5 +50,5 @@ pub(crate) fn spawn(commands: &mut Commands, level: &level::Level,
             }));
         }
     }
-    commands.insert_resource(PropBreakableScene { assets: cache.into_values().flatten().collect() });
+    commands.insert_resource(PropBreakableScene { assets: cache.into_values().flatten().map(|(asset, _)| asset).collect() });
 }

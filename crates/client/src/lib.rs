@@ -92,6 +92,7 @@ pub mod props;
 mod doors;
 mod breakables;
 mod prop_breakables;
+mod studio_pose;
 pub mod scoreboard;
 pub mod scope;
 pub mod sky;

@@ -10,7 +10,7 @@ use std::{collections::HashMap, sync::Arc};
 struct Leaf {
     asset: SkinnedAsset,
     instance: SkinnedInstance,
-    pose: Vec<glam::Mat4>,
+    pose: Arc<Vec<glam::Mat4>>,
     angle: f32,
 }
 
@@ -39,7 +39,7 @@ pub(crate) fn spawn(
     bindposes: &mut Assets<SkinnedMeshInverseBindposes>,
     exposure: f32,
 ) {
-    let mut cache = HashMap::<(String, usize), Option<SkinnedAsset>>::new();
+    let mut cache = HashMap::<(String, usize), Option<(SkinnedAsset, Arc<Vec<glam::Mat4>>)>>::new();
     let mut scene = DoorScene::default();
     let sun = crate::props::Sun::from_bsp(&level.bsp);
     for def in level.collision.doors.iter() {
@@ -51,14 +51,14 @@ pub(crate) fn spawn(
             let mut model = mdl::Model::load(&fs.read(&def.model)?,
                 &fs.read(&format!("{base}.vvd"))?, &fs.read(&format!("{base}.dx90.vtx"))?).ok()?;
             if skin < model.skins.len() { model.skins.swap(0, skin); }
-            Some(skinning::build_asset(Arc::new(model), fs, meshes, materials, images,
-                textures, shared, bindposes, exposure, true))
+            let pose = Arc::new(crate::studio_pose::initial(&model, fs));
+            Some((skinning::build_asset(Arc::new(model), fs, meshes, materials, images,
+                textures, shared, bindposes, exposure, true), pose))
         }).clone();
-        let Some(asset) = asset else {
+        let Some((asset, pose)) = asset else {
             warn!("Map door model unavailable: {} (entity {})", def.model, def.entity);
             scene.leaves.push(None); continue;
         };
-        let pose = mdl::skeleton::model_space(&asset.model.bones, &mdl::skeleton::rest_pose(&asset.model.bones));
         let instance = skinning::spawn(commands, &asset, None, Some(&mut *materials));
         for (joint, posed) in instance.joints.iter().zip(skinning::pose_transforms(transform(def, def.initial_angle), &pose)) {
             commands.entity(*joint).insert(posed);
