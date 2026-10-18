@@ -366,7 +366,7 @@ pub fn update(
                             ImpactFx { born: now, life: 30., velocity: Vec3::ZERO, billboard: false }));
                         if let Some(index) = level.0.collision.breakables.iter()
                             .position(|def| def.contains_surface(pos, crate::coords::to_source(normal))) {
-                            mark.insert(crate::breakables::BreakableMesh(index));
+                            mark.insert(crate::breakables::BreakableMesh(vec![index]));
                         }
                     }
                 }

@@ -251,7 +251,7 @@ mod tests {
         base.breakables = vec![collision::breakables::Breakable {
             entity: 1, model: 1, origin: Vec3::ZERO, health: 20., material: 2,
             prop_data: String::new(), bullet_scale: 1., club_scale: 1., minimum_damage: 0.,
-            trigger_only: false, solids: Vec::new(),
+            trigger_only: false, solids: Vec::new(), studio: None,
         }].into();
         authority.breakables = vec![State { health: 20., destroyed: false }];
         let mut missing = update(&authority, 0);

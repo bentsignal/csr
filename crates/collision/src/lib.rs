@@ -164,6 +164,7 @@ pub struct CollisionWorld {
     /// Authored prop doors, separate from the immutable map solids.
     pub doors: std::sync::Arc<[doors::Door]>,
     pub breakables: std::sync::Arc<[breakables::Breakable]>,
+    pub breakable_dependencies: std::sync::Arc<[breakables::Dependency]>,
     /// A session-owned, immutable pose overlay shares the heavy map/grid.
     base: Option<std::sync::Arc<CollisionWorld>>,
     /// Per-overlay convex ownership, in the same order as `convexes`.
@@ -748,7 +749,18 @@ impl CollisionWorld {
     /// Adds the world brushes, solid brush entities, displacements and solid
     /// static props of a map. `prop_hulls` loads a model's `.phy` hulls.
     pub fn from_bsp(map: &bsp::Bsp, opts: &MapCollisionOptions, prop_hulls: &PropHullLoader) -> Self {
+        Self::from_bsp_with_model_data(map, opts, prop_hulls, &|_| None, &kv::Block::default())
+    }
+
+    /// Mounted MDL declarations opt supported props into the same exact-owner
+    /// health/collision lifecycle as brushes. Missing declarations stay unchanged.
+    pub fn from_bsp_with_model_data(map: &bsp::Bsp, opts: &MapCollisionOptions,
+        prop_hulls: &PropHullLoader, models: &breakables::ModelDataLoader<'_>, presets: &kv::Block) -> Self {
         let mut w = CollisionWorld::new();
+        let props = breakables::load_props(map, prop_hulls, models, presets);
+        // Collect edges before brush loading so linked static brushes are never
+        // left in the immutable grid. Rebase owner ordinals after brush admission.
+        let mut dependencies = breakables::dependencies(map, &props);
 
         // Brushes of model 0 (the world) and of solid brush entities.
         let add_model_brushes = |w: &mut CollisionWorld, model: usize, origin: Vec3| {
@@ -792,7 +804,8 @@ impl CollisionWorld {
         let mut breakables = Vec::new();
         for (entity, ent) in map.entities.iter().enumerate() {
             let Some(class) = ent.str("classname") else { continue };
-            if !opts.solid_brush_classes.iter().any(|c| c.eq_ignore_ascii_case(class)) {
+            let dependency = dependencies.iter().position(|dep| dep.entity == entity);
+            if dependency.is_none() && !opts.solid_brush_classes.iter().any(|c| c.eq_ignore_ascii_case(class)) {
                 continue;
             }
             // func_brush with "Solidity: never solid" (1).
@@ -810,7 +823,11 @@ impl CollisionWorld {
             let origin = ent.str("origin").and_then(bsp::parse_origin).unwrap_or(Vec3::ZERO);
             let start = w.convexes.len();
             add_model_brushes(&mut w, model, origin);
-            if breakables.len() < breakables::MAX_BREAKABLES {
+            if let Some(index) = dependency {
+                dependencies[index].solids = w.convexes.drain(start..).collect();
+                continue;
+            }
+            if breakables.len() < breakables::MAX_BREAKABLES.saturating_sub(props.len()) {
                 if let Some(mut def) = breakables::Breakable::load(entity, ent, map) {
                     if w.convexes.len() > start {
                         def.solids = w.convexes.drain(start..).collect();
@@ -819,7 +836,18 @@ impl CollisionWorld {
                 }
             }
         }
+        for dep in &mut dependencies {
+            for index in &mut dep.killed_by { *index += breakables.len(); }
+        }
+        breakables.extend(props);
+        for def in &mut breakables {
+            if let Some(studio) = &def.studio {
+                let surface = w.surface_id(&studio.model.to_ascii_lowercase());
+                for solid in &mut def.solids { solid.surface = surface; }
+            }
+        }
         w.breakables = breakables.into();
+        w.breakable_dependencies = dependencies.into();
 
         // Displacements.
         for (fi, face) in map.faces.iter().enumerate() {

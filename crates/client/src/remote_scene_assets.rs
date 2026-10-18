@@ -99,6 +99,9 @@ pub fn gather(world: &mut World) -> Result<SceneAssets, GatherError> {
     if let Some(doors) = world.get_resource::<crate::doors::DoorScene>() {
         for asset in doors.assets() { owners.model(asset)?; }
     }
+    if let Some(props) = world.get_resource::<crate::prop_breakables::PropBreakableScene>() {
+        for asset in props.assets() { owners.model(asset)?; }
+    }
     let materials = world
         .get_resource::<Assets<WorldMaterial>>()
         .ok_or(GatherError::MissingMaterials)?;
@@ -189,6 +192,10 @@ mod tests {
         let model_mesh = mesh(&mut meshes);
         let ground_mesh = mesh(&mut meshes);
         let dropped_mesh = mesh(&mut meshes);
+        let cover_mesh = mesh(&mut meshes);
+        world.insert_resource(crate::prop_breakables::PropBreakableScene {
+            assets: vec![model(cover_mesh.clone(), material.clone())],
+        });
         // These images/meshes already existed before the scene; ownership,
         // rather than a fresh-ID difference, must include them.
         world.spawn((
@@ -224,7 +231,7 @@ mod tests {
         world.insert_resource(images);
         world.insert_resource(materials);
         let scene = gather(&mut world).unwrap();
-        let mut expected_meshes = vec![entity_mesh.id(), model_mesh.id(), ground_mesh.id(), dropped_mesh.id()];
+        let mut expected_meshes = vec![entity_mesh.id(), model_mesh.id(), ground_mesh.id(), dropped_mesh.id(), cover_mesh.id()];
         expected_meshes.sort();
         let mut expected_images = handles.iter().map(Handle::id).collect::<Vec<_>>();
         expected_images.sort();

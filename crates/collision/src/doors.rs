@@ -176,6 +176,7 @@ impl CollisionWorld {
         Arc::new(Self {
             mins: base.mins, maxs: base.maxs, doors: base.doors.clone(),
             breakables: base.breakables.clone(),
+            breakable_dependencies: base.breakable_dependencies.clone(),
             dynamic: base.dynamic.clone(),
             convexes: solids, runtime_breakables: owners, base: Some(base), ..Default::default()
         })

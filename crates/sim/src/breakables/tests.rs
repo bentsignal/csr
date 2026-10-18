@@ -8,6 +8,10 @@ use movement::buttons;
 use std::sync::Arc;
 
 fn fixture(rate: u32, metadata: &str, door: bool) -> (World, PlayerId) {
+    fixture_with_model(rate, metadata, door, None)
+}
+
+fn fixture_with_model(rate: u32, metadata: &str, door: bool, prop_data: Option<&str>) -> (World, PlayerId) {
     let mut map = bsp::Bsp::default();
     let doc = kv::parse(&format!(r#"vent {{ classname func_breakable model *1
         origin "0 0 0" {metadata} }}"#)).unwrap();
@@ -39,7 +43,28 @@ fn fixture(rate: u32, metadata: &str, door: bool) -> (World, PlayerId) {
         triangles: vec![[0, 2, 1], [0, 3, 2], [4, 5, 6], [4, 6, 7], [0, 1, 5], [0, 5, 4],
             [1, 2, 6], [1, 6, 5], [2, 3, 7], [2, 7, 6], [3, 0, 4], [3, 4, 7]],
     }]);
-    let mut collision = CollisionWorld::from_bsp(&map, &MapCollisionOptions::default(), &loader);
+    if prop_data.is_some() {
+        let mut button = map.entities[0].clone();
+        for (key, value) in [("classname", "func_button"), ("targetname", "release_fixture"), ("spawnflags", "1")] {
+            button.set(key, kv::Value::Str(value.into()));
+        }
+        map.entities.push(button);
+        let doc = kv::parse(r#"cover { classname prop_dynamic model models/private_cover.mdl solid 6
+            origin "0 0 0" angles "0 0 0" rendercolor "121 173 211" skin 2 body 3
+            OnBreak "release_fixture,Kill,,0,-1" }"#).unwrap();
+        map.entities[0] = doc.block("cover").unwrap().clone();
+    }
+    let model_loader = |_: &str| prop_data.map(|data| {
+        let text = format!("mdlkeyvalue {{ prop_data {{ {data} }} }}\0");
+        let mut bytes = vec![0; 384]; bytes[..4].copy_from_slice(b"IDST");
+        bytes[4..8].copy_from_slice(&49i32.to_le_bytes());
+        bytes[312..316].copy_from_slice(&384i32.to_le_bytes());
+        bytes[316..320].copy_from_slice(&(text.len() as i32).to_le_bytes());
+        bytes.extend_from_slice(text.as_bytes()); bytes
+    });
+    let presets = kv::parse(r#"MetalFixture { base BaseFixture } BaseFixture { health 0 "dmg.bullets" 1 "dmg.club" 1 }"#).unwrap();
+    let mut collision = CollisionWorld::from_bsp_with_model_data(&map, &MapCollisionOptions::default(),
+        &loader, &model_loader, &presets);
     assert_eq!(collision.breakables.len(), 1);
     let s = 2048.;
     collision.add_triangle([Vec3::new(-s, -s, 0.), Vec3::new(s, -s, 0.), Vec3::new(s, s, 0.)], contents::SOLID, 0);
@@ -191,7 +216,7 @@ fn combat_damages_only_the_exact_masked_first_brush_owner() {
             for solid in &mut solids { solid.contents = contents; }
             collision::breakables::Breakable { entity, model: 1, origin: Vec3::ZERO,
                 health: 1., material: 0, prop_data: String::new(), bullet_scale: 1., club_scale: 1.,
-                minimum_damage: 0., trigger_only: false, solids }
+                minimum_damage: 0., trigger_only: false, solids, studio: None }
         };
         base.breakables = vec![make(0, first_contents), make(1, contents::SOLID)].into();
         world.reset_breakables();
@@ -206,5 +231,49 @@ fn combat_damages_only_the_exact_masked_first_brush_owner() {
         assert!(blocked(&world), "the other intact movement-solid owner remains");
         world.start_round(false);
         assert!(world.breakables.iter().all(|state| !state.broken()));
+    }
+}
+
+
+#[test]
+fn authored_studio_cover_shot_and_knife_remove_linked_brush_and_restore_as_one_state() {
+    for rate in [64, 128] {
+        for knife in [false, true] {
+            let (mut world, id) = fixture_with_model(rate, "health 999", true,
+                Some(r#"base MetalFixture health 1"#));
+            let def = &world.collision.breakables[0];
+            assert_eq!(def.entity, 0);
+            assert_eq!(def.health, 1., "local MDL health overrides the inherited zero");
+            let studio = def.studio.as_ref().unwrap();
+            assert_eq!((studio.skin, studio.body), (2, 3));
+            assert_eq!(studio.tint, Vec3::new(121., 173., 211.) / 255.);
+            assert_eq!(world.collision.breakable_dependencies.len(), 1);
+            assert_eq!(world.collision.breakable_dependencies[0].killed_by, vec![0]);
+            assert_eq!(world.collision.breakable_dependencies[0].solids.len(), 1);
+            assert!(blocked(&world));
+            if knife {
+                world.players[0].weapons = vec![WeaponState::new(Arc::new(world.catalog.get("weapon_knife").unwrap().clone()))];
+            }
+            let intact = world.clone();
+            let mut predicted = world.clone();
+            world.step(&[(id, attack())]); predicted.step_prediction(&[(id, attack())]);
+            assert_eq!(world.state(), predicted.state());
+            assert!(predicted.events.is_empty());
+            assert!(world.breakables[0].broken());
+            assert!(!blocked(&world), "the linked invisible brush must also leave the passage");
+            assert!(blocked(&intact), "prediction clones must retain independent collision");
+            let mut restored = intact.clone();
+            restored.restore(world.decode::<crate::WorldState>(&world.encode_state()).unwrap());
+            assert!(!blocked(&restored));
+            assert!(world.collision.trace_ray(Vec3::new(64., 0., 64.), Vec3::new(128., 0., 64.), contents::MASK_SHOT).hit(),
+                "removal must preserve the independent door leaf");
+            for _ in 0..rate / 2 { world.step(&[(id, TickInput { forward_move: 450., ..Default::default() })]); }
+            assert!(world.players[0].movement.origin.x > 18.);
+            world.damage_environment(id, 1000, "fixture");
+            assert!(world.breakables[0].broken());
+            restored.restore(intact.state()); assert!(blocked(&restored));
+            world.start_round(false); assert!(blocked(&world));
+            assert_eq!(world.breakables, intact.breakables);
+        }
     }
 }

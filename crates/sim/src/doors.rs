@@ -57,6 +57,11 @@ impl World {
             solids.extend(def.solids.iter().cloned());
             owners.resize(solids.len(), Some(index));
         }
+        for dep in self.collision.breakable_dependencies.iter() {
+            if dep.killed_by.iter().any(|&index| self.breakables[index].broken()) { continue; }
+            solids.extend(dep.solids.iter().cloned());
+            owners.resize(solids.len(), None);
+        }
         self.collision = collision::CollisionWorld::with_runtime_solids(
             collision::CollisionWorld::map_arc(&self.collision), solids, owners);
     }

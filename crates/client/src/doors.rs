@@ -69,7 +69,7 @@ pub(crate) fn spawn(
         // The instance owns material copies. Resolve them after deferred spawn
         // below; assets in the cache retain their original per-material tint.
         for entity in &instance.meshes {
-            commands.entity(*entity).insert(DoorLight { cube, sun_dir, sun_color, tint: Vec4::new(tint.x, tint.y, tint.z, 1.0) });
+            commands.entity(*entity).insert(StudioLight { cube, sun_dir, sun_color, tint: Vec4::new(tint.x, tint.y, tint.z, 1.0) });
         }
         scene.leaves.push(Some(Leaf { asset, instance, pose, angle: def.initial_angle }));
     }
@@ -77,7 +77,9 @@ pub(crate) fn spawn(
 }
 
 #[derive(Component)]
-pub(crate) struct DoorLight { cube: [Vec4; 6], sun_dir: Vec4, sun_color: Vec4, tint: Vec4 }
+pub(crate) struct StudioLight {
+    pub cube: [Vec4; 6], pub sun_dir: Vec4, pub sun_color: Vec4, pub tint: Vec4,
+}
 
 pub(crate) fn sync(
     mut commands: Commands,
@@ -85,7 +87,7 @@ pub(crate) fn sync(
     level: Res<LoadedLevel>,
     mut scene: ResMut<DoorScene>,
     mut transforms: Query<&mut Transform>,
-    lights: Query<(Entity, &MeshMaterial3d<WorldMaterial>, &DoorLight)>,
+    lights: Query<(Entity, &MeshMaterial3d<WorldMaterial>, &StudioLight)>,
     mut materials: ResMut<Assets<WorldMaterial>>,
 ) {
     for ((def, state), leaf) in level.0.collision.doors.iter().zip(&world.0.doors).zip(&mut scene.leaves) {
@@ -100,7 +102,7 @@ pub(crate) fn sync(
             material.params.sun_dir = light.sun_dir;
             material.params.sun_color = light.sun_color;
             material.params.color *= light.tint;
-            commands.entity(entity).remove::<DoorLight>();
+            commands.entity(entity).remove::<StudioLight>();
         }
     }
 }

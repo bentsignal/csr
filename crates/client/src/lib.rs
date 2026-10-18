@@ -91,6 +91,7 @@ pub mod xr_input;
 pub mod props;
 mod doors;
 mod breakables;
+mod prop_breakables;
 pub mod scoreboard;
 pub mod scope;
 pub mod sky;
@@ -440,23 +441,32 @@ fn spawn_level(
         .map(|s| world_mesh::sky_faces(&level.bsp, &s))
         .unwrap_or_default();
     let atlas = world_mesh::LightmapAtlas::build(&level.bsp);
-    let breakable_faces: std::collections::HashSet<_> = level.collision.breakables.iter().flat_map(|def| {
-        let model = &level.bsp.models[def.model];
+    // Isolate only brush models here. Studio props have independent meshes;
+    // immediate Kill dependencies share the same health-driven visibility.
+    let breakable_models: Vec<_> = level.collision.breakables.iter().enumerate()
+        .filter(|(_, def)| def.studio.is_none())
+        .map(|(index, def)| (vec![index], def.model, def.origin, true))
+        .chain(level.collision.breakable_dependencies.iter().map(|dep| {
+            let visible = level.bsp.entities[dep.entity].i64("rendermode") != Some(10);
+            (dep.killed_by.clone(), dep.model, dep.origin, visible)
+        })).collect();
+    let breakable_faces: std::collections::HashSet<_> = breakable_models.iter().flat_map(|(_, model, _, _)| {
+        let model = &level.bsp.models[*model];
         model.first_face.max(0) as usize..(model.first_face.max(0) as usize + model.num_faces.max(0) as usize).min(level.bsp.faces.len())
     }).collect();
     let main = world_mesh::build(&level.bsp, &atlas, &|f| !sky_faces.contains(&f) && !breakable_faces.contains(&f));
     let skybox = world_mesh::build(&level.bsp, &atlas, &|f| sky_faces.contains(&f) && !breakable_faces.contains(&f));
-    let breakable_builds: Vec<_> = level.collision.breakables.iter().enumerate().map(|(index, def)| {
-        let model = &level.bsp.models[def.model];
-        (index, sky_faces.contains(&(model.first_face.max(0) as usize)),
-            world_mesh::build_brush_model(&level.bsp, &atlas, def.model, def.origin))
+    let breakable_builds: Vec<_> = breakable_models.iter().filter(|(_, _, _, visible)| *visible).map(|(owners, model, origin, _)| {
+        let def = &level.bsp.models[*model];
+        (owners.clone(), sky_faces.contains(&(def.first_face.max(0) as usize)),
+            world_mesh::build_brush_model(&level.bsp, &atlas, *model, *origin))
     }).collect();
     let main_overlays = world_mesh::build_overlays(&level.bsp, &atlas, &|f| !sky_faces.contains(&f) && !breakable_faces.contains(&f));
     let sky_overlays = world_mesh::build_overlays(&level.bsp, &atlas, &|f| sky_faces.contains(&f) && !breakable_faces.contains(&f));
-    let breakable_overlay_builds: Vec<_> = level.collision.breakables.iter().enumerate().map(|(index, def)| {
-        let model = &level.bsp.models[def.model];
+    let breakable_overlay_builds: Vec<_> = breakable_models.iter().filter(|(_, _, _, visible)| *visible).map(|(owners, model, _, _)| {
+        let model = &level.bsp.models[*model];
         let range = model.first_face.max(0) as usize..model.first_face.max(0) as usize + model.num_faces.max(0) as usize;
-        (index, sky_faces.contains(&range.start), world_mesh::build_overlays(&level.bsp, &atlas, &|f| range.contains(&f)))
+        (owners.clone(), sky_faces.contains(&range.start), world_mesh::build_overlays(&level.bsp, &atlas, &|f| range.contains(&f)))
     }).collect();
     let lightmap = images.add(atlas.to_image());
     drop(atlas);
@@ -467,7 +477,7 @@ fn spawn_level(
     let mut world_draws = 0;
     let mut world_materials: std::collections::HashMap<String, Option<Handle<WorldMaterial>>> = Default::default();
     let mut world_builds = vec![(false, None, &main), (true, None, &skybox)];
-    world_builds.extend(breakable_builds.iter().map(|(index, in_sky, build)| (*in_sky, Some(*index), build)));
+    world_builds.extend(breakable_builds.iter().map(|(index, in_sky, build)| (*in_sky, Some(index), build)));
     for (in_sky, breakable, build) in world_builds {
         for (name, mesh) in &build.meshes {
             let mat = world_materials
@@ -483,7 +493,7 @@ fn spawn_level(
                 .clone();
             let Some(mat) = mat else { continue };
             let mut e = commands.spawn((Mesh3d(meshes.add(mesh.clone())), MeshMaterial3d(mat)));
-            if let Some(index) = breakable { e.insert(breakables::BreakableMesh(index)); }
+            if let Some(index) = breakable { e.insert(breakables::BreakableMesh(index.clone())); }
             match (in_sky, sky) {
                 (true, Some(s)) => {
                     e.insert((sky::sky_transform(&s), sky::sky_layer()));
@@ -498,7 +508,7 @@ fn spawn_level(
     let mut overlay_materials: std::collections::HashMap<(String, u8), Option<Handle<WorldMaterial>>> = Default::default();
     let mut overlay_draws = 0;
     let mut overlay_builds = vec![(false, None, &main_overlays), (true, None, &sky_overlays)];
-    overlay_builds.extend(breakable_overlay_builds.iter().map(|(index, in_sky, build)| (*in_sky, Some(*index), build)));
+    overlay_builds.extend(breakable_overlay_builds.iter().map(|(index, in_sky, build)| (*in_sky, Some(index), build)));
     for (in_sky, breakable, build) in overlay_builds {
         for (name, order, mesh) in &build.meshes {
             let mat = overlay_materials.entry((name.clone(), *order)).or_insert_with(|| {
@@ -508,7 +518,7 @@ fn spawn_level(
             }).clone();
             let Some(mat) = mat else { continue };
             let mut e = commands.spawn((Mesh3d(meshes.add(mesh.clone())), MeshMaterial3d(mat)));
-            if let Some(index) = breakable { e.insert(breakables::BreakableMesh(index)); }
+            if let Some(index) = breakable { e.insert(breakables::BreakableMesh(index.clone())); }
             match (in_sky, sky) {
                 (true, Some(s)) => { e.insert((sky::sky_transform(&s), sky::sky_layer())); }
                 _ => { e.insert((Transform::IDENTITY, visibility::MapClusters::mesh(&level.bsp, mesh))); }
@@ -590,6 +600,8 @@ fn spawn_level(
         opts.exposure,
     );
     doors::spawn(&mut commands, &level, &mut meshes, &mut materials, &mut images,
+        &mut textures, &world_shared, &mut bindposes, opts.exposure);
+    prop_breakables::spawn(&mut commands, &level, &mut meshes, &mut materials, &mut images,
         &mut textures, &world_shared, &mut bindposes, opts.exposure);
     info!("characters and viewmodels loaded in {:.2}s", t_chars.elapsed().as_secs_f32());
     let localization = localize::Localization::load(&level.vfs);

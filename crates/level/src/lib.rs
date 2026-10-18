@@ -3,6 +3,7 @@
 pub mod maps;
 pub mod bot_profiles;
 mod character_profiles;
+mod breakable_digest;
 mod empty_trigger;
 mod grenade_animations;
 mod historical_awp;
@@ -222,12 +223,14 @@ impl Level {
             let bytes = fs.read(&format!("{base}.phy"))?;
             mdl::Phy::parse(&bytes).ok().map(|p| p.hulls)
         };
-        let mut collision = CollisionWorld::from_bsp(&bsp, &MapCollisionOptions::default(), &loader);
-        if let Some(data) = fs.read_string("scripts/propdata.txt").and_then(|text| kv::parse(&text).ok()) {
-            let root = data.block("PropData.txt").unwrap_or(&data);
-            if let Some(defs) = Arc::get_mut(&mut collision.breakables) {
-                for def in defs { def.apply_prop_data(root); }
-            }
+        let propdata = fs.read_string("scripts/propdata.txt").and_then(|text| kv::parse(&text).ok()).unwrap_or_default();
+        let root = propdata.block("PropData.txt").unwrap_or(&propdata);
+        let mut collision = CollisionWorld::from_bsp_with_model_data(&bsp, &MapCollisionOptions::default(),
+            &loader, &|model| fs.read(model), root);
+        if let Some(defs) = Arc::get_mut(&mut collision.breakables) {
+            // Studio declarations already resolve local overrides over their
+            // model's inherited base; brush presets retain their existing order.
+            for def in defs { if def.studio.is_none() { def.apply_prop_data(root); } }
         }
         timings.push(("collision", t.elapsed().as_secs_f32()));
 
@@ -295,20 +298,7 @@ impl Level {
         } else { catalog_sha1 };
         // Peers must agree on the resolved mounted breakable damage data,
         // which can differ between packs even when the BSP/items schema match.
-        let catalog_sha1 = if collision.breakables.is_empty() { catalog_sha1 } else {
-            catalog_sha1.map(|previous| {
-                let mut hash = Sha1::new();
-                hash.update(b"csr-brush-breakable-damage-v1\0");
-                hash.update(previous);
-                for def in collision.breakables.iter() {
-                    hash.update((def.entity as u64).to_le_bytes());
-                    for value in [def.health, def.bullet_scale, def.club_scale, def.minimum_damage] {
-                        hash.update(value.to_le_bytes());
-                    }
-                }
-                hash.finalize().into()
-            })
-        };
+        let catalog_sha1 = breakable_digest::bind(&collision, catalog_sha1);
         timings.push(("weapons", t.elapsed().as_secs_f32()));
         let t = Instant::now();
         let (character_profiles, catalog_sha1) = character_profiles::load(&fs, catalog_sha1)?;

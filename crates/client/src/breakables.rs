@@ -1,10 +1,11 @@
 //! Presentation consumes health state after fixed-tick authority/prediction.
-//! Keep the authored brush meshes/materials/lightmaps alive for round reset.
+//! Keep authored brush/studio meshes and materials alive for round reset.
 use crate::{LoadedLevel, player::{LocalPlayer, SimWorld}, visibility::MapClusters};
 use bevy::prelude::*;
 
+/// Visible only while every source is intact; dependencies may have several.
 #[derive(Component)]
-pub(crate) struct BreakableMesh(pub usize);
+pub(crate) struct BreakableMesh(pub Vec<usize>);
 
 pub(crate) fn sync(level: Res<LoadedLevel>, world: Res<SimWorld>, local: Res<LocalPlayer>,
     mut cached_pvs: Local<Option<(i16, bool, Option<Vec<u8>>)>>,
@@ -18,7 +19,7 @@ pub(crate) fn sync(level: Res<LoadedLevel>, world: Res<SimWorld>, local: Res<Loc
     }
     let row = cached_pvs.as_ref().and_then(|(_, _, row)| row.as_deref());
     for (leaf, clusters, mut visibility) in &mut batches {
-        let intact = world.0.breakables.get(leaf.0).is_some_and(|state| !state.broken());
+        let intact = leaf.0.iter().all(|&index| world.0.breakables.get(index).is_some_and(|state| !state.broken()));
         let visible = intact && clusters.is_none_or(|clusters| clusters.visible(row));
         let next = if visible { Visibility::Inherited } else { Visibility::Hidden };
         if *visibility != next { *visibility = next; }

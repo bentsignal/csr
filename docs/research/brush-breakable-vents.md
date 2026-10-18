@@ -1,5 +1,10 @@
 # Brush breakables: source candidate, executable validation UNRUN
 
+Historical R3 brush-only report. Its fourteen installed Nuke `func_breakable`
+entities are glass windows, **not the actual vent covers**. The separate
+[authored studio prop candidate](authored-prop-breakables.md) supplies the
+actual cover path; both candidates still require executable verification.
+
 The owner authorized this bounded overnight map-interaction slice on October
 18, 2026. It is based on the rotating-prop-door candidate `c9a0270`. No build,
 test executable, game, native helper, UI, push or PR was run by this agent.
