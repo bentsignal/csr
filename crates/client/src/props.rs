@@ -88,6 +88,14 @@ impl PropLight {
     }
 }
 
+/// Fading (0x01) and disabled shadow casting (0x10) do not change how a
+/// surface receives lighting. In particular, a no-shadow autocombined model
+/// still spans independently exposed/covered surfaces. Keep lighting-origin,
+/// ignored-normal and other unsupported receiver modes on their old fallback.
+fn supports_surface_lighting(flags: u8) -> bool {
+    flags & !(0x01 | 0x10) == 0
+}
+
 /// Map ambient cube at the prop, plus the sun if its center ray reaches sky.
 /// This one-sample fallback remains approximate for large/combined models.
 fn prop_light(
@@ -374,14 +382,15 @@ pub fn spawn(
                     && m.params.flags & crate::material::flags::NORMAL == 0)
                 .and_then(|_| authored.as_ref()?.get(mesh_index)?.as_deref());
             // Special prop lighting modes retain their previous fallback. Only
-            // ordinary/fading props enter either spatial path. Bumped meshes
-            // carry full coefficients, rather than colors the shader discards.
+            // ordinary/fading/no-cast-shadow props enter either spatial path.
+            // Bumped meshes carry full coefficients, rather than colors the
+            // shader discards.
             let spatial_fallback = authored_colors.is_none()
-                && prop.flags & !1 == 0
+                && supports_surface_lighting(prop.flags)
                 && materials.get(&material).is_some_and(|m|
                     m.params.flags & crate::material::flags::VERTEX_LIT != 0
                     && m.params.flags & crate::material::flags::NORMAL == 0);
-            let directional_fallback = prop.flags & !1 == 0
+            let directional_fallback = supports_surface_lighting(prop.flags)
                 && materials.get(&material).is_some_and(|m|
                     m.params.flags & crate::material::flags::VERTEX_LIT != 0
                     && m.params.flags & crate::material::flags::NORMAL != 0);
@@ -747,6 +756,32 @@ mod lighting_tests {
                 SourceVec3::ZERO, -SourceVec3::Z, 0);
             assert_eq!(local.sun, SourceVec3::ZERO, "other_prop={other_prop}");
             assert_eq!(local.cube, instance.cube);
+        }
+    }
+
+    #[test]
+    fn no_cast_shadow_props_receive_spatial_light_without_bypassing_occluders() {
+        for flags in [0x00, 0x01, 0x10, 0x11] {
+            let (mut map, mut w) = fixture(false);
+            map.static_props.props[0].flags = flags;
+            assert!(supports_surface_lighting(map.static_props.props[0].flags));
+            add_world_bounds(&mut w, SourceVec3::new(-256., -256., 33.),
+                SourceVec3::new(32., 256., 44.), "partial_cover");
+            w.finalize();
+            let instance = fallback(&map, &w);
+            assert_eq!(instance.sun, SourceVec3::ZERO);
+            let sample = |x| surface_directional_light(&map, &w, Some(SUN), &instance,
+                SourceVec3::new(x, 0., 1.), SourceVec3::Z, 0);
+            assert_eq!(sample(-80.).sun, SourceVec3::ZERO,
+                "cast-shadow flags must not disable receiving shadows: {flags:#x}");
+            assert_eq!(sample(80.).sun, SUN.color,
+                "a covered center must not darken an exposed surface: {flags:#x}");
+        }
+        for flags in 0u8..=u8::MAX {
+            if ![0x00, 0x01, 0x10, 0x11].contains(&flags) {
+                assert!(!supports_surface_lighting(flags),
+                    "unsupported lighting modes must retain their fallback: {flags:#x}");
+            }
         }
     }
 
