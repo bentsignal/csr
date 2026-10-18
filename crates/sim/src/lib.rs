@@ -574,7 +574,7 @@ impl World {
         self.mode == GameMode::Competitive
     }
 
-    /// Reads `info_player_terrorist` / `info_player_counterterrorist`.
+    /// Reads initially enabled `info_player_terrorist` / `info_player_counterterrorist`.
     pub fn load_spawns(&mut self, map: &bsp::Bsp) {
         self.spawns.clear();
         for (class, team) in [
@@ -582,6 +582,12 @@ impl World {
             ("info_player_counterterrorist", Team::CounterTerrorist),
         ] {
             for ent in map.entities_of_class(class) {
+                // Alternative mode spawns can live in the same BSP (for
+                // example Guardian and 2v2). They require an explicit Enable
+                // input; merely loading the map must not activate them.
+                if ent.str("enabled").and_then(kv::parse_i64) == Some(0) {
+                    continue;
+                }
                 let Some(origin) = ent.str("origin").and_then(bsp::parse_origin) else {
                     continue;
                 };

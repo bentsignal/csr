@@ -312,6 +312,59 @@ fn rules() -> RulesConfig {
 }
 
 #[test]
+fn disabled_team_spawns_stay_out_of_initial_placement_in_every_mode() {
+    let mut map = bsp::Bsp::default();
+    let mut expected = Vec::new();
+    for (class, x, team) in [
+        ("info_player_terrorist", -1000., Team::Terrorist),
+        ("info_player_counterterrorist", 1000., Team::CounterTerrorist),
+    ] {
+        for k in 0..5 {
+            // Missing enabled retains the ordinary default. Names and group /
+            // priority metadata do not themselves disable a spawn in any mode.
+            let enabled = if k == 0 { "" } else { "enabled 1" };
+            let y = k as f32 * 64.;
+            let doc = kv::parse(&format!(r#"spawn {{ classname {class} origin "{x} {y} 1"
+                angles "0 90 0" {enabled} targetname spawnpoints.2v2
+                spawngroup alternate spawnpriority 2 }}"#)).unwrap();
+            map.entities.push(doc.block("spawn").unwrap().clone());
+            expected.push(SpawnPoint { origin: Vec3::new(x, y, 1.), yaw: 90., team });
+        }
+        // This candidate has valid geometry but is outside the ordinary buy
+        // zone. Disabled metadata, rather than zone size, must exclude it.
+        let doc = kv::parse(&format!(r#"spawn {{ classname {class} origin "{x} 2000 1"
+            EnAbLeD 0 targetname spawnpoints.guardian }}"#)).unwrap();
+        map.entities.push(doc.block("spawn").unwrap().clone());
+    }
+    for mode in [GameMode::Deathmatch, GameMode::Special, GameMode::Competitive] {
+        let mut w = world();
+        w.load_spawns(&map);
+        assert_eq!(w.spawns, expected);
+        for i in 0..5 {
+            w.add_player(&format!("T {i}"), Team::Terrorist);
+            w.add_player(&format!("CT {i}"), Team::CounterTerrorist);
+        }
+        w.set_mode(mode, rules());
+        w.step(&[]);
+        assert_eq!(w.players.len(), 10);
+        assert!(w.players.iter().all(|p| p.alive && p.in_buy_zone), "{mode:?}");
+        for i in 0..w.players.len() {
+            assert!(w.players[..i].iter().all(|p|
+                p.movement.origin.distance(w.players[i].movement.origin) > 40.));
+        }
+        // Cover all offsets through the same placement path used by respawns.
+        for tick in 0..w.spawns.len() as u64 {
+            w.tick = tick;
+            let id = w.players[0].id;
+            w.respawn(id);
+            let p = w.player(id).unwrap();
+            let (mins, maxs) = p.bounds();
+            assert!(w.objectives.in_buy_zone(p.team, mins, maxs), "{mode:?} tick {tick}");
+        }
+    }
+}
+
+#[test]
 fn grenade_practice_survives_snapshot_and_respawn_without_changing_competitive() {
     let mut w = world();
     let mut c = catalog();

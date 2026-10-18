@@ -2,6 +2,41 @@ use super::*;
 use glam::Vec3;
 
 #[test]
+#[ignore = "requires read-only CS:GO Legacy installed Overpass; no native process"]
+fn installed_overpass_initial_competitive_spawns_touch_buy_zones() {
+    let (game, fs) = mount_game(None).expect("installed Legacy dependencies");
+    let level = Level::load_from_vfs(ContentId::csgo(ContentKind::Map, "de_overpass"),
+        "de_overpass", game, fs).expect("installed Legacy Overpass; no download");
+    let cvars = level.cfg("gamemode_competitive.cfg")
+        .map(|text| sim::rules::parse_cfg(&text)).unwrap_or_default();
+    let rules = sim::RulesConfig::from_cvars(&cvars);
+    for rate in [64, 128] {
+        let mut world = sim::World::with_catalog(level.collision.clone(), level.catalog.clone());
+        world.set_character_profiles(level.character_profiles.clone());
+        world.set_tick_rate(rate);
+        world.load_map(&level.bsp, level.overview().as_deref());
+        // Exactly the launcher's round_check setup, including the initial
+        // deathmatch placements before set_mode starts the first round.
+        for i in 0..5 {
+            world.add_bot(&format!("T bot {i}"), sim::Team::Terrorist);
+            world.add_bot(&format!("CT bot {i}"), sim::Team::CounterTerrorist);
+        }
+        world.set_mode(sim::GameMode::Competitive, rules.clone());
+        for player in &world.players {
+            println!("{rate}Hz initial {} id {} {:?}: {:?}",
+                player.name, player.id, player.team, player.movement.origin);
+        }
+        world.step(&[]);
+        assert_eq!(world.players.len(), 10);
+        for player in &world.players {
+            assert!(player.alive && player.in_buy_zone,
+                "{rate}Hz {} id {} {:?}: {:?}, buy_zones={:?}",
+                player.name, player.id, player.team, player.movement, world.objectives.buy_zones);
+        }
+    }
+}
+
+#[test]
 #[ignore = "requires private cached de_cbble_2018 BSP via CSR_DATA_DIR and installed Legacy dependencies"]
 fn cached_classic_cobble_admission_routes_never_enter_solid() {
     // Match launcher's movement_checks, including the other player and every
