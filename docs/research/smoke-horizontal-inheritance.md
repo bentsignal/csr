@@ -1,4 +1,4 @@
-# Grounded primary Smoke launch observations
+# Grounded Smoke launch observations
 
 ## Initial horizontal-inheritance admission
 
@@ -101,3 +101,77 @@ stationary/moving velocities at 64/128 Hz, preserving Molotov and unsupported
 releases. A separate regression checks the three Smoke angles, unchanged spawn
 trace, movement inheritance, absent calibration and unsupported modes. The
 64 Hz cases are regression consistency checks rather than new native evidence.
+
+## October 19 stationary secondary/combined velocity extension
+
+Six fresh original Legacy 1.38.8.1 sessions on Train at requested 128 Hz and
+confirmed `host_timescale .01` independently qualify the secondary and combined
+Smoke base vectors. In every case the player is standing on world ground with
+zero movement, standing eye offset `64.062561`, and actual pitch 0, -30 or +45
+(yaw/roll zero). Root personally reviewed the full player-before-hold,
+held-weapon and projectile-0 originals and nearest-neighbor held-field crops.
+The active Smoke weapon and matching held-owner/projectile-thrower handles,
+literal pin-pulled `true`, and held strength `0` for secondary or `0.5` for
+combined establish the named modes. Secondary used only `+attack2`; combined
+held `+attack` and `+attack2` together, then released both.
+
+Only each case's first pre-contact projectile frame is admitted. The measured
+field is `C_SmokeGrenadeProjectile` index 150 `m_vecVelocity`; the generic zero
+absolute-velocity field is excluded. Later projectile frames are not admitted
+for this extension.
+
+| Mode | Actual pitch | First pre-contact velocity X | Received Vz, compatibility only | Release-to-later-dump upper bound, seconds |
+| --- | --- | --- | --- | --- |
+| Secondary | 0 | 199.423584 | 10.163757 | 0.251998098 |
+| Secondary | -30 | 162.429962 | 95.924629 | 0.245490531 |
+| Secondary | +45 | 155.124008 | -152.664490 | 0.244251862 |
+| Combined | 0 | 432.084351 | 51.188133 | 0.245796353 |
+| Combined | -30 | 351.931519 | 237.003326 | 0.247952960 |
+| Combined | +45 | 336.101959 | -304.523041 | 0.242968991 |
+
+Fitting 0/-30 independently for each mode within the existing weighted-pitch
+family gives secondary speed `202.50001144765758`, bias
+`9.999995533351424` degrees, and combined speed `438.749942113388`, bias
+`9.99999520725116` degrees. Their separate +45 checks without refitting have
+horizontal residuals about `-0.000004573` and `-0.000015721` units/second.
+These parameters were **not prospectively preregistered**. The bounded profile
+uses speeds `202.5` and `438.75` with bias `10` degrees, supported by these
+Smoke observations independently of HE. The finite samples do not uniquely
+identify every possible throw law.
+
+Neither initial Vz nor physical spawn time was measured. Received Vz is only
+a gravity compatibility bracket for the vertical component constructed by the
+existing family. Each first screenshot precedes its later server classname/
+gravity dump; logged receive time minus command release, scaled by the
+confirmed .01 clock, gives the upper bounds above without subtracting an
+unknown physical spawn delay. Use `320 * per_case_bound` for the gravity-loss
+ceiling; every bound is below .3 seconds, so 96 units/second is conservative.
+The old blanket 80 units/second ceiling must not be reused: secondary level's
+upper bound exceeds .25 seconds. None of these bounds is an actual frame age.
+
+Private evidence remains in
+`overpass-20261019/native-smoke-buttons-r1/root-admission.json`, its six case
+subfolders' `root-review.json`, original captures and console logs. The job
+closed with exit 0, all six cases closed and all 12 preference files restored
+per case; no owner files changed. Original images and logs remain private.
+
+The exact schema and Smoke model-header gates above are unchanged. The two
+grounded velocity fields are added through the existing definition seam, and
+the catalog identity advances to v14. Primary Smoke remains unchanged, as do
+HE, Molotov and other grenade definitions. Secondary/combined horizontal
+inheritance fields remain `None`, retaining the prior 0.5 movement response;
+there is **no moving inheritance observation for either new mode**. Vertical
+movement inheritance stays 0.5. Airborne/no-mode throws, unmatched packs, the
+raw spawn trace, timings, gravity, contact and lifecycle are preserved.
+
+The existing ordinary TickInput fixture is extended to stationary secondary/
+combined Smoke at all three angles and 64/128 Hz, with separate checks that
+movement retains its prior inheritance. Numeric release regressions use only
+the admitted first rows and their individual compatibility bounds, preserving
+raw spawn positions and the air/no-mode/absent-profile fallbacks. The older
+unsupported-mode full-vector comparisons now distinguish the newly admitted
+base vectors from unmeasured movement response. 64 Hz remains regression
+coverage, not new native evidence. This source-only patch runs no Cargo,
+build, test, executable or native verification; root owns those checks and
+publication. Historical 2015 identity, full lineups, jump and bounce parity
+remain unestablished.
