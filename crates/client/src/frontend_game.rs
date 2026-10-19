@@ -442,6 +442,38 @@ mod tests {
     }
 
     #[test]
+    fn prepared_overpass_photo_keeps_installed_selection_and_archive_admission_separate() {
+        let archive = workshop::find("de_overpass_2015").unwrap();
+        assert!(workshop::preview::supported(archive.name));
+        assert!(crate::frontend_loading::supported(archive.name));
+        assert!(!menu_archive(archive.name));
+        let mut root = kv::parse("gameTypes { classic { gameModes { competitive { mapgroupsSP { mg_de_overpass 0 } } } } } mapgroups { mg_de_overpass { nameID Overpass imagename map-overpass-overall maps { de_overpass 0 } } } maps { de_overpass { nameID Overpass } }").unwrap();
+        let installed_group = root
+            .block("mapgroups").unwrap()
+            .block("mg_de_overpass").unwrap().clone();
+        // Prepare through the normal schema helper without admitting the map.
+        add_classic_map(&mut root, archive);
+        let card = root.block("mapgroups").unwrap()
+            .block("mg_de_overpass_2015").unwrap();
+        assert_eq!(card.str("imagename"),
+            Some("csr-classic-card|de_overpass_2015|map-overpass-overall"));
+        assert_eq!(card.str("nameID"), Some("Overpass (2015)"));
+        assert!(card.str("tooltipID").unwrap().contains("October 13, 2015"));
+        assert!(card.str("tooltipID").unwrap().contains("CS:GO 1.35.0.6"));
+        assert_eq!(map_group_subkeys(&root, "mg_de_overpass_2015", "maps"),
+            archive.name);
+        assert_eq!(root.block("mapgroups").unwrap().block("mg_de_overpass").unwrap(),
+            &installed_group);
+        filter(&mut root,
+            &HashSet::from(["de_overpass".into(), archive.name.into()]),
+            &HashSet::from(["map-overpass-overall".into()]));
+        let query = REQUEST.replace("mg_de_dust2", "mg_de_overpass");
+        assert_eq!(offline_selection(&root, &query).unwrap().map, "de_overpass");
+        assert!(offline_selection(&root,
+            &query.replace("mg_de_overpass", "mg_de_overpass_2015")).is_err());
+    }
+
+    #[test]
     fn old_inferno_is_distinct_from_the_remake_and_preserves_mode_order() {
         let mut root = installed_modes();
         let original = root

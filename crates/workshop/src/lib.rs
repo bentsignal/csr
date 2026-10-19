@@ -214,7 +214,7 @@ pub const OLD_MAPS: &[OldMap] = &[
         name: "de_overpass_2015",
         base: "de_overpass",
         title: "Overpass (2015)",
-        note: "Valve's October 13, 2015 Overpass snapshot",
+        note: "Valve's October 13, 2015 Overpass snapshot (CS:GO 1.35.0.6)",
         workshop_id: 534663598,
         version: "1.35.0.6",
         size: 14667547,

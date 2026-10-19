@@ -549,7 +549,7 @@ Stage.addProperty("visibleRect", function() {
 _global.csrClassicCardMaps = {
     de_dust2_2017: true, de_inferno_2016: true, de_nuke_2016: true,
     de_train_2015: true, de_vertigo_2017: true, de_cache_2015: true,
-    de_mirage_2019: true, de_cbble_2018: true
+    de_mirage_2019: true, de_cbble_2018: true, de_overpass_2015: true
 };
 if (_global.csrClassicAttachOriginal == undefined) {
 _global.csrClassicAttachOriginal = MovieClip.prototype.attachMovie;
