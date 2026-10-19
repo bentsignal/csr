@@ -194,6 +194,7 @@ mod life_tests {
         app.insert_resource(SimWorld(world)).insert_resource(local).insert_resource(models)
             .insert_resource(materials).insert_resource(LoadedLevel(level))
             .insert_resource(ViewModelState::default())
+            .init_resource::<crate::interpolation::RenderPoses>()
             .init_resource::<HeldWick>()
             .insert_resource(crate::tracers::InspectRequest::default())
             .insert_resource(crate::tracers::Muzzles::default())
@@ -520,6 +521,66 @@ mod life_tests {
                 assert_eq!(app.world().resource::<ViewModelState>().life, life);
                 assert_eq!(app.world().resource::<SimWorld>().0.state(), landed);
                 assert_mesh_visibility(&app, Visibility::Inherited);
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "requires the player's installed CS:GO Legacy; no GPU required"]
+    fn installed_weapon_movement_uses_the_rendered_takeoff_timeline() {
+        use std::time::Duration;
+        for rate in [64, 128] {
+            for weapon in ["weapon_m4a1", "weapon_awp", "weapon_smokegrenade"] {
+                let (mut app, id) = installed_app(Some(weapon));
+                let mut history = crate::interpolation::RenderPoses::default();
+                {
+                    let mut world = app.world_mut().resource_mut::<SimWorld>();
+                    world.0.set_tick_rate(rate);
+                    let actor = world.0.player_mut(id).unwrap();
+                    actor.movement.on_ground = true;
+                    actor.movement.velocity = glam::Vec3::ZERO;
+                    history.capture(&world.0);
+                    world.0.tick += 1;
+                    let actor = world.0.player_mut(id).unwrap();
+                    actor.movement.on_ground = false;
+                    actor.movement.velocity = glam::Vec3::new(225., 0., 250.);
+                    history.capture(&world.0);
+                }
+                let mut fixed = Time::<Fixed>::from_hz(rate as f64);
+                fixed.accumulate_overstep(Duration::from_secs_f64(0.5 / rate as f64));
+                app.insert_resource(fixed).insert_resource(history);
+                let alpha = app.world().resource::<Time<Fixed>>().overstep_fraction();
+                let sampled = {
+                    let world = app.world().resource::<SimWorld>();
+                    app.world().resource::<crate::interpolation::RenderPoses>()
+                        .sample_at(world.0.player(id).unwrap(), alpha, world.0.tick, rate)
+                };
+                assert!(sampled.animation.input.on_ground, "takeoff is not yet on this timeline");
+                assert!((sampled.velocity.x - 112.5).abs() < 0.0001);
+                let authoritative = app.world().resource::<SimWorld>().0.state();
+                app.world_mut().resource_mut::<Time>().advance_by(Duration::from_millis(100));
+                app.update();
+                let rendered = joint_transforms(&app);
+                assert_eq!(app.world().resource::<SimWorld>().0.state(), authoritative);
+
+                // A raw pose at the sampled speed/ground state must produce
+                // exactly the same gun and hands at the same camera/time.
+                {
+                    let mut world = app.world_mut().resource_mut::<SimWorld>();
+                    let actor = world.0.player_mut(id).unwrap();
+                    actor.movement.velocity = sampled.velocity;
+                    actor.movement.on_ground = sampled.animation.input.on_ground;
+                }
+                app.insert_resource(crate::interpolation::RenderPoses::default());
+                app.world_mut().resource_mut::<ViewModelState>().air_lowering.clear();
+                let reference = app.world().resource::<SimWorld>().0.state();
+                app.update();
+                for (actual, expected) in rendered.iter().zip(joint_transforms(&app)) {
+                    assert!((actual.translation - expected.translation).length() < 0.001,
+                        "{weapon} at {rate}: weapon motion led the rendered actor");
+                    assert!(actual.rotation.abs_diff_eq(expected.rotation, 0.00001));
+                }
+                assert_eq!(app.world().resource::<SimWorld>().0.state(), reference);
             }
         }
     }
@@ -1040,7 +1101,7 @@ fn despawn(commands: &mut Commands, i: &SkinnedInstance) {
 #[allow(clippy::too_many_arguments)]
 pub fn update(
     mut commands: Commands,
-    world: Res<SimWorld>,
+    (world, poses): (Res<SimWorld>, Res<crate::interpolation::RenderPoses>),
     local: Res<LocalPlayer>,
     models: Res<ViewModels>,
     mut state: ResMut<ViewModelState>,
@@ -1074,6 +1135,9 @@ pub fn update(
         state.air_lowering.clear();
         return;
     };
+    // Camera, body and weapon movement must describe the same rendered
+    // moment. Raw command-state velocity/ground flags are one tick newer.
+    let motion = poses.sample_at(p, fixed.overstep_fraction(), world.0.tick, world.0.tick_rate);
     let show = p.alive && !local.noclip && !p.active_weapon().is_some_and(|w| w.hides_viewmodel());
     // Look history belongs to the viewing life, not the selected weapon.
     // Switching within that life keeps the accepted response across the arsenal.
@@ -1097,7 +1161,7 @@ pub fn update(
     // The same viewing life owns vertical presentation through mesh changes.
     // Climbing/tracked/scoped/hidden views have no admitted lowering profile.
     let air_offset = if shared_motion && p.movement.ladder_normal.is_none() {
-        state.air_lowering.sample(now, !p.movement.on_ground)
+        state.air_lowering.sample(now, !motion.animation.input.on_ground)
     } else { state.air_lowering.clear(); 0. };
     let active = p.active_weapon().map(|w| w.def.class_name.clone()).unwrap_or_default();
 
@@ -1338,7 +1402,7 @@ pub fn update(
         offset = offset.lerp(glam::Vec3::new(8.0 - center.x, -rear.y, -rear.z), blend);
     }
     let settling = if shared_motion {
-        settling::Settling::sample(p.movement.velocity,
+        settling::Settling::sample(motion.velocity,
             movement::angle_vectors(glam::Vec3::new(0., local.yaw, 0.)).0)
     } else { settling::Settling::default() };
     let settled_offset = settling.offset(offset);
@@ -1346,7 +1410,7 @@ pub fn update(
         + u * (settled_offset.z + air_offset) + look_translation;
     if std::env::var_os("CSR_VIEWMODEL_MOTION_TRACE").is_some() {
         info!("viewmodel motion: time={now:.6} angles={view_angles:?} eye={eye:?} look_translation={look_translation:?} settling_weight={} velocity={:?} on_ground={} settling_translation={:?} air_offset={air_offset}",
-            settling.weight, p.movement.velocity, p.movement.on_ground, settling.translation);
+            settling.weight, motion.velocity, motion.animation.input.on_ground, settling.translation);
     }
     let world_from_model = Mat4::from_rotation_translation(rotation_to_bevy(rot * settling.rotation), to_bevy(origin));
     skinning::apply_pose(&gun, world_from_model, &pose, &mut transforms);

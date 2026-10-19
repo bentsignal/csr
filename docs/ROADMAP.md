@@ -61,6 +61,8 @@ These increments do not complete exact 2015 parity or the full map catalog.
 - [x] Show each admitted classic map's own version-specific photo in the
   authored picker (#245). Warm and fresh-cache picker pages were inspected;
   images remain in private runtime storage.
+- [x] Add bounded airborne gun/hand lowering and a continuous return (#246).
+  Full native airborne tilt and camera landing response remain open.
 
 ## Where we are (assessed 2026-10-17)
 
