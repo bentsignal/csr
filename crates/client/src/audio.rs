@@ -224,6 +224,8 @@ struct Entry {
     channel: u8,
     category: Category,
     weapon_falloff: Option<WeaponFalloff>,
+    /// Literal overrides of the imported foley stack's distance bounds.
+    foley_bounds: Option<(f32, f32)>,
     xfade_bounds: (f32, f32),
     explicit_near_fade: bool,
     /// `play_distant_version_*` partner entry.
@@ -250,12 +252,16 @@ pub struct Emitter {
     soundlevel: f32,
     gunfire: Option<GunfireFade>,
     weapon_falloff: Option<WeaponFalloff>,
+    foley_bounds: Option<(f32, f32)>,
 }
 
 impl Emitter {
     fn gain(&self, distance: f32) -> f32 {
         let fade = self.gunfire.map_or(1.0, |fade| fade.gain(distance));
-        let falloff = self.weapon_falloff.map_or_else(|| self.category.falloff(self.soundlevel, distance), |curve| curve.gain(distance));
+        let falloff = self.weapon_falloff.map_or_else(|| {
+            self.foley_bounds.map_or_else(|| self.category.falloff(self.soundlevel, distance),
+                |(min, max)| stack_curve(distance, min, max))
+        }, |curve| curve.gain(distance));
         self.base * falloff * fade
     }
 }
@@ -472,11 +478,24 @@ fn parse_entry(b: &kv::Block) -> Option<Entry> {
         None
     };
     let mut weapon_falloff = (category == Category::Weapon).then(WeaponFalloff::default);
+    let mut foley_bounds = None;
     let mut xfade_bounds = (800.0, 2800.0);
     let mut explicit_near_fade = false;
     if let Some(update) = b.block("operator_stacks").and_then(|s| s.block("update_stack")) {
         let literal = |block: Option<&kv::Block>, field: &str| block.and_then(|v| v.str(field))
             .and_then(kv::parse_f32).filter(|v| v.is_finite());
+        if category == Category::Foley {
+            // The installed helmet cue overrides CS_update_foley's bounds.
+            // Retain those declarations without changing the fitted curve,
+            // local gain, mixer or the defaults of other foley entries.
+            if let Some(falloff) = update.block("volume_falloff") {
+                let bound = |field, default| falloff.get(field).map_or(Some(default), |value|
+                    value.as_str().and_then(kv::parse_f32).filter(|value| value.is_finite()));
+                if let (Some(min), Some(max)) = (bound("input_min", 400.0), bound("input_max", 1100.0)) {
+                    if min >= 0.0 && max > min { foley_bounds = Some((min, max)); }
+                }
+            }
+        }
         if let Some(curve) = &mut weapon_falloff {
             let falloff = update.block("volume_falloff");
             let min = literal(falloff, "input_min").or_else(|| literal(update.block("volume_falloff_min"), "input2")).unwrap_or(curve.min);
@@ -498,7 +517,7 @@ fn parse_entry(b: &kv::Block) -> Option<Entry> {
         soundlevel: b.str("soundlevel").map_or(75.0, parse_soundlevel),
         channel: b.str("channel").map_or(0, channel_number),
         category,
-        weapon_falloff, xfade_bounds, explicit_near_fade,
+        weapon_falloff, foley_bounds, xfade_bounds, explicit_near_fade,
         distant,
         limit,
         distant_layer: false,
@@ -727,6 +746,7 @@ impl SoundLibrary {
                     gunfire: (entry.category == Category::Weapon && (entry.distant.is_some() || entry.distant_layer || entry.explicit_near_fade))
                         .then_some(GunfireFade { start: entry.xfade_bounds.0, end: entry.xfade_bounds.1, distant: entry.distant_layer }),
                     weapon_falloff: entry.weapon_falloff,
+                    foley_bounds: entry.foley_bounds,
                 };
                 let gain = emitter.gain(emitter.pos.distance(self.listener));
                 initial_gain = gain * self.master_volume;
@@ -856,7 +876,7 @@ impl SoundLibrary {
         }
         let mut e = match raw.at {
             Some(pos) => {
-                let emitter = Emitter { pos: to_bevy(pos), base: raw.volume * category.field() * spatial_normalization(channels), category, soundlevel: raw.soundlevel, gunfire: None, weapon_falloff: None };
+                let emitter = Emitter { pos: to_bevy(pos), base: raw.volume * category.field() * spatial_normalization(channels), category, soundlevel: raw.soundlevel, gunfire: None, weapon_falloff: None, foley_bounds: None };
                 let gain = emitter.gain(emitter.pos.distance(self.listener)) * start;
                 commands.spawn((
                     AudioPlayer(handle),
@@ -1030,7 +1050,7 @@ mod tests {
         Entry {
             waves: vec!["sound/synthetic.wav".into()], volume: (1.0, 1.0),
             pitch: (100.0, 100.0), soundlevel: 79.0, channel: 6,
-            category: Category::Weapon, weapon_falloff: Some(WeaponFalloff::default()), xfade_bounds: (800.0, 2800.0), explicit_near_fade: false, distant: distant.map(str::to_owned),
+            category: Category::Weapon, weapon_falloff: Some(WeaponFalloff::default()), foley_bounds: None, xfade_bounds: (800.0, 2800.0), explicit_near_fade: false, distant: distant.map(str::to_owned),
             limit: Some(limit), distant_layer: distant.is_none(),
             // No AudioPlugin is installed; only entity lifecycle is exercised.
             frozen_wave: Some(classic::FrozenWave { bytes: Arc::from([0u8; 4]), channels: 1 }),
@@ -1175,7 +1195,7 @@ mod tests {
         let curve = entry.weapon_falloff.unwrap();
         assert_eq!((curve.min, curve.max, curve.floor, curve.curve_amount), (400.0, 800.0, 0.05, 0.9));
         let emitter = Emitter { pos: Vec3::ZERO, base: 1.0, category: entry.category, soundlevel: entry.soundlevel,
-            weapon_falloff: entry.weapon_falloff, gunfire: Some(GunfireFade { start: entry.xfade_bounds.0, end: entry.xfade_bounds.1, distant: false }) };
+            weapon_falloff: entry.weapon_falloff, foley_bounds: entry.foley_bounds, gunfire: Some(GunfireFade { start: entry.xfade_bounds.0, end: entry.xfade_bounds.1, distant: false }) };
         assert_eq!(emitter.gain(100.0), 1.0);
         assert_eq!(emitter.gain(800.0), 0.05);
         assert!(emitter.gain(1100.0) < 0.05);
@@ -1192,6 +1212,163 @@ mod tests {
         let entry = parse_entry(doc.block("Shot").unwrap()).unwrap();
         assert_eq!(entry.weapon_falloff, Some(WeaponFalloff::default()));
         assert_eq!(entry.xfade_bounds, (800.0, 2800.0));
+    }
+
+    #[test]
+    fn authored_foley_bounds_reach_spatial_playback_without_changing_default_cues() {
+        let doc = kv::parse(r#"
+            Custom { wave synthetic.wav channel CHAN_STATIC volume 0.7
+                operator_stacks { update_stack { import_stack CS_update_foley
+                    volume_falloff { input_min 120 input_max 1400 } } } }
+            Default { wave synthetic.wav channel CHAN_STATIC
+                operator_stacks { update_stack { import_stack CS_update_foley } } }
+        "#).unwrap();
+        let mut app = App::new();
+        app.init_resource::<SoundLibrary>().init_resource::<Assets<AudioSource>>();
+        for name in ["Custom", "Default"] {
+            let mut entry = parse_entry(doc.block(name).unwrap()).unwrap();
+            entry.frozen_wave = Some(classic::FrozenWave { bytes: Arc::from([0u8; 4]), channels: 1 });
+            app.world_mut().resource_mut::<SoundLibrary>().entries.insert(name.to_ascii_lowercase(), entry);
+        }
+        app.add_systems(Update, |mut commands: Commands, mut sounds: ResMut<SoundLibrary>,
+            mut sources: ResMut<Assets<AudioSource>>| {
+            for name in ["Custom", "Default"] {
+                sounds.play_with(&mut commands, &vfs::Vfs::new(), &mut sources, name,
+                    Emit { at: Some(glam::Vec3::X * 1250.0), owner: Some(7), local: false });
+            }
+        });
+        // No AudioPlugin/device: exercise production parsing, play_with and
+        // deferred entity creation, then inspect the actual spatial emitters.
+        app.update();
+        let sounds = app.world().resource::<SoundLibrary>();
+        let emitter = |name| {
+            let voice = sounds.playing.iter().find(|p| p.entry == name).unwrap();
+            app.world().get::<Emitter>(voice.entity).unwrap()
+        };
+        let custom = emitter("custom");
+        assert_eq!(custom.foley_bounds, Some((120.0, 1400.0)));
+        assert_eq!(custom.gain(120.0), custom.base);
+        assert!(custom.gain(1250.0) > 0.0, "Authored range must survive the old 1100-unit cutoff");
+        assert_eq!(custom.gain(1400.0), 0.0);
+        let default = emitter("default");
+        assert_eq!(default.foley_bounds, None);
+        assert_eq!(default.gain(400.0), default.base);
+        assert_eq!(default.gain(1100.0), 0.0);
+        assert_eq!(sounds.entries["custom"].volume, (0.7, 0.7));
+        assert_eq!(sounds.entries["custom"].channel, 6);
+    }
+
+    #[test]
+    fn invalid_foley_bounds_keep_default_attenuation() {
+        for bounds in ["input_min 900 input_max 800", "input_min -1 input_max 1400",
+            "input_min NaN input_max inf", "input_min NaN input_max 1400",
+            "input_min 120 input_max inf", "input_min invalid input_max 1400",
+            "input_min 120 input_max invalid", "input_min {} input_max 1400"] {
+            let text = format!("Cue {{ wave synthetic.wav operator_stacks {{ update_stack {{
+                import_stack CS_update_foley volume_falloff {{ {bounds} }} }} }} }}");
+            let doc = kv::parse(&text).unwrap();
+            let entry = parse_entry(doc.block("Cue").unwrap()).unwrap();
+            let emitter = Emitter { pos: Vec3::ZERO, base: 1.0, category: entry.category,
+                soundlevel: entry.soundlevel, weapon_falloff: entry.weapon_falloff,
+                foley_bounds: entry.foley_bounds, gunfire: None };
+            assert_eq!(emitter.gain(400.0), 1.0);
+            assert_eq!(emitter.gain(1100.0), 0.0);
+        }
+    }
+
+    #[test]
+    fn combat_events_keep_head_feedback_spatial_and_separate_from_fatal_cues() {
+        use sim::{GameEvent, weapon::{HitGroup, HitProtection}};
+        #[derive(Resource)]
+        struct Hits(Vec<GameEvent>);
+        fn app(events: Vec<GameEvent>, viewer: u32, noclip: bool) -> App {
+            let doc = kv::parse(r#"
+                Player.DamageHeadShotFeedback { wave synthetic.wav volume 0.7 channel CHAN_STATIC
+                    operator_stacks { start_stack { import_stack CS_limit_foley_start }
+                    update_stack { import_stack CS_update_foley
+                        volume_falloff { input_min 120 input_max 4000 } } } }
+                Player.DamageHelmetFeedback { wave synthetic.wav volume 0.7 channel CHAN_STATIC
+                    operator_stacks { start_stack { import_stack CS_limit_foley_start }
+                    update_stack { import_stack CS_update_foley
+                        volume_falloff { input_min 120 input_max 4000 } } } }
+                Player.DamageHeadShot { wave synthetic.wav channel CHAN_STATIC
+                    operator_stacks { update_stack { import_stack CS_update_foley } } }
+                Player.DamageHelmet { wave synthetic.wav channel CHAN_STATIC
+                    operator_stacks { update_stack { import_stack CS_update_foley } } }
+                Player.DamageKevlar { wave synthetic.wav channel CHAN_STATIC
+                    operator_stacks { update_stack { import_stack CS_update_foley } } }
+                Flesh.BulletImpact { wave synthetic.wav }
+            "#).unwrap();
+            let mut app = App::new();
+            app.init_resource::<SoundLibrary>().init_resource::<Assets<AudioSource>>()
+                .insert_resource(Hits(events));
+            let mut local = crate::player::LocalPlayer::new(viewer, glam::Vec3::ZERO, 0.0);
+            local.noclip = noclip;
+            app.insert_resource(local);
+            for (name, block) in doc.iter().filter_map(|(name, value)| value.as_block().map(|block| (name, block))) {
+                let mut entry = parse_entry(block).unwrap();
+                entry.frozen_wave = Some(classic::FrozenWave { bytes: Arc::from([0u8; 4]), channels: 1 });
+                app.world_mut().resource_mut::<SoundLibrary>().entries.insert(name.to_ascii_lowercase(), entry);
+            }
+            app.add_systems(Update, |mut commands: Commands, mut sounds: ResMut<SoundLibrary>,
+                mut sources: ResMut<Assets<AudioSource>>, mut hits: ResMut<Hits>,
+                local: Res<crate::player::LocalPlayer>| {
+                for event in hits.0.drain(..) {
+                    crate::effects::play_combat_cue(&event, &local, &mut commands,
+                        &mut sounds, &mut sources, &vfs::Vfs::new());
+                }
+            });
+            app.update();
+            app
+        }
+        let contact = glam::Vec3::new(1600.0, 0.0, 64.0);
+        let hit = |group, protection| GameEvent::Damage { attacker: 1, victim: 2, health: 20,
+            group, pos: contact, protection };
+        // Capture a death independently of any later player lookup, then use
+        // the authoritative hit fields carried by a firearm headshot receipt.
+        let mut world = sim::World::new(Arc::new(collision::CollisionWorld::new()));
+        let victim = world.add_player("old life", sim::Team::Terrorist);
+        world.damage_environment(victim, 1000, "environment");
+        let mut death = world.events.into_iter().find_map(|event| match event {
+            GameEvent::Kill { death, .. } => Some(death), _ => None,
+        }).unwrap();
+        death.key.victim = 2;
+        death.hit = Some(sim::death::DeathHit { position: contact, direction: glam::Vec3::X, group: HitGroup::Head });
+        let kill = GameEvent::Kill { attacker: 1, victim: 2, weapon: "weapon_awp".into(), headshot: true, death };
+        for (protection, feedback) in [(HitProtection::Helmet, "player.damagehelmetfeedback"),
+            (HitProtection::Flesh, "player.damageheadshotfeedback")] {
+            for fatal in [false, true] {
+                let mut events = vec![hit(HitGroup::Head, protection)];
+                if fatal { events.push(kill.clone()); }
+                let app = app(events, 1, false);
+                let sounds = app.world().resource::<SoundLibrary>();
+                assert_eq!(sounds.playing.len(), if fatal { 2 } else { 1 });
+                let voice = sounds.playing.iter().find(|voice| voice.entry == feedback).unwrap();
+                assert_eq!(voice.owner, 2, "Feedback remains owned by the struck player");
+                let emitter = app.world().get::<Emitter>(voice.entity).unwrap();
+                assert_eq!(emitter.pos, to_bevy(contact));
+                assert_eq!(emitter.foley_bounds, Some((120.0, 4000.0)));
+                assert!(emitter.gain(1600.0) > 0.0, "Long headshot range survives ordinary foley cutoff");
+                assert_eq!(emitter.gain(4000.0), 0.0);
+                if fatal {
+                    let voice = sounds.playing.iter().find(|voice| voice.entry == "player.damageheadshot").unwrap();
+                    assert_eq!(app.world().get::<Emitter>(voice.entity).unwrap().pos, to_bevy(contact));
+                }
+            }
+        }
+        // Body impacts stay ordinary; unrelated listeners get no attacker cue.
+        for (event, viewer, noclip, expected) in [
+            (hit(HitGroup::Chest, HitProtection::Kevlar), 1, false, "player.damagekevlar"),
+            (hit(HitGroup::LeftLeg, HitProtection::Flesh), 1, false, "flesh.bulletimpact"),
+            (hit(HitGroup::Head, HitProtection::Helmet), 3, false, "player.damagehelmet"),
+            (hit(HitGroup::Head, HitProtection::Helmet), 1, true, "player.damagehelmet"),
+        ] {
+            let app = app(vec![event], viewer, noclip);
+            let sounds = app.world().resource::<SoundLibrary>();
+            assert_eq!(sounds.playing.len(), 1);
+            assert_eq!(sounds.playing[0].entry, expected);
+        }
+        assert!(app(vec![kill], 3, false).world().resource::<SoundLibrary>().playing.is_empty());
     }
 
     #[test]
