@@ -1,6 +1,7 @@
 # Historical CS:GO map coverage
 
-Research checked 2026-10-18. This records historical identity and private data
+Research checked 2026-10-18, with the bounded October 19 dependency follow-up
+below. This records historical identity and private data
 inspection, not new map admission. The eight offered archives in
 [OLD-MAPS.md](../OLD-MAPS.md) remain unchanged. No game assets belong here.
 
@@ -140,10 +141,61 @@ for older entries, and the current public depot view can show an app-730 stub.
 Do not fetch the current app-730 content or invent an old manifest ID. See the
 existing [depot research and access limits](2018-era.md#2-old-game-builds-steam-depots).
 
-Only after obtaining and verifying original bytes should shared, explicit
-private dependency mounting be considered. Then root must run decode/probe,
-simulation, traversal and visual admission checks. No runtime correction can
-recover an absent original material from these map metadata alone.
+### October 19: distinguish absent content from native fallback
+
+A bounded, offline follow-up checked the already cached May 2015 depot
+manifest, not another manifest or download. Its 2,437 filename records contain
+no loose `gates001` file; its only VPK directory is `csgo/pak01_dir.vpk`, already
+checked above. This closes the loose-file gap in that depot's negative result.
+The installed Legacy `platform/platform_pak01_dir.vpk` also contains no
+`gates001` path among its 1,109 entries. Installed `gameinfo.txt` declares only
+the two equivalent CS:GO search directories, not a Half-Life 2 content mount.
+These checks do not establish every historical runtime mount.
+The installed low-violence, Perfect World and Chinese-audio supplemental VPK
+directories likewise contain neither the exact model nor a `gates001` path;
+direct loose copies of the model and candidate VMTs are absent.
+
+Read-only extraction in memory verified the installed fence MDL/VVD/DX90
+VTX/PHY payload CRC32s and sizes against the historical directory declarations:
+`8ceea952`/1,760, `097fe319`/8,512, `a1b4403f`/2,017 and `b8eceda4`/712.
+CRC/size agreement supports the historical model context; historical numbered
+segments were not fetched, so this is not a historical payload SHA-256 proof.
+The installed MDL has one body part with one submodel and one mesh, one
+skin `[0]`, and one VTX LOD with no material replacements. There is no alternate
+authored body/skin/LOD material to select. All 19 fence instances in the exact
+October 2015 BSP use skin zero and flags `1`, with fade distances 1,500/1,750.
+
+The shared renderer already retains missing prop meshes and selects its
+generated missing-texture checkerboard when VMT resolution returns `None`
+(`world_mesh::material_from_vmt`, called by `props`). The strict probe still
+reports the absent VMT. No shared material-path or VFS defect was established
+by these data checks. In particular, `gates002` remains an unsupported alias.
+
+The concrete remaining distinction is native appearance at those exact fence
+placements: the original may use missing-material fallback too. Original
+absence in the checked depot is evidence for that possibility, not proof of
+deliberate authoring or a measured fallback match. Root's October 19 native
+Legacy observations show black metal bars at matching park-fence coordinates;
+turning static props off removes them. They do not show an obvious checkerboard,
+but have not yet bound those bars to this particular missing-material mesh.
+Overlapping models, native draw selection and fallback appearance still need
+to be distinguished. The observations are of installed Legacy, not visual
+admission of the October archive. Root retains that native isolation work.
+For example, October 2015 prop 951 is at `(-3204, -1590, 565)`,
+yaw zero, with model-local bounds approximately X +/-1, Y +/-64, Z 33..120.
+An eye position `(-3084, -1590, 641)`, pitch zero/yaw 180, faces its midpoint;
+the opposite-side candidate is `(-3324, -1590, 641)`, pitch zero/yaw zero.
+These are computed comparison targets, not verified unobstructed viewpoints.
+
+Do not require acquisition of a presumed original material indefinitely if
+native observation instead establishes an original fallback. Conversely,
+absence alone does not admit the map or justify ignoring arbitrary probe
+failures. If authentic additional dependency bytes are found, verify them
+before adding explicit private mounting. Root still owns native comparison,
+decode/probe, simulation, traversal and visual admission. Private metadata and
+the bounded inspection helper are under
+`%USERPROFILE%/csr-fidelity/overpass-20261019/`; no new asset download, build,
+native run, or runtime admission occurred in this follow-up.
 
 ## Distinct early Train, without replacing Train (2015)
 
