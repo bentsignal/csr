@@ -582,7 +582,11 @@ pub fn material_from_vmt(
         cull: true,
     };
     let Some(mat) = mat else {
-        out.params.flags = if lightmapped { flags::LIGHTMAPPED } else { flags::VERTEX_LIT };
+        // Native Legacy identifies its shared missing material as ___error /
+        // UnlitGeneric, including on static props. Do not apply map lighting
+        // or exposure to the diagnostic texture. Its sampling remains separate
+        // from the unavailable authored material and strict asset probes.
+        out.params.flags = flags::UNLIT;
         return out;
     };
     if matches!(mat.shader.as_str(), "lightmappedgeneric" | "worldvertextransition" | "vertexlitgeneric" | "unlittwotexture") {
@@ -834,6 +838,36 @@ mod authored_transform_tests {
         let mut textures = TextureCache::new(&mut images);
         let shared = SharedHandles { lightmap: textures.white.clone() };
         material_from_vmt(mat, &fs, &mut textures, &mut images, &shared, 1.0, lightmapped)
+    }
+
+    #[test]
+    fn missing_material_is_unlit_without_changing_missing_texture_or_textureless_materials() {
+        let fs = normal_fs();
+        let mut images = Assets::<Image>::default();
+        let mut textures = TextureCache::new(&mut images);
+        let shared = SharedHandles { lightmap: textures.white.clone() };
+        let missing_texture = vmt::Material::parse_with(
+            r#"VertexLitGeneric { "$basetexture" "test/absent" }"#, &|_| None, 0,
+        ).unwrap();
+        let textureless = vmt::Material::parse_with("VertexLitGeneric {}", &|_| None, 0).unwrap();
+
+        for lightmapped in [false, true] {
+            let missing = material_from_vmt(None, &fs, &mut textures, &mut images, &shared, 7.0, lightmapped);
+            assert_eq!(missing.base, textures.missing);
+            assert_eq!(missing.params.flags, flags::UNLIT);
+            assert_eq!(missing.alpha_mode, AlphaMode::Opaque);
+            assert!(missing.cull);
+
+            let lit_flags = if lightmapped { flags::LIGHTMAPPED } else { flags::VERTEX_LIT };
+            let authored = material_from_vmt(Some(&missing_texture), &fs, &mut textures, &mut images, &shared, 7.0, lightmapped);
+            assert_eq!(authored.base, textures.missing);
+            assert_eq!(authored.params.flags, lit_flags);
+            let plain = material_from_vmt(Some(&textureless), &fs, &mut textures, &mut images, &shared, 7.0, lightmapped);
+            assert_eq!(plain.base, textures.white);
+            assert_eq!(plain.params.flags, lit_flags);
+        }
+        // The absent texture is still tracked, including when served from cache.
+        assert_eq!(textures.stats_missing, 1);
     }
 
     #[test]
