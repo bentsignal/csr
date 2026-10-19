@@ -462,7 +462,6 @@ mod life_tests {
         }
     }
 
-    // UNRUN: source-only child; root owns Cargo and installed-data checks.
     #[test]
     #[ignore = "requires the player's installed CS:GO Legacy; no GPU required"]
     fn installed_airborne_weapon_switch_records_the_hidden_frame_before_the_delayed_reversal() {
