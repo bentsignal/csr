@@ -8,7 +8,7 @@ fn private_classic_level(name: &str) -> Level {
         .expect("already-cached private classic BSP; no download")
 }
 
-// Source-reviewed, UNRUN private-data fixtures. CSR_DATA_DIR selects the
+// Private-data fixtures. CSR_DATA_DIR selects the
 // already-cached October 2015 BSP; private_classic_level never downloads it.
 mod cached_classic_overpass_2015 {
     use super::*;
@@ -205,7 +205,10 @@ mod cached_classic_overpass_2015 {
                     "{rate}Hz open leaf must clear the standing passage: {open:?}");
                 for _ in 0..rate * 2 {
                     world.step(&[(actor, sim::TickInput { view_angles: Vec3::new(0., yaw, 0.),
-                        forward_move: 450., weapon_slot: 3, ..Default::default() })]);
+                        // Walk through the threshold so stopping friction leaves
+                        // the actor within ordinary USE reach of the closed leaf.
+                        forward_move: 450., buttons: movement::buttons::WALK,
+                        weapon_slot: 3, ..Default::default() })]);
                     assert_clear(&world, actor, "Connector passage");
                     let movement = world.player(actor).unwrap().movement;
                     if (movement.origin.y - goal.y) * yaw.signum() >= 0. && movement.on_ground { break; }
