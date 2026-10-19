@@ -202,7 +202,8 @@ fn classic_card_symbol(name: &str, symbols: &HashSet<String>) -> bool {
     matches!((parts.next(), parts.next(), parts.next(), parts.next()),
         (Some("csr-classic-card"), Some(map), Some(base), None)
         if workshop::find(map).is_some_and(|m| m.menu_supported())
-            && workshop::preview::supported(map) && symbols.contains(base))
+            && workshop::preview::supported(map) && base.starts_with("map-")
+            && base.ends_with("-overall") && symbols.contains(base))
 }
 
 /// The installed movie splits this native result on a comma.
