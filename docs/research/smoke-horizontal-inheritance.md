@@ -158,20 +158,54 @@ per case; no owner files changed. Original images and logs remain private.
 The exact schema and Smoke model-header gates above are unchanged. The two
 grounded velocity fields are added through the existing definition seam, and
 the catalog identity advances to v14. Primary Smoke remains unchanged, as do
-HE, Molotov and other grenade definitions. Secondary/combined horizontal
-inheritance fields remain `None`, retaining the prior 0.5 movement response;
-there is **no moving inheritance observation for either new mode**. Vertical
-movement inheritance stays 0.5. Airborne/no-mode throws, unmatched packs, the
+HE, Molotov and other grenade definitions. These stationary observations alone
+do not admit a moving response; the independent follow-up below supplies that
+measurement. Vertical movement inheritance stays 0.5. Airborne/no-mode throws, unmatched packs, the
 raw spawn trace, timings, gravity, contact and lifecycle are preserved.
 
 The existing ordinary TickInput fixture is extended to stationary secondary/
-combined Smoke at all three angles and 64/128 Hz, with separate checks that
-movement retains its prior inheritance. Numeric release regressions use only
+combined Smoke at all three angles and 64/128 Hz, with separate movement
+checks. Numeric release regressions use only
 the admitted first rows and their individual compatibility bounds, preserving
 raw spawn positions and the air/no-mode/absent-profile fallbacks. The older
 unsupported-mode full-vector comparisons now distinguish the newly admitted
-base vectors from unmeasured movement response. 64 Hz remains regression
-coverage, not new native evidence. This source-only patch runs no Cargo,
-build, test, executable or native verification; root owns those checks and
-publication. Historical 2015 identity, full lineups, jump and bounce parity
+base vectors from movement response. 64 Hz remains regression coverage, not new
+native evidence. Historical 2015 identity, full lineups, jump and bounce parity
 remain unestablished.
+
+## Independent steady-forward secondary/combined response
+
+Two further fresh Legacy sessions use the same standing, level, grounded setup
+and literal held strengths. Before and after each throw, the actual player's
+velocity is `[245,0,0]`, with world ground, standing eye and the same active
+Smoke. Forward input remains held across the interval in an open corridor.
+Root personally reviewed both player brackets, the held weapon and the first
+pre-contact projectile frame; weapon owner and projectile thrower match.
+
+| Mode | Independent stationary VX | Steady-forward projectile VX | Difference |
+| --- | --- | --- | --- |
+| Secondary | 199.423584 | 505.673584 | 306.25 |
+| Combined | 432.084351 | 738.334351 | 306.25 |
+
+For each named mode, `306.25 / 245 = 1.25`. The previous 0.5 response would
+predict 321.923584 and 554.584351, missing both by 183.75 units/second. These
+pairs independently support the two optional grounded horizontal-inheritance
+fields, which now use 1.25. The source's existing horizontal scalar response is
+retained; other directions/speeds are not newly observed here. Vertical movement
+inheritance is unchanged and uncalibrated by these horizontal differences.
+
+The earlier moving attempt is retained as a negative: its before velocity was
+225.665039 and after velocity 245, so it cannot establish the exact release-tick
+coefficient. It is excluded from the point calibration. The repeat waits for the
+equal before/after plateau rather than estimating a release velocity from that
+acceleration interval.
+
+Private evidence is `overpass-20261019/native-smoke-moving-r3`, with per-case
+root reviews and the aggregate admission; the accelerating negative is `r2`.
+Both repeat cases closed successfully, restored all 12 preference files and
+removed only their 224 new session byproducts. Raw captures remain private.
+The existing TickInput regression checks the observed moving VX as well as the
+stationary values at 64/128 Hz and preserves airborne and other-definition
+behavior. The single unshipped v14 identity is named for the complete grounded
+button response. No initial vertical velocity, physical spawn timestamp,
+historical lineup, arbitrary movement or bounce parity is inferred.

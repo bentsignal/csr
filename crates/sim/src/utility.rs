@@ -697,10 +697,10 @@ mod tests {
 
     fn observed_smoke_launch() -> weapons::GrenadeLaunch {
         weapons::GrenadeLaunch {
-            reference: "native-grounded-smoke-button-velocity-128hz".into(),
+            reference: "native-grounded-smoke-button-response-128hz".into(),
             grounded_overhand_horizontal_inheritance: 1.25,
-            grounded_underhand_horizontal_inheritance: None,
-            grounded_combined_horizontal_inheritance: None,
+            grounded_underhand_horizontal_inheritance: Some(1.25),
+            grounded_combined_horizontal_inheritance: Some(1.25),
             grounded_overhand_velocity: Some(weapons::GrenadeLaunchVelocity {
                 speed: 675., upward_pitch_bias_degrees: 10.,
             }),
@@ -812,8 +812,13 @@ mod tests {
                             assert!(stationary.velocity.y.abs() < 0.002);
                             let (moving, player_velocity) = launch(name, rate, mode, true, true, false, pitch);
                             assert!((player_velocity.x - 245.).abs() < 0.001);
-                            assert!((moving.velocity - stationary.velocity - player_velocity * 0.5).length() < 0.002,
-                                "secondary/combined movement keeps prior inheritance; no native moving evidence");
+                            assert!((moving.velocity.x - stationary.velocity.x - 306.25).abs() < 0.002,
+                                "independent stationary/steady-forward Smoke pairs establish both button responses");
+                            assert_eq!(moving.velocity.z, stationary.velocity.z);
+                            if pitch == 0. {
+                                let native_moving_x = if mode == ThrowMode::Underhand { 505.673584 } else { 738.334351 };
+                                assert!((moving.velocity.x - native_moving_x).abs() < 0.002);
+                            }
                         }
                     } else {
                         assert_eq!(launch(name, rate, mode, true, true, false, 0.), launch(name, rate, mode, false, true, false, 0.),
@@ -885,10 +890,9 @@ mod tests {
                 let old = release(pitch, Vec3::ZERO, true, Some(mode), Some(&old_profile));
                 assert_eq!(pos, old.0, "velocity calibration preserves the raw spawn trace");
                 let moving = release(pitch, Vec3::new(245., 80., 100.), true, Some(mode), Some(&profile));
-                let inherited = if mode == ThrowMode::Overhand { Vec3::new(306.25, 100., 50.) }
-                    else { Vec3::new(122.5, 40., 50.) };
+                let inherited = Vec3::new(306.25, 100., 50.);
                 assert!((moving.1 - launch - inherited).length() < 0.001,
-                    "existing inheritance is unchanged; secondary/combined moving response remains unmeasured");
+                    "grounded button horizontal response uses the separately observed coefficient; vertical stays unchanged");
                 for (grounded, mode) in [
                     (false, Some(ThrowMode::Overhand)), (false, Some(ThrowMode::Underhand)),
                     (false, Some(ThrowMode::Combined)), (true, None), (false, None),
