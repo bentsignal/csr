@@ -379,7 +379,7 @@ mod tests {
         assert!(classic_card_symbol("csr-classic-card|de_nuke_2016|map-nuke-overall", &symbols));
         for symbol in [
             "csr-classic-card|de_nuke|map-nuke-overall",
-            "csr-classic-card|de_overpass_2015|map-nuke-overall",
+            "csr-classic-card|de_overpass_2019|map-nuke-overall",
             "csr-classic-card|de_nuke_2016|missing",
             "csr-classic-card|de_nuke_2016|map-nuke-overall|extra",
             "../de_nuke_2016",
@@ -442,16 +442,15 @@ mod tests {
     }
 
     #[test]
-    fn prepared_overpass_photo_keeps_installed_selection_and_archive_admission_separate() {
+    fn overpass_photo_keeps_installed_and_archive_selection_independent() {
         let archive = workshop::find("de_overpass_2015").unwrap();
         assert!(workshop::preview::supported(archive.name));
         assert!(crate::frontend_loading::supported(archive.name));
-        assert!(!menu_archive(archive.name));
+        assert!(menu_archive(archive.name));
         let mut root = kv::parse("gameTypes { classic { gameModes { competitive { mapgroupsSP { mg_de_overpass 0 } } } } } mapgroups { mg_de_overpass { nameID Overpass imagename map-overpass-overall maps { de_overpass 0 } } } maps { de_overpass { nameID Overpass } }").unwrap();
         let installed_group = root
             .block("mapgroups").unwrap()
             .block("mg_de_overpass").unwrap().clone();
-        // Prepare through the normal schema helper without admitting the map.
         add_classic_map(&mut root, archive);
         let card = root.block("mapgroups").unwrap()
             .block("mg_de_overpass_2015").unwrap();
@@ -468,9 +467,25 @@ mod tests {
             &HashSet::from(["de_overpass".into(), archive.name.into()]),
             &HashSet::from(["map-overpass-overall".into()]));
         let query = REQUEST.replace("mg_de_dust2", "mg_de_overpass");
-        assert_eq!(offline_selection(&root, &query).unwrap().map, "de_overpass");
+        let archive_query = query.replace("mg_de_overpass", "mg_de_overpass_2015");
+        for (request, expected) in [(&query, "de_overpass"), (&archive_query, archive.name)] {
+            assert_eq!(offline_selection(&root, request).unwrap(), Selection {
+                map: expected.into(),
+                deathmatch: false,
+            });
+        }
         assert!(offline_selection(&root,
-            &query.replace("mg_de_overpass", "mg_de_overpass_2015")).is_err());
+            &query.replace("mg_de_overpass", "mg_de_overpass_2019")).is_err());
+        for (available, accepted, rejected) in [
+            ("de_overpass", &query, &archive_query),
+            (archive.name, &archive_query, &query),
+        ] {
+            let mut single = root.clone();
+            filter(&mut single, &HashSet::from([available.into()]),
+                &HashSet::from(["map-overpass-overall".into()]));
+            assert_eq!(offline_selection(&single, accepted).unwrap().map, available);
+            assert!(offline_selection(&single, rejected).is_err());
+        }
     }
 
     #[test]
@@ -596,10 +611,10 @@ mod tests {
 
     #[test]
     fn archive_menu_admission_excludes_unresolved_dependencies_and_later_remakes() {
-        for name in ["de_nuke_2016", "de_train_2015", "de_vertigo_2017", "de_mirage_2019", "de_cbble_2018", "de_cache_2015"] {
+        for name in ["de_nuke_2016", "de_train_2015", "de_vertigo_2017", "de_mirage_2019", "de_cbble_2018", "de_cache_2015", "de_overpass_2015"] {
             assert!(menu_archive(name), "{name}");
         }
-        for name in ["de_cache_2019", "de_overpass_2015", "de_overpass_2019", "de_nuke_2019", "de_train_2020", "de_canals_2018", "de_train_2014"] {
+        for name in ["de_cache_2019", "de_overpass_2019", "de_nuke_2019", "de_train_2020", "de_canals_2018", "de_train_2014"] {
             assert!(!menu_archive(name), "{name}");
         }
     }
