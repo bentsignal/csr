@@ -489,9 +489,11 @@ fn parse_entry(b: &kv::Block) -> Option<Entry> {
             // Retain those declarations without changing the fitted curve,
             // local gain, mixer or the defaults of other foley entries.
             if let Some(falloff) = update.block("volume_falloff") {
-                let min = literal(Some(falloff), "input_min").unwrap_or(400.0);
-                let max = literal(Some(falloff), "input_max").unwrap_or(1100.0);
-                if min >= 0.0 && max > min { foley_bounds = Some((min, max)); }
+                let bound = |field, default| falloff.get(field).map_or(Some(default), |value|
+                    value.as_str().and_then(kv::parse_f32).filter(|value| value.is_finite()));
+                if let (Some(min), Some(max)) = (bound("input_min", 400.0), bound("input_max", 1100.0)) {
+                    if min >= 0.0 && max > min { foley_bounds = Some((min, max)); }
+                }
             }
         }
         if let Some(curve) = &mut weapon_falloff {
@@ -1259,7 +1261,9 @@ mod tests {
     #[test]
     fn invalid_foley_bounds_keep_default_attenuation() {
         for bounds in ["input_min 900 input_max 800", "input_min -1 input_max 1400",
-            "input_min NaN input_max inf"] {
+            "input_min NaN input_max inf", "input_min NaN input_max 1400",
+            "input_min 120 input_max inf", "input_min invalid input_max 1400",
+            "input_min 120 input_max invalid", "input_min {} input_max 1400"] {
             let text = format!("Cue {{ wave synthetic.wav operator_stacks {{ update_stack {{
                 import_stack CS_update_foley volume_falloff {{ {bounds} }} }} }} }}");
             let doc = kv::parse(&text).unwrap();
