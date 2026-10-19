@@ -699,12 +699,19 @@ pub fn material_from_vmt(
         Ok(None) | Ok(Some(_)) => {}
         Err(error) => warn!("unsupported authored detail layer ({error:?}); retaining base material"),
     }
-    if mat.flag("$selfillum") {
-        // Only opaque, non-terrain-blended lit composition is in this pass.
-        // Alternate mask/angle controls and animated inputs need native checks.
+    let env_alpha_illum = mat.shader == "vertexlitgeneric" && mat.flag("$selfillum_envmapmask_alpha");
+    if mat.flag("$selfillum") || env_alpha_illum {
+        // Legacy's Nuke window skins author emission through the env-mask alpha
+        // without a separate $selfillum switch. Keep its RGB reflection mask
+        // independent from the alpha emission mask. Only static opaque
+        // composition is admitted here; animated/angle-dependent inputs remain
+        // on the existing diffuse fallback.
         let supported = f & (flags::UNLIT | flags::ALPHA_TEST | flags::TRANSLUCENT | flags::BLEND) == 0
             && mat.shader != "worldvertextransition"
-            && !mat.flag("$selfillum_envmapmask_alpha")
+            && (!mat.flag("$selfillum_envmapmask_alpha") || env_alpha_illum
+                && mat.params.get("$selfillummask").is_none()
+                && mat.params.get("$envmapmasktransform").is_none()
+                && mat.params.get("proxies").is_none())
             && !mat.flag("$selfillumfresnel")
             && mat.params.get("$selfillummaskscale").is_none()
             && !mat.params.get_all("proxies").any(references_self_illum);
@@ -715,7 +722,16 @@ pub fn material_from_vmt(
             Some(_) => mat.color("$selfillumtint"),
         }.filter(|rgb| rgb.iter().all(|v| v.is_finite() && *v >= 0.0));
         if let (true, Some(tint)) = (supported, tint) {
-            let mode = if let Some(name) = mat.str("$selfillummask") {
+            let mode = if env_alpha_illum {
+                if let Some(mask) = mat.str("$envmapmask")
+                    .and_then(|name| textures.load(fs, images, name, false)) {
+                    out.self_illum_mask = mask.handle;
+                    3.0
+                } else {
+                    warn!("authored env-alpha emission mask unavailable; retaining lit material");
+                    0.0
+                }
+            } else if let Some(name) = mat.str("$selfillummask") {
                 if let Some(mask) = textures.load(fs, images, name, false) {
                     out.self_illum_mask = mask.handle;
                     2.0
@@ -1387,6 +1403,22 @@ mod authored_transform_tests {
         let world = parse(r#""LightmappedGeneric" { "$selfillum" "1" }"#);
         assert_eq!(normal_material(Some(&world), true).params.self_illum, Vec4::ONE);
         assert_eq!(normal_material(None, true).params.self_illum, Vec4::ZERO);
+    }
+
+    #[test]
+    fn opaque_env_alpha_emission_uses_its_own_mask_without_a_selfillum_switch() {
+        let parse = |text: &str| vmt::Material::parse_with(text, &|_| None, 0).unwrap();
+        let declaration = r#""VertexLitGeneric" { "$envmapmask" "test/normal"
+            "$selfillum_envmapmask_alpha" "1" "$selfillumtint" "[1.3 1.57 2.3]" }"#;
+        let out = normal_material(Some(&parse(declaration)), false);
+        assert_eq!(out.params.self_illum, Vec4::new(1.3, 1.57, 2.3, 3.));
+        assert_ne!(out.self_illum_mask, out.base);
+        for extra in [r#""$translucent" "1""#, r#""$alphatest" "1""#,
+            r#""$selfillummask" "test/normal""#, r#""$envmapmasktransform" "center .5 .5 scale 1 1""#,
+            r#""Proxies" { "TextureScroll" { "textureScrollVar" "$envmapmasktransform" } }"#] {
+            let text = declaration.replacen('}', &format!("{extra} }}"), 1);
+            assert_eq!(normal_material(Some(&parse(&text)), false).params.self_illum.w, 0., "{extra}");
+        }
     }
 
     #[test]

@@ -476,7 +476,11 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     }
     if params.self_illum.w > 0.5 {
         var mask = vec3<f32>(self_illum_alpha);
-        if params.self_illum.w > 1.5 {
+        if params.self_illum.w > 2.5 {
+            // The env-map mask's alpha is emission coverage, not its RGB
+            // reflection strength or the base texture's opacity.
+            mask = vec3<f32>(textureSample(self_illum_tex, self_illum_samp, uv).a);
+        } else if params.self_illum.w > 1.5 {
             mask = textureSample(self_illum_tex, self_illum_samp, uv).rgb;
         }
         // Preserve the lit surface outside the authored luminous region.
