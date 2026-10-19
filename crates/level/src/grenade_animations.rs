@@ -80,11 +80,17 @@ fn observed_launch(name: &str, schema: Option<[u8; 20]>, header: &str) -> Option
     if name == "weapon_smokegrenade" && schema == Some(OBSERVED_LAUNCH_SCHEMA)
         && header == OBSERVED_HEADERS[2].1 {
         return Some(weapons::GrenadeLaunch {
-            reference: "legacy-1.38.8.1-smoke-ground-primary-horizontal-128hz".into(),
+            reference: "legacy-1.38.8.1-smoke-ground-primary-velocity-128hz".into(),
             grounded_overhand_horizontal_inheritance: 1.25,
             grounded_underhand_horizontal_inheritance: None,
             grounded_combined_horizontal_inheritance: None,
-            grounded_overhand_velocity: None,
+            // Independent Smoke level/-30 observations fit this family; the
+            // positive45 holdout confirms it. Primary-only input and the held
+            // strength field establish the mode; spawn time is not fitted.
+            grounded_overhand_velocity: Some(weapons::GrenadeLaunchVelocity {
+                speed: 675.,
+                upward_pitch_bias_degrees: 10.,
+            }),
             grounded_underhand_velocity: None,
             grounded_combined_velocity: None,
         });
@@ -118,8 +124,9 @@ pub(super) fn import(
 ) -> Option<[u8; 20]> {
     let mut digest = Sha1::new();
     digest.update(previous_hash?);
-    // Bind the mean-velocity flight law even when installed grenade data matches.
-    digest.update(b"grenade-animation-timing-v12-mean-velocity-gravity");
+    // Bind the grounded primary Smoke velocity correction as well as the
+    // existing mean-velocity gravity law when installed data is unchanged.
+    digest.update(b"grenade-animation-timing-v13-smoke-ground-primary-velocity");
     let mut definitions: Vec<_> = catalog
         .weapons
         .iter_mut()
@@ -188,8 +195,14 @@ mod tests {
             assert_eq!(launch.grounded_overhand_horizontal_inheritance, 1.25);
             assert!(launch.grounded_underhand_horizontal_inheritance.is_none()
                 && launch.grounded_combined_horizontal_inheritance.is_none());
-            assert!(launch.grounded_overhand_velocity.is_none() && launch.grounded_underhand_velocity.is_none()
-                && launch.grounded_combined_velocity.is_none());
+            if name == "weapon_smokegrenade" {
+                let velocity = launch.grounded_overhand_velocity.as_ref().unwrap();
+                assert_eq!(velocity.speed, 675.);
+                assert_eq!(velocity.upward_pitch_bias_degrees, 10.);
+            } else {
+                assert!(launch.grounded_overhand_velocity.is_none());
+            }
+            assert!(launch.grounded_underhand_velocity.is_none() && launch.grounded_combined_velocity.is_none());
             for (name, schema, header) in [
                 (name, Some(OBSERVED_LAUNCH_SCHEMA), header),
                 (name, Some(other_schema), own_header),
@@ -216,8 +229,8 @@ mod tests {
         for name in ["weapon_molotov", "weapon_smokegrenade"] {
             let launch = level.catalog.get(name).unwrap().grenade_launch.as_ref().unwrap();
             assert_eq!(launch.grounded_overhand_horizontal_inheritance, 1.25);
-            assert!(launch.grounded_overhand_velocity.is_none()
-                && launch.grounded_underhand_velocity.is_none()
+            assert_eq!(launch.grounded_overhand_velocity.is_some(), name == "weapon_smokegrenade");
+            assert!(launch.grounded_underhand_velocity.is_none()
                 && launch.grounded_combined_velocity.is_none()
                 && launch.grounded_underhand_horizontal_inheritance.is_none()
                 && launch.grounded_combined_horizontal_inheritance.is_none());
