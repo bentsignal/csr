@@ -14,6 +14,7 @@ pub(super) fn menu_archive(name: &str) -> bool {
 }
 
 pub(super) fn load(fs: &vfs::Vfs, installed: &HashSet<String>) -> kv::Block {
+    workshop::Store::current().prefetch_previews(installed);
     let Some(doc) = fs
         .read_string("gamemodes.txt")
         .and_then(|text| kv::parse(&text).ok())
@@ -34,7 +35,7 @@ pub(super) fn load(fs: &vfs::Vfs, installed: &HashSet<String>) -> kv::Block {
     root
 }
 
-/// Extend the installed data schema, retaining the original map card/art and
+/// Extend the installed data schema, retaining the original map card geometry and
 /// controls. Callback text still resolves exclusively through this catalog.
 fn add_classic_map(root: &mut kv::Block, archive: &workshop::OldMap) {
     let base_group = format!("mg_{}", archive.base);
@@ -54,6 +55,11 @@ fn add_classic_map(root: &mut kv::Block, archive: &workshop::OldMap) {
         return;
     };
     let title = archive.title;
+    if workshop::preview::supported(archive.name) {
+        if let Some(base_image) = group.str("imagename") {
+            group.set("imagename", kv::Value::Str(format!("csr-classic-card|{}|{base_image}", archive.name)));
+        }
+    }
     let qualification = if archive.name.ends_with("_2015") {
         "Compatibility archive; rewritten rendering and gameplay still require fidelity validation."
     } else {
@@ -135,7 +141,7 @@ fn filter(root: &mut kv::Block, installed: &HashSet<String>, symbols: &HashSet<S
             };
             if !group
                 .str("imagename")
-                .is_some_and(|name| symbols.contains(name))
+                .is_some_and(|name| symbols.contains(name) || classic_card_symbol(name, symbols))
             {
                 return false;
             }
@@ -189,6 +195,15 @@ fn filter(root: &mut kv::Block, installed: &HashSet<String>, symbols: &HashSet<S
     if let Some(kv::Value::Block(maps)) = root.get_mut("maps") {
         maps.entries.retain(|(name, _)| installed.contains(name));
     }
+}
+
+fn classic_card_symbol(name: &str, symbols: &HashSet<String>) -> bool {
+    let mut parts = name.split('|');
+    matches!((parts.next(), parts.next(), parts.next(), parts.next()),
+        (Some("csr-classic-card"), Some(map), Some(base), None)
+        if workshop::find(map).is_some_and(|m| m.menu_supported())
+            && workshop::preview::supported(map) && base.starts_with("map-")
+            && base.ends_with("-overall") && symbols.contains(base))
 }
 
 /// The installed movie splits this native result on a comma.
@@ -357,6 +372,19 @@ pub(super) fn mode_name(root: &kv::Block, game_type: f64, game_mode: f64) -> &st
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn archive_photo_symbols_require_an_admitted_version_and_existing_card() {
+        let symbols = HashSet::from(["map-nuke-overall".into()]);
+        assert!(classic_card_symbol("csr-classic-card|de_nuke_2016|map-nuke-overall", &symbols));
+        for symbol in [
+            "csr-classic-card|de_nuke|map-nuke-overall",
+            "csr-classic-card|de_overpass_2015|map-nuke-overall",
+            "csr-classic-card|de_nuke_2016|missing",
+            "csr-classic-card|de_nuke_2016|map-nuke-overall|extra",
+            "../de_nuke_2016",
+        ] { assert!(!classic_card_symbol(symbol, &symbols), "{symbol}"); }
+    }
     const REQUEST: &str = "System { network offline } Game { type classic mode competitive mapgroupname mg_de_dust2 skirmishmode undefined } Options { action create anytypemode 0 } Contexts {} Properties {}";
 
     fn installed_modes() -> kv::Block {
@@ -364,7 +392,7 @@ mod tests {
     }
 
     #[test]
-    fn classic_card_keeps_installed_art_and_resolves_only_the_pinned_archive() {
+    fn classic_card_uses_versioned_photo_and_resolves_only_the_pinned_archive() {
         let mut root = installed_modes();
         root.get_mut("mapgroups")
             .unwrap()
@@ -386,7 +414,7 @@ mod tests {
             .unwrap()
             .block(CLASSIC_GROUP)
             .unwrap();
-        assert_eq!(card.str("imagename"), Some("map-dust2-overall"));
+        assert_eq!(card.str("imagename"), Some("csr-classic-card|de_dust2_2017|map-dust2-overall"));
         assert_eq!(card.str("nameID"), Some("Dust II (2017)"));
         assert_eq!(
             map_group_subkeys(&root, CLASSIC_GROUP, "maps"),
@@ -480,7 +508,7 @@ mod tests {
             .block("mg_de_inferno_2016")
             .unwrap();
         assert_eq!(group.str("nameID"), Some("Inferno (2016)"));
-        assert_eq!(group.str("imagename"), Some("map-inferno-overall"));
+        assert_eq!(group.str("imagename"), Some("csr-classic-card|de_inferno_2016|map-inferno-overall"));
         for (requested, expected) in [
             ("mg_de_inferno", "de_inferno"),
             ("mg_de_inferno_2016", CLASSIC_INFERNO),

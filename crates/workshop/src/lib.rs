@@ -28,6 +28,8 @@ use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+pub mod preview;
+
 use sha1::{Digest, Sha1};
 
 /// SteamID64 of Valve's official Workshop account, which uploaded every
