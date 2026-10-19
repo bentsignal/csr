@@ -1,6 +1,7 @@
 # Absent model VMT presentation
 
-Source-only candidate based on `8328ad0d7aa9fa2a3900ab26a7fcbcee492db819`.
+The initial source candidate was based on `8328ad0d7aa9fa2a3900ab26a7fcbcee492db819`;
+root checks below record the subsequent executable verification.
 This is an empirical rendering policy for an unresolved model material. It
 does not recover an authored material or establish complete fallback parity.
 
@@ -101,3 +102,9 @@ zero failures. The strict archive probe retains its one absent-VMT failure.
 A bounded normal-HUD ten-player window at 1440p averaged about 252 FPS; it is
 not sustained whole-map or independent input/camera acceptance. Final picker
 source checks, CI and owner review remain separate from these parent checks.
+
+Final picker source `3248311` also passed workspace, normal Release and required
+Dust II probe/simulation. Root inspected its corrected fence, distinct archive
+photo/card and normal original-picker GO path into `de_overpass_2015` with ten
+participants. Nine pinned photos were cached. Protected snapshots and the final
+executable remained unchanged. CI, merge/staging and owner review are pending.

@@ -37,8 +37,11 @@ missing native landing response. Keep it separate from the morning result.
 
 Continue concrete fixes with proportional existing checks and prepare coherent
 review builds; no small repeated tests or new diagnostic framework/backlog GUI.
-Historical Overpass remains withheld while its original error-material
-presentation is matched; the authentic archive/photo are already verified.
+October 2015 Overpass now passes qualified traversal, Release simulation,
+rendered map/control and original-picker launch checks, with its historical
+photo distinct from installed Legacy. The original fence VMT remains missing;
+the measured shared fallback preserves its strict probe diagnostic. CI, staging
+and owner review remain open; complete historical coverage is not claimed.
 The lower backlog (HUD, positional audio, interactions, bots, combat effects,
 menus/reliability, performance polish, multiplayer, inventory and later expansion)
 is retained; avoid unrelated expansion while these core outcomes remain.

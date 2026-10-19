@@ -156,8 +156,10 @@ routes at 64/128 tick, a ten-round Release simulation, and rendered map/control
 checks. A bounded normal-HUD ten-player diagnostic at 2560x1440 sampled about
 252 FPS over simulation seconds 30-60 (one-second intervals about 193-292 FPS).
 This stationary local-player check does not establish sustained whole-map FPS
-or independent camera/input coverage. The final picker build and owner review
-remain separate gates.
+or independent camera/input coverage. The final picker Release passes workspace and required Dust II checks; its
+original picker/GO path loads the exact archived map with ten participants.
+Its historical photo is distinct from installed Overpass. CI, staging and
+owner review remain separate gates.
 
 Its strict asset probe still reports **one failure**, the absent `gates001` VMT;
 all 270 prop models and six sky faces load. Native Legacy binds the same fence
