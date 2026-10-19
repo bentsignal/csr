@@ -118,7 +118,8 @@ pub(super) fn import(
 ) -> Option<[u8; 20]> {
     let mut digest = Sha1::new();
     digest.update(previous_hash?);
-    digest.update(b"grenade-animation-timing-v11-smoke-ground-primary-horizontal");
+    // Bind the mean-velocity flight law even when installed grenade data matches.
+    digest.update(b"grenade-animation-timing-v12-mean-velocity-gravity");
     let mut definitions: Vec<_> = catalog
         .weapons
         .iter_mut()
