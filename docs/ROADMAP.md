@@ -49,6 +49,17 @@ them are listed. Every item ends in a verified state (`cargo test`,
 These increments do not complete exact 2015 parity or the full map catalog.
 [Version qualification and remaining dependencies](OLD-MAPS.md).
 
+### October 18 evening increments
+
+- [x] Restore admitted Nuke window emission and capture hit protection at
+  contact time for consistent flesh/armor cue selection (#243). Full lighting
+  and native audio mixing parity remain open.
+- [x] Match measured grounded walk/crouch acceleration and retain look motion
+  across weapon switches (#244). Vertical jump/landing response remains open.
+- [x] Show each admitted classic map's own version-specific photo in the
+  authored picker (#245). Warm and fresh-cache picker pages were inspected;
+  images remain in private runtime storage.
+
 ## Where we are (assessed 2026-10-17)
 
 The [October17 follow-up](PLAYTEST-2026-10-17.md) confirms bounded menu overlap/Pause fixes but reports transition flicker, restart binding loss, stale HUD binding hints, AWP cooldown/ammo/audio defects and unacceptable sustained FPS. Current ragdolls are accepted for now; custom ragdolls/death-animation work is deferred. Deliver actual verified fixes before requesting another improvement test.

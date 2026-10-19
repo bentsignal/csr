@@ -21,6 +21,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 mod grenade_hold;
+mod air_lowering;
 mod inspection;
 mod look_motion;
 mod sequence_pose;
@@ -525,6 +526,62 @@ mod life_tests {
 
     #[test]
     #[ignore = "requires the player's installed CS:GO Legacy; no GPU required"]
+    fn installed_air_lowering_moves_gun_and_hands_together_without_changing_simulation() {
+        use std::time::Duration;
+        for weapon in ["weapon_m4a1", "weapon_awp", "weapon_smokegrenade"] {
+            let (mut app, id) = installed_app(Some(weapon));
+            {
+                let mut world = app.world_mut().resource_mut::<SimWorld>();
+                let player = world.0.player_mut(id).unwrap();
+                player.movement.on_ground = true;
+                player.movement.velocity = glam::Vec3::ZERO;
+            }
+            app.world_mut().resource_mut::<LocalPlayer>().render_angles = glam::Vec3::new(20., 45., 0.);
+            app.update();
+            app.world_mut().resource_mut::<SimWorld>().0.player_mut(id).unwrap().movement.on_ground = false;
+            let airborne = app.world().resource::<SimWorld>().0.state();
+            app.world_mut().resource_mut::<Time>().advance_by(Duration::from_millis(100));
+            app.update();
+            assert_mesh_visibility(&app, Visibility::Inherited);
+            let lowered = joint_transforms(&app);
+            // Same source pose, camera and timestamp, with only the presentation
+            // history cleared. Every gun/arm joint must share the same offset.
+            app.world_mut().resource_mut::<ViewModelState>().air_lowering.clear();
+            app.update();
+            let neutral = joint_transforms(&app);
+            let expected = to_bevy(movement::angle_vectors(glam::Vec3::new(20., 45., 0.)).2 * -0.75);
+            for (low, rest) in lowered.iter().zip(&neutral) {
+                assert!((low.translation - rest.translation - expected).length() < 0.001,
+                    "{weapon}: gun and hands must lower in their current view basis");
+                assert!(low.rotation.angle_between(rest.rotation) < 0.001);
+            }
+            assert_eq!(app.world().resource::<SimWorld>().0.state(), airborne);
+
+            app.world_mut().resource_mut::<Time>().advance_by(Duration::from_millis(100));
+            app.update();
+            app.world_mut().resource_mut::<SimWorld>().0.player_mut(id).unwrap().movement.on_ground = true;
+            let landed = app.world().resource::<SimWorld>().0.state();
+            app.world_mut().resource_mut::<Time>().advance_by(Duration::from_millis(20));
+            app.update();
+            let now = app.world().resource::<Time>().elapsed_secs();
+            let returning = app.world_mut().resource_mut::<ViewModelState>().air_lowering.sample(now, false);
+            assert!(returning > -0.75 && returning < 0., "landing must return continuously");
+            app.world_mut().resource_mut::<Time>().advance_by(Duration::from_millis(100));
+            app.update();
+            let now = app.world().resource::<Time>().elapsed_secs();
+            assert_eq!(app.world_mut().resource_mut::<ViewModelState>().air_lowering.sample(now, false), 0.);
+            assert_eq!(app.world().resource::<SimWorld>().0.state(), landed);
+
+            // Hiding the viewing life discards its presentation history.
+            app.world_mut().resource_mut::<SimWorld>().0.player_mut(id).unwrap().alive = false;
+            app.update();
+            assert_mesh_visibility(&app, Visibility::Hidden);
+            assert_eq!(app.world_mut().resource_mut::<ViewModelState>().air_lowering.sample(now, true), 0.);
+        }
+    }
+
+    #[test]
+    #[ignore = "requires the player's installed CS:GO Legacy; no GPU required"]
     fn installed_magazine_reload_finishes_at_the_authoritative_deadline() {
         // Joining a reload late can give rendering a newer start time than sim.
         // Keep render time frozen while ordinary TickInput ticks finish it.
@@ -775,6 +832,7 @@ pub struct ViewModelState {
     suppressor_seen: Option<sim::weapon::SuppressorTransition>,
     light_timer: f32,
     look_motion: look_motion::LookMotion,
+    air_lowering: air_lowering::AirLowering,
     /// Persistent bone-local pose for authored sequence masks. Absolute clips
     /// also restore decoded rest values for tracks omitted by compression.
     pose: Vec<(glam::Vec3, glam::Quat)>,
@@ -1012,6 +1070,7 @@ pub fn update(
     let dt = time.delta_secs();
     let Some(p) = world.0.player(local.view_target()) else {
         state.look_motion.clear();
+        state.air_lowering.clear();
         return;
     };
     let show = p.alive && !local.noclip && !p.active_weapon().is_some_and(|w| w.hides_viewmodel());
@@ -1019,6 +1078,7 @@ pub fn update(
     // Switching within that life keeps the accepted response across the arsenal.
     if state.owner != Some(p.id) || state.life != Some(p.life_epoch) {
         state.look_motion.clear();
+        state.air_lowering.clear();
     }
     let w = p.active_weapon();
     let shared_motion = show && p.id == local.id && local.spectating.is_none()
@@ -1033,6 +1093,11 @@ pub fn update(
         let look = movement::angle_vectors(glam::Vec3::new(local.pitch, local.yaw, 0.)).0;
         state.look_motion.translation(now, look)
     } else { state.look_motion.clear(); glam::Vec3::ZERO };
+    // The same viewing life owns vertical presentation through mesh changes.
+    // Climbing/tracked/scoped/hidden views have no admitted lowering profile.
+    let air_offset = if shared_motion && p.movement.ladder_normal.is_none() {
+        state.air_lowering.sample(now, !p.movement.on_ground)
+    } else { state.air_lowering.clear(); 0. };
     let active = p.active_weapon().map(|w| w.def.class_name.clone()).unwrap_or_default();
 
     let glove=if p.id==local.id{inventory.active("gloves").map(|i|i.weapon.as_str()).unwrap_or("")}else{""};
@@ -1276,9 +1341,10 @@ pub fn update(
             movement::angle_vectors(glam::Vec3::new(0., local.yaw, 0.)).0)
     } else { settling::Settling::default() };
     let settled_offset = settling.offset(offset);
-    let origin = eye + f * settled_offset.x - r * settled_offset.y + u * settled_offset.z + look_translation;
+    let origin = eye + f * settled_offset.x - r * settled_offset.y
+        + u * (settled_offset.z + air_offset) + look_translation;
     if std::env::var_os("CSR_VIEWMODEL_MOTION_TRACE").is_some() {
-        info!("viewmodel motion: time={now:.6} angles={view_angles:?} eye={eye:?} look_translation={look_translation:?} settling_weight={} velocity={:?} on_ground={} settling_translation={:?}",
+        info!("viewmodel motion: time={now:.6} angles={view_angles:?} eye={eye:?} look_translation={look_translation:?} settling_weight={} velocity={:?} on_ground={} settling_translation={:?} air_offset={air_offset}",
             settling.weight, p.movement.velocity, p.movement.on_ground, settling.translation);
     }
     let world_from_model = Mat4::from_rotation_translation(rotation_to_bevy(rot * settling.rotation), to_bevy(origin));
