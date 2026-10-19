@@ -20,6 +20,38 @@ fn damage_sound(group: sim::weapon::HitGroup, protection: sim::weapon::HitProtec
     }
 }
 
+/// Attacker feedback is distinct from the victim's ordinary damage/death cue.
+/// Legacy 1.38.8.1 emits the 0 dB Feedback entry on nonlethal head hits and
+/// additionally emits the ordinary headshot entry on a fatal head hit, even
+/// through a helmet. Keep the victim as source owner and retain spatial range.
+/// Other listeners keep their existing damage routing; this observation only
+/// establishes the firing player's perspective.
+pub(crate) fn play_combat_cue(
+    event: &GameEvent, local: &LocalPlayer, commands: &mut Commands,
+    sounds: &mut SoundLibrary, sources: &mut Assets<AudioSource>, fs: &vfs::Vfs,
+) {
+    let shooter = |attacker, victim| !local.noclip && attacker == local.view_target() && attacker != victim;
+    let (sound, victim, pos) = match event {
+        GameEvent::Damage { attacker, victim, group, pos, protection, .. } => {
+            let sound = if *group == sim::weapon::HitGroup::Head && shooter(*attacker, *victim) {
+                if *protection == sim::weapon::HitProtection::Helmet {
+                    "Player.DamageHelmetFeedback"
+                } else {
+                    "Player.DamageHeadShotFeedback"
+                }
+            } else { damage_sound(*group, *protection) };
+            (sound, *victim, *pos)
+        }
+        GameEvent::Kill { attacker, victim, headshot: true, death, .. } if shooter(*attacker, *victim) => {
+            ("Player.DamageHeadShot", *victim, death.hit.map_or(death.pose.origin, |hit| hit.position))
+        }
+        _ => return,
+    };
+    let own = victim == local.view_target() && !local.noclip;
+    sounds.play_with(commands, fs, sources, sound,
+        Emit { at: (!own).then_some(pos), owner: Some(victim), local: own });
+}
+
 /// Events produced by fixed ticks since the last frame.
 #[derive(Resource, Default)]
 pub struct PendingEvents(pub Vec<GameEvent>);
@@ -128,6 +160,7 @@ pub fn process(
     // remote Fire evidence stays unknown instead of reusing a prior mode.
     let mut shot_modes = std::collections::HashMap::<sim::PlayerId, (String, bool)>::new();
     for event in pending.0.drain(..) {
+        play_combat_cue(&event, &local, &mut commands, &mut sounds, &mut sources, fs);
         if matches!(event, GameEvent::Damage {..} | GameEvent::Impact {..} | GameEvent::RoundStart {..}) { effects.feedback.push(event.clone()); }
         match event {
             GameEvent::Fire { player, weapon, origin, suppressed } => {
@@ -231,11 +264,7 @@ pub fn process(
                 }
 
             }
-            GameEvent::Damage { attacker, victim, group, pos, protection, .. } => {
-                // Protection belongs to this hit. Armor may already be depleted,
-                // or the same player may have died/respawned before rendering.
-                let sound = damage_sound(group, protection);
-                sounds.play_with(&mut commands, fs, &mut sources, sound, emit(victim, pos));
+            GameEvent::Damage { attacker, group, .. } => {
                 if attacker == local.view_target() {
                     effects.last_hit = now;
                     effects.last_hit_headshot = group == sim::weapon::HitGroup::Head;

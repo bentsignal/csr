@@ -1277,6 +1277,101 @@ mod tests {
     }
 
     #[test]
+    fn combat_events_keep_head_feedback_spatial_and_separate_from_fatal_cues() {
+        use sim::{GameEvent, weapon::{HitGroup, HitProtection}};
+        #[derive(Resource)]
+        struct Hits(Vec<GameEvent>);
+        fn app(events: Vec<GameEvent>, viewer: u32, noclip: bool) -> App {
+            let doc = kv::parse(r#"
+                Player.DamageHeadShotFeedback { wave synthetic.wav volume 0.7 channel CHAN_STATIC
+                    operator_stacks { start_stack { import_stack CS_limit_foley_start }
+                    update_stack { import_stack CS_update_foley
+                        volume_falloff { input_min 120 input_max 4000 } } } }
+                Player.DamageHelmetFeedback { wave synthetic.wav volume 0.7 channel CHAN_STATIC
+                    operator_stacks { start_stack { import_stack CS_limit_foley_start }
+                    update_stack { import_stack CS_update_foley
+                        volume_falloff { input_min 120 input_max 4000 } } } }
+                Player.DamageHeadShot { wave synthetic.wav channel CHAN_STATIC
+                    operator_stacks { update_stack { import_stack CS_update_foley } } }
+                Player.DamageHelmet { wave synthetic.wav channel CHAN_STATIC
+                    operator_stacks { update_stack { import_stack CS_update_foley } } }
+                Player.DamageKevlar { wave synthetic.wav channel CHAN_STATIC
+                    operator_stacks { update_stack { import_stack CS_update_foley } } }
+                Flesh.BulletImpact { wave synthetic.wav }
+            "#).unwrap();
+            let mut app = App::new();
+            app.init_resource::<SoundLibrary>().init_resource::<Assets<AudioSource>>()
+                .insert_resource(Hits(events));
+            let mut local = crate::player::LocalPlayer::new(viewer, glam::Vec3::ZERO, 0.0);
+            local.noclip = noclip;
+            app.insert_resource(local);
+            for (name, block) in doc.iter().filter_map(|(name, value)| value.as_block().map(|block| (name, block))) {
+                let mut entry = parse_entry(block).unwrap();
+                entry.frozen_wave = Some(classic::FrozenWave { bytes: Arc::from([0u8; 4]), channels: 1 });
+                app.world_mut().resource_mut::<SoundLibrary>().entries.insert(name.to_ascii_lowercase(), entry);
+            }
+            app.add_systems(Update, |mut commands: Commands, mut sounds: ResMut<SoundLibrary>,
+                mut sources: ResMut<Assets<AudioSource>>, mut hits: ResMut<Hits>,
+                local: Res<crate::player::LocalPlayer>| {
+                for event in hits.0.drain(..) {
+                    crate::effects::play_combat_cue(&event, &local, &mut commands,
+                        &mut sounds, &mut sources, &vfs::Vfs::new());
+                }
+            });
+            app.update();
+            app
+        }
+        let contact = glam::Vec3::new(1600.0, 0.0, 64.0);
+        let hit = |group, protection| GameEvent::Damage { attacker: 1, victim: 2, health: 20,
+            group, pos: contact, protection };
+        // Capture a death independently of any later player lookup, then use
+        // the authoritative hit fields carried by a firearm headshot receipt.
+        let mut world = sim::World::new(Arc::new(collision::CollisionWorld::new()));
+        let victim = world.add_player("old life", sim::Team::Terrorist);
+        world.damage_environment(victim, 1000, "environment");
+        let mut death = world.events.into_iter().find_map(|event| match event {
+            GameEvent::Kill { death, .. } => Some(death), _ => None,
+        }).unwrap();
+        death.key.victim = 2;
+        death.hit = Some(sim::death::DeathHit { position: contact, direction: glam::Vec3::X, group: HitGroup::Head });
+        let kill = GameEvent::Kill { attacker: 1, victim: 2, weapon: "weapon_awp".into(), headshot: true, death };
+        for (protection, feedback) in [(HitProtection::Helmet, "player.damagehelmetfeedback"),
+            (HitProtection::Flesh, "player.damageheadshotfeedback")] {
+            for fatal in [false, true] {
+                let mut events = vec![hit(HitGroup::Head, protection)];
+                if fatal { events.push(kill.clone()); }
+                let app = app(events, 1, false);
+                let sounds = app.world().resource::<SoundLibrary>();
+                assert_eq!(sounds.playing.len(), if fatal { 2 } else { 1 });
+                let voice = sounds.playing.iter().find(|voice| voice.entry == feedback).unwrap();
+                assert_eq!(voice.owner, 2, "Feedback remains owned by the struck player");
+                let emitter = app.world().get::<Emitter>(voice.entity).unwrap();
+                assert_eq!(emitter.pos, to_bevy(contact));
+                assert_eq!(emitter.foley_bounds, Some((120.0, 4000.0)));
+                assert!(emitter.gain(1600.0) > 0.0, "Long headshot range survives ordinary foley cutoff");
+                assert_eq!(emitter.gain(4000.0), 0.0);
+                if fatal {
+                    let voice = sounds.playing.iter().find(|voice| voice.entry == "player.damageheadshot").unwrap();
+                    assert_eq!(app.world().get::<Emitter>(voice.entity).unwrap().pos, to_bevy(contact));
+                }
+            }
+        }
+        // Body impacts stay ordinary; unrelated listeners get no attacker cue.
+        for (event, viewer, noclip, expected) in [
+            (hit(HitGroup::Chest, HitProtection::Kevlar), 1, false, "player.damagekevlar"),
+            (hit(HitGroup::LeftLeg, HitProtection::Flesh), 1, false, "flesh.bulletimpact"),
+            (hit(HitGroup::Head, HitProtection::Helmet), 3, false, "player.damagehelmet"),
+            (hit(HitGroup::Head, HitProtection::Helmet), 1, true, "player.damagehelmet"),
+        ] {
+            let app = app(vec![event], viewer, noclip);
+            let sounds = app.world().resource::<SoundLibrary>();
+            assert_eq!(sounds.playing.len(), 1);
+            assert_eq!(sounds.playing[0].entry, expected);
+        }
+        assert!(app(vec![kill], 3, false).world().resource::<SoundLibrary>().playing.is_empty());
+    }
+
+    #[test]
     fn cancelled_never_observed_players_are_not_retained_forever() {
         let mut app = voices();
         let mut fixture = app.world_mut().resource_mut::<VoiceFixture>();

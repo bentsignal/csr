@@ -12,6 +12,8 @@ fn main() {
         "Flesh.BulletImpact",
         "Player.DamageHeadShot",
         "Player.DamageHelmet",
+        "Player.DamageHeadShotFeedback",
+        "Player.DamageHelmetFeedback",
         "Player.DamageKevlar",
         "Concrete.BulletImpact",
         "SolidMetal.BulletImpact",
