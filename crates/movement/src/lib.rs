@@ -277,23 +277,13 @@ impl<W: TraceWorld + ?Sized> Mover<'_, W> {
         }
     }
 
-    fn accelerate(&mut self, wish_dir: Vec3, wish_speed: f32, accel: f32, input: &MoveInput) {
+    fn accelerate(&mut self, wish_dir: Vec3, wish_speed: f32, accel: f32, base_speed: f32) {
         let current = self.pm.velocity.dot(wish_dir);
         let add = wish_speed - current;
         if add <= 0.0 {
             return;
         }
-        // Legacy's observed first partial forward command still accelerates
-        // from full weapon speed. Preserve the wish-speed option when off.
-        // Preserve the pre-existing climbable stance policy; only grounded
-        // acceleration has the new measured full-weapon base.
-        let slowed = input.buttons & (buttons::WALK | buttons::DUCK) != 0 || self.pm.ducked;
-        let base = if self.cfg.accelerate_use_weapon_speed && (self.pm.on_ground || slowed) {
-            self.max_speed.max(wish_speed)
-        } else {
-            wish_speed
-        };
-        let accel_speed = (accel * self.dt * base).min(add);
+        let accel_speed = (accel * self.dt * base_speed).min(add);
         self.pm.velocity += wish_dir * accel_speed;
     }
 
@@ -505,7 +495,21 @@ impl<W: TraceWorld + ?Sized> Mover<'_, W> {
     fn walk_move(&mut self, input: &MoveInput) {
         let (wish_dir, wish_speed) = self.wish(input);
         self.pm.velocity.z = 0.0;
-        self.accelerate(wish_dir, wish_speed, self.cfg.accelerate, input);
+        let base_speed = if !self.cfg.accelerate_use_weapon_speed {
+            wish_speed
+        } else if input.buttons & buttons::DUCK != 0 || self.pm.ducked {
+            // Native P2000 (64/128) and M4 (64) start a crouch command at
+            // 5.5 * 85 * dt, including its first partial input. Stance
+            // acceleration uses the 250-unit floor before its modifier;
+            // the actual weapon still determines the separate wish cap.
+            self.max_speed.max(250.0) * self.cfg.duck_speed_modifier
+        } else if input.buttons & buttons::WALK != 0 {
+            self.max_speed.max(250.0) * self.cfg.walk_speed_modifier
+        } else {
+            // Retain the measured ordinary running weapon-speed base.
+            self.max_speed.max(wish_speed)
+        };
+        self.accelerate(wish_dir, wish_speed, self.cfg.accelerate, base_speed);
         self.pm.velocity.z = 0.0;
 
         let speed = self.pm.velocity.length();
@@ -551,7 +555,13 @@ impl<W: TraceWorld + ?Sized> Mover<'_, W> {
         self.pm.on_ground=false;
         self.pm.velocity*=0.75;
         let (dir,speed)=self.wish(input);
-        self.accelerate(dir,speed.min(scale*3.),self.cfg.accelerate,input);
+        let wish_speed = speed.min(scale * 3.);
+        // Keep the existing climbable policy separate from grounded stances.
+        let slowed = input.buttons & (buttons::WALK | buttons::DUCK) != 0 || self.pm.ducked;
+        let base_speed = if self.cfg.accelerate_use_weapon_speed && (self.pm.on_ground || slowed) {
+            self.max_speed.max(wish_speed)
+        } else { wish_speed };
+        self.accelerate(dir, wish_speed, self.cfg.accelerate, base_speed);
         self.pm.velocity.x=self.pm.velocity.x.clamp(-scale*3.,scale*3.);
         self.pm.velocity.y=self.pm.velocity.y.clamp(-scale*3.,scale*3.);
         let horizontal=self.trace(self.pm.origin,self.pm.origin+Vec3::new(self.pm.velocity.x,self.pm.velocity.y,0.)*self.dt);
