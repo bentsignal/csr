@@ -737,8 +737,8 @@ mod tests {
         old_profile.grounded_overhand_velocity = None;
         // Smoke observations, not HE fixtures: level stationary/forward, then
         // stationary -30 and an independent +45 holdout of the fitted family.
-        // At nonzero pitch mode is controlled +attack-only input; the literal
-        // strength field was offscreen. Generic zero abs-velocity is excluded.
+        // At nonzero pitch +attack-only input and the held strength field (1)
+        // establish primary mode. Generic zero abs-velocity is excluded.
         for (pitch, native_x, received_z, later_z) in [
             (0., 664.745239, 102.212517, Some(94.712517)),
             (-30., 541.433167, 378.082062, Some(368.082062)),

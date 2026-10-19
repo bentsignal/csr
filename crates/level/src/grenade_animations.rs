@@ -85,8 +85,8 @@ fn observed_launch(name: &str, schema: Option<[u8; 20]>, header: &str) -> Option
             grounded_underhand_horizontal_inheritance: None,
             grounded_combined_horizontal_inheritance: None,
             // Independent Smoke level/-30 observations fit this family; the
-            // positive45 holdout confirms it. Controlled primary input at
-            // nonzero pitch, not a literal strength-field or spawn-time fit.
+            // positive45 holdout confirms it. Primary-only input and the held
+            // strength field establish the mode; spawn time is not fitted.
             grounded_overhand_velocity: Some(weapons::GrenadeLaunchVelocity {
                 speed: 675.,
                 upward_pitch_bias_degrees: 10.,
