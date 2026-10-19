@@ -543,6 +543,77 @@ Stage.addProperty("visibleRect", function() {
     return {left: 0, top: 0, width: Stage.width, height: Stage.height};
 }, null);
 
+// Keep the installed card's authored clip, bounds and controls. Only its photo
+// is replaced for an explicit, catalog-owned archive symbol. A neutral backing
+// prevents a missing older photo from showing the installed remake instead.
+_global.csrClassicCardMaps = {
+    de_dust2_2017: true, de_inferno_2016: true, de_nuke_2016: true,
+    de_train_2015: true, de_vertigo_2017: true, de_cache_2015: true,
+    de_mirage_2019: true, de_cbble_2018: true
+};
+var csrAttachMovie = MovieClip.prototype.attachMovie;
+MovieClip.prototype.attachMovie = function(linkage, name, depth, init) {
+    var parts = String(linkage).split("|");
+    if (parts.length != 3 || parts[0] != "csr-classic-card" ||
+        _global.csrClassicCardMaps[parts[1]] !== true ||
+        parts[2].indexOf("map-") != 0 || parts[2].indexOf("-overall") != parts[2].length - 8) {
+        return csrAttachMovie.apply(this, arguments);
+    }
+    arguments[0] = parts[2];
+    var card = csrAttachMovie.apply(this, arguments);
+    if (card == undefined) { return card; }
+    var bounds = card.getBounds(card);
+    var width = bounds.xMax - bounds.xMin;
+    var height = bounds.yMax - bounds.yMin;
+    if (!(width > 0 && height > 0 && width <= 4096 && height <= 4096)) { return card; }
+    var holder = card.createEmptyMovieClip("csrArchivePhoto", card.getNextHighestDepth());
+    holder.beginFill(0x1c1c1c, 100);
+    holder.moveTo(bounds.xMin, bounds.yMin);
+    holder.lineTo(bounds.xMax, bounds.yMin);
+    holder.lineTo(bounds.xMax, bounds.yMax);
+    holder.lineTo(bounds.xMin, bounds.yMax);
+    holder.lineTo(bounds.xMin, bounds.yMin);
+    holder.endFill();
+    var photo = holder.createEmptyMovieClip("Image", 1);
+    var context = {card: card, holder: holder, photo: photo, bounds: bounds,
+        width: width, height: height, attempts: 0, url: "img://classic-card/" + parts[1],
+        loader: new MovieClipLoader()};
+    card.csrArchivePhotoContext = context;
+    context.retry = function() {
+        if (this.attempts >= 12 || this.card._parent == undefined ||
+            this.card.csrArchivePhotoContext != this) {
+            this.loader.removeListener(this);
+            return;
+        }
+        var owner = this;
+        var next = getTimer() + 1000;
+        this.holder.onEnterFrame = function() {
+            if (getTimer() < next) { return; }
+            delete this.onEnterFrame;
+            owner.load();
+        };
+    };
+    context.load = function() {
+        this.attempts++;
+        if (this.loader.loadClip(this.url, this.photo) !== true) { this.retry(); }
+    };
+    context.onLoadError = function(mc, error) { this.retry(); };
+    context.onLoadInit = function(mc) {
+        this.loader.removeListener(this);
+        if (this.card.csrArchivePhotoContext != this || mc != this.photo ||
+            !(mc._width > 0 && mc._height > 0)) { return; }
+        var scale = Math.min(this.width / mc._width, this.height / mc._height);
+        mc._xscale *= scale;
+        mc._yscale *= scale;
+        mc._x = this.bounds.xMin + (this.width - mc._width) / 2;
+        mc._y = this.bounds.yMin + (this.height - mc._height) / 2;
+        delete this.holder.onEnterFrame;
+    };
+    context.loader.addListener(context);
+    context.load();
+    return card;
+};
+
 // avatar.swf hides DynamicAvatar right before loading `img://avatar_<xuid>`
 // into it and never shows it again, yet the reference shows avatars:
 // Scaleform's load left the clip visible. Emulate that for avatar loads only.

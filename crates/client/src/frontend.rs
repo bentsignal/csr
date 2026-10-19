@@ -385,6 +385,10 @@ impl Engine for Bridge {
         !active || self.actions.lock().unwrap().resume()
     }
     fn image(&mut self, url: &str) -> Option<Vec<u8>> {
+        if let Some(name) = url.strip_prefix("img://classic-card/") {
+            let map = workshop::find(name).filter(|m| m.menu_supported())?;
+            return workshop::Store::current().preview_bytes(map);
+        }
         if url.starts_with("img://loading/") {
             let epoch = self.actions.lock().ok()?.current()?;
             let (selected, art, fs, image) = {
