@@ -36,11 +36,15 @@ impl Pose {
     }
     fn lerp(self, next: Self, alpha: f32) -> Self {
         let same_life=self.life==next.life && self.alive==next.alive;
+        // A respawn is a new camera/weapon timeline even when no rendered
+        // frame observed the dead actor. Never blend its body or eye with
+        // the previous life; tracking/aim still pass their validation below.
+        let previous = if same_life { self } else { next };
         Self {
-            velocity: self.velocity.lerp(next.velocity, alpha), on_ground: next.on_ground,
-            origin: self.origin.lerp(next.origin, alpha), eye: self.eye.lerp(next.eye, alpha),
-            angles: glam::Vec3::new(angle_lerp(self.angles.x, next.angles.x, alpha), angle_lerp(self.angles.y, next.angles.y, alpha), 0.0),
-            punch: self.punch.lerp(next.punch, alpha), alive: next.alive,
+            velocity: previous.velocity.lerp(next.velocity, alpha), on_ground: next.on_ground,
+            origin: previous.origin.lerp(next.origin, alpha), eye: previous.eye.lerp(next.eye, alpha),
+            angles: glam::Vec3::new(angle_lerp(previous.angles.x, next.angles.x, alpha), angle_lerp(previous.angles.y, next.angles.y, alpha), 0.0),
+            punch: previous.punch.lerp(next.punch, alpha), alive: next.alive,
             animation: if same_life { self.animation.interpolate(next.animation,alpha) } else { next.animation },
             tracked:blend_tracked(self.tracked,next.tracked,alpha,same_life),
             aim:blend_aim(self.aim,next.aim,alpha,same_life),life:next.life,
@@ -152,7 +156,8 @@ impl RenderPoses {
         for p in &world.players {
             let mut current = Pose::player_at(p,world.tick,world.tick_rate);
             let pair = self.0.entry(p.id).or_insert((current, current));
-            let reset = round_start || pair.1.alive != current.alive || pair.1.origin.distance(current.origin) > 128.0;
+            let reset = round_start || pair.1.life != current.life
+                || pair.1.alive != current.alive || pair.1.origin.distance(current.origin) > 128.0;
             let offset = self.1.entry(p.id).or_default();
             *offset = stair_offset(*offset, current.origin.z - pair.1.origin.z, current.on_ground && pair.1.on_ground, reset, world.dt());
             current.eye.z += *offset;
@@ -177,6 +182,58 @@ impl RenderPoses {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn nearby_respawn_discards_previous_eye_motion_without_a_dead_frame() {
+        for rate in [64, 128] {
+            let mut world = sim::World::new(std::sync::Arc::new(collision::CollisionWorld::new()));
+            world.set_tick_rate(rate);
+            let id = world.add_player("Local", sim::Team::CounterTerrorist);
+            world.events.clear();
+            world.player_mut(id).unwrap().movement.on_ground = true;
+            let mut history = RenderPoses::default();
+            history.capture(&world);
+
+            // Leave a real stair-eye offset and a moving/turned old pose.
+            world.tick += 1;
+            let actor = world.player_mut(id).unwrap();
+            actor.movement.origin.z += 18.;
+            actor.movement.velocity = glam::Vec3::X * 117.;
+            actor.view_angles.y = 179.;
+            history.capture(&world);
+            let actor = world.player(id).unwrap();
+            let previous = history.sample(actor, 1.);
+            assert!(previous.eye.z < actor.eye().z - 15.);
+
+            // An alive-to-alive respawn nearby is neither a large teleport nor
+            // a RoundStart event. The life epoch is the only reset signal.
+            world.spawns = vec![sim::SpawnPoint {
+                origin: glam::Vec3::new(4., 0., 18.), yaw: -179.,
+                team: sim::Team::CounterTerrorist,
+            }];
+            world.respawn(id);
+            world.tick += 1;
+            let actor = world.player_mut(id).unwrap();
+            actor.movement.on_ground = true;
+            let next = Pose::player_at(world.player(id).unwrap(), world.tick, rate);
+            assert!(previous.alive && next.alive);
+            assert_ne!(previous.life, next.life);
+            assert!(previous.origin.distance(next.origin) < 128.);
+            let before = world.state();
+            history.capture(&world);
+            for alpha in [0., 0.25, 0.5, 1.] {
+                for pose in [previous.lerp(next, alpha), history.sample(world.player(id).unwrap(), alpha)] {
+                    assert_eq!(pose.origin, next.origin);
+                    assert_eq!(pose.eye, next.eye);
+                    assert_eq!(pose.velocity, next.velocity);
+                    assert_eq!(pose.angles, next.angles);
+                    assert_eq!(pose.punch, next.punch);
+                    assert_eq!(pose.animation, next.animation);
+                }
+            }
+            assert_eq!(world.state(), before);
+        }
+    }
+
     #[test]
     fn predicted_stairs_match_offline_easing_and_snap_new_lives_and_corrections() {
         for rate in [64, 128] {

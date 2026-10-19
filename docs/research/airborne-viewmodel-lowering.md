@@ -43,3 +43,17 @@ adds the observed drop and return; it does not synthesize a landing spring.
 The installed-data regression checks that all gun/arm joints move together,
 landing returns continuously, death hides the meshes, and render updates leave
 the authoritative simulation and aim state unchanged.
+
+## Shared render timeline
+
+Movement-driven lowering and forward settling use the camera/body render
+sample, rather than the newest command-state velocity and ground flag. This
+keeps their transitions on the displayed timeline at both 64 and 128 ticks.
+Local look history still uses current mouse look, preserving input response.
+An installed-data regression compares the actual rifle, AWP and utility joint
+transforms with a reference at the sampled speed and takeoff state.
+
+Nearby respawns also reset camera/stair history by life epoch, including an
+alive-to-alive transition when no render frame observed death. The previous
+life's eye, body motion, angles and recoil cannot blend into the new life.
+These timing corrections do not establish the missing native landing curve.
