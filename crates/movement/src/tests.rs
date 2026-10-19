@@ -77,9 +77,43 @@ fn walking_and_crouching_are_slower() {
     let mut pm = PlayerMove::spawn_at(Vec3::new(-2000.0, 0.0, 1.0));
     run(&mut pm, MoveInput::default(), 4, &w);
     input.buttons = buttons::DUCK;
-    run(&mut pm, input, 64, &w);
+    run(&mut pm, input, 128, &w);
     assert!(pm.ducked);
     assert!((pm.speed_2d() - 85.0).abs() < 1.0, "duck speed {}", pm.speed_2d());
+}
+
+#[test]
+fn native_grounded_stance_acceleration_preserves_weapon_caps_and_direction() {
+    let w = test_world();
+    let cfg = MoveConfig::default();
+    // Consecutive native post-command velocities from rest, with zero stamina,
+    // friction 5.2/stopspeed 80, no base velocity and an unchanged flat route.
+    // P2000 was observed at both rates; M4 independently gives the same ramp
+    // at 64 Hz despite its lower final stance speed.
+    for (rate, weapon_speed) in [(64, 240.), (128, 240.), (64, 225.)] {
+        let dt = 1. / rate as f32;
+        for (stance, samples) in [
+            (buttons::WALK, [11.171875, 15.84375, 20.515625, 25.1875]),
+            (buttons::DUCK, [7.3046875, 8.109375, 8.9140625, 9.71875]),
+        ] {
+            for direction in [1., -1.] {
+                let mut pm = PlayerMove::spawn_at(Vec3::new(-2000., 0., 1.));
+                for _ in 0..4 { player_move(&mut pm, &MoveInput::default(), &cfg, &w, dt); }
+                let mut input = forward(weapon_speed);
+                input.buttons = stance;
+                for (i, speed64) in samples.into_iter().enumerate() {
+                    input.forward_move = direction * if i == 0 { 225. } else { 450. };
+                    player_move(&mut pm, &input, &cfg, &w, dt);
+                    let expected = direction * speed64 * (64. / rate as f32);
+                    assert!((pm.velocity.x - expected).abs() < 0.0001,
+                        "rate={rate} weapon={weapon_speed} stance={stance} sample={i}: {} vs {expected}", pm.velocity.x);
+                }
+                for _ in 0..rate * 2 { player_move(&mut pm, &input, &cfg, &w, dt); }
+                let modifier = if stance == buttons::DUCK { cfg.duck_speed_modifier } else { cfg.walk_speed_modifier };
+                assert!((pm.speed_2d() - weapon_speed * modifier).abs() < 0.001);
+            }
+        }
+    }
 }
 
 #[test]
