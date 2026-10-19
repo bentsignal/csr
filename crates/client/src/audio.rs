@@ -224,6 +224,8 @@ struct Entry {
     channel: u8,
     category: Category,
     weapon_falloff: Option<WeaponFalloff>,
+    /// Literal overrides of the imported foley stack's distance bounds.
+    foley_bounds: Option<(f32, f32)>,
     xfade_bounds: (f32, f32),
     explicit_near_fade: bool,
     /// `play_distant_version_*` partner entry.
@@ -250,12 +252,16 @@ pub struct Emitter {
     soundlevel: f32,
     gunfire: Option<GunfireFade>,
     weapon_falloff: Option<WeaponFalloff>,
+    foley_bounds: Option<(f32, f32)>,
 }
 
 impl Emitter {
     fn gain(&self, distance: f32) -> f32 {
         let fade = self.gunfire.map_or(1.0, |fade| fade.gain(distance));
-        let falloff = self.weapon_falloff.map_or_else(|| self.category.falloff(self.soundlevel, distance), |curve| curve.gain(distance));
+        let falloff = self.weapon_falloff.map_or_else(|| {
+            self.foley_bounds.map_or_else(|| self.category.falloff(self.soundlevel, distance),
+                |(min, max)| stack_curve(distance, min, max))
+        }, |curve| curve.gain(distance));
         self.base * falloff * fade
     }
 }
@@ -472,11 +478,22 @@ fn parse_entry(b: &kv::Block) -> Option<Entry> {
         None
     };
     let mut weapon_falloff = (category == Category::Weapon).then(WeaponFalloff::default);
+    let mut foley_bounds = None;
     let mut xfade_bounds = (800.0, 2800.0);
     let mut explicit_near_fade = false;
     if let Some(update) = b.block("operator_stacks").and_then(|s| s.block("update_stack")) {
         let literal = |block: Option<&kv::Block>, field: &str| block.and_then(|v| v.str(field))
             .and_then(kv::parse_f32).filter(|v| v.is_finite());
+        if category == Category::Foley {
+            // The installed helmet cue overrides CS_update_foley's bounds.
+            // Retain those declarations without changing the fitted curve,
+            // local gain, mixer or the defaults of other foley entries.
+            if let Some(falloff) = update.block("volume_falloff") {
+                let min = literal(Some(falloff), "input_min").unwrap_or(400.0);
+                let max = literal(Some(falloff), "input_max").unwrap_or(1100.0);
+                if min >= 0.0 && max > min { foley_bounds = Some((min, max)); }
+            }
+        }
         if let Some(curve) = &mut weapon_falloff {
             let falloff = update.block("volume_falloff");
             let min = literal(falloff, "input_min").or_else(|| literal(update.block("volume_falloff_min"), "input2")).unwrap_or(curve.min);
@@ -498,7 +515,7 @@ fn parse_entry(b: &kv::Block) -> Option<Entry> {
         soundlevel: b.str("soundlevel").map_or(75.0, parse_soundlevel),
         channel: b.str("channel").map_or(0, channel_number),
         category,
-        weapon_falloff, xfade_bounds, explicit_near_fade,
+        weapon_falloff, foley_bounds, xfade_bounds, explicit_near_fade,
         distant,
         limit,
         distant_layer: false,
@@ -727,6 +744,7 @@ impl SoundLibrary {
                     gunfire: (entry.category == Category::Weapon && (entry.distant.is_some() || entry.distant_layer || entry.explicit_near_fade))
                         .then_some(GunfireFade { start: entry.xfade_bounds.0, end: entry.xfade_bounds.1, distant: entry.distant_layer }),
                     weapon_falloff: entry.weapon_falloff,
+                    foley_bounds: entry.foley_bounds,
                 };
                 let gain = emitter.gain(emitter.pos.distance(self.listener));
                 initial_gain = gain * self.master_volume;
@@ -856,7 +874,7 @@ impl SoundLibrary {
         }
         let mut e = match raw.at {
             Some(pos) => {
-                let emitter = Emitter { pos: to_bevy(pos), base: raw.volume * category.field() * spatial_normalization(channels), category, soundlevel: raw.soundlevel, gunfire: None, weapon_falloff: None };
+                let emitter = Emitter { pos: to_bevy(pos), base: raw.volume * category.field() * spatial_normalization(channels), category, soundlevel: raw.soundlevel, gunfire: None, weapon_falloff: None, foley_bounds: None };
                 let gain = emitter.gain(emitter.pos.distance(self.listener)) * start;
                 commands.spawn((
                     AudioPlayer(handle),
@@ -1030,7 +1048,7 @@ mod tests {
         Entry {
             waves: vec!["sound/synthetic.wav".into()], volume: (1.0, 1.0),
             pitch: (100.0, 100.0), soundlevel: 79.0, channel: 6,
-            category: Category::Weapon, weapon_falloff: Some(WeaponFalloff::default()), xfade_bounds: (800.0, 2800.0), explicit_near_fade: false, distant: distant.map(str::to_owned),
+            category: Category::Weapon, weapon_falloff: Some(WeaponFalloff::default()), foley_bounds: None, xfade_bounds: (800.0, 2800.0), explicit_near_fade: false, distant: distant.map(str::to_owned),
             limit: Some(limit), distant_layer: distant.is_none(),
             // No AudioPlugin is installed; only entity lifecycle is exercised.
             frozen_wave: Some(classic::FrozenWave { bytes: Arc::from([0u8; 4]), channels: 1 }),
@@ -1175,7 +1193,7 @@ mod tests {
         let curve = entry.weapon_falloff.unwrap();
         assert_eq!((curve.min, curve.max, curve.floor, curve.curve_amount), (400.0, 800.0, 0.05, 0.9));
         let emitter = Emitter { pos: Vec3::ZERO, base: 1.0, category: entry.category, soundlevel: entry.soundlevel,
-            weapon_falloff: entry.weapon_falloff, gunfire: Some(GunfireFade { start: entry.xfade_bounds.0, end: entry.xfade_bounds.1, distant: false }) };
+            weapon_falloff: entry.weapon_falloff, foley_bounds: entry.foley_bounds, gunfire: Some(GunfireFade { start: entry.xfade_bounds.0, end: entry.xfade_bounds.1, distant: false }) };
         assert_eq!(emitter.gain(100.0), 1.0);
         assert_eq!(emitter.gain(800.0), 0.05);
         assert!(emitter.gain(1100.0) < 0.05);
@@ -1192,6 +1210,66 @@ mod tests {
         let entry = parse_entry(doc.block("Shot").unwrap()).unwrap();
         assert_eq!(entry.weapon_falloff, Some(WeaponFalloff::default()));
         assert_eq!(entry.xfade_bounds, (800.0, 2800.0));
+    }
+
+    #[test]
+    fn authored_foley_bounds_reach_spatial_playback_without_changing_default_cues() {
+        let doc = kv::parse(r#"
+            Custom { wave synthetic.wav channel CHAN_STATIC volume 0.7
+                operator_stacks { update_stack { import_stack CS_update_foley
+                    volume_falloff { input_min 120 input_max 1400 } } } }
+            Default { wave synthetic.wav channel CHAN_STATIC
+                operator_stacks { update_stack { import_stack CS_update_foley } } }
+        "#).unwrap();
+        let mut app = App::new();
+        app.init_resource::<SoundLibrary>().init_resource::<Assets<AudioSource>>();
+        for name in ["Custom", "Default"] {
+            let mut entry = parse_entry(doc.block(name).unwrap()).unwrap();
+            entry.frozen_wave = Some(classic::FrozenWave { bytes: Arc::from([0u8; 4]), channels: 1 });
+            app.world_mut().resource_mut::<SoundLibrary>().entries.insert(name.to_ascii_lowercase(), entry);
+        }
+        app.add_systems(Update, |mut commands: Commands, mut sounds: ResMut<SoundLibrary>,
+            mut sources: ResMut<Assets<AudioSource>>| {
+            for name in ["Custom", "Default"] {
+                sounds.play_with(&mut commands, &vfs::Vfs::new(), &mut sources, name,
+                    Emit { at: Some(glam::Vec3::X * 1250.0), owner: Some(7), local: false });
+            }
+        });
+        // No AudioPlugin/device: exercise production parsing, play_with and
+        // deferred entity creation, then inspect the actual spatial emitters.
+        app.update();
+        let sounds = app.world().resource::<SoundLibrary>();
+        let emitter = |name| {
+            let voice = sounds.playing.iter().find(|p| p.entry == name).unwrap();
+            app.world().get::<Emitter>(voice.entity).unwrap()
+        };
+        let custom = emitter("custom");
+        assert_eq!(custom.foley_bounds, Some((120.0, 1400.0)));
+        assert_eq!(custom.gain(120.0), custom.base);
+        assert!(custom.gain(1250.0) > 0.0, "Authored range must survive the old 1100-unit cutoff");
+        assert_eq!(custom.gain(1400.0), 0.0);
+        let default = emitter("default");
+        assert_eq!(default.foley_bounds, None);
+        assert_eq!(default.gain(400.0), default.base);
+        assert_eq!(default.gain(1100.0), 0.0);
+        assert_eq!(sounds.entries["custom"].volume, (0.7, 0.7));
+        assert_eq!(sounds.entries["custom"].channel, 6);
+    }
+
+    #[test]
+    fn invalid_foley_bounds_keep_default_attenuation() {
+        for bounds in ["input_min 900 input_max 800", "input_min -1 input_max 1400",
+            "input_min NaN input_max inf"] {
+            let text = format!("Cue {{ wave synthetic.wav operator_stacks {{ update_stack {{
+                import_stack CS_update_foley volume_falloff {{ {bounds} }} }} }} }}");
+            let doc = kv::parse(&text).unwrap();
+            let entry = parse_entry(doc.block("Cue").unwrap()).unwrap();
+            let emitter = Emitter { pos: Vec3::ZERO, base: 1.0, category: entry.category,
+                soundlevel: entry.soundlevel, weapon_falloff: entry.weapon_falloff,
+                foley_bounds: entry.foley_bounds, gunfire: None };
+            assert_eq!(emitter.gain(400.0), 1.0);
+            assert_eq!(emitter.gain(1100.0), 0.0);
+        }
     }
 
     #[test]
