@@ -2,12 +2,13 @@
 use serde::{Deserialize, Serialize};
 use sim::{GameEvent, PlayerId, Snapshot, Team, TickInput};
 
+// v29 retains protection at each damage event instead of reading later armor.
 // v28 adds bounded door-local cosmetic bullet contacts to the v27 events.
 // v27 combines authoritative door poses/cues, brush-breakable health/removal,
 // and replicated BSP ladder contact for prediction and foley.
 // Older peers must reject the session before attempting snapshot decoding.
-pub const VERSION: u32 = 28;
-pub const PROTOCOL_ID: u64 = 0x4353_5257_0000_001c;
+pub const VERSION: u32 = 29;
+pub const PROTOCOL_ID: u64 = 0x4353_5257_0000_001d;
 pub const CONTROL: u8 = 0;
 pub const INPUT: u8 = 1;
 pub const SNAPSHOT: u8 = 2;
@@ -616,6 +617,21 @@ mod death_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn damage_contact_protection_survives_event_transport() {
+        use sim::weapon::{HitGroup, HitProtection};
+        let batch = EventBatch { tick: 200, events: [
+            (HitGroup::Chest, HitProtection::Kevlar),
+            (HitGroup::Head, HitProtection::Helmet),
+            (HitGroup::Head, HitProtection::Flesh),
+            (HitGroup::LeftLeg, HitProtection::Flesh),
+        ].into_iter().map(|(group, protection)| GameEvent::Damage {
+            attacker: 1, victim: 2, health: 25, group, pos: glam::Vec3::X, protection,
+        }).collect() };
+        validate_events(&batch).unwrap();
+        assert_eq!(decode::<EventBatch>(&encode(&batch).unwrap()).unwrap(), batch);
+    }
+
     #[test]
     fn door_impact_local_frame_roundtrips_and_rejects_unbounded_contacts() {
         use glam::Vec3;

@@ -88,12 +88,15 @@ impl PropLight {
     }
 }
 
-/// Fading (0x01) and disabled shadow casting (0x10) do not change how a
-/// surface receives lighting. In particular, a no-shadow autocombined model
-/// still spans independently exposed/covered surfaces. Keep lighting-origin,
-/// ignored-normal and other unsupported receiver modes on their old fallback.
+/// Fading (0x01), disabled shadow casting (0x10), and disabled self-shadowing
+/// (0x80) do not prevent receiving spatial light from the rest of the map.
+/// The lighting query already excludes the receiving prop's own shapes. Large
+/// no-self-shadow receivers still span independently exposed/covered surfaces.
+/// Keep lighting-origin, ignored-normal and other unsupported receiver modes
+/// on their old fallback. Flag meanings: srctools' public BSP format docs,
+/// https://srctools.readthedocs.io/en/latest/modules/bsp.html#srctools.bsp.StaticPropFlags
 fn supports_surface_lighting(flags: u8) -> bool {
-    flags & !(0x01 | 0x10) == 0
+    flags & !(0x01 | 0x10 | 0x80) == 0
 }
 
 /// Map ambient cube at the prop, plus the sun if its sample ray reaches sky.
@@ -853,8 +856,8 @@ mod lighting_tests {
     }
 
     #[test]
-    fn no_cast_shadow_props_receive_spatial_light_without_bypassing_occluders() {
-        for flags in [0x00, 0x01, 0x10, 0x11] {
+    fn no_cast_or_self_shadow_props_receive_spatial_light_without_bypassing_occluders() {
+        for flags in [0x00, 0x01, 0x10, 0x11, 0x80, 0x81, 0x90, 0x91] {
             let (mut map, mut w) = fixture(false);
             map.static_props.props[0].flags = flags;
             assert!(supports_surface_lighting(map.static_props.props[0].flags));
@@ -871,7 +874,7 @@ mod lighting_tests {
                 "a covered center must not darken an exposed surface: {flags:#x}");
         }
         for flags in 0u8..=u8::MAX {
-            if ![0x00, 0x01, 0x10, 0x11].contains(&flags) {
+            if ![0x00, 0x01, 0x10, 0x11, 0x80, 0x81, 0x90, 0x91].contains(&flags) {
                 assert!(!supports_surface_lighting(flags),
                     "unsupported lighting modes must retain their fallback: {flags:#x}");
             }

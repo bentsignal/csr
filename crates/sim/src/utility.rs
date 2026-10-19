@@ -433,6 +433,7 @@ impl World {
                 health: damage,
                 group: crate::weapon::HitGroup::Chest,
                 pos: chest,
+                protection: if absorbed > 0.0 { crate::weapon::HitProtection::Kevlar } else { crate::weapon::HitProtection::Flesh },
             });
             if self.players[i].health <= 0 {
                 self.kill(i, attacker, kind.name(), false, None);

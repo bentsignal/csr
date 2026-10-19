@@ -1,40 +1,24 @@
 # Current owner priorities
 
-Status: **owner selected maps-only follow-up on 2026-10-18**. This is the scheduling
+Status: **owner accepted the conversational backlog and authorized continued work on October 18 evening until the next testing interruption**. This is the scheduling
 authority. VISION defines the product. The complete newest observations and
 corrections are in [the October 18 playtest record](PLAYTEST-2026-10-18.md).
 Maintain priorities through conversation; the GUI is retired.
 
-## Active work: final classic map pass
+## Active work: continued evening backlog
 
-The owner selected the first five map outcomes from the conversational menu:
+The owner approved the consolidated conversational backlog and explicitly
+authorized continuing until interrupted for a testing pass. Begin with remaining
+remake Nuke lighting and map-version clarity, then movement and airborne/landing
+viewmodels, followed by weapon handling, hit audio and original-CS:GO grenades.
+Preserve accepted maps, input, binds, performance and grounded weapon motion.
 
-1. **Collision and traversal:** correct support on visible props, including old
-   Nuke silos and Train tanker roofs; check intended routes across maps.
-2. **Lighting and materials:** broad Train/Cobblestone corrections, including
-   arches, trains, boards and white window panels; preserve accepted maps.
-3. **Sky presentation:** diagnose the recurring high-sky square and correct sky
-   and distant-background defects.
-4. **Map interactions:** visible working Vertigo porta-potty doors and usable
-   interiors; check remaining doors, breakables and Cobble's untested T ladder.
-5. **Historical map coverage:** finish authentic historical dependencies,
-   especially old Overpass, with clear version labels. Cover meaningful CS:GO
-   versions; do not substitute CS2 content or claim every patch snapshot.
-
-These are the current implementation scope. Prepare one coherent final map
-playtest, then let the owner review maps before moving on. **Movement/viewmodels,
-hit-sound consistency and original CS:GO grenades are deferred until that review.**
-Keep their saved findings; do not start or integrate them into this map batch.
-Parallel source work within these map outcomes remains authorized.
-
-The bot/mode availability warning was retested successfully through another
-launch route and is not a new investigation without a normal-menu reproduction.
-Preserve ordinary ten-player support and accepted performance. Offer a solo or
-harmless route so bots do not prevent the owner's traversal review.
-
-Latest accepted map behavior and remaining defects are recorded in
-[the October 18 playtest record](PLAYTEST-2026-10-18.md). This is authorization to
-implement; no additional scope confirmation is needed.
+Continue concrete fixes with proportional existing checks and prepare coherent
+review builds; no small repeated tests or new diagnostic framework/backlog GUI.
+Historical Overpass remains blocked by missing authentic fence materials.
+The lower backlog (HUD, positional audio, interactions, bots, combat effects,
+menus/reliability, performance polish, multiplayer, inventory and later expansion)
+is retained; avoid unrelated expansion while these core outcomes remain.
 
 ## Current direction: October 18
 

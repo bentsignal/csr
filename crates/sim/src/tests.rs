@@ -1195,3 +1195,40 @@ mod scope_hold;
 
 #[path = "tests/model_hitboxes.rs"]
 mod model_hitboxes;
+
+#[test]
+fn damage_keeps_contact_protection_after_depletion_and_later_player_changes() {
+    use weapon::HitProtection;
+    for rate in [64, 128] {
+        for name in ["weapon_ak47", "weapon_m4a1", "weapon_glock", "weapon_hkp2000"] {
+            for (group, armor, helmet, expected) in [
+                (HitGroup::Chest, 1, false, HitProtection::Kevlar),
+                (HitGroup::Head, 1, true, HitProtection::Helmet),
+                (HitGroup::Head, 100, false, HitProtection::Flesh),
+                (HitGroup::Head, 0, true, HitProtection::Flesh),
+                (HitGroup::LeftLeg, 100, true, HitProtection::Flesh),
+                (HitGroup::RightLeg, 100, true, HitProtection::Flesh),
+            ] {
+                let mut w = world(); w.set_tick_rate(rate);
+                let shooter = w.add_player("shooter", Team::Terrorist);
+                let victim = w.add_player("target", Team::CounterTerrorist);
+                let def = w.catalog.get(name).unwrap().clone();
+                w.players[1].armor = armor; w.players[1].helmet = helmet;
+                let (_, armor_damage) = weapon::damage(&def, 0., group, armor, helmet);
+                w.events.clear();
+                w.apply_damage(0, 1, &def, 0., group, Vec3::X, None);
+                assert_eq!(w.players[1].armor, (armor - armor_damage).max(0));
+                if armor == 1 && expected != HitProtection::Flesh {
+                    assert_eq!(w.players[1].armor, 0, "fixture must exhaust the protected armor");
+                }
+                let event = w.events.iter().find(|e| matches!(e, GameEvent::Damage { .. })).unwrap().clone();
+                // Mimic later damage/respawn state before a deferred render.
+                w.players[1].armor = if armor == 0 { 100 } else { 0 };
+                w.players[1].helmet = !helmet;
+                assert!(matches!(event, GameEvent::Damage { attacker, victim: id, protection, .. }
+                    if attacker == shooter && id == victim && protection == expected),
+                    "{name} {group:?} rate={rate}");
+            }
+        }
+    }
+}
