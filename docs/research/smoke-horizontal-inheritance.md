@@ -209,3 +209,71 @@ stationary values at 64/128 Hz and preserves airborne and other-definition
 behavior. The single unshipped v14 identity is named for the complete grounded
 button response. No initial vertical velocity, physical spawn timestamp,
 historical lineup, arbitrary movement or bounce parity is inferred.
+
+
+## Airborne primary response (October 19 follow-up)
+
+Independent Legacy 1.38.8.1 sessions on Train requested 128 ticks/second,
+confirmed host_timescale 0.01, and used ordinary primary input. Root personally
+reviewed the held pin/strength (true/1), actual player ground/angle/velocity
+brackets and first pre-contact C_SmokeGrenadeProjectile in every case. Held
+weapon owner and projectile thrower match; generic zero absolute-velocity
+metadata is excluded. Normal-gravity cases have NULL ground before and after,
+standing eye offset 64.062561 and the same active Smoke throughout.
+
+| Pitch | Stationary airborne projectile VX |
+| --- | --- |
+| 0 | 664.745239 |
+| -30 | 541.433167 |
+| +45 | 517.080017 |
+
+Fitting the level and -30 observations within the existing weighted-pitch
+family independently gives speed 675.000001 and bias 9.999998 degrees. The
+separate +45 case differs from that prediction by less than 0.00003. This is
+finite evidence for speed 675 and bias 10 in that family, not a unique general
+law or a prospectively preregistered experiment. A separate forward-jump case
+has player VX 245 before and after and projectile VX 970.995239. Its difference
+from stationary is 306.25, independently supporting horizontal inheritance
+1.25. Normal-gravity player VZ changes across the bracket; it does not identify
+exact release velocity, initial projectile VZ or physical spawn time.
+
+To separate vertical inheritance from those unknowns, three fresh sessions
+read back sv_gravity=0: a grounded stationary control and two jumps where
+gravity is disabled after jump onset. Before and after each airborne throw,
+the player's VZ remains on the same measured plateau. These controls remove
+flight-age gravity loss without fitting an unknown timestamp.
+
+| Control | Player VZ before and after | Projectile VZ |
+| --- | --- | --- |
+| Grounded | 0 | 117.212517 |
+| Earlier ascending plateau | 217.618378 | 389.235504 |
+| Later ascending plateau | 123.868378 | 272.048004 |
+
+The two airborne rows give (389.235504-272.048004)/(217.618378-123.868378)
+= 1.25. Their independently derived intercept is 117.2125315, within 0.000015
+of the grounded control. This admits vertical inheritance 1.25 for primary
+Smoke in the existing scalar response. Normal-gravity observations are
+compatibility checks, not exact-age or initial-VZ fits. Production gravity
+remains unchanged; the zero-gravity experiment is a calibration control only.
+
+The exact schema/model gate now supplies these three independently qualified
+air components for Smoke only. Catalog semantics advance once to v15.
+Grounded button modes, other grenade definitions, airborne secondary/combined,
+no-mode calls, spawn tracing, release timing, integration and contact remain
+unchanged. Optional components preserve the prior behavior independently when
+absent, including content-pack definitions. Existing bot planning does not
+assume this is a grounded path.
+
+Ordinary TickInput regressions cover standing/running jump release at 64/128 Hz,
+three angles and independent absent-component fallbacks; separate numeric
+regressions anchor the three constant-VZ native controls. 64 Hz is regression
+coverage, not a new native observation. Arbitrary movement/directions,
+descending or crouched throws, VR motion, physical spawn position/time,
+complete trajectories/contact and historical 2015 lineups remain unqualified.
+
+Private evidence: native-smoke-jump-pilot-r1 and
+native-smoke-jump-cases-r1/root-admission.json under overpass-20261019. The pilot
+and all six follow-ups closed successfully and restored all 12 exact native
+preference snapshots per session. Original captures/logs stay private. A pilot
+player-VZ transcription typo was explicitly corrected in its root receipt;
+original evidence was not modified.

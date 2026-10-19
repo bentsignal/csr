@@ -132,8 +132,8 @@ pub struct GrenadeAnimations {
 #[derive(Clone, Debug, PartialEq)]
 pub struct GrenadeLaunch {
     pub reference: String,
-    /// Grounded primary throws only; vertical and airborne response remain
-    /// unchanged until separately observed. Applied to the horizontal vector.
+    /// Grounded primary throws only; vertical response remains unchanged.
+    /// Applied to the horizontal vector.
     pub grounded_overhand_horizontal_inheritance: f32,
     /// Admit each additional mode independently; an absent measurement retains
     /// its prior movement response even when stationary velocity is measured.
@@ -146,6 +146,12 @@ pub struct GrenadeLaunch {
     /// inheritance remains independent of the primary-only observation.
     pub grounded_underhand_velocity: Option<GrenadeLaunchVelocity>,
     pub grounded_combined_velocity: Option<GrenadeLaunchVelocity>,
+    /// Airborne primary response, admitted separately from every grounded mode.
+    /// Each absent component retains its prior raw-aim or movement response;
+    /// velocity evidence alone must not supply either inheritance coefficient.
+    pub airborne_overhand_velocity: Option<GrenadeLaunchVelocity>,
+    pub airborne_overhand_horizontal_inheritance: Option<f32>,
+    pub airborne_overhand_vertical_inheritance: Option<f32>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
