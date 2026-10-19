@@ -76,7 +76,7 @@ fn valid(pin: &Pin, bytes: &[u8]) -> bool {
     bytes.len() == pin.bytes
         && pin.bytes <= 4 * 1024 * 1024
         && bytes.starts_with(&[0xff, 0xd8])
-        && format!("{:x}", Sha1::digest(bytes)) == pin.sha1
+        && super::hex(&Sha1::digest(bytes)) == pin.sha1
 }
 
 impl Store {
@@ -200,7 +200,7 @@ mod tests {
     #[test]
     fn photo_identity_rejects_truncation_changes_and_unbounded_declarations() {
         let bytes = [0xff, 0xd8, 1, 2, 0xff, 0xd9];
-        let hash = format!("{:x}", Sha1::digest(bytes));
+        let hash = crate::hex(&Sha1::digest(bytes));
         let pin = Pin {
             name: "synthetic",
             url: "",
