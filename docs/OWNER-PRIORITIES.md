@@ -37,7 +37,8 @@ missing native landing response. Keep it separate from the morning result.
 
 Continue concrete fixes with proportional existing checks and prepare coherent
 review builds; no small repeated tests or new diagnostic framework/backlog GUI.
-Historical Overpass remains blocked by missing authentic fence materials.
+Historical Overpass remains withheld while its original error-material
+presentation is matched; the authentic archive/photo are already verified.
 The lower backlog (HUD, positional audio, interactions, bots, combat effects,
 menus/reliability, performance polish, multiplayer, inventory and later expansion)
 is retained; avoid unrelated expansion while these core outcomes remain.

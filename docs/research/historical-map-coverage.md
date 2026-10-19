@@ -171,21 +171,28 @@ generated missing-texture checkerboard when VMT resolution returns `None`
 reports the absent VMT. No shared material-path or VFS defect was established
 by these data checks. In particular, `gates002` remains an unsupported alias.
 
-The concrete remaining distinction is native appearance at those exact fence
-placements: the original may use missing-material fallback too. Original
-absence in the checked depot is evidence for that possibility, not proof of
-deliberate authoring or a measured fallback match. Root's October 19 native
-Legacy observations show black metal bars at matching park-fence coordinates;
-turning static props off removes them. They do not show an obvious checkerboard,
-but have not yet bound those bars to this particular missing-material mesh.
-Overlapping models, native draw selection and fallback appearance still need
-to be distinguished. The observations are of installed Legacy, not visual
-admission of the October archive. Root retains that native isolation work.
+Native Legacy's public model-stat overlay now identifies the exact
+`park_fence_128` draw as `___error`. Its verbose material report identifies
+`UnlitGeneric`, a runtime `error` base texture (32 by 32), identity base UVs,
+and white color modulation. The shared absent-VMT fallback now uses unlit
+shading rather than world/vertex lighting. The same-camera original view is
+black while our diagnostic checker still has magenta upper bars; this is not
+a fallback parity result or archive admission. The original runtime texture's
+appearance/draw inputs remain to be resolved without an unrelated asset alias.
+The observation is of installed Legacy, not the October archive.
+
+The cached archive's ten-player initial placements, buy-zone membership,
+tunnel-ladder approach/climb/upper dismount, and Connector door use and passage
+in both directions pass through ordinary TickInput at 64 and 128 Hz. These
+fixtures do not establish sustained rendered performance or complete map review.
+The historical card/photo is prepared but menu admission remains disabled.
+
 For example, October 2015 prop 951 is at `(-3204, -1590, 565)`,
 yaw zero, with model-local bounds approximately X +/-1, Y +/-64, Z 33..120.
 An eye position `(-3084, -1590, 641)`, pitch zero/yaw 180, faces its midpoint;
 the opposite-side candidate is `(-3324, -1590, 641)`, pitch zero/yaw zero.
-These are computed comparison targets, not verified unobstructed viewpoints.
+The front view was rendered in both clients; the reverse native position was
+inside geometry and is not an admitted comparison.
 
 Do not require acquisition of a presumed original material indefinitely if
 native observation instead establishes an original fallback. Conversely,
@@ -194,8 +201,7 @@ failures. If authentic additional dependency bytes are found, verify them
 before adding explicit private mounting. Root still owns native comparison,
 decode/probe, simulation, traversal and visual admission. Private metadata and
 the bounded inspection helper are under
-`%USERPROFILE%/csr-fidelity/overpass-20261019/`; no new asset download, build,
-native run, or runtime admission occurred in this follow-up.
+`%USERPROFILE%/csr-fidelity/overpass-20261019/`; no game assets or captures are published. Runtime admission remains pending.
 
 ## Distinct early Train, without replacing Train (2015)
 
