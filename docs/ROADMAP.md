@@ -44,7 +44,9 @@ them are listed. Every item ends in a verified state (`cargo test`,
 - [x] Correct additive/layered unlit map materials, invisible brush rendering,
   bounded archived prop bakes and authored prop lighting origins.
 - [ ] Finish current-source rendered ten-player admission and owner playtest;
-  historical Overpass is withheld for its missing authentic fence material.
+  October 2015 Overpass now has qualified routes, Release simulation, rendered
+  controls and a bounded ten-player result. Final picker/build verification and
+  owner acceptance remain open; the original missing-material probe stays visible.
 
 These increments do not complete exact 2015 parity or the full map catalog.
 [Version qualification and remaining dependencies](OLD-MAPS.md).

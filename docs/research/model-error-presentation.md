@@ -88,3 +88,16 @@ rendered checks are unrun by instruction. Root owns serialized Cargo/native
 work, the matched-camera Overpass comparison and accepted Dust II/Nuke
 controls before admission. No parity, historical-map admission, staging,
 owner acceptance, merge or release is claimed.
+
+## Root checks on October 19
+
+Parent candidate `30876c5` passed the full workspace tests, normal Release build
+and required Dust II probe/simulation. Root inspected matched archived/installed
+Overpass fences, tunnel ladder, Connector door, A site and water-side scenes,
+plus accepted Dust II/Nuke controls. The fence is black instead of magenta;
+owner configuration and executable snapshots remained identical. Cached routes
+passed at 64/128 tick; the archive Release simulation completed ten rounds with
+zero failures. The strict archive probe retains its one absent-VMT failure.
+A bounded normal-HUD ten-player window at 1440p averaged about 252 FPS; it is
+not sustained whole-map or independent input/camera acceptance. Final picker
+source checks, CI and owner review remain separate from these parent checks.

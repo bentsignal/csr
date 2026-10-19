@@ -6,10 +6,10 @@ snapshots published by Valve. `csr fetch-map <name|all>` prefetches archives;
 with `probe`, `sim` or `play` fetches it automatically. These commands support
 development and fidelity checks. The original map picker offers the admitted
 archives: **Dust II (2017), Inferno (2016), Nuke (2016), Train (2015),
-Vertigo (2017), Mirage (2019), Cobblestone (2018), and Cache (2015)**. Each uses its own
+Vertigo (2017), Mirage (2019), Cobblestone (2018), Cache (2015), and Overpass (2015)**. Each uses its own
 archive identity and title beside any installed version. Archive years describe
 compatibility snapshots, not a promise of exact 2015 geometry or materials.
-Cache (2019), Overpass (2015) and Overpass (2019) remain hidden pending their
+Cache (2019) and Overpass (2019) remain hidden pending their
 unresolved model dependencies; the other, later snapshots remain development
 selections. The newer snapshots keep their own names and pins.
 
@@ -64,9 +64,10 @@ full `.csrpack` manifest and installation workflow remain Track E work.
 The [historical coverage research](research/historical-map-coverage.md) separates
 meaningful CS:GO generations from patch snapshots. Two additional private
 Overpass references (February 2014 and January 2015) were acquired and verified;
-both still require the original `models/props_urban/gates001` fence material.
-They add historical evidence, not picker entries. The eight offered maps and
-their identities remain unchanged.
+both lack the original `models/props_urban/gates001` fence material.
+They add historical evidence, not picker entries. The offered October 2015
+Overpass is a separate, explicitly dated snapshot with an observed fallback;
+the early 2014 generation remains a coverage gap.
 
 Names use Valve's archive year. Upload date and build version do **not**
 establish August 2018 parity. Compare intervening update notes and reference
@@ -141,13 +142,29 @@ by the current decoder, and a DXT5 ordinary radar. The loader tries the same
 verified BSP's ordinary radar when the spectate image cannot decode. Overpass
 only embeds a 1024-square DXT1 ordinary radar. Both installed base collection
 icons exist. Art pins are available for both snapshots independently of normal
-picker admission; Overpass remains a development selection.
+picker admission. Overpass (2015) now uses its own pinned historical photo
+and remains distinct from the installed Legacy selection.
 
 The pair's authentic 2015 archive identity does not establish rewritten-game
 parity. Cache 2015 passed the current Release probe, simulation and archived
 loading-image decode. Final rendered ten-player admission and staging remain
-separate from these data and simulation checks. Overpass retains the dependency
-failure and is not admitted to the picker.
+separate from these data and simulation checks.
+
+The October 19 Overpass increment admits the exact October 13, 2015 archive
+(build 1.35.0.6) after cached ten-player spawn, tunnel-ladder and Connector-door
+routes at 64/128 tick, a ten-round Release simulation, and rendered map/control
+checks. A bounded normal-HUD ten-player diagnostic at 2560x1440 sampled about
+252 FPS over simulation seconds 30-60 (one-second intervals about 193-292 FPS).
+This stationary local-player check does not establish sustained whole-map FPS
+or independent camera/input coverage. The final picker build and owner review
+remain separate gates.
+
+Its strict asset probe still reports **one failure**, the absent `gates001` VMT;
+all 270 prop models and six sky faces load. Native Legacy binds the same fence
+model to an unlit error material and renders it black. The shared model fallback
+now matches that measured appearance without inventing an authored VMT, omitting
+geometry or suppressing the diagnostic. Native runtime texture texels are not
+recovered. [Evidence and generalization limits](research/model-error-presentation.md).
 
 ## Verification and remaining work
 

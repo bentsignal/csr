@@ -2,8 +2,11 @@
 
 Research checked 2026-10-18, with the bounded October 19 dependency follow-up
 below. This records historical identity and private data
-inspection, not new map admission. The eight offered archives in
-[OLD-MAPS.md](../OLD-MAPS.md) remain unchanged. No game assets belong here.
+inspection. The October 19 increment adds the qualified October 2015 Overpass
+selection described in [OLD-MAPS.md](../OLD-MAPS.md); the early-layout references
+remain research-only. The original fence dependency is still absent, with the
+measured fallback described in [model-error-presentation.md](model-error-presentation.md).
+No game assets belong here.
 
 ## What complete coverage means
 

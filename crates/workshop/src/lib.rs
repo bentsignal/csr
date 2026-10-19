@@ -67,8 +67,8 @@ impl OldMap {
     /// to explicit development loads, without being offered as classic matches.
     /// See docs/OLD-MAPS.md for the retained probe/simulation evidence and gaps.
     pub fn menu_supported(&self) -> bool {
-        // Cache/Overpass 2015 are source admission candidates: parent runtime
-        // checks must pass before integration; missing-material diagnostics remain.
+        // Qualified runtime selections; known original missing-material diagnostics
+        // remain visible to the strict asset probe (see docs/OLD-MAPS.md).
         matches!(self.name,
             "de_dust2_2017" | "de_inferno_2016" | "de_nuke_2016"
             | "de_train_2015" | "de_vertigo_2017" | "de_mirage_2019"
