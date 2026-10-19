@@ -152,6 +152,15 @@ pub struct GrenadeLaunch {
     pub airborne_overhand_velocity: Option<GrenadeLaunchVelocity>,
     pub airborne_overhand_horizontal_inheritance: Option<f32>,
     pub airborne_overhand_vertical_inheritance: Option<f32>,
+    /// Airborne secondary and combined endpoints require their own evidence.
+    /// Each component is optional independently of primary and grounded data;
+    /// None retains raw aim at 750 * strength or movement inheritance 0.5.
+    pub airborne_underhand_velocity: Option<GrenadeLaunchVelocity>,
+    pub airborne_underhand_horizontal_inheritance: Option<f32>,
+    pub airborne_underhand_vertical_inheritance: Option<f32>,
+    pub airborne_combined_velocity: Option<GrenadeLaunchVelocity>,
+    pub airborne_combined_horizontal_inheritance: Option<f32>,
+    pub airborne_combined_vertical_inheritance: Option<f32>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
