@@ -170,36 +170,46 @@ impl World {
         // includes running/backpedalling/jumping; crouch uses the current eye.
         // Button endpoint velocities are independent observations. Only the
         // independently admitted modes receive a measured movement response;
-        // retain absent modes' prior inheritance and every airborne vector.
+        // retain each absent component's prior response independently.
         let mut inherited = p.movement.velocity * 0.5;
         let mut launch = forward * (750.0 * strength);
-        if p.movement.on_ground {
-            if let Some(profile) = definition.grenade_launch.as_ref() {
-                let horizontal_inheritance = match mode {
+        if let Some(profile) = definition.grenade_launch.as_ref() {
+            let (horizontal_inheritance, vertical_inheritance, velocity_profile) = if p.movement.on_ground {
+                let horizontal = match mode {
                     Some(ThrowMode::Overhand) => Some(profile.grounded_overhand_horizontal_inheritance),
                     Some(ThrowMode::Underhand) => profile.grounded_underhand_horizontal_inheritance,
                     Some(ThrowMode::Combined) => profile.grounded_combined_horizontal_inheritance,
                     None => None,
                 };
-                if let Some(inheritance) = horizontal_inheritance {
-                    inherited.x = p.movement.velocity.x * inheritance;
-                    inherited.y = p.movement.velocity.y * inheritance;
-                }
-                let velocity_profile = match mode {
+                let velocity = match mode {
                     Some(ThrowMode::Overhand) => profile.grounded_overhand_velocity.as_ref(),
                     Some(ThrowMode::Underhand) => profile.grounded_underhand_velocity.as_ref(),
                     Some(ThrowMode::Combined) => profile.grounded_combined_velocity.as_ref(),
                     None => None,
                 };
-                if let Some(profile) = velocity_profile {
-                    // Keep the separately uncalibrated spawn trace on the raw
-                    // aim ray above. Only the release velocity uses this law.
-                    let mut launch_angles = angles;
-                    launch_angles.x -= profile.upward_pitch_bias_degrees
-                        * (1. - angles.x.abs() / 90.);
-                    let (direction, _, _) = movement::angle_vectors(launch_angles);
-                    launch = direction * profile.speed;
-                }
+                (horizontal, None, velocity)
+            } else if mode == Some(ThrowMode::Overhand) {
+                (profile.airborne_overhand_horizontal_inheritance,
+                    profile.airborne_overhand_vertical_inheritance,
+                    profile.airborne_overhand_velocity.as_ref())
+            } else {
+                (None, None, None)
+            };
+            if let Some(inheritance) = horizontal_inheritance {
+                inherited.x = p.movement.velocity.x * inheritance;
+                inherited.y = p.movement.velocity.y * inheritance;
+            }
+            if let Some(inheritance) = vertical_inheritance {
+                inherited.z = p.movement.velocity.z * inheritance;
+            }
+            if let Some(profile) = velocity_profile {
+                // Keep the separately uncalibrated spawn trace on the raw
+                // aim ray above. Only the release velocity uses this law.
+                let mut launch_angles = angles;
+                launch_angles.x -= profile.upward_pitch_bias_degrees
+                    * (1. - angles.x.abs() / 90.);
+                let (direction, _, _) = movement::angle_vectors(launch_angles);
+                launch = direction * profile.speed;
             }
         }
         launch + inherited
@@ -526,6 +536,9 @@ mod tests {
             grounded_overhand_velocity: (mode == ThrowMode::Overhand).then(|| vector.clone()).flatten(),
             grounded_underhand_velocity: (mode == ThrowMode::Underhand).then(|| vector.clone()).flatten(),
             grounded_combined_velocity: (mode == ThrowMode::Combined).then_some(vector).flatten(),
+            airborne_overhand_velocity: None,
+            airborne_overhand_horizontal_inheritance: None,
+            airborne_overhand_vertical_inheritance: None,
         });
         let mut weapon = crate::weapon::WeaponState::new(Arc::new(definition));
         weapon.grenade_throw = Some(ThrowState { phase: ThrowPhase::Throwing, mode,
@@ -582,6 +595,9 @@ mod tests {
                     speed: 675., upward_pitch_bias_degrees: 10.,
                 }),
                 grounded_underhand_velocity: None, grounded_combined_velocity: None,
+                airborne_overhand_velocity: None,
+                airborne_overhand_horizontal_inheritance: None,
+                airborne_overhand_vertical_inheritance: None,
             });
             let release = weapons::GrenadeReleaseAnimation {
                 duration: 0.5, release_time: 0.3, command_release_time: Some(0.1),
@@ -609,7 +625,16 @@ mod tests {
                 let mut actor = world.players[0].clone();
                 let mut definition = index;
                 match unsupported {
-                    "air" => actor.movement.on_ground = false,
+                    "air" => {
+                        actor.movement.on_ground = false;
+                        // Even a definition carrying an air-primary candidate
+                        // must retain the existing unsupported-air bot fallback.
+                        let air = unadmitted_smoke_air_primary_candidate();
+                        let profile = Arc::make_mut(&mut actor.weapons[0].def).grenade_launch.as_mut().unwrap();
+                        profile.airborne_overhand_velocity = air.airborne_overhand_velocity;
+                        profile.airborne_overhand_horizontal_inheritance = air.airborne_overhand_horizontal_inheritance;
+                        profile.airborne_overhand_vertical_inheritance = air.airborne_overhand_vertical_inheritance;
+                    },
                     "underhand" => actor.weapons[0].grenade_throw.as_mut().unwrap().mode = ThrowMode::Underhand,
                     "combined" => actor.weapons[0].grenade_throw.as_mut().unwrap().mode = ThrowMode::Combined,
                     "no-profile" => Arc::make_mut(&mut actor.weapons[0].def).grenade_launch = None,
@@ -710,35 +735,92 @@ mod tests {
             grounded_combined_velocity: Some(weapons::GrenadeLaunchVelocity {
                 speed: 438.75, upward_pitch_bias_degrees: 10.,
             }),
+            airborne_overhand_velocity: None,
+            airborne_overhand_horizontal_inheritance: None,
+            airborne_overhand_vertical_inheritance: None,
         }
+    }
+
+    // UNADMITTED numeric hypothesis for source-candidate plumbing only. These
+    // fixtures are not native evidence and do not enable the installed importer.
+    fn unadmitted_smoke_air_primary_candidate() -> weapons::GrenadeLaunch {
+        weapons::GrenadeLaunch {
+            reference: "UNADMITTED-smoke-air-primary-hypothesis".into(),
+            airborne_overhand_velocity: Some(weapons::GrenadeLaunchVelocity {
+                speed: 675., upward_pitch_bias_degrees: 10.,
+            }),
+            airborne_overhand_horizontal_inheritance: Some(1.25),
+            airborne_overhand_vertical_inheritance: Some(1.25),
+            ..observed_smoke_launch()
+        }
+    }
+
+    fn launch_utility_tick_input(name: &str, rate: u32, mode: ThrowMode,
+        profile: Option<weapons::GrenadeLaunch>, running: bool, jump: bool, pitch: f32) -> (Projectile, Vec3) {
+        use std::sync::Arc;
+        use crate::{TickInput, weapon::WeaponState};
+        use movement::buttons;
+        let mut collision = collision::CollisionWorld::new();
+        collision.add_convex(collision::Convex {
+            mins: Vec3::new(-8192., -8192., -128.), maxs: Vec3::new(8192., 8192., 0.),
+            planes: [Vec3::X, -Vec3::X, Vec3::Y, -Vec3::Y, Vec3::Z, -Vec3::Z]
+                .into_iter().zip([8192., 8192., 8192., 8192., 0., 128.])
+                .map(|(normal, dist)| collision::Plane { normal, dist }).collect(),
+            contents: contents::SOLID, surface: 0,
+        });
+        collision.finalize();
+        let mut catalog = weapons::Catalog::from_items_game(&format!(r#"items_game {{ items {{
+            7343 {{ name {name} attributes {{ "primary default clip size" 1 }} }}
+        }} }}"#)).unwrap();
+        let def = &mut catalog.weapons[0];
+        def.max_player_speed = 245.;
+        def.grenade_animations = Some(weapons::GrenadeAnimations {
+            pull_pin_duration: 0.25,
+            overhand: weapons::GrenadeReleaseAnimation { command_release_time: Some(0.1), duration: 0.5, release_time: 0.125 },
+            underhand: weapons::GrenadeReleaseAnimation { command_release_time: Some(0.1), duration: 0.5, release_time: 0.125 },
+        });
+        def.grenade_launch = profile;
+        let mut world = World::with_catalog(Arc::new(collision), Arc::new(catalog));
+        world.set_tick_rate(rate);
+        let id = world.add_player("thrower", Team::Terrorist);
+        let weapon = WeaponState::new(Arc::new(world.catalog.weapons[0].clone()));
+        let player = world.player_mut(id).unwrap();
+        player.alive = true;
+        player.weapons = vec![weapon]; player.active = 0;
+        player.movement.on_ground = true;
+        let forward_move = if running { 450. } else { 0. };
+        let hold = match mode {
+            ThrowMode::Overhand => buttons::ATTACK,
+            ThrowMode::Underhand => buttons::ATTACK2,
+            ThrowMode::Combined => buttons::ATTACK | buttons::ATTACK2,
+        };
+        for _ in 0..rate {
+            world.step(&[(id, TickInput { view_angles: Vec3::new(pitch, 0., 0.), forward_move, buttons: hold, ..Default::default() })]);
+        }
+        assert!(world.projectiles.is_empty());
+        let state = world.player(id).unwrap().active_weapon().unwrap().grenade_throw.unwrap();
+        assert_eq!(state.phase, ThrowPhase::Holding);
+        assert_eq!(state.mode, mode);
+        for _ in 0..rate / 2 {
+            world.step(&[(id, TickInput { view_angles: Vec3::new(pitch, 0., 0.), forward_move,
+                buttons: if jump { buttons::JUMP } else { 0 }, ..Default::default() })]);
+            if let Some(projectile) = world.projectiles.first() {
+                let player = world.player(id).unwrap();
+                assert_eq!(player.movement.on_ground, !jump);
+                assert_eq!(world.projectiles.len(), 1);
+                assert_eq!(projectile.owner, id);
+                assert!(world.events.iter().any(|e| matches!(e,
+                    GameEvent::UtilityThrown { kind, .. } if *kind == projectile.kind)));
+                return (projectile.clone(), player.movement.velocity);
+            }
+        }
+        panic!("ordinary hold/release must create one {name}");
     }
 
     #[test]
     fn molotov_and_smoke_tick_input_preserve_inheritance_with_admitted_smoke_button_vectors() {
-        use std::sync::Arc;
-        use crate::{TickInput, weapon::WeaponState};
-        use movement::buttons;
         fn launch(name: &str, rate: u32, mode: ThrowMode, measured: bool, running: bool, jump: bool, pitch: f32) -> (Projectile, Vec3) {
-            let mut collision = collision::CollisionWorld::new();
-            collision.add_convex(collision::Convex {
-                mins: Vec3::new(-8192., -8192., -128.), maxs: Vec3::new(8192., 8192., 0.),
-                planes: [Vec3::X, -Vec3::X, Vec3::Y, -Vec3::Y, Vec3::Z, -Vec3::Z]
-                    .into_iter().zip([8192., 8192., 8192., 8192., 0., 128.])
-                    .map(|(normal, dist)| collision::Plane { normal, dist }).collect(),
-                contents: contents::SOLID, surface: 0,
-            });
-            collision.finalize();
-            let mut catalog = weapons::Catalog::from_items_game(&format!(r#"items_game {{ items {{
-                7343 {{ name {name} attributes {{ "primary default clip size" 1 }} }}
-            }} }}"#)).unwrap();
-            let def = &mut catalog.weapons[0];
-            def.max_player_speed = 245.;
-            def.grenade_animations = Some(weapons::GrenadeAnimations {
-                pull_pin_duration: 0.25,
-                overhand: weapons::GrenadeReleaseAnimation { command_release_time: Some(0.1), duration: 0.5, release_time: 0.125 },
-                underhand: weapons::GrenadeReleaseAnimation { command_release_time: Some(0.1), duration: 0.5, release_time: 0.125 },
-            });
-            def.grenade_launch = measured.then(|| {
+            let profile = measured.then(|| {
                 if name == "weapon_smokegrenade" { observed_smoke_launch() }
                 else { weapons::GrenadeLaunch {
                     reference: format!("observed-{name}-primary"),
@@ -748,38 +830,12 @@ mod tests {
                     grounded_overhand_velocity: None,
                     grounded_underhand_velocity: None,
                     grounded_combined_velocity: None,
+                    airborne_overhand_velocity: None,
+                    airborne_overhand_horizontal_inheritance: None,
+                    airborne_overhand_vertical_inheritance: None,
                 } }
             });
-            let mut world = World::with_catalog(Arc::new(collision), Arc::new(catalog));
-            world.set_tick_rate(rate);
-            let id = world.add_player("thrower", Team::Terrorist);
-            let weapon = WeaponState::new(Arc::new(world.catalog.weapons[0].clone()));
-            let player = world.player_mut(id).unwrap();
-            player.alive = true;
-            player.weapons = vec![weapon]; player.active = 0;
-            player.movement.on_ground = true;
-            let forward_move = if running { 450. } else { 0. };
-            let hold = match mode {
-                ThrowMode::Overhand => buttons::ATTACK,
-                ThrowMode::Underhand => buttons::ATTACK2,
-                ThrowMode::Combined => buttons::ATTACK | buttons::ATTACK2,
-            };
-            for _ in 0..rate {
-                world.step(&[(id, TickInput { view_angles: Vec3::new(pitch, 0., 0.), forward_move, buttons: hold, ..Default::default() })]);
-            }
-            assert!(world.projectiles.is_empty());
-            let state = world.player(id).unwrap().active_weapon().unwrap().grenade_throw.unwrap();
-            assert_eq!(state.phase, ThrowPhase::Holding);
-            assert_eq!(state.mode, mode);
-            for _ in 0..rate / 2 {
-                world.step(&[(id, TickInput { view_angles: Vec3::new(pitch, 0., 0.), forward_move,
-                    buttons: if jump { buttons::JUMP } else { 0 }, ..Default::default() })]);
-                if let Some(projectile) = world.projectiles.first() {
-                    assert_eq!(world.player(id).unwrap().movement.on_ground, !jump);
-                    return (projectile.clone(), world.player(id).unwrap().movement.velocity);
-                }
-            }
-            panic!("ordinary hold/release must create one {name}");
+            launch_utility_tick_input(name, rate, mode, profile, running, jump, pitch)
         }
         for name in ["weapon_molotov", "weapon_smokegrenade"] {
             for rate in [64, 128] {
@@ -826,6 +882,92 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    #[test]
+    fn unadmitted_air_primary_components_follow_ordinary_jump_release_independently() {
+        for rate in [64, 128] {
+            let dt = 1. / rate as f32;
+            for running in [false, true] {
+                // Calculated from the UNADMITTED hypothesis, not observed air
+                // samples. Native angular/vertical admission belongs to root.
+                for (pitch, hypothesis_x, hypothesis_z) in [
+                    (0., 664.745239, 117.212517),
+                    (-30., 541.433167, 403.082062),
+                    (45., 517.080017, -433.881622),
+                ] {
+                    let (prior, player_velocity) = launch_utility_tick_input("weapon_smokegrenade", rate,
+                        ThrowMode::Overhand, Some(observed_smoke_launch()), running, true, pitch);
+                    assert!(player_velocity.z > 0., "ordinary JUMP must still be ascending at release");
+                    if running { assert!((player_velocity.x - 245.).abs() < 0.001); }
+                    else { assert_eq!(player_velocity.truncate(), glam::Vec2::ZERO); }
+                    for components in 0..8 {
+                        let mut profile = unadmitted_smoke_air_primary_candidate();
+                        if components & 1 == 0 { profile.airborne_overhand_velocity = None; }
+                        if components & 2 == 0 { profile.airborne_overhand_horizontal_inheritance = None; }
+                        if components & 4 == 0 { profile.airborne_overhand_vertical_inheritance = None; }
+                        let (actual, actual_player_velocity) = launch_utility_tick_input("weapon_smokegrenade", rate,
+                            ThrowMode::Overhand, Some(profile), running, true, pitch);
+                        assert_eq!(actual_player_velocity, player_velocity);
+                        let mut expected = if components & 1 != 0 {
+                            Vec3::new(hypothesis_x, 0., hypothesis_z)
+                        } else { movement::angle_vectors(Vec3::new(pitch, 0., 0.)).0 * 750. };
+                        expected += Vec3::new(
+                            player_velocity.x * if components & 2 != 0 { 1.25 } else { 0.5 },
+                            player_velocity.y * if components & 2 != 0 { 1.25 } else { 0.5 },
+                            player_velocity.z * if components & 4 != 0 { 1.25 } else { 0.5 });
+                        // First emitted projectile has already advanced through
+                        // one ordinary free-flight tick; do not fit spawn age.
+                        assert!((actual.velocity + Vec3::Z * 320. * dt - expected).length() < 0.002,
+                            "{rate}Hz, running={running}, pitch={pitch}, components={components}");
+                        assert!((actual.pos - prior.pos - (actual.velocity - prior.velocity) * dt).length() < 0.002,
+                            "air velocity changes preserve the existing spawn trace");
+                        assert_eq!(actual.born, prior.born);
+                        assert_eq!(actual.kind, Kind::Smoke);
+                        if components == 0 { assert_eq!(actual, prior); }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn unadmitted_air_primary_preserves_ground_buttons_air_alternates_and_no_mode() {
+        let candidate = unadmitted_smoke_air_primary_candidate();
+        for rate in [64, 128] {
+            for running in [false, true] {
+                for pitch in [0., -30., 45.] {
+                    for mode in [ThrowMode::Overhand, ThrowMode::Underhand, ThrowMode::Combined] {
+                        for jump in [false, true] {
+                            if jump && mode == ThrowMode::Overhand { continue; }
+                            assert_eq!(
+                                launch_utility_tick_input("weapon_smokegrenade", rate, mode, Some(candidate.clone()), running, jump, pitch),
+                                launch_utility_tick_input("weapon_smokegrenade", rate, mode, Some(observed_smoke_launch()), running, jump, pitch),
+                                "{rate}Hz, running={running}, pitch={pitch}, mode={mode:?}, jump={jump}");
+                        }
+                    }
+                }
+            }
+        }
+        // No-mode callers have no ordinary button endpoint. Check that seam
+        // directly, including both horizontal axes and descending movement.
+        let mut world = arena();
+        let id = world.add_player("thrower", Team::Terrorist);
+        let catalog = weapons::Catalog::from_items_game(r#"items_game { items {
+            45 { name weapon_smokegrenade attributes { "primary default clip size" 1 } }
+        } }"#).unwrap();
+        let mut definition = catalog.weapons[0].clone();
+        definition.grenade_launch = Some(candidate);
+        for grounded in [false, true] {
+            let player = world.player_mut(id).unwrap();
+            player.movement.on_ground = grounded;
+            player.movement.velocity = Vec3::new(-245., 80., -100.);
+            let actor = world.player(id).unwrap();
+            let actual = world.grenade_release(actor, &definition, None, Vec3::new(-30., 20., 0.));
+            let mut unmatched = definition.clone();
+            unmatched.grenade_launch = None;
+            assert_eq!(actual, world.grenade_release(actor, &unmatched, None, Vec3::new(-30., 20., 0.)));
         }
     }
 

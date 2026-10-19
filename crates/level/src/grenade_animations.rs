@@ -75,6 +75,9 @@ fn observed_launch(name: &str, schema: Option<[u8; 20]>, header: &str) -> Option
             grounded_overhand_velocity: None,
             grounded_underhand_velocity: None,
             grounded_combined_velocity: None,
+            airborne_overhand_velocity: None,
+            airborne_overhand_horizontal_inheritance: None,
+            airborne_overhand_vertical_inheritance: None,
         });
     }
     if name == "weapon_smokegrenade" && schema == Some(OBSERVED_LAUNCH_SCHEMA)
@@ -103,6 +106,13 @@ fn observed_launch(name: &str, schema: Option<[u8; 20]>, header: &str) -> Option
                 speed: 438.75,
                 upward_pitch_bias_degrees: 10.,
             }),
+            // SOURCE CANDIDATE: UNADMITTED. Root's level jump pilot establishes
+            // a horizontal mismatch, not the angular family or inheritance.
+            // Populate each component only after root's independent admission;
+            // this exact Smoke/schema/model gate must remain the sole importer.
+            airborne_overhand_velocity: None,
+            airborne_overhand_horizontal_inheritance: None,
+            airborne_overhand_vertical_inheritance: None,
         });
     }
     (name == "weapon_hegrenade" && schema == Some(OBSERVED_LAUNCH_SCHEMA)
@@ -123,6 +133,9 @@ fn observed_launch(name: &str, schema: Option<[u8; 20]>, header: &str) -> Option
                 speed: 438.75,
                 upward_pitch_bias_degrees: 10.,
             }),
+            airborne_overhand_velocity: None,
+            airborne_overhand_horizontal_inheritance: None,
+            airborne_overhand_vertical_inheritance: None,
         })
 }
 
@@ -136,6 +149,8 @@ pub(super) fn import(
     digest.update(previous_hash?);
     // Bind the grounded Smoke button velocity corrections as well as the
     // existing mean-velocity gravity law when installed data is unchanged.
+    // Retain v14 while installed airborne fields remain empty. Root must bind
+    // the final admitted air profile once with v15 before candidate integration.
     digest.update(b"grenade-animation-timing-v14-smoke-ground-button-response");
     let mut definitions: Vec<_> = catalog
         .weapons
@@ -186,6 +201,21 @@ pub(super) fn import(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn installed_air_components_remain_unadmitted_for_every_grenade() {
+        use super::*;
+        // Root has admitted only the jump pilot's level horizontal mismatch.
+        // Do not turn that into a complete angular/inheritance profile, even
+        // when the exact installed Smoke identity matches the grounded gate.
+        for &(name, header) in OBSERVED_HEADERS {
+            if let Some(profile) = observed_launch(name, Some(OBSERVED_LAUNCH_SCHEMA), header) {
+                assert!(profile.airborne_overhand_velocity.is_none());
+                assert!(profile.airborne_overhand_horizontal_inheritance.is_none());
+                assert!(profile.airborne_overhand_vertical_inheritance.is_none());
+            }
+        }
+    }
+
     #[test]
     fn launch_response_requires_exact_schema_model_and_item() {
         use super::*;
