@@ -15,8 +15,8 @@ impl World {
             && def.grenade_launch.as_ref()?.grounded_overhand_velocity.is_some()).then_some(def)
     }
 
-    // The closest horizontal crossing and its vertical error use the current
-    // sim's discrete gravity law, including its first full gravity step.
+    // The closest horizontal crossing and its vertical error use the same
+    // mean-velocity gravity displacement as authoritative free flight.
     fn bot_he_target_error(&self, bot: &crate::Player, definition: &weapons::WeaponDefinition,
         target: Vec3, angles: Vec3) -> Option<(glam::Vec2, f32, Vec3, Vec3)> {
         let (from, velocity) = self.grenade_release(bot, definition, Some(ThrowMode::Overhand), angles)?;
@@ -24,7 +24,7 @@ impl World {
         let delta = (target - from).truncate();
         let time = delta.dot(horizontal) / horizontal.length_squared();
         if !time.is_finite() || time <= 0.0 || horizontal.length_squared() < 1.0 { return None; }
-        let end = from + velocity * time - Vec3::Z * 160.0 * time * (time + self.dt());
+        let end = from + velocity * time - Vec3::Z * 160.0 * time * time;
         let across = horizontal.normalize().perp_dot((end - target).truncate());
         let error = glam::Vec2::new(end.z - target.z, across);
         error.is_finite().then_some((error, time, from, velocity))
@@ -61,7 +61,7 @@ impl World {
         let mut previous = from;
         for step in 1..=24 {
             let time = duration * step as f32 / 24.0;
-            let next = from + velocity * time - Vec3::Z * 160.0 * time * (time + self.dt());
+            let next = from + velocity * time - Vec3::Z * 160.0 * time * time;
             let tr = self.collision.trace_box(previous, next, Vec3::splat(-2.0),
                 Vec3::splat(2.0), contents::MASK_SOLID);
             if tr.hit() { return next.distance(target) < 45.0 && !tr.start_solid; }
