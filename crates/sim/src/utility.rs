@@ -648,11 +648,13 @@ mod tests {
                 underhand: weapons::GrenadeReleaseAnimation { command_release_time: Some(0.1), duration: 0.5, release_time: 0.125 },
             });
             def.grenade_launch = measured.then(|| weapons::GrenadeLaunch {
-                reference: format!("observed-{name}-primary-horizontal-only"),
+                reference: format!("observed-{name}-primary"),
                 grounded_overhand_horizontal_inheritance: 1.25,
                 grounded_underhand_horizontal_inheritance: None,
                 grounded_combined_horizontal_inheritance: None,
-                grounded_overhand_velocity: None,
+                grounded_overhand_velocity: (name == "weapon_smokegrenade").then_some(weapons::GrenadeLaunchVelocity {
+                    speed: 675., upward_pitch_bias_degrees: 10.,
+                }),
                 grounded_underhand_velocity: None,
                 grounded_combined_velocity: None,
             });
@@ -688,15 +690,87 @@ mod tests {
                 let (moving, player_velocity) = launch(name, rate, ThrowMode::Overhand, true, true, false);
                 assert!((player_velocity.x - 245.).abs() < 0.001);
                 // Independently observed for each grenade:970.995239 -664.745239 =306.25.
-                // Preserve the current base vector: this packet does not admit its law.
                 assert!((moving.velocity.x - stationary.velocity.x - 306.25).abs() < 0.002);
-                assert_eq!(stationary.velocity, launch(name, rate, ThrowMode::Overhand, false, false, false).0.velocity);
+                if name == "weapon_smokegrenade" {
+                    assert!((stationary.velocity.x - 664.745239).abs() < 0.002);
+                    assert!((moving.velocity.x - 970.995239).abs() < 0.002);
+                } else {
+                    assert_eq!(stationary.velocity, launch(name, rate, ThrowMode::Overhand, false, false, false).0.velocity);
+                }
                 assert_eq!(moving.velocity.z, stationary.velocity.z);
                 for (mode, jump) in [(ThrowMode::Underhand, false), (ThrowMode::Combined, false), (ThrowMode::Overhand, true)] {
                     assert_eq!(launch(name, rate, mode, true, true, jump), launch(name, rate, mode, false, true, jump),
                         "unobserved button/air scope preserves the complete actual release");
                 }
             }
+        }
+    }
+
+    #[test]
+    fn grounded_primary_smoke_matches_native_level_negative_pitch_and_positive_holdout() {
+        fn release(pitch: f32, velocity: Vec3, grounded: bool, mode: Option<ThrowMode>,
+            profile: Option<&weapons::GrenadeLaunch>) -> (Vec3, Vec3) {
+            let mut world = arena();
+            let id = world.add_player("thrower", Team::Terrorist);
+            let catalog = weapons::Catalog::from_items_game(r#"items_game { items {
+                45 { name weapon_smokegrenade attributes { "primary default clip size" 1 } }
+            } }"#).unwrap();
+            let mut definition = catalog.weapons[0].clone();
+            definition.grenade_launch = profile.cloned();
+            let player = world.player_mut(id).unwrap();
+            player.movement.on_ground = grounded;
+            player.movement.velocity = velocity;
+            world.grenade_release(world.player(id).unwrap(), &definition, mode, Vec3::new(pitch, 0., 0.)).unwrap()
+        }
+        let profile = weapons::GrenadeLaunch {
+            reference: "native-grounded-primary-smoke-128hz".into(),
+            grounded_overhand_horizontal_inheritance: 1.25,
+            grounded_underhand_horizontal_inheritance: None,
+            grounded_combined_horizontal_inheritance: None,
+            grounded_overhand_velocity: Some(weapons::GrenadeLaunchVelocity {
+                speed: 675., upward_pitch_bias_degrees: 10.,
+            }),
+            grounded_underhand_velocity: None,
+            grounded_combined_velocity: None,
+        };
+        let mut old_profile = profile.clone();
+        old_profile.grounded_overhand_velocity = None;
+        // Smoke observations, not HE fixtures: level stationary/forward, then
+        // stationary -30 and an independent +45 holdout of the fitted family.
+        // At nonzero pitch mode is controlled +attack-only input; the literal
+        // strength field was offscreen. Generic zero abs-velocity is excluded.
+        for (pitch, native_x, received_z, later_z) in [
+            (0., 664.745239, 102.212517, Some(94.712517)),
+            (-30., 541.433167, 378.082062, Some(368.082062)),
+            (45., 517.080017, -446.381622, None),
+        ] {
+            let (pos, launch) = release(pitch, Vec3::ZERO, true, Some(ThrowMode::Overhand), Some(&profile));
+            assert!((launch.x - native_x).abs() < 0.002, "Smoke pitch {pitch}");
+            assert!(launch.y.abs() < 0.002);
+            for received_z in [Some(received_z), later_z].into_iter().flatten() {
+                // Gravity-only receive-time bracket, not an exact spawn tick
+                // or a fit of initial Vz to the displayed sample. Capture/log
+                // bounds put these frames within .25 nominal simulation seconds
+                // of command release: at 320u/s^2, gravity loss is <80u/s even
+                // without subtracting any unknown physical spawn delay.
+                let gravity_loss = launch.z - received_z;
+                assert!((0. ..80.).contains(&gravity_loss), "Smoke pitch {pitch}: {gravity_loss}");
+            }
+            let old = release(pitch, Vec3::ZERO, true, Some(ThrowMode::Overhand), Some(&old_profile));
+            assert_eq!(pos, old.0, "velocity calibration preserves the raw spawn trace");
+            let moving = release(pitch, Vec3::new(245., 80., 100.), true, Some(ThrowMode::Overhand), Some(&profile));
+            assert!((moving.1 - launch - Vec3::new(306.25, 100., 50.)).length() < 0.001,
+                "existing horizontal and vertical inheritance are unchanged");
+            for (grounded, mode) in [
+                (false, Some(ThrowMode::Overhand)), (true, Some(ThrowMode::Underhand)),
+                (true, Some(ThrowMode::Combined)), (true, None),
+            ] {
+                let actual = release(pitch, Vec3::new(245., 80., 100.), grounded, mode, Some(&profile));
+                assert_eq!(actual, release(pitch, Vec3::new(245., 80., 100.), grounded, mode, None),
+                    "unsupported Smoke modes/air retain the complete uncalibrated release");
+            }
+            let unmatched = release(pitch, Vec3::ZERO, true, Some(ThrowMode::Overhand), None);
+            assert_eq!(unmatched, old, "absent calibration retains the prior base vector");
         }
     }
 
