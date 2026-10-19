@@ -29,19 +29,24 @@ knife slash-to-quick-inspect hand jiggle and access to the early CS:GO knife set
 for owner testing. Preserve accepted maps, input, binds, performance, grounded
 motion and the accepted classic thumbnails.
 
-The owner tested staged Release `989fdc6`. A separate local candidate `4f5c6bb`
-corrects viewing-life/render-timeline defects and passed workspace, installed
-weapon-system, normal Release and Dust II probe/simulation checks. It is not
-merged, staged, visually admitted or owner-tested, and does not complete the
-missing native landing response. Keep it separate from the morning result.
+The owner tested staged Release `989fdc6`. The follow-on motion candidate now
+carries the viewing-life/render-timeline corrections and the knife
+secondary-slash-to-inspect continuity fix. Workspace, installed-model and normal
+Release/Dust II checks pass; rendered review, CI and delivery are in progress.
+This does not complete the missing native landing response or establish owner
+acceptance. Original-menu knife equip/persistence remains separate unfinished
+work; the requested early knives can be reviewed through isolated practice
+shortcuts without changing the saved collection.
 
 Continue concrete fixes with proportional existing checks and prepare coherent
 review builds; no small repeated tests or new diagnostic framework/backlog GUI.
 October 2015 Overpass now passes qualified traversal, Release simulation,
 rendered map/control and original-picker launch checks, with its historical
-photo distinct from installed Legacy. The original fence VMT remains missing;
-the measured shared fallback preserves its strict probe diagnostic. CI, staging
-and owner review remain open; complete historical coverage is not claimed.
+photo distinct from installed Legacy. PR #247 passed CI and was merged; the
+verified Release is staged in the October 19 Maps Desktop playtest folder.
+The original fence VMT remains missing; the measured shared fallback preserves
+its strict probe diagnostic. Owner review remains open; complete historical
+coverage is not claimed.
 The lower backlog (HUD, positional audio, interactions, bots, combat effects,
 menus/reliability, performance polish, multiplayer, inventory and later expansion)
 is retained; avoid unrelated expansion while these core outcomes remain.
