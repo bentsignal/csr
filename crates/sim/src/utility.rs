@@ -540,9 +540,10 @@ mod tests {
     }
 
     #[test]
-    fn bot_he_plan_reaches_target_through_tick_input_and_rejects_real_wall() {
+    fn bot_primary_plan_reaches_target_through_tick_input_and_rejects_calibrated_path_blocker() {
         use std::sync::Arc;
         use collision::{CollisionWorld, Convex, Plane};
+        use crate::TickInput;
         let solid = |mins: Vec3, maxs: Vec3| Convex {
             mins, maxs,
             planes: [Vec3::X, -Vec3::X, Vec3::Y, -Vec3::Y, Vec3::Z, -Vec3::Z]
@@ -550,76 +551,148 @@ mod tests {
                 .map(|(normal, dist)| Plane { normal, dist }).collect(),
             contents: contents::SOLID, surface: 0,
         };
-        let mut collision = CollisionWorld::new();
-        collision.add_convex(solid(Vec3::new(-2000., -2000., -16.), Vec3::new(2000., 2000., 0.)));
-        collision.finalize();
-        let mut catalog = weapons::Catalog::from_items_game(r#""items_game" { "items" { "44" { "name" "weapon_hegrenade" "attributes" { "primary default clip size" "1" } } } }"#).unwrap();
-        let def = &mut catalog.weapons[0];
-        def.grenade_launch = Some(weapons::GrenadeLaunch {
-            reference: "grounded-he-profile-fixture".into(),
-            grounded_overhand_horizontal_inheritance: 1.25,
-            grounded_underhand_horizontal_inheritance: None,
-            grounded_combined_horizontal_inheritance: None,
-            grounded_overhand_velocity: Some(weapons::GrenadeLaunchVelocity {
-                speed: 675., upward_pitch_bias_degrees: 10.,
-            }),
-            grounded_underhand_velocity: None, grounded_combined_velocity: None,
-        });
-        let release = weapons::GrenadeReleaseAnimation {
-            duration: 0.5, release_time: 0.3, command_release_time: Some(0.1),
+        let scene = |blocker: Option<Vec3>| {
+            let mut collision = CollisionWorld::new();
+            collision.add_convex(solid(Vec3::new(-2000., -2000., -16.), Vec3::new(2000., 2000., 0.)));
+            if let Some(point) = blocker {
+                collision.add_convex(solid(point - Vec3::splat(2.), point + Vec3::splat(2.)));
+            }
+            collision.finalize();
+            Arc::new(collision)
         };
-        def.grenade_animations = Some(weapons::GrenadeAnimations {
-            pull_pin_duration: 0.5, overhand: release.clone(), underhand: release,
-        });
-        let mut world = World::with_catalog(Arc::new(collision), Arc::new(catalog));
-        world.set_tick_rate(128);
-        let owner = world.add_player("thrower", Team::Terrorist);
-        let def = Arc::new(world.catalog.weapons[0].clone());
-        world.players[0].weapons = vec![crate::weapon::WeaponState::new(def)];
-        world.players[0].active = 0;
-        world.players[0].is_bot = true;
-        world.players[0].movement.origin = Vec3::Z * 0.03125;
-        world.players[0].movement.on_ground = true;
-        for _ in 0..4 { world.step(&[(owner, crate::TickInput::default())]); }
-        let target = Vec3::new(700., 120., 8.);
-        let angles = world.bot_lob_angles(&world.players[0], 44, target).unwrap();
-        assert!(world.clear_bot_lob(&world.players[0], 44, target, angles));
-        let mut airborne = world.players[0].clone();
-        airborne.movement.on_ground = false;
-        assert_eq!(world.bot_lob_angles(&airborne, 44, target), lob_angles(airborne.eye(), target));
-        let mut blocked = world.clone();
-        let mut collision = CollisionWorld::new();
-        collision.add_convex(solid(Vec3::new(-2000., -2000., -16.), Vec3::new(2000., 2000., 0.)));
-        collision.add_convex(solid(Vec3::new(300., -1000., 0.), Vec3::new(316., 1000., 512.)));
-        collision.finalize();
-        blocked.collision = Arc::new(collision);
-        assert!(!blocked.clear_bot_lob(&blocked.players[0], 44, target, angles));
-        for candidate in [&mut world, &mut blocked] {
-            for _ in 0..80 { candidate.step(&[(owner, crate::TickInput {
-                view_angles: angles, buttons: movement::buttons::ATTACK, ..Default::default()
-            })]); }
-        }
-        let direction = target.truncate().normalize();
-        let mut previous: Option<Vec3> = None;
-        let mut crossing = None;
-        let mut bounced = false;
-        for _ in 0..200 {
-            for candidate in [&mut world, &mut blocked] {
-                candidate.step(&[(owner, crate::TickInput { view_angles: angles, ..Default::default() })]);
+        // Preserve the same world-space lateral wish while solver yaw changes.
+        let input = |angles: Vec3, moving: bool, buttons: u32| {
+            let (forward, right, _) = movement::angle_vectors(Vec3::new(0., angles.y, 0.));
+            let wish = if moving { Vec3::Y * 245. } else { Vec3::ZERO };
+            TickInput { view_angles: angles, forward_move: wish.dot(forward),
+                side_move: wish.dot(right), buttons, ..Default::default() }
+        };
+        let check = |rate: u32, name: &str, index: u32, kind: Kind, moving: bool| {
+            let mut catalog = weapons::Catalog::from_items_game(&format!(r#"items_game {{ items {{
+                {index} {{ name {name} attributes {{ "primary default clip size" 1 }} }}
+            }} }}"#)).unwrap();
+            let def = &mut catalog.weapons[0];
+            def.max_player_speed = 245.;
+            def.grenade_launch = Some(weapons::GrenadeLaunch {
+                reference: "admitted-grounded-primary-profile-fixture".into(),
+                grounded_overhand_horizontal_inheritance: 1.25,
+                grounded_underhand_horizontal_inheritance: None,
+                grounded_combined_horizontal_inheritance: None,
+                grounded_overhand_velocity: Some(weapons::GrenadeLaunchVelocity {
+                    speed: 675., upward_pitch_bias_degrees: 10.,
+                }),
+                grounded_underhand_velocity: None, grounded_combined_velocity: None,
+            });
+            let release = weapons::GrenadeReleaseAnimation {
+                duration: 0.5, release_time: 0.3, command_release_time: Some(0.1),
+            };
+            def.grenade_animations = Some(weapons::GrenadeAnimations {
+                pull_pin_duration: 0.5, overhand: release.clone(), underhand: release,
+            });
+            let mut world = World::with_catalog(scene(None), Arc::new(catalog));
+            world.set_tick_rate(rate);
+            let owner = world.add_player("thrower", Team::Terrorist);
+            let def = Arc::new(world.catalog.weapons[0].clone());
+            world.players[0].weapons = vec![crate::weapon::WeaponState::new(def)];
+            world.players[0].active = 0;
+            world.players[0].is_bot = true;
+            world.players[0].movement.origin = Vec3::Z * 0.03125;
+            world.players[0].movement.on_ground = true;
+            for _ in 0..rate {
+                world.step(&[(owner, input(Vec3::ZERO, moving, movement::buttons::ATTACK))]);
             }
-            bounced |= blocked.events.iter().any(|e| matches!(e, GameEvent::UtilityBounced { .. }));
-            if let Some(p) = blocked.projectiles.first() { assert!(p.pos.x < 300.); }
-            if let Some(p) = world.projectiles.first() {
-                if let Some(before) = previous {
-                    let a = (before - target).truncate().dot(direction);
-                    let b = (p.pos - target).truncate().dot(direction);
-                    if a < 0. && b >= 0. { crossing = Some(before.lerp(p.pos, -a / (b-a))); }
+            assert!(world.projectiles.is_empty());
+            assert_eq!(world.players[0].active_weapon().unwrap().grenade_throw.unwrap().phase, ThrowPhase::Holding);
+            let target = Vec3::new(700., 120., 8.);
+            for unsupported in ["air", "underhand", "combined", "no-profile", "no-velocity", "human",
+                "tracked", "aim", "unknown-definition", "unknown-kind", "flash", "molotov", "incendiary", "decoy"] {
+                let mut actor = world.players[0].clone();
+                let mut definition = index;
+                match unsupported {
+                    "air" => actor.movement.on_ground = false,
+                    "underhand" => actor.weapons[0].grenade_throw.as_mut().unwrap().mode = ThrowMode::Underhand,
+                    "combined" => actor.weapons[0].grenade_throw.as_mut().unwrap().mode = ThrowMode::Combined,
+                    "no-profile" => Arc::make_mut(&mut actor.weapons[0].def).grenade_launch = None,
+                    "no-velocity" => Arc::make_mut(&mut actor.weapons[0].def).grenade_launch.as_mut().unwrap()
+                        .grounded_overhand_velocity = None,
+                    "human" => actor.is_bot = false,
+                    "tracked" => actor.tracked = Some(crate::TrackedPose::default()),
+                    "aim" => actor.aim = Some(crate::AimRay::default()),
+                    "unknown-definition" => definition += 10000,
+                    other => Arc::make_mut(&mut actor.weapons[0].def).class_name = match other {
+                        "flash" => "weapon_flashbang", "molotov" => "weapon_molotov",
+                        "incendiary" => "weapon_incgrenade", "decoy" => "weapon_decoy",
+                        _ => "weapon_unknown_grenade",
+                    }.into(),
                 }
-                previous = Some(p.pos);
+                let fallback = lob_angles(actor.eye(), target).unwrap();
+                assert_eq!(world.bot_lob_angles(&actor, definition, target), Some(fallback), "{unsupported}");
+                assert_eq!(world.clear_bot_lob(&actor, definition, target, fallback),
+                    world.clear_lob(actor.eye(), target, fallback), "{unsupported}");
+            }
+            // Stop immediately before the ordinary command-relative release tick.
+            world.step(&[(owner, input(Vec3::ZERO, moving, 0))]);
+            let started = world.players[0].active_weapon().unwrap().grenade_throw.unwrap().throw_started_tick.unwrap();
+            let delay = world.players[0].active_weapon().unwrap().def.grenade_animations.as_ref().unwrap()
+                .overhand.projectile_delay();
+            while world.tick < started + (delay / world.dt()).ceil() as u64 {
+                world.step(&[(owner, input(Vec3::ZERO, moving, 0))]);
+            }
+            assert!(world.projectiles.is_empty());
+            // Isolate planning/release agreement at the release actor state. A
+            // cloned TickInput step supplies post-movement origin/velocity; this
+            // does not assert that bot decisions anticipate future movement.
+            let mut release_actor = world.clone();
+            release_actor.step_prediction(&[(owner, input(Vec3::ZERO, moving, 0))]);
+            let actor = &release_actor.players[0];
+            assert!(actor.movement.on_ground);
+            if moving { assert!((actor.movement.velocity.y - 245.).abs() < 0.001); }
+            let angles = world.bot_lob_angles(actor, index, target).unwrap();
+            assert!(world.clear_bot_lob(actor, index, target, angles));
+            let (from, velocity) = world.grenade_release(actor, &actor.weapons[0].def,
+                Some(ThrowMode::Overhand), angles).unwrap();
+            let duration = (target - from).truncate().dot(velocity.truncate()) / velocity.truncate().length_squared();
+            let midpoint = from + velocity * (duration * 0.5) - Vec3::Z * 160. * (duration * 0.5).powi(2);
+            let mut blocked = world.clone();
+            blocked.collision = scene(Some(midpoint));
+            assert!(!blocked.clear_bot_lob(actor, index, target, angles));
+            let fallback = lob_angles(actor.eye(), target).unwrap();
+            assert!((angles - fallback).length() > 1., "must solve beyond the raw-750 fallback");
+            assert!(blocked.clear_lob(actor.eye(), target, fallback), "old prediction misses this path blocker");
+            let direction = velocity.truncate().normalize();
+            let mut previous = from;
+            let mut crossing = None;
+            let mut bounced = false;
+            for step in 1..=rate * 2 {
+                for candidate in [&mut world, &mut blocked] {
+                    candidate.step(&[(owner, input(angles, moving, 0))]);
+                }
+                if step == 1 {
+                    assert!((world.players[0].movement.origin - actor.movement.origin).length() < 0.001);
+                    assert!((world.players[0].movement.velocity - actor.movement.velocity).length() < 0.001);
+                    assert!(world.events.iter().any(|e| matches!(e,
+                        GameEvent::UtilityThrown { kind: actual, .. } if *actual == kind)));
+                    assert_eq!(world.projectiles[0].kind, kind);
+                    assert!((world.projectiles[0].velocity - (velocity - Vec3::Z * 320. * world.dt())).length() < 0.001);
+                }
+                bounced |= blocked.events.iter().any(|e| matches!(e, GameEvent::UtilityBounced { .. }));
+                let p = world.projectiles.first().expect("free-flight projectile before target");
+                let time = step as f32 * world.dt();
+                let planned = from + velocity * time - Vec3::Z * 160. * time * time;
+                assert!((p.pos - planned).length() < 0.01, "{name}, {rate} Hz, moving={moving}");
+                let a = (previous - target).truncate().dot(direction);
+                let b = (p.pos - target).truncate().dot(direction);
+                if a < 0. && b >= 0. { crossing = Some(previous.lerp(p.pos, -a / (b-a))); break; }
+                previous = p.pos;
+            }
+            assert!((crossing.expect("ordinary primary throw crosses the target plane") - target).length() < 1.0);
+            assert!(bounced, "the same TickInput launch hits the rejected path blocker");
+        };
+        for rate in [64, 128] {
+            for (name, index, kind) in [("weapon_hegrenade", 44, Kind::He), ("weapon_smokegrenade", 45, Kind::Smoke)] {
+                for moving in [false, true] { check(rate, name, index, kind, moving); }
             }
         }
-        assert!((crossing.expect("ordinary thrown HE crosses the target plane") - target).length() < 1.0);
-        assert!(bounced, "the same real launch hits the rejected wall");
     }
 
     #[test]
