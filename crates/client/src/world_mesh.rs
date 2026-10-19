@@ -551,6 +551,8 @@ pub struct SharedHandles {
 }
 
 /// Shared VMT → [`WorldMaterial`] translation for world and props.
+/// `lightmapped` distinguishes BSP surfaces from models; the sky caller uses
+/// `false` but always supplies a parsed VMT, so it never uses the absent-VMT path.
 pub fn material_from_vmt(
     mat: Option<&vmt::Material>,
     fs: &vfs::Vfs,
@@ -582,10 +584,16 @@ pub fn material_from_vmt(
         cull: true,
     };
     let Some(mat) = mat else {
-        // Native Legacy identifies its shared missing material as ___error /
-        // UnlitGeneric, including on static props. Do not apply map lighting
-        // or exposure to the diagnostic texture. Its sampling remains separate
-        // from the unavailable authored material and strict asset probes.
+        // The measured Legacy unresolved-model reference uses ___error /
+        // UnlitGeneric and appears black. Reuse the neutral black texture for
+        // that empirical model fallback; this does not reconstruct the native
+        // runtime texture.
+        // BSP surfaces retain their diagnostic checker. A missing texture in a
+        // valid VMT follows the separate authored path below; strict missing-VMT
+        // probes remain independent of this presentation choice.
+        if !lightmapped {
+            out.base = textures.black.clone();
+        }
         out.params.flags = flags::UNLIT;
         return out;
     };
@@ -841,31 +849,45 @@ mod authored_transform_tests {
     }
 
     #[test]
-    fn missing_material_is_unlit_without_changing_missing_texture_or_textureless_materials() {
+    fn missing_material_uses_unlit_caller_fallback_without_changing_valid_materials() {
         let fs = normal_fs();
         let mut images = Assets::<Image>::default();
         let mut textures = TextureCache::new(&mut images);
         let shared = SharedHandles { lightmap: textures.white.clone() };
-        let missing_texture = vmt::Material::parse_with(
-            r#"VertexLitGeneric { "$basetexture" "test/absent" }"#, &|_| None, 0,
-        ).unwrap();
-        let textureless = vmt::Material::parse_with("VertexLitGeneric {}", &|_| None, 0).unwrap();
-
+        let valid_base = textures.load(&fs, &mut images, "test/opaque", true).unwrap().handle;
         for lightmapped in [false, true] {
             let missing = material_from_vmt(None, &fs, &mut textures, &mut images, &shared, 7.0, lightmapped);
-            assert_eq!(missing.base, textures.missing);
+            assert_eq!(missing.base, if lightmapped { textures.missing.clone() } else { textures.black.clone() });
             assert_eq!(missing.params.flags, flags::UNLIT);
+            assert_eq!(missing.params.color, Vec4::ONE);
+            assert_eq!(missing.params.base_uv, WorldParams::default().base_uv);
             assert_eq!(missing.alpha_mode, AlphaMode::Opaque);
             assert!(missing.cull);
 
             let lit_flags = if lightmapped { flags::LIGHTMAPPED } else { flags::VERTEX_LIT };
-            let authored = material_from_vmt(Some(&missing_texture), &fs, &mut textures, &mut images, &shared, 7.0, lightmapped);
-            assert_eq!(authored.base, textures.missing);
-            assert_eq!(authored.params.flags, lit_flags);
-            let plain = material_from_vmt(Some(&textureless), &fs, &mut textures, &mut images, &shared, 7.0, lightmapped);
-            assert_eq!(plain.base, textures.white);
-            assert_eq!(plain.params.flags, lit_flags);
+            let lit_shader = if lightmapped { "LightmappedGeneric" } else { "VertexLitGeneric" };
+            for (shader, expected_flags) in [
+                (lit_shader, lit_flags),
+                ("UnlitGeneric", flags::UNLIT | if lightmapped { 0 } else { flags::VERTEX_LIT }),
+            ] {
+                for (declaration, expected_base) in [
+                    (r#""$basetexture" "test/opaque""#, valid_base.clone()),
+                    (r#""$basetexture" "test/absent""#, textures.missing.clone()),
+                    ("", textures.white.clone()),
+                ] {
+                    let valid = vmt::Material::parse_with(&format!("{shader} {{ {declaration} }}"), &|_| None, 0).unwrap();
+                    let authored = material_from_vmt(Some(&valid), &fs, &mut textures, &mut images, &shared, 7.0, lightmapped);
+                    assert_eq!(authored.base, expected_base, "{shader}: {declaration}");
+                    assert_eq!(authored.params.flags, expected_flags, "{shader}: {declaration}");
+                    assert_eq!(authored.alpha_mode, AlphaMode::Opaque);
+                }
+            }
         }
+        // A BSP caller that loads an absent VMT also retains the checker.
+        let world = world_material("test/absent_material", &fs, &mut textures, &mut images, &shared, 7.0);
+        assert_eq!(world.base, textures.missing);
+        assert_eq!(world.params.flags, flags::UNLIT);
+        assert!(vmt::Material::load("test/absent_material", &|p| fs.read_string(p)).is_none());
         // The absent texture is still tracked, including when served from cache.
         assert_eq!(textures.stats_missing, 1);
     }
