@@ -872,7 +872,7 @@ fn smoke_test(
             if tr.hit() {events.0.push(sim::GameEvent::Impact{player:l.id,pos:tr.end,normal:tr.normal,surface:tr.surface,door:None});}
             if std::env::var("CSR_TEST_FEEDBACK").as_deref() != Ok("impact") {
                 let pos=start+forward*70.0;
-                events.0.push(sim::GameEvent::Damage{attacker:l.id,victim:l.id,health:25,group:sim::weapon::HitGroup::Chest,pos});
+                events.0.push(sim::GameEvent::Damage{attacker:l.id,victim:l.id,health:25,group:sim::weapon::HitGroup::Chest,pos,protection:sim::weapon::HitProtection::Flesh});
             }
         }
     }

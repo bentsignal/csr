@@ -618,6 +618,21 @@ mod death_tests;
 mod tests {
     use super::*;
     #[test]
+    fn damage_contact_protection_survives_event_transport() {
+        use sim::weapon::{HitGroup, HitProtection};
+        let batch = EventBatch { tick: 200, events: [
+            (HitGroup::Chest, HitProtection::Kevlar),
+            (HitGroup::Head, HitProtection::Helmet),
+            (HitGroup::Head, HitProtection::Flesh),
+            (HitGroup::LeftLeg, HitProtection::Flesh),
+        ].into_iter().map(|(group, protection)| GameEvent::Damage {
+            attacker: 1, victim: 2, health: 25, group, pos: glam::Vec3::X, protection,
+        }).collect() };
+        validate_events(&batch).unwrap();
+        assert_eq!(decode::<EventBatch>(&encode(&batch).unwrap()).unwrap(), batch);
+    }
+
+    #[test]
     fn door_impact_local_frame_roundtrips_and_rejects_unbounded_contacts() {
         use glam::Vec3;
         let impact = sim::doors::Impact { door: 0, pos: Vec3::new(-2., 24., 64.), normal: -Vec3::X };
