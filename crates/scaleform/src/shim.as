@@ -551,16 +551,17 @@ _global.csrClassicCardMaps = {
     de_train_2015: true, de_vertigo_2017: true, de_cache_2015: true,
     de_mirage_2019: true, de_cbble_2018: true
 };
-var csrAttachMovie = MovieClip.prototype.attachMovie;
+if (_global.csrClassicAttachOriginal == undefined) {
+_global.csrClassicAttachOriginal = MovieClip.prototype.attachMovie;
 MovieClip.prototype.attachMovie = function(linkage, name, depth, init) {
     var parts = String(linkage).split("|");
     if (parts.length != 3 || parts[0] != "csr-classic-card" ||
         _global.csrClassicCardMaps[parts[1]] !== true ||
         parts[2].indexOf("map-") != 0 || parts[2].indexOf("-overall") != parts[2].length - 8) {
-        return csrAttachMovie.apply(this, arguments);
+        return _global.csrClassicAttachOriginal.apply(this, arguments);
     }
     arguments[0] = parts[2];
-    var card = csrAttachMovie.apply(this, arguments);
+    var card = _global.csrClassicAttachOriginal.apply(this, arguments);
     if (card == undefined) { return card; }
     var bounds = card.getBounds(card);
     var width = bounds.xMax - bounds.xMin;
@@ -613,6 +614,7 @@ MovieClip.prototype.attachMovie = function(linkage, name, depth, init) {
     context.load();
     return card;
 };
+}
 
 // avatar.swf hides DynamicAvatar right before loading `img://avatar_<xuid>`
 // into it and never shows it again, yet the reference shows avatars:
