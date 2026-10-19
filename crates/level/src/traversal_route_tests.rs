@@ -8,6 +8,224 @@ fn private_classic_level(name: &str) -> Level {
         .expect("already-cached private classic BSP; no download")
 }
 
+// Private-data fixtures. CSR_DATA_DIR selects the
+// already-cached October 2015 BSP; private_classic_level never downloads it.
+mod cached_classic_overpass_2015 {
+    use super::*;
+
+    fn world(level: &Level, rate: u32) -> sim::World {
+        let mut world = sim::World::with_catalog(level.collision.clone(), level.catalog.clone());
+        world.set_character_profiles(level.character_profiles.clone());
+        world.set_tick_rate(rate);
+        world.load_map(&level.bsp, level.overview().as_deref());
+        world
+    }
+
+    fn assert_clear(world: &sim::World, actor: sim::PlayerId, stage: &str) {
+        let player = world.player(actor).unwrap();
+        let (mins, maxs) = player.movement.hull();
+        let at = world.collision.trace_box(player.movement.origin, player.movement.origin,
+            mins, maxs, collision::contents::MASK_PLAYERSOLID);
+        assert!(player.alive && player.health > 0 && player.deaths == 0
+            && !player.movement.ducked && !at.start_solid && !at.all_solid,
+            "{}Hz {stage}, actor {actor}, tick {}: alive={} health={} deaths={}, {:?}, {at:?}",
+            world.tick_rate, world.tick, player.alive, player.health, player.deaths, player.movement);
+    }
+
+    #[test]
+    #[ignore = "requires private cached de_overpass_2015 via CSR_DATA_DIR and read-only Legacy dependencies"]
+    fn ten_player_competitive_starts_use_shared_spawn_path() {
+        let level = private_classic_level("de_overpass_2015");
+        let cvars = level.cfg("gamemode_competitive.cfg")
+            .map(|text| sim::rules::parse_cfg(&text)).unwrap_or_default();
+        let rules = sim::RulesConfig::from_cvars(&cvars);
+        for rate in [64, 128] {
+            let mut world = world(&level, rate);
+            // All 36 enabled authored spawns must reach the shared pool,
+            // rather than a test-specific substitute or a fallback origin.
+            assert_eq!(world.spawns.len(), 36);
+            assert_eq!(world.objectives.buy_zones.len(), 2);
+            for (team, count) in [(sim::Team::Terrorist, 20), (sim::Team::CounterTerrorist, 16)] {
+                assert_eq!(world.spawns.iter().filter(|spawn| spawn.team == team).count(), count);
+            }
+            // Same add_bot -> set_mode order as launcher's round_check:
+            // first deathmatch placements, then the first competitive round.
+            for i in 0..5 {
+                world.add_bot(&format!("T bot {i}"), sim::Team::Terrorist);
+                world.add_bot(&format!("CT bot {i}"), sim::Team::CounterTerrorist);
+            }
+            for stage in ["initial deathmatch placement", "first competitive placement"] {
+                if stage == "first competitive placement" {
+                    world.set_mode(sim::GameMode::Competitive, rules.clone());
+                }
+                assert_eq!(world.players.len(), 10);
+                for (i, player) in world.players.iter().enumerate() {
+                    assert_clear(&world, player.id, stage);
+                    assert!(world.spawns.iter().any(|spawn| spawn.team == player.team
+                        && spawn.origin.truncate().distance(player.movement.origin.truncate()) < 0.01),
+                        "{rate}Hz {stage}: {} left the authored team spawn pool: {:?}", player.name, player.movement);
+                    let (mins, maxs) = player.bounds();
+                    assert!(world.objectives.in_buy_zone(player.team, mins, maxs),
+                        "{rate}Hz {stage}: {} outside own buy zone: {:?}", player.name, player.movement);
+                    for other in &world.players[..i] {
+                        let delta = (player.movement.origin - other.movement.origin).abs();
+                        assert!(delta.x >= 32. || delta.y >= 32. || delta.z >= 72.,
+                            "{rate}Hz {stage}: standing players {} and {} overlap", player.id, other.id);
+                    }
+                }
+            }
+            let idle: Vec<_> = world.players.iter().map(|player| (player.id,
+                sim::TickInput { weapon_slot: 3, ..Default::default() })).collect();
+            // Explicit commands override AI without replacing the bot/player
+            // placement path. Exercise authoritative buy flags and settling.
+            for _ in 0..rate {
+                world.step(&idle);
+                for player in &world.players {
+                    assert_clear(&world, player.id, "competitive idle");
+                    assert!(player.in_buy_zone, "{rate}Hz {} lost buy zone at tick {}: {:?}",
+                        player.name, world.tick, player.movement);
+                }
+            }
+            assert!(world.players.iter().all(|player| player.movement.on_ground));
+        }
+    }
+
+    #[test]
+    #[ignore = "requires private cached de_overpass_2015 via CSR_DATA_DIR and read-only Legacy dependencies"]
+    fn tunnel_ladder_bottom_approach_climb_and_south_dismount() {
+        let level = private_classic_level("de_overpass_2015");
+        // Brush 2450: X -1696..-1694, Y -1995..-1973, Z 96..384.
+        // Bottom NAV 11206; south upper platform/NAV 9775 is at Z336.
+        // Its shaft opening is between the authored Z336 grate strips.
+        // Y-1980 also keeps the standing hull north of the two tilted
+        // pallet PHY bounds (the nearer one ends at Y-1999.2594).
+        let start = Vec3::new(-1656., -1980., 96.03125);
+        for rate in [64, 128] {
+            let mut world = world(&level, rate);
+            let actor = world.add_player("tunnel ladder", sim::Team::CounterTerrorist);
+            world.player_mut(actor).unwrap().movement = movement::PlayerMove::spawn_at(start);
+            let epoch = world.player(actor).unwrap().life_epoch;
+            assert_clear(&world, actor, "ladder bottom start");
+            assert_eq!(world.collision.ladder_normal(start, movement::STAND_MINS, movement::STAND_MAXS), None,
+                "approach must start off the ladder");
+            let mut attached = false;
+            for _ in 0..rate * 3 {
+                world.step(&[(actor, sim::TickInput { view_angles: Vec3::new(0., 180., 0.),
+                    forward_move: 450., weapon_slot: 3, ..Default::default() })]);
+                assert_clear(&world, actor, "ladder approach/climb");
+                let movement = world.player(actor).unwrap().movement;
+                attached |= movement.ladder_normal == Some(Vec3::X);
+                if movement.origin.z >= 338. { break; }
+            }
+            let movement = world.player(actor).unwrap().movement;
+            assert!(attached && movement.origin.x < start.x - 16. && movement.origin.z >= 338.,
+                "{rate}Hz ordinary bottom approach/climb failed: {movement:?}");
+            // Move south along the face, then off its side onto the platform.
+            // No jump, crouch, teleport, hull adjustment or collision removal.
+            for _ in 0..rate * 2 {
+                world.step(&[(actor, sim::TickInput { view_angles: Vec3::new(0., -90., 0.),
+                    forward_move: 450., weapon_slot: 3, ..Default::default() })]);
+                assert_clear(&world, actor, "ladder south dismount");
+                let movement = world.player(actor).unwrap().movement;
+                if movement.origin.y <= -2032. && movement.on_ground { break; }
+            }
+            let player = world.player(actor).unwrap();
+            assert!(player.movement.origin.y <= -2032. && player.movement.origin.y >= -2050.
+                && (-1700. ..=-1625.).contains(&player.movement.origin.x)
+                && (player.movement.origin.z - 336.).abs() < 1.
+                && player.movement.on_ground && player.movement.ladder_normal.is_none(),
+                "{rate}Hz south upper NAV/platform not reached: {:?}", player.movement);
+            assert_eq!(player.life_epoch, epoch, "route must finish in the same life");
+            for _ in 0..rate / 2 {
+                world.step(&[(actor, sim::TickInput { weapon_slot: 3, ..Default::default() })]);
+                assert_clear(&world, actor, "upper platform idle");
+            }
+            let player = world.player(actor).unwrap();
+            assert!(player.movement.on_ground && (player.movement.origin.z - 336.).abs() < 1.
+                && player.movement.ladder_normal.is_none(), "{rate}Hz dismount did not hold: {:?}", player.movement);
+            assert_eq!(player.life_epoch, epoch);
+        }
+    }
+
+    fn use_door(world: &mut sim::World, actor: sim::PlayerId, door: usize, angle: f32) {
+        // Release USE and movement explicitly; missing inputs repeat movement.
+        world.step(&[(actor, sim::TickInput::default())]);
+        assert_clear(world, actor, "door use release");
+        let center = world.collision.doors[door].center_at(world.doors[door].angle);
+        let delta = center - world.player(actor).unwrap().eye();
+        let yaw = delta.y.atan2(delta.x).to_degrees();
+        let pitch = (-delta.z).atan2(delta.truncate().length()).to_degrees();
+        world.step(&[(actor, sim::TickInput { buttons: movement::buttons::USE,
+            view_angles: Vec3::new(pitch, yaw, 0.), ..Default::default() })]);
+        assert_clear(world, actor, "door use press");
+        for _ in 0..world.tick_rate * 2 {
+            world.step(&[(actor, sim::TickInput::default())]);
+            assert_clear(world, actor, "door swing");
+            if (world.doors[door].angle - angle).abs() < 0.01 { break; }
+        }
+        assert!((world.doors[door].angle - angle).abs() < 0.01
+            && (world.doors[door].target - angle).abs() < 0.01,
+            "{}Hz door use failed, expected {angle}: {:?}, actor {:?}",
+            world.tick_rate, world.doors[door], world.player(actor).unwrap().movement);
+    }
+
+    #[test]
+    #[ignore = "requires private cached de_overpass_2015 via CSR_DATA_DIR and read-only Legacy dependencies"]
+    fn connector_door_opens_from_both_sides_and_allows_return_passage() {
+        let level = private_classic_level("de_overpass_2015");
+        let entity = level.bsp.entities.iter().position(|entity|
+            entity.str("hammerid") == Some("4363685")).expect("authored Connector door");
+        let door = level.collision.doors.iter().position(|door| door.entity == entity)
+            .expect("Connector door must load through shared mounted PHY seam");
+        let def = &level.collision.doors[door];
+        assert_eq!(def.model, "models/props_downtown/metal_door_112.mdl");
+        assert_eq!(def.origin, Vec3::new(-1748., -889., 96.));
+        assert_eq!(def.angles, Vec3::new(0., 270., 0.));
+        assert_eq!(level.bsp.entities[entity].str("skin"), Some("1"));
+        // Frame opening X -1747..-1693, threshold Z96. Keep the full
+        // standing hull centered at X-1720, well clear of either jamb.
+        let south = Vec3::new(-1720., -949., 96.03125);
+        let north = Vec3::new(-1720., -829., 96.03125);
+        for rate in [64, 128] {
+            let mut world = world(&level, rate);
+            let actor = world.add_player("Connector passage", sim::Team::CounterTerrorist);
+            world.player_mut(actor).unwrap().movement = movement::PlayerMove::spawn_at(south);
+            let epoch = world.player(actor).unwrap().life_epoch;
+            assert_clear(&world, actor, "Connector south start");
+            let passage = |world: &sim::World| world.collision.trace_box(south, north,
+                movement::STAND_MINS, movement::STAND_MAXS, collision::contents::MASK_PLAYERSOLID);
+            let closed = passage(&world);
+            assert!(closed.hit() && !closed.start_solid && !closed.all_solid
+                && world.collision.surface_name(closed.surface) == def.model.as_str(),
+                "{rate}Hz closed authored leaf must block passage: {closed:?}");
+            for (goal, yaw, angle) in [(north, 90., 90.), (south, -90., -90.)] {
+                use_door(&mut world, actor, door, angle);
+                let open = passage(&world);
+                assert!(!open.hit() && !open.start_solid && !open.all_solid,
+                    "{rate}Hz open leaf must clear the standing passage: {open:?}");
+                for _ in 0..rate * 2 {
+                    world.step(&[(actor, sim::TickInput { view_angles: Vec3::new(0., yaw, 0.),
+                        // Walk through the threshold so stopping friction leaves
+                        // the actor within ordinary USE reach of the closed leaf.
+                        forward_move: 450., buttons: movement::buttons::WALK,
+                        weapon_slot: 3, ..Default::default() })]);
+                    assert_clear(&world, actor, "Connector passage");
+                    let movement = world.player(actor).unwrap().movement;
+                    if (movement.origin.y - goal.y) * yaw.signum() >= 0. && movement.on_ground { break; }
+                }
+                let player = world.player(actor).unwrap();
+                assert!((player.movement.origin.y - goal.y) * yaw.signum() >= 0.
+                    && (player.movement.origin.x - goal.x).abs() < 1.
+                    && (player.movement.origin.z - 96.).abs() < 1. && player.movement.on_ground,
+                    "{rate}Hz Connector passage toward {goal:?} failed: {:?}", player.movement);
+                assert_eq!(player.life_epoch, epoch, "both passages must use the same life");
+                use_door(&mut world, actor, door, 0.);
+                assert!(passage(&world).hit(), "{rate}Hz closed leaf must block again");
+            }
+        }
+    }
+}
+
 #[test]
 #[ignore = "requires private classic Nuke/Train BSPs via CSR_DATA_DIR and read-only Legacy dependencies"]
 fn cached_classic_silo_and_tanker_roofs_support_falling_players() {

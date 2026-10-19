@@ -233,11 +233,11 @@ mod tests {
         assert!(ArchiveArt::new("de_nuke_2019").is_none());
         for archive in workshop::OLD_MAPS {
             assert_eq!(supported(archive.name),
-                archive.menu_supported() || archive.name == "de_overpass_2015",
+                archive.menu_supported(),
                 "{}", archive.name);
         }
         assert!(supported("de_overpass_2015"));
-        assert!(!workshop::find("de_overpass_2015").unwrap().menu_supported());
+        assert!(workshop::find("de_overpass_2015").unwrap().menu_supported());
     }
 
     #[test]

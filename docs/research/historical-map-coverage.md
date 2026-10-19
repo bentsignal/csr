@@ -1,8 +1,12 @@
 # Historical CS:GO map coverage
 
-Research checked 2026-10-18. This records historical identity and private data
-inspection, not new map admission. The eight offered archives in
-[OLD-MAPS.md](../OLD-MAPS.md) remain unchanged. No game assets belong here.
+Research checked 2026-10-18, with the bounded October 19 dependency follow-up
+below. This records historical identity and private data
+inspection. The October 19 increment adds the qualified October 2015 Overpass
+selection described in [OLD-MAPS.md](../OLD-MAPS.md); the early-layout references
+remain research-only. The original fence dependency is still absent, with the
+measured fallback described in [model-error-presentation.md](model-error-presentation.md).
+No game assets belong here.
 
 ## What complete coverage means
 
@@ -140,10 +144,67 @@ for older entries, and the current public depot view can show an app-730 stub.
 Do not fetch the current app-730 content or invent an old manifest ID. See the
 existing [depot research and access limits](2018-era.md#2-old-game-builds-steam-depots).
 
-Only after obtaining and verifying original bytes should shared, explicit
-private dependency mounting be considered. Then root must run decode/probe,
-simulation, traversal and visual admission checks. No runtime correction can
-recover an absent original material from these map metadata alone.
+### October 19: distinguish absent content from native fallback
+
+A bounded, offline follow-up checked the already cached May 2015 depot
+manifest, not another manifest or download. Its 2,437 filename records contain
+no loose `gates001` file; its only VPK directory is `csgo/pak01_dir.vpk`, already
+checked above. This closes the loose-file gap in that depot's negative result.
+The installed Legacy `platform/platform_pak01_dir.vpk` also contains no
+`gates001` path among its 1,109 entries. Installed `gameinfo.txt` declares only
+the two equivalent CS:GO search directories, not a Half-Life 2 content mount.
+These checks do not establish every historical runtime mount.
+The installed low-violence, Perfect World and Chinese-audio supplemental VPK
+directories likewise contain neither the exact model nor a `gates001` path;
+direct loose copies of the model and candidate VMTs are absent.
+
+Read-only extraction in memory verified the installed fence MDL/VVD/DX90
+VTX/PHY payload CRC32s and sizes against the historical directory declarations:
+`8ceea952`/1,760, `097fe319`/8,512, `a1b4403f`/2,017 and `b8eceda4`/712.
+CRC/size agreement supports the historical model context; historical numbered
+segments were not fetched, so this is not a historical payload SHA-256 proof.
+The installed MDL has one body part with one submodel and one mesh, one
+skin `[0]`, and one VTX LOD with no material replacements. There is no alternate
+authored body/skin/LOD material to select. All 19 fence instances in the exact
+October 2015 BSP use skin zero and flags `1`, with fade distances 1,500/1,750.
+
+The shared renderer already retains missing prop meshes and selects its
+generated missing-texture checkerboard when VMT resolution returns `None`
+(`world_mesh::material_from_vmt`, called by `props`). The strict probe still
+reports the absent VMT. No shared material-path or VFS defect was established
+by these data checks. In particular, `gates002` remains an unsupported alias.
+
+Native Legacy's public model-stat overlay now identifies the exact
+`park_fence_128` draw as `___error`. Its verbose material report identifies
+`UnlitGeneric`, a runtime `error` base texture (32 by 32), identity base UVs,
+and white color modulation. The shared absent-VMT fallback now uses unlit
+shading rather than world/vertex lighting. The same-camera original view is
+black while our diagnostic checker still has magenta upper bars; this is not
+a fallback parity result or archive admission. The original runtime texture's
+appearance/draw inputs remain to be resolved without an unrelated asset alias.
+The observation is of installed Legacy, not the October archive.
+
+The cached archive's ten-player initial placements, buy-zone membership,
+tunnel-ladder approach/climb/upper dismount, and Connector door use and passage
+in both directions pass through ordinary TickInput at 64 and 128 Hz. These
+fixtures do not establish sustained rendered performance or complete map review.
+The historical card/photo is prepared but menu admission remains disabled.
+
+For example, October 2015 prop 951 is at `(-3204, -1590, 565)`,
+yaw zero, with model-local bounds approximately X +/-1, Y +/-64, Z 33..120.
+An eye position `(-3084, -1590, 641)`, pitch zero/yaw 180, faces its midpoint;
+the opposite-side candidate is `(-3324, -1590, 641)`, pitch zero/yaw zero.
+The front view was rendered in both clients; the reverse native position was
+inside geometry and is not an admitted comparison.
+
+Do not require acquisition of a presumed original material indefinitely if
+native observation instead establishes an original fallback. Conversely,
+absence alone does not admit the map or justify ignoring arbitrary probe
+failures. If authentic additional dependency bytes are found, verify them
+before adding explicit private mounting. Root still owns native comparison,
+decode/probe, simulation, traversal and visual admission. Private metadata and
+the bounded inspection helper are under
+`%USERPROFILE%/csr-fidelity/overpass-20261019/`; no game assets or captures are published. Runtime admission remains pending.
 
 ## Distinct early Train, without replacing Train (2015)
 

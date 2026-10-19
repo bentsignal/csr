@@ -67,12 +67,12 @@ impl OldMap {
     /// to explicit development loads, without being offered as classic matches.
     /// See docs/OLD-MAPS.md for the retained probe/simulation evidence and gaps.
     pub fn menu_supported(&self) -> bool {
-        // Cache 2015 is a source admission candidate: parent runtime checks
-        // must pass before integration. Overpass 2015 still lacks gates001.
+        // Qualified runtime selections; known original missing-material diagnostics
+        // remain visible to the strict asset probe (see docs/OLD-MAPS.md).
         matches!(self.name,
             "de_dust2_2017" | "de_inferno_2016" | "de_nuke_2016"
             | "de_train_2015" | "de_vertigo_2017" | "de_mirage_2019"
-            | "de_cbble_2018" | "de_cache_2015")
+            | "de_cbble_2018" | "de_cache_2015" | "de_overpass_2015")
     }
 
     /// Stable identity for recipes, content packs and server map selection.
@@ -214,7 +214,7 @@ pub const OLD_MAPS: &[OldMap] = &[
         name: "de_overpass_2015",
         base: "de_overpass",
         title: "Overpass (2015)",
-        note: "Valve's October 13, 2015 Overpass snapshot",
+        note: "Valve's October 13, 2015 Overpass snapshot (CS:GO 1.35.0.6)",
         workshop_id: 534663598,
         version: "1.35.0.6",
         size: 14667547,

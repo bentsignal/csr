@@ -61,6 +61,14 @@ const PINS: &[Pin<'static>] = &[
         sha1: "9bc8e9d876916173c915233460d559231ff4e4e3",
     },
     Pin {
+        // Valve item 534663598, build 1.35.0.6, October 13, 2015.
+        // Photo capability does not admit the map to the picker.
+        name: "de_overpass_2015",
+        url: "https://images.steamusercontent.com/ugc/387665671598509751/E2CD625FE00394016AC3AEB358B5D8566C373B0C/",
+        bytes: 142383,
+        sha1: "e2cd625fe00394016ac3aeb358b5d8566c373b0c",
+    },
+    Pin {
         name: "de_cbble_2018",
         url: "https://images.steamusercontent.com/ugc/263838243293284444/65DE5CFFED79F09420B34795D9F4C90409FC0212/",
         bytes: 138758,
