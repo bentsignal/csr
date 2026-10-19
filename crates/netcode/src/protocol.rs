@@ -2,12 +2,13 @@
 use serde::{Deserialize, Serialize};
 use sim::{GameEvent, PlayerId, Snapshot, Team, TickInput};
 
+// v29 retains protection at each damage event instead of reading later armor.
 // v28 adds bounded door-local cosmetic bullet contacts to the v27 events.
 // v27 combines authoritative door poses/cues, brush-breakable health/removal,
 // and replicated BSP ladder contact for prediction and foley.
 // Older peers must reject the session before attempting snapshot decoding.
-pub const VERSION: u32 = 28;
-pub const PROTOCOL_ID: u64 = 0x4353_5257_0000_001c;
+pub const VERSION: u32 = 29;
+pub const PROTOCOL_ID: u64 = 0x4353_5257_0000_001d;
 pub const CONTROL: u8 = 0;
 pub const INPUT: u8 = 1;
 pub const SNAPSHOT: u8 = 2;

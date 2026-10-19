@@ -723,6 +723,20 @@ pub fn think(w: &mut WeaponState, time: f32, dt: f32, ducked: bool, firing: bool
     }
 }
 
+/// Protection actually present at a hit, retained independently of later damage,
+/// death and respawn. This describes the contacted hit group, not total armor.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum HitProtection { Flesh, Kevlar, Helmet }
+
+pub fn hit_protection(group: HitGroup, armor: i32, helmet: bool) -> HitProtection {
+    if armor <= 0 { return HitProtection::Flesh; }
+    match group {
+        HitGroup::Head if helmet => HitProtection::Helmet,
+        HitGroup::Head | HitGroup::LeftLeg | HitGroup::RightLeg => HitProtection::Flesh,
+        _ => HitProtection::Kevlar,
+    }
+}
+
 /// Damage after range falloff, hit group and armour, as CS:GO computes it.
 /// Returns (health damage, armour damage).
 pub fn damage(def: &WeaponDefinition, distance: f32, group: HitGroup, armor: i32, helmet: bool) -> (i32, i32) {
@@ -732,11 +746,7 @@ pub fn damage(def: &WeaponDefinition, distance: f32, group: HitGroup, armor: i32
     } else {
         group.multiplier()
     };
-    let armored = armor > 0 && match group {
-        HitGroup::Head => helmet,
-        HitGroup::LeftLeg | HitGroup::RightLeg => false,
-        _ => true,
-    };
+    let armored = hit_protection(group, armor, helmet) != HitProtection::Flesh;
     if !armored {
         return (dmg as i32, 0);
     }

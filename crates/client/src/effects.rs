@@ -10,6 +10,16 @@ use bevy::audio::AudioSource;
 use bevy::prelude::*;
 use sim::GameEvent;
 
+fn damage_sound(group: sim::weapon::HitGroup, protection: sim::weapon::HitProtection) -> &'static str {
+    use sim::weapon::{HitGroup, HitProtection};
+    match protection {
+        HitProtection::Helmet => "Player.DamageHelmet",
+        HitProtection::Kevlar => "Player.DamageKevlar",
+        HitProtection::Flesh if group == HitGroup::Head => "Player.DamageHeadShot",
+        HitProtection::Flesh => "Flesh.BulletImpact",
+    }
+}
+
 /// Events produced by fixed ticks since the last frame.
 #[derive(Resource, Default)]
 pub struct PendingEvents(pub Vec<GameEvent>);
@@ -221,14 +231,10 @@ pub fn process(
                 }
 
             }
-            GameEvent::Damage { attacker, victim, group, pos, .. } => {
-                let target = world.0.player(victim);
-                let sound = match group {
-                    sim::weapon::HitGroup::Head if target.is_some_and(|p|p.helmet) => "Player.DamageHelmet",
-                    sim::weapon::HitGroup::Head => "Player.DamageHeadShot",
-                    _ if target.is_some_and(|p|p.armor>0) => "Player.DamageKevlar",
-                    _ => "Flesh.BulletImpact",
-                };
+            GameEvent::Damage { attacker, victim, group, pos, protection, .. } => {
+                // Protection belongs to this hit. Armor may already be depleted,
+                // or the same player may have died/respawned before rendering.
+                let sound = damage_sound(group, protection);
                 sounds.play_with(&mut commands, fs, &mut sources, sound, emit(victim, pos));
                 if attacker == local.view_target() {
                     effects.last_hit = now;
@@ -375,6 +381,17 @@ pub fn draw(effects: Res<Effects>, time: Res<Time>, mut gizmos: Gizmos) {
 #[cfg(test)]
 mod attack_tests {
     use super::*;
+    #[test]
+    fn damage_audio_uses_immutable_contact_protection() {
+        use sim::weapon::{HitGroup, HitProtection};
+        for (group, protection, sound) in [
+            (HitGroup::Head, HitProtection::Helmet, "Player.DamageHelmet"),
+            (HitGroup::Head, HitProtection::Flesh, "Player.DamageHeadShot"),
+            (HitGroup::Chest, HitProtection::Kevlar, "Player.DamageKevlar"),
+            (HitGroup::LeftLeg, HitProtection::Flesh, "Flesh.BulletImpact"),
+        ] { assert_eq!(damage_sound(group, protection), sound); }
+    }
+
     #[test]
     fn delayed_feed_keeps_authority_names_and_life_after_lookup_disappears() {
         let mut world = sim::World::new(std::sync::Arc::new(collision::CollisionWorld::new()));

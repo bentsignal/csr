@@ -402,7 +402,7 @@ pub enum GameEvent {
     Tracer { player: PlayerId, start: Vec3, end: Vec3 },
     /// A bullet hit the world. `player` fired it.
     Impact { player: PlayerId, pos: Vec3, normal: Vec3, surface: u32, door: Option<doors::Impact> },
-    Damage { attacker: PlayerId, victim: PlayerId, health: i32, group: HitGroup, pos: Vec3 },
+    Damage { attacker: PlayerId, victim: PlayerId, health: i32, group: HitGroup, pos: Vec3, protection: weapon::HitProtection },
     /// `attacker` is [`WORLD`] for the bomb.
     Kill { attacker: PlayerId, victim: PlayerId, weapon: String, headshot: bool, death: death::DeathReceipt },
     Reload { player: PlayerId },
@@ -1067,6 +1067,7 @@ impl World {
                 health: health_dmg,
                 group: HitGroup::Chest,
                 pos: at,
+                protection: if armor_dmg > 0.0 { weapon::HitProtection::Kevlar } else { weapon::HitProtection::Flesh },
             });
             if self.players[i].health <= 0 {
                 self.kill(i, None, "planted_c4", false, None);
@@ -1895,6 +1896,7 @@ impl World {
 
     fn apply_damage(&mut self, attacker: usize, victim: usize, def: &weapons::WeaponDefinition, distance: f32, group: HitGroup, pos: Vec3, direction: Option<Vec3>) {
         let v = &self.players[victim];
+        let protection = weapon::hit_protection(group, v.armor, v.helmet);
         let (health_dmg, armor_dmg) = weapon::damage(def, distance, group, v.armor, v.helmet);
         let attacker_id = self.players[attacker].id;
         let v = &mut self.players[victim];
@@ -1907,6 +1909,7 @@ impl World {
             health: health_dmg,
             group,
             pos,
+            protection,
         });
         if self.players[victim].health <= 0 {
             let hit = direction.map(|direction| death::DeathHit { direction, position: pos, group });
@@ -1925,7 +1928,7 @@ impl World {
         let amount = amount.max(0);
         if amount == 0 { return; }
         self.players[victim].health -= amount;
-        self.events.push(GameEvent::Damage { attacker: WORLD, victim: id, health: amount, group: HitGroup::Chest, pos: self.players[victim].eye() });
+        self.events.push(GameEvent::Damage { attacker: WORLD, victim: id, health: amount, group: HitGroup::Chest, pos: self.players[victim].eye(), protection: weapon::HitProtection::Flesh });
         if self.players[victim].health <= 0 { self.kill(victim, None, cause, false, None); }
     }
 
