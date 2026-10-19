@@ -257,8 +257,12 @@ impl World {
         for p in &mut self.projectiles {
             let was_settled = p.settled;
             let was_moving = p.velocity != Vec3::ZERO;
+            let previous_velocity = p.velocity;
             p.velocity.z -= 320.0 * dt;
-            let end = p.pos + p.velocity * dt;
+            // Observed Legacy pre-contact positions follow the mean vertical
+            // velocity over the tick. Using only the final velocity adds an
+            // extra half-tick of gravity displacement on every flight step.
+            let end = p.pos + (previous_velocity + p.velocity) * (0.5 * dt);
             let tr = self.collision.trace_box(
                 p.pos,
                 end,
@@ -454,6 +458,53 @@ impl World {
 mod tests {
     use super::*;
     use crate::Team;
+
+    #[test]
+    fn free_flight_replays_observed_legacy_he_positions_without_tick_rate_sag() {
+        use std::sync::Arc;
+        // Existing owned Legacy 1.38.8.1, 128 Hz public projectile dumps:
+        // public-grenade-state-20261015-170424 (private fidelity packet).
+        // Anchor at a received state, not an inferred launch/spawn timestamp.
+        // The first segment spans 21 native ticks; the second spans 10 and
+        // also admits a 5-step 64 Hz resampling (not a native 64 Hz claim).
+        for (rate, steps, from, velocity, observed_end, observed_velocity_z) in [
+            (128, 21, Vec3::new(1094.15625, 2380., 174.96875),
+                Vec3::new(670.435852, 0., -123.362717),
+                Vec3::new(1204.15625, 2380., 150.4375), -175.862717),
+            (128, 10, Vec3::new(1125.59375, 2380., 168.84375),
+                Vec3::new(670.435852, 0., -138.362717),
+                Vec3::new(1177.96875, 2380., 157.0625), -163.362717),
+            (64, 5, Vec3::new(1125.59375, 2380., 168.84375),
+                Vec3::new(670.435852, 0., -138.362717),
+                Vec3::new(1177.96875, 2380., 157.0625), -163.362717),
+        ] {
+            let mut collision = collision::CollisionWorld::new();
+            collision.finalize();
+            let mut world = World::new(Arc::new(collision));
+            world.set_tick_rate(rate);
+            world.projectiles.push(Projectile {
+                id: 1, owner: crate::WORLD, kind: Kind::He, pos: from,
+                velocity, settled: false, born: 0., decoy_weapon: None,
+            });
+            let mut restored = world.clone();
+            restored.restore(world.decode(&world.encode_state()).unwrap());
+            for _ in 0..steps {
+                world.step(&[]);
+                restored.step_prediction(&[]);
+                assert_eq!(world.state(), restored.state());
+                assert!(world.events.is_empty(), "pre-contact flight has no impact or detonation");
+            }
+            let projectile = &world.projectiles[0];
+            // Conservatively allow one 1/32 unit per received position
+            // endpoint. The previous final-velocity integration has >0.10
+            // units of vertical error on both 128 Hz segments.
+            let error = (projectile.pos - observed_end).abs();
+            assert!(error.max_element() < 2. / 32., "rate {rate}, steps {steps}: {error:?}");
+            assert_eq!(projectile.velocity.truncate(), velocity.truncate());
+            assert!((projectile.velocity.z - observed_velocity_z).abs() < 0.0001);
+            assert!(!projectile.settled);
+        }
+    }
 
     fn launch_he(velocity: Vec3, grounded: bool, mode: ThrowMode, measured: bool,
         angles: Vec3, vector: Option<weapons::GrenadeLaunchVelocity>) -> Projectile {
