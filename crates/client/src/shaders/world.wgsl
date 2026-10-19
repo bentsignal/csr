@@ -476,16 +476,18 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     }
     if params.self_illum.w > 0.5 {
         var mask = vec3<f32>(self_illum_alpha);
+        var illuminated = albedo.rgb * params.self_illum.rgb;
         if params.self_illum.w > 2.5 {
             // The env-map mask's alpha is emission coverage, not its RGB
             // reflection strength or the base texture's opacity.
             mask = vec3<f32>(textureSample(self_illum_tex, self_illum_samp, uv).a);
+            illuminated = params.self_illum.rgb;
         } else if params.self_illum.w > 1.5 {
             mask = textureSample(self_illum_tex, self_illum_samp, uv).rgb;
         }
         // Preserve the lit surface outside the authored luminous region.
         // This does not add scene lights; surrounding light is already baked.
-        rgb = mix(rgb, albedo.rgb * params.self_illum.rgb, clamp(mask, vec3<f32>(0.0), vec3<f32>(1.0)));
+        rgb = mix(rgb, illuminated, clamp(mask, vec3<f32>(0.0), vec3<f32>(1.0)));
     }
     if (params.flags & UNLIT) == 0u {
         rgb = tonemap(rgb * params.exposure);

@@ -111,7 +111,8 @@ pub struct WorldParams {
     pub skin_pattern_palette:Vec4,
     /// Detail UV scale xy and authored blend factor z.
     pub detail: Vec4,
-    /// Authored self-illumination tint; w: 0 disabled, 1 base alpha, 2 RGB mask.
+    /// Authored self-illumination tint; w: 0 disabled, 1 base alpha, 2 RGB mask,
+    /// 3 independent env-mask alpha emission.
     pub self_illum: Vec4,
     /// Primary color UV scale/offset for ordinary lit surfaces and UnlitTwoTexture.
     /// Appended to preserve existing lighting and diagnostic-prefix offsets.
