@@ -656,7 +656,7 @@ mod tests {
                         };
                         // UNADMITTED alternate-air candidates do not expand
                         // the existing grounded-only bot planner's scope.
-                        let air = unadmitted_smoke_air_buttons_launch();
+                        let air = observed_smoke_air_buttons_launch();
                         let profile = Arc::make_mut(&mut actor.weapons[0].def).grenade_launch.as_mut().unwrap();
                         profile.airborne_overhand_velocity = air.airborne_overhand_velocity;
                         profile.airborne_overhand_horizontal_inheritance = air.airborne_overhand_horizontal_inheritance;
@@ -794,12 +794,11 @@ mod tests {
         }
     }
 
-    // UNADMITTED airborne secondary/combined hypotheses for source coverage
-    // only. Installed profiles MUST keep these six fields None pending root's
-    // independent native admission for each mode and each component.
-    fn unadmitted_smoke_air_buttons_launch() -> weapons::GrenadeLaunch {
+    // Independently observed secondary and combined airborne responses; these
+    // do not borrow their component admission from the primary observations.
+    fn observed_smoke_air_buttons_launch() -> weapons::GrenadeLaunch {
         weapons::GrenadeLaunch {
-            reference: "UNADMITTED-smoke-air-secondary-combined-hypotheses".into(),
+            reference: "legacy-1.38.8.1-smoke-ground-and-air-button-response-128hz".into(),
             airborne_underhand_velocity: Some(weapons::GrenadeLaunchVelocity {
                 speed: 202.5, upward_pitch_bias_degrees: 10.,
             }),
@@ -998,32 +997,32 @@ mod tests {
     }
 
     #[test]
-    fn unadmitted_air_buttons_follow_ordinary_jump_release_with_independent_fallbacks() {
-        // UNADMITTED arithmetic predictions for the proposed angular family,
-        // NOT airborne native observations or an extension of primary evidence.
-        for (mode, raw_speed, predictions) in [
+    fn observed_air_buttons_follow_ordinary_jump_release_with_independent_fallbacks() {
+        // Each mode's independent native airborne VX; base VZ is calculated
+        // from its qualified angular family, not a normal-gravity age fit.
+        for (mode, raw_speed, observations) in [
             (ThrowMode::Underhand, 225., [
-                (0., 199.42357, 35.16376),
-                (-30., 162.42995, 120.92462),
-                (45., 155.124, -130.16449),
+                (0., 199.423584, 35.16376),
+                (-30., 162.429962, 120.92462),
+                (45., 155.124008, -130.16449),
             ]),
             (ThrowMode::Combined, 487.5, [
-                (0., 432.0844, 76.18813),
-                (-30., 351.93155, 262.00333),
-                (45., 336.102, -282.02304),
+                (0., 432.084351, 76.18813),
+                (-30., 351.931519, 262.00333),
+                (45., 336.101959, -282.02304),
             ]),
         ] {
             for rate in [64, 128] {
                 let dt = 1. / rate as f32;
                 for running in [false, true] {
-                    for (pitch, predicted_x, predicted_z) in predictions {
+                    for (pitch, observed_x, base_z) in observations {
                         let (prior, player_velocity) = launch_utility_tick_input("weapon_smokegrenade", rate,
                             mode, Some(observed_smoke_air_primary_launch()), running, true, pitch);
                         assert!(player_velocity.z > 0., "ordinary standing/running JUMP must be ascending");
                         if running { assert!((player_velocity.x - 245.).abs() < 0.001); }
                         else { assert_eq!(player_velocity.truncate(), glam::Vec2::ZERO); }
                         for components in 0..8 {
-                            let mut profile = unadmitted_smoke_air_buttons_launch();
+                            let mut profile = observed_smoke_air_buttons_launch();
                             let (velocity, horizontal, vertical) = match mode {
                                 ThrowMode::Underhand => (&mut profile.airborne_underhand_velocity,
                                     &mut profile.airborne_underhand_horizontal_inheritance,
@@ -1042,7 +1041,7 @@ mod tests {
                                 mode, Some(profile), running, true, pitch);
                             assert_eq!(actual_player_velocity, player_velocity);
                             let mut expected = if components & 1 != 0 {
-                                Vec3::new(predicted_x, 0., predicted_z)
+                                Vec3::new(observed_x, 0., base_z)
                             } else { movement::angle_vectors(Vec3::new(pitch, 0., 0.)).0 * raw_speed };
                             expected += Vec3::new(
                                 player_velocity.x * if components & 2 != 0 { 1.25 } else { 0.5 },
@@ -1051,7 +1050,7 @@ mod tests {
                             // Undo the first ordinary free-flight gravity tick;
                             // this does not assert an observed native spawn age.
                             assert!((actual.velocity + Vec3::Z * 320. * dt - expected).length() < 0.002,
-                                "UNADMITTED {mode:?}, {rate}Hz, running={running}, pitch={pitch}, components={components}");
+                                "{mode:?}, {rate}Hz, running={running}, pitch={pitch}, components={components}");
                             assert!((actual.pos - prior.pos - (actual.velocity - prior.velocity) * dt).length() < 0.002);
                             assert_eq!(actual.born, prior.born);
                             assert_eq!(actual.kind, Kind::Smoke);
@@ -1064,7 +1063,7 @@ mod tests {
     }
 
     #[test]
-    fn unadmitted_air_buttons_preserve_ground_modes_and_admitted_primary_air() {
+    fn observed_air_buttons_preserve_ground_modes_and_admitted_primary_air() {
         for rate in [64, 128] {
             for running in [false, true] {
                 for pitch in [0., -30., 45.] {
@@ -1073,7 +1072,7 @@ mod tests {
                             if jump && mode != ThrowMode::Overhand { continue; }
                             assert_eq!(
                                 launch_utility_tick_input("weapon_smokegrenade", rate, mode,
-                                    Some(unadmitted_smoke_air_buttons_launch()), running, jump, pitch),
+                                    Some(observed_smoke_air_buttons_launch()), running, jump, pitch),
                                 launch_utility_tick_input("weapon_smokegrenade", rate, mode,
                                     Some(observed_smoke_air_primary_launch()), running, jump, pitch),
                                 "{rate}Hz, running={running}, pitch={pitch}, mode={mode:?}, jump={jump}");
@@ -1100,6 +1099,43 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    #[test]
+    fn smoke_air_button_modes_match_independent_native_constant_vz_and_moving_controls() {
+        let mut world = arena();
+        let id = world.add_player("thrower", Team::Terrorist);
+        let catalog = weapons::Catalog::from_items_game(r#"items_game { items {
+            45 { name weapon_smokegrenade attributes { "primary default clip size" 1 } }
+        } }"#).unwrap();
+        let mut definition = catalog.weapons[0].clone();
+        definition.grenade_launch = Some(observed_smoke_air_buttons_launch());
+        for (mode, observed_x, moving_x, controls) in [
+            (ThrowMode::Underhand, 199.423584, 505.673584, [
+                (true, 0., 35.163757), (false, 223.868378, 314.999237), (false, 130.118378, 197.811737),
+            ]),
+            (ThrowMode::Combined, 432.084351, 738.334351, [
+                (true, 0., 76.188133), (false, 217.618378, 348.211121), (false, 130.118378, 238.836121),
+            ]),
+        ] {
+            // Each native zero-G session reads back gravity=0 and equal player
+            // VZ before/after. No physical projectile age is subtracted.
+            for (grounded, player_vz, observed_z) in controls {
+                let actor = world.player_mut(id).unwrap();
+                actor.movement.on_ground = grounded;
+                actor.movement.velocity = Vec3::Z * player_vz;
+                let actual = World::grenade_launch_velocity(world.player(id).unwrap(),
+                    &definition, Some(mode), Vec3::ZERO);
+                assert!((actual - Vec3::new(observed_x, 0., observed_z)).length() < 0.002);
+            }
+            let actor = world.player_mut(id).unwrap();
+            actor.movement.on_ground = false;
+            actor.movement.velocity = Vec3::new(245., 0., 211.368378);
+            let actual = World::grenade_launch_velocity(world.player(id).unwrap(),
+                &definition, Some(mode), Vec3::ZERO);
+            // Normal-gravity steady-forward VX only; its initial VZ is unknown.
+            assert!((actual.x - moving_x).abs() < 0.002);
         }
     }
 
@@ -1147,7 +1183,7 @@ mod tests {
             }
         }
         // No-mode callers have no ordinary button endpoint. Check that seam
-        // with every air mode populated (alternates UNADMITTED), including
+        // with every independently qualified air mode populated, including
         // both horizontal axes and descending movement.
         let mut world = arena();
         let id = world.add_player("thrower", Team::Terrorist);
@@ -1155,7 +1191,7 @@ mod tests {
             45 { name weapon_smokegrenade attributes { "primary default clip size" 1 } }
         } }"#).unwrap();
         let mut definition = catalog.weapons[0].clone();
-        definition.grenade_launch = Some(unadmitted_smoke_air_buttons_launch());
+        definition.grenade_launch = Some(observed_smoke_air_buttons_launch());
         for grounded in [false, true] {
             let player = world.player_mut(id).unwrap();
             player.movement.on_ground = grounded;
