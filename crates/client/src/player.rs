@@ -631,9 +631,12 @@ pub fn tick(
             input.buttons = 0; input.side_move = 0.; input.forward_move = 0.;
             local.pitch = 0.; local.yaw = 0.; input.view_angles = glam::Vec3::ZERO;
             let case = std::env::var("CSR_VIEWMODEL_CASE").unwrap_or_default();
-            if case != "baseline" && (1.5..3.5).contains(&world.0.time()) {
+            if case != "baseline" && case != "jump" && (1.5..3.5).contains(&world.0.time()) {
                 input.forward_move = 450.;
                 if case == "walk" { input.buttons |= buttons::WALK; }
+            }
+            if matches!(case.as_str(), "jump" | "jump-run") && (2.0..2.1).contains(&world.0.time()) {
+                input.buttons |= buttons::JUMP;
             }
         } else if std::env::var("CSR_TEST_SWITCH").as_deref() == Ok("viewmodel-look") {
             // Finite screenshot fixture: ordinary TickInput and the same local

@@ -553,7 +553,8 @@ mod life_tests {
             for (low, rest) in lowered.iter().zip(&neutral) {
                 assert!((low.translation - rest.translation - expected).length() < 0.001,
                     "{weapon}: gun and hands must lower in their current view basis");
-                assert!(low.rotation.angle_between(rest.rotation) < 0.001);
+                assert!(low.rotation.abs_diff_eq(rest.rotation, 0.00001),
+                    "{weapon}: lowering cannot rotate a joint: {:?} vs {:?}", low.rotation, rest.rotation);
             }
             assert_eq!(app.world().resource::<SimWorld>().0.state(), airborne);
 
