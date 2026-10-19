@@ -162,8 +162,13 @@ impl Store {
         }
         let path = self.preview_path(map);
         fs::create_dir_all(path.parent().unwrap()).map_err(|e| e.to_string())?;
-        let part = path.with_extension("jpg.part");
-        // Another process may own this download; never truncate its temporary file.
+        // An interrupted download must not block the next launch. Each writer
+        // owns its temporary file; never truncate another process's download.
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|e| e.to_string())?
+            .as_nanos();
+        let part = path.with_extension(format!("jpg.{}.{nonce}.part", std::process::id()));
         let mut file = fs::OpenOptions::new()
             .write(true)
             .create_new(true)
