@@ -188,12 +188,22 @@ impl World {
                     None => None,
                 };
                 (horizontal, None, velocity)
-            } else if mode == Some(ThrowMode::Overhand) {
-                (profile.airborne_overhand_horizontal_inheritance,
-                    profile.airborne_overhand_vertical_inheritance,
-                    profile.airborne_overhand_velocity.as_ref())
             } else {
-                (None, None, None)
+                match mode {
+                    Some(ThrowMode::Overhand) => (
+                        profile.airborne_overhand_horizontal_inheritance,
+                        profile.airborne_overhand_vertical_inheritance,
+                        profile.airborne_overhand_velocity.as_ref()),
+                    Some(ThrowMode::Underhand) => (
+                        profile.airborne_underhand_horizontal_inheritance,
+                        profile.airborne_underhand_vertical_inheritance,
+                        profile.airborne_underhand_velocity.as_ref()),
+                    Some(ThrowMode::Combined) => (
+                        profile.airborne_combined_horizontal_inheritance,
+                        profile.airborne_combined_vertical_inheritance,
+                        profile.airborne_combined_velocity.as_ref()),
+                    None => (None, None, None),
+                }
             };
             if let Some(inheritance) = horizontal_inheritance {
                 inherited.x = p.movement.velocity.x * inheritance;
@@ -539,6 +549,12 @@ mod tests {
             airborne_overhand_velocity: None,
             airborne_overhand_horizontal_inheritance: None,
             airborne_overhand_vertical_inheritance: None,
+            airborne_underhand_velocity: None,
+            airborne_underhand_horizontal_inheritance: None,
+            airborne_underhand_vertical_inheritance: None,
+            airborne_combined_velocity: None,
+            airborne_combined_horizontal_inheritance: None,
+            airborne_combined_vertical_inheritance: None,
         });
         let mut weapon = crate::weapon::WeaponState::new(Arc::new(definition));
         weapon.grenade_throw = Some(ThrowState { phase: ThrowPhase::Throwing, mode,
@@ -598,6 +614,12 @@ mod tests {
                 airborne_overhand_velocity: None,
                 airborne_overhand_horizontal_inheritance: None,
                 airborne_overhand_vertical_inheritance: None,
+                airborne_underhand_velocity: None,
+                airborne_underhand_horizontal_inheritance: None,
+                airborne_underhand_vertical_inheritance: None,
+                airborne_combined_velocity: None,
+                airborne_combined_horizontal_inheritance: None,
+                airborne_combined_vertical_inheritance: None,
             });
             let release = weapons::GrenadeReleaseAnimation {
                 duration: 0.5, release_time: 0.3, command_release_time: Some(0.1),
@@ -620,20 +642,31 @@ mod tests {
             assert!(world.projectiles.is_empty());
             assert_eq!(world.players[0].active_weapon().unwrap().grenade_throw.unwrap().phase, ThrowPhase::Holding);
             let target = Vec3::new(700., 120., 8.);
-            for unsupported in ["air", "underhand", "combined", "no-profile", "no-velocity", "human",
+            for unsupported in ["air", "air-underhand", "air-combined", "underhand", "combined", "no-profile", "no-velocity", "human",
                 "tracked", "aim", "unknown-definition", "unknown-kind", "flash", "molotov", "incendiary", "decoy"] {
                 let mut actor = world.players[0].clone();
                 let mut definition = index;
                 match unsupported {
-                    "air" => {
+                    "air" | "air-underhand" | "air-combined" => {
                         actor.movement.on_ground = false;
-                        // Even a definition carrying an air-primary candidate
-                        // must retain the existing unsupported-air bot fallback.
-                        let air = observed_smoke_air_primary_launch();
+                        actor.weapons[0].grenade_throw.as_mut().unwrap().mode = match unsupported {
+                            "air-underhand" => ThrowMode::Underhand,
+                            "air-combined" => ThrowMode::Combined,
+                            _ => ThrowMode::Overhand,
+                        };
+                        // UNADMITTED alternate-air candidates do not expand
+                        // the existing grounded-only bot planner's scope.
+                        let air = observed_smoke_air_buttons_launch();
                         let profile = Arc::make_mut(&mut actor.weapons[0].def).grenade_launch.as_mut().unwrap();
                         profile.airborne_overhand_velocity = air.airborne_overhand_velocity;
                         profile.airborne_overhand_horizontal_inheritance = air.airborne_overhand_horizontal_inheritance;
                         profile.airborne_overhand_vertical_inheritance = air.airborne_overhand_vertical_inheritance;
+                        profile.airborne_underhand_velocity = air.airborne_underhand_velocity;
+                        profile.airborne_underhand_horizontal_inheritance = air.airborne_underhand_horizontal_inheritance;
+                        profile.airborne_underhand_vertical_inheritance = air.airborne_underhand_vertical_inheritance;
+                        profile.airborne_combined_velocity = air.airborne_combined_velocity;
+                        profile.airborne_combined_horizontal_inheritance = air.airborne_combined_horizontal_inheritance;
+                        profile.airborne_combined_vertical_inheritance = air.airborne_combined_vertical_inheritance;
                     },
                     "underhand" => actor.weapons[0].grenade_throw.as_mut().unwrap().mode = ThrowMode::Underhand,
                     "combined" => actor.weapons[0].grenade_throw.as_mut().unwrap().mode = ThrowMode::Combined,
@@ -738,6 +771,12 @@ mod tests {
             airborne_overhand_velocity: None,
             airborne_overhand_horizontal_inheritance: None,
             airborne_overhand_vertical_inheritance: None,
+            airborne_underhand_velocity: None,
+            airborne_underhand_horizontal_inheritance: None,
+            airborne_underhand_vertical_inheritance: None,
+            airborne_combined_velocity: None,
+            airborne_combined_horizontal_inheritance: None,
+            airborne_combined_vertical_inheritance: None,
         }
     }
 
@@ -752,6 +791,25 @@ mod tests {
             airborne_overhand_horizontal_inheritance: Some(1.25),
             airborne_overhand_vertical_inheritance: Some(1.25),
             ..observed_smoke_launch()
+        }
+    }
+
+    // Independently observed secondary and combined airborne responses; these
+    // do not borrow their component admission from the primary observations.
+    fn observed_smoke_air_buttons_launch() -> weapons::GrenadeLaunch {
+        weapons::GrenadeLaunch {
+            reference: "legacy-1.38.8.1-smoke-ground-and-air-button-response-128hz".into(),
+            airborne_underhand_velocity: Some(weapons::GrenadeLaunchVelocity {
+                speed: 202.5, upward_pitch_bias_degrees: 10.,
+            }),
+            airborne_underhand_horizontal_inheritance: Some(1.25),
+            airborne_underhand_vertical_inheritance: Some(1.25),
+            airborne_combined_velocity: Some(weapons::GrenadeLaunchVelocity {
+                speed: 438.75, upward_pitch_bias_degrees: 10.,
+            }),
+            airborne_combined_horizontal_inheritance: Some(1.25),
+            airborne_combined_vertical_inheritance: Some(1.25),
+            ..observed_smoke_air_primary_launch()
         }
     }
 
@@ -833,6 +891,12 @@ mod tests {
                     airborne_overhand_velocity: None,
                     airborne_overhand_horizontal_inheritance: None,
                     airborne_overhand_vertical_inheritance: None,
+                    airborne_underhand_velocity: None,
+                    airborne_underhand_horizontal_inheritance: None,
+                    airborne_underhand_vertical_inheritance: None,
+                    airborne_combined_velocity: None,
+                    airborne_combined_horizontal_inheritance: None,
+                    airborne_combined_vertical_inheritance: None,
                 } }
             });
             launch_utility_tick_input(name, rate, mode, profile, running, jump, pitch)
@@ -933,6 +997,149 @@ mod tests {
     }
 
     #[test]
+    fn observed_air_buttons_follow_ordinary_jump_release_with_independent_fallbacks() {
+        // Each mode's independent native airborne VX; base VZ is calculated
+        // from its qualified angular family, not a normal-gravity age fit.
+        for (mode, raw_speed, observations) in [
+            (ThrowMode::Underhand, 225., [
+                (0., 199.423584, 35.16376),
+                (-30., 162.429962, 120.92462),
+                (45., 155.124008, -130.16449),
+            ]),
+            (ThrowMode::Combined, 487.5, [
+                (0., 432.084351, 76.18813),
+                (-30., 351.931519, 262.00333),
+                (45., 336.101959, -282.02304),
+            ]),
+        ] {
+            for rate in [64, 128] {
+                let dt = 1. / rate as f32;
+                for running in [false, true] {
+                    for (pitch, observed_x, base_z) in observations {
+                        let (prior, player_velocity) = launch_utility_tick_input("weapon_smokegrenade", rate,
+                            mode, Some(observed_smoke_air_primary_launch()), running, true, pitch);
+                        assert!(player_velocity.z > 0., "ordinary standing/running JUMP must be ascending");
+                        if running { assert!((player_velocity.x - 245.).abs() < 0.001); }
+                        else { assert_eq!(player_velocity.truncate(), glam::Vec2::ZERO); }
+                        for components in 0..8 {
+                            let mut profile = observed_smoke_air_buttons_launch();
+                            let (velocity, horizontal, vertical) = match mode {
+                                ThrowMode::Underhand => (&mut profile.airborne_underhand_velocity,
+                                    &mut profile.airborne_underhand_horizontal_inheritance,
+                                    &mut profile.airborne_underhand_vertical_inheritance),
+                                ThrowMode::Combined => (&mut profile.airborne_combined_velocity,
+                                    &mut profile.airborne_combined_horizontal_inheritance,
+                                    &mut profile.airborne_combined_vertical_inheritance),
+                                ThrowMode::Overhand => unreachable!(),
+                            };
+                            if components & 1 == 0 { *velocity = None; }
+                            if components & 2 == 0 { *horizontal = None; }
+                            if components & 4 == 0 { *vertical = None; }
+                            // Primary and the other alternate mode stay populated:
+                            // absent components must never borrow their values.
+                            let (actual, actual_player_velocity) = launch_utility_tick_input("weapon_smokegrenade", rate,
+                                mode, Some(profile), running, true, pitch);
+                            assert_eq!(actual_player_velocity, player_velocity);
+                            let mut expected = if components & 1 != 0 {
+                                Vec3::new(observed_x, 0., base_z)
+                            } else { movement::angle_vectors(Vec3::new(pitch, 0., 0.)).0 * raw_speed };
+                            expected += Vec3::new(
+                                player_velocity.x * if components & 2 != 0 { 1.25 } else { 0.5 },
+                                player_velocity.y * if components & 2 != 0 { 1.25 } else { 0.5 },
+                                player_velocity.z * if components & 4 != 0 { 1.25 } else { 0.5 });
+                            // Undo the first ordinary free-flight gravity tick;
+                            // this does not assert an observed native spawn age.
+                            assert!((actual.velocity + Vec3::Z * 320. * dt - expected).length() < 0.002,
+                                "{mode:?}, {rate}Hz, running={running}, pitch={pitch}, components={components}");
+                            assert!((actual.pos - prior.pos - (actual.velocity - prior.velocity) * dt).length() < 0.002);
+                            assert_eq!(actual.born, prior.born);
+                            assert_eq!(actual.kind, Kind::Smoke);
+                            if components == 0 { assert_eq!(actual, prior); }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn observed_air_buttons_preserve_ground_modes_and_admitted_primary_air() {
+        for rate in [64, 128] {
+            for running in [false, true] {
+                for pitch in [0., -30., 45.] {
+                    for mode in [ThrowMode::Overhand, ThrowMode::Underhand, ThrowMode::Combined] {
+                        for jump in [false, true] {
+                            if jump && mode != ThrowMode::Overhand { continue; }
+                            assert_eq!(
+                                launch_utility_tick_input("weapon_smokegrenade", rate, mode,
+                                    Some(observed_smoke_air_buttons_launch()), running, jump, pitch),
+                                launch_utility_tick_input("weapon_smokegrenade", rate, mode,
+                                    Some(observed_smoke_air_primary_launch()), running, jump, pitch),
+                                "{rate}Hz, running={running}, pitch={pitch}, mode={mode:?}, jump={jump}");
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn absent_air_components_preserve_other_kinds_through_ordinary_jump_release() {
+        for name in ["weapon_hegrenade", "weapon_flashbang", "weapon_molotov", "weapon_incgrenade", "weapon_decoy"] {
+            for rate in [64, 128] {
+                for running in [false, true] {
+                    for pitch in [0., -30., 45.] {
+                        for mode in [ThrowMode::Overhand, ThrowMode::Underhand, ThrowMode::Combined] {
+                            // Grounded metadata must not supply absent air data.
+                            assert_eq!(
+                                launch_utility_tick_input(name, rate, mode, Some(observed_smoke_launch()), running, true, pitch),
+                                launch_utility_tick_input(name, rate, mode, None, running, true, pitch),
+                                "{name}, {rate}Hz, running={running}, pitch={pitch}, mode={mode:?}");
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn smoke_air_button_modes_match_independent_native_constant_vz_and_moving_controls() {
+        let mut world = arena();
+        let id = world.add_player("thrower", Team::Terrorist);
+        let catalog = weapons::Catalog::from_items_game(r#"items_game { items {
+            45 { name weapon_smokegrenade attributes { "primary default clip size" 1 } }
+        } }"#).unwrap();
+        let mut definition = catalog.weapons[0].clone();
+        definition.grenade_launch = Some(observed_smoke_air_buttons_launch());
+        for (mode, observed_x, moving_x, controls) in [
+            (ThrowMode::Underhand, 199.423584, 505.673584, [
+                (true, 0., 35.163757), (false, 223.868378, 314.999237), (false, 130.118378, 197.811737),
+            ]),
+            (ThrowMode::Combined, 432.084351, 738.334351, [
+                (true, 0., 76.188133), (false, 217.618378, 348.211121), (false, 130.118378, 238.836121),
+            ]),
+        ] {
+            // Each native zero-G session reads back gravity=0 and equal player
+            // VZ before/after. No physical projectile age is subtracted.
+            for (grounded, player_vz, observed_z) in controls {
+                let actor = world.player_mut(id).unwrap();
+                actor.movement.on_ground = grounded;
+                actor.movement.velocity = Vec3::Z * player_vz;
+                let actual = World::grenade_launch_velocity(world.player(id).unwrap(),
+                    &definition, Some(mode), Vec3::ZERO);
+                assert!((actual - Vec3::new(observed_x, 0., observed_z)).length() < 0.002);
+            }
+            let actor = world.player_mut(id).unwrap();
+            actor.movement.on_ground = false;
+            actor.movement.velocity = Vec3::new(245., 0., 211.368378);
+            let actual = World::grenade_launch_velocity(world.player(id).unwrap(),
+                &definition, Some(mode), Vec3::ZERO);
+            // Normal-gravity steady-forward VX only; its initial VZ is unknown.
+            assert!((actual.x - moving_x).abs() < 0.002);
+        }
+    }
+
+    #[test]
     fn smoke_primary_matches_independent_constant_vz_native_controls() {
         let mut world = arena();
         let id = world.add_player("thrower", Team::Terrorist);
@@ -976,14 +1183,15 @@ mod tests {
             }
         }
         // No-mode callers have no ordinary button endpoint. Check that seam
-        // directly, including both horizontal axes and descending movement.
+        // with every independently qualified air mode populated, including
+        // both horizontal axes and descending movement.
         let mut world = arena();
         let id = world.add_player("thrower", Team::Terrorist);
         let catalog = weapons::Catalog::from_items_game(r#"items_game { items {
             45 { name weapon_smokegrenade attributes { "primary default clip size" 1 } }
         } }"#).unwrap();
         let mut definition = catalog.weapons[0].clone();
-        definition.grenade_launch = Some(candidate);
+        definition.grenade_launch = Some(observed_smoke_air_buttons_launch());
         for grounded in [false, true] {
             let player = world.player_mut(id).unwrap();
             player.movement.on_ground = grounded;

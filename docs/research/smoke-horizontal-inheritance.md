@@ -277,3 +277,57 @@ and all six follow-ups closed successfully and restored all 12 exact native
 preference snapshots per session. Original captures/logs stay private. A pilot
 player-VZ transcription typo was explicitly corrected in its root receipt;
 original evidence was not modified.
+
+
+## Airborne secondary and combined response
+
+Fourteen further fresh Legacy 1.38.8.1 sessions independently qualify the two
+remaining Smoke button modes. The Train setup requests 128 Hz and reads back
+host_timescale 0.01. Root personally reviewed all 56 held/player-before/first-
+projectile/player-after originals: literal pin true, strengths 0 and 0.5,
+matching weapon owner/projectile thrower, unchanged active Smoke and actual
+pitch, standing eye offset, NULL ground for jump cases and World for grounded
+controls. Generic zero absolute velocity is excluded. Each session closed and
+restored all 12 exact native preference snapshots; raw evidence remains private.
+
+| Mode | Air VX at 0 / -30 / +45 degrees | Steady-forward air VX |
+| --- | --- | --- |
+| Secondary | 199.423584 / 162.429962 / 155.124008 | 505.673584 |
+| Combined | 432.084351 / 351.931519 / 336.101959 | 738.334351 |
+
+Independent level/-30 fits within the weighted-pitch family give speeds
+202.500011 and 438.749942, biases 9.999996 and 9.999995 degrees. Separate +45
+checks differ by less than 0.000016. These support rounded speeds 202.5/438.75
+and bias 10 for the named modes; they are not extensions of primary evidence
+or unique general laws. Neither fit is claimed prospectively preregistered.
+Each forward case has actual player VX 245 before and after. Subtracting its
+independent stationary VX gives 306.25, supporting horizontal inheritance 1.25.
+Normal-gravity VZ/brackets do not identify exact release VZ or projectile age.
+
+Each mode also has an independent grounded zero-gravity control and two
+ascending constant-VZ controls, with sv_gravity read back as 0. Both player
+brackets retain exactly the listed VZ. This isolates the vertical response
+without subtracting an unknown physical spawn age or flight gravity loss.
+
+| Mode | Player VZ before and after | Projectile VZ |
+| --- | --- | --- |
+| Secondary grounded | 0 | 35.163757 |
+| Secondary earlier / later air | 223.868378 / 130.118378 | 314.999237 / 197.811737 |
+| Combined grounded | 0 | 76.188133 |
+| Combined earlier / later air | 217.618378 / 130.118378 | 348.211121 / 238.836121 |
+
+Both airborne pairs independently give slope 1.25. Their intercepts are
+35.1637645 and 76.1881485, within 0.000016 of their separate grounded controls.
+Only exact installed Smoke admits these six additional components; v16 binds
+the complete airborne button response. Primary air, grounded modes, other
+kinds, absent-component/no-mode fallback, spawn tracing, release schedules,
+gravity/contact and unsupported bot-planning fallback are preserved.
+
+Ordinary TickInput tests exercise both new air modes with JUMP at 64/128 Hz,
+standing/running, three angles and independent missing-component fallback.
+Separate numeric controls use the observed constant-VZ and forward rows above.
+64 Hz is regression coverage only. Arbitrary speeds/directions, descending,
+crouched/VR throws, physical spawn position/time, full trajectory/contact and
+historical 2015 lineup equivalence remain unqualified. The zero-gravity controls
+do not change production gravity. Private root admissions and original hashes
+are in overpass-20261019/native-smoke-air-buttons-r1/root-admission.json.
