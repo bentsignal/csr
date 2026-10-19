@@ -784,6 +784,88 @@ mod life_tests {
         assert_eq!(knife.next_attack, deadline);
         assert!(knife.reload_end.is_none());
     }
+
+    // UNRUN: source/data-only handoff; root owns Cargo and runtime verification.
+    #[test]
+    #[ignore = "requires the player's installed CS:GO Legacy; no GPU required"]
+    fn installed_early_knife_models_retain_their_authored_activity_sets() {
+        let (app, _) = installed_app(Some("weapon_knife"));
+        let views = app.world().resource::<ViewModels>();
+        for name in ["weapon_knife", "weapon_knife_t", "weapon_bayonet", "weapon_knife_flip",
+            "weapon_knife_gut", "weapon_knife_karambit", "weapon_knife_m9_bayonet",
+            "weapon_knife_tactical", "weapon_knife_butterfly", "weapon_knife_falchion", "weapon_knife_push"] {
+            let view = views.weapons.get(name).expect(name);
+            for activity in ["ACT_VM_DRAW", "ACT_VM_IDLE", "ACT_VM_MISSCENTER", "ACT_VM_MISSCENTER2", "INSPECT"] {
+                let clips = view.clips.get(activity).expect(name);
+                assert!(!clips.is_empty(), "{name}: {activity}");
+                assert!(clips.iter().all(|seq| !seq.clip.frames.is_empty()
+                    && seq.clip.frames[0].len() == view.asset.model.bones.len()));
+            }
+        }
+        assert_eq!(views.weapons["weapon_knife_butterfly"].clips["INSPECT"].len(), 3);
+        assert_eq!(views.weapons["weapon_knife_falchion"].clips["INSPECT"].len(), 2);
+        assert_eq!(views.weapons["weapon_knife_push"].clips["ACT_VM_MISSCENTER"].len(), 5);
+    }
+
+    #[test]
+    #[ignore = "requires the player's installed CS:GO Legacy; no GPU required"]
+    fn installed_secondary_slash_quick_inspect_continues_the_authored_attack() {
+        use std::time::Duration;
+        let (mut app, id) = installed_app(Some("weapon_knife"));
+        {
+            let mut world = app.world_mut().resource_mut::<SimWorld>();
+            world.0.step(&[(id, sim::TickInput {
+                buttons: movement::buttons::ATTACK2, ..Default::default()
+            })]);
+            assert!(world.0.events.iter().any(|event|
+                matches!(event, sim::GameEvent::Melee { secondary: true, .. })));
+        }
+        // The existing no-renderer fixture does not run Effects::process.
+        // Select its real secondary miss activity, then let production update
+        // sample and retain the displayed attack phase (rather than injecting
+        // an already blended pose as the previous regression did).
+        {
+            let mut state = app.world_mut().resource_mut::<ViewModelState>();
+            state.activity = "ACT_VM_MISSCENTER2".into();
+            state.started = 0.;
+            state.clip_index = 0;
+        }
+        app.world_mut().resource_mut::<Time>().advance_by(Duration::from_millis(200));
+        app.update();
+        let displayed = app.world().resource::<ViewModelState>().pose.clone();
+        let attack = app.world().resource::<ViewModelState>().knife_attack.clone().unwrap();
+        let inspect = app.world().resource::<ViewModels>().weapons["weapon_knife"].clips["INSPECT"][0].clone();
+        let authoritative = app.world().resource::<SimWorld>().0.state();
+        app.world_mut().resource_mut::<crate::tracers::InspectRequest>().start();
+        app.update();
+        assert_eq!(app.world().resource::<ViewModelState>().pose, displayed);
+        let inspect_started = app.world().resource::<ViewModelState>().started;
+
+        app.world_mut().resource_mut::<Time>().advance_by(Duration::from_secs_f32(inspect.fade_in * 0.5));
+        app.update();
+        let elapsed = app.world().resource::<Time>().elapsed_secs() - inspect_started;
+        let mut incoming = displayed.clone();
+        sequence_pose::sample(&inspect.clip, elapsed, &mut incoming,
+            |b| inspect.weights.get(b).copied().unwrap_or(1.));
+        let mut continuing = displayed.clone();
+        sequence_pose::sample(&attack.clip, attack.time + elapsed, &mut continuing,
+            |b| attack.weights.get(b).copied().unwrap_or(1.));
+        assert_ne!(continuing, displayed, "the outgoing slash must still be moving during the fade");
+        let weight = (elapsed / inspect.fade_in).clamp(0., 1.);
+        let expected: Vec<_> = continuing.iter().zip(&incoming)
+            .map(|(a, b)| (a.0.lerp(b.0, weight), a.1.slerp(b.1, weight))).collect();
+        assert_eq!(app.world().resource::<ViewModelState>().pose, expected,
+            "quick inspect must fade a continuing slash, not a frozen hand snapshot");
+
+        app.world_mut().resource_mut::<crate::tracers::InspectRequest>().start();
+        app.update();
+        assert_eq!(app.world().resource::<ViewModelState>().pose, expected,
+            "repeated inspect must discard the old outgoing slash and capture what is visible");
+        app.world_mut().resource_mut::<Time>().advance_by(Duration::from_secs_f32(inspect.fade_in * 2.));
+        app.update();
+        assert_eq!(app.world().resource::<SimWorld>().0.state(), authoritative,
+            "the stab deadline and next-attack rejection remain authoritative");
+    }
 }
 
 /// Vertical FOV (radians) for a horizontal 4:3 FOV in degrees, as Source scales it.
@@ -899,6 +981,7 @@ pub struct ViewModelState {
     /// also restore decoded rest values for tracks omitted by compression.
     pose: Vec<(glam::Vec3, glam::Quat)>,
     inspection: inspection::Inspection,
+    knife_attack: Option<inspection::Playback>,
 }
 
 impl ViewModelState {
@@ -919,6 +1002,7 @@ impl ViewModelState {
         self.suppressor_seen = None;
         self.light_timer = 0.0;
         self.inspection = inspection::Inspection::default();
+        self.knife_attack = None;
         // Masked clips deliberately preserve zero-weight bones within one life.
         // They must never inherit the reload/inspect pose of a previous life.
         self.pose = mdl::skeleton::rest_pose(bones);
@@ -929,6 +1013,16 @@ impl ViewModelState {
 fn load_model(fs: &vfs::Vfs, path: &str) -> Option<mdl::Model> {
     let base = path.trim_end_matches(".mdl");
     mdl::Model::load(&fs.read(path)?, &fs.read(&format!("{base}.vvd"))?, &fs.read(&format!("{base}.dx90.vtx"))?).ok()
+}
+
+fn inspect_sequence(seq: &mdl::anim::Sequence) -> bool {
+    seq.name == "inspect" || seq.name.strip_prefix("lookat")
+        .is_some_and(|suffix| !suffix.is_empty() && suffix.bytes().all(|b| b.is_ascii_digit()))
+}
+
+fn knife_attack_activity(activity: &str) -> bool {
+    matches!(activity, "ACT_VM_PRIMARYATTACK" | "ACT_VM_MISSCENTER" | "ACT_VM_HITCENTER"
+        | "ACT_VM_MISSCENTER2" | "ACT_VM_HITCENTER2")
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -970,7 +1064,8 @@ pub fn load(
                 grenade_hold = grenade_hold::HoldPoses::load(src, ani.as_deref());
             }
             for seq in &src.sequences {
-                if seq.activity.is_empty() && seq.name != "lookat01" && seq.name != "inspect" {
+                let inspect = inspect_sequence(seq);
+                if seq.activity.is_empty() && !inspect {
                     continue;
                 }
                 let Some(&first) = seq.anims.first() else { continue };
@@ -992,7 +1087,7 @@ pub fn load(
                         if matches!(seq.activity.as_str(), "ACT_VM_ATTACH_SILENCER" | "ACT_VM_DETACH_SILENCER") {
                             clip.looping = false;
                         }
-                        clips.entry(if seq.name == "lookat01" || seq.name == "inspect" {"INSPECT".into()}else{seq.activity.to_ascii_uppercase()}).or_default().push(SeqClip {
+                        clips.entry(if inspect {"INSPECT".into()}else{seq.activity.to_ascii_uppercase()}).or_default().push(SeqClip {
                             clip: Arc::new(clip),
                             weights: Arc::new(weights),
                             fade_in: seq.fade_in,
@@ -1286,7 +1381,10 @@ pub fn update(
         state.started = now;
     } else if let Some(activity) = attack {
         state.activity = activity.into();
-        state.clip_index = (state.clip_index + 1) % 3;
+        // Select against the actual activity's sequence count below. Shadow
+        // Daggers author five light misses; a fixed three excluded two clips.
+        state.clip_index = if knife { state.clip_index.wrapping_add(1) }
+            else { (state.clip_index + 1) % 3 };
         state.started = now;
     }
     if suppressor.is_none() && attack.is_none() && !reloading && p.plant_start.is_none() && w.is_some_and(|w|w.zoom_level==0 && (knife || w.next_attack<=world.0.time())) && inspect_action == Some(crate::tracers::InspectAction::Start) && view.clips.contains_key("INSPECT") {
@@ -1380,11 +1478,17 @@ pub fn update(
             || state.reload_from_inspect).then_some(state.started),
         seq.fade_in,
         &state.pose,
+        if knife && state.activity == "INSPECT" { state.knife_attack.clone() } else { None },
+        state.inspect_seen,
+        &state.activity,
     );
     inspection.sample_base(&mut state.pose);
     sequence_pose::sample(&clip, t, &mut state.pose, |b| weights.get(b).copied().unwrap_or(1.0));
     inspection.apply(now, &mut state.pose);
     state.inspection = inspection;
+    state.knife_attack = (knife && knife_attack_activity(&state.activity)).then(|| inspection::Playback {
+        clip: clip.clone(), weights: weights.clone(), time: t,
+    });
     if let Some(hold) = &view.grenade_hold { hold.apply(grenade, &mut state.pose); }
     let pose = mdl::skeleton::model_space(&model.bones, &state.pose);
 
