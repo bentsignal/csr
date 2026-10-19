@@ -595,7 +595,7 @@ MovieClip.prototype.attachMovie = function(linkage, name, depth, init) {
         };
     };
     context.load = function() {
-        this.attempts++;
+        this.attempts = this.attempts + 1;
         if (this.loader.loadClip(this.url, this.photo) !== true) { this.retry(); }
     };
     context.onLoadError = function(mc, error) { this.retry(); };
