@@ -629,7 +629,7 @@ mod tests {
                         actor.movement.on_ground = false;
                         // Even a definition carrying an air-primary candidate
                         // must retain the existing unsupported-air bot fallback.
-                        let air = unadmitted_smoke_air_primary_candidate();
+                        let air = observed_smoke_air_primary_launch();
                         let profile = Arc::make_mut(&mut actor.weapons[0].def).grenade_launch.as_mut().unwrap();
                         profile.airborne_overhand_velocity = air.airborne_overhand_velocity;
                         profile.airborne_overhand_horizontal_inheritance = air.airborne_overhand_horizontal_inheritance;
@@ -741,11 +741,11 @@ mod tests {
         }
     }
 
-    // UNADMITTED numeric hypothesis for source-candidate plumbing only. These
-    // fixtures are not native evidence and do not enable the installed importer.
-    fn unadmitted_smoke_air_primary_candidate() -> weapons::GrenadeLaunch {
+    // Independently qualified Legacy Smoke primary-air response. See the
+    // bounded native observations in research/smoke-horizontal-inheritance.md.
+    fn observed_smoke_air_primary_launch() -> weapons::GrenadeLaunch {
         weapons::GrenadeLaunch {
-            reference: "UNADMITTED-smoke-air-primary-hypothesis".into(),
+            reference: "legacy-1.38.8.1-smoke-ground-and-air-primary-response-128hz".into(),
             airborne_overhand_velocity: Some(weapons::GrenadeLaunchVelocity {
                 speed: 675., upward_pitch_bias_degrees: 10.,
             }),
@@ -886,13 +886,13 @@ mod tests {
     }
 
     #[test]
-    fn unadmitted_air_primary_components_follow_ordinary_jump_release_independently() {
+    fn observed_air_primary_components_follow_ordinary_jump_release_independently() {
         for rate in [64, 128] {
             let dt = 1. / rate as f32;
             for running in [false, true] {
-                // Calculated from the UNADMITTED hypothesis, not observed air
-                // samples. Native angular/vertical admission belongs to root.
-                for (pitch, hypothesis_x, hypothesis_z) in [
+                // Native airborne VX at each angle; base VZ is calculated from
+                // the qualified angular family, not a normal-gravity age fit.
+                for (pitch, observed_x, base_z) in [
                     (0., 664.745239, 117.212517),
                     (-30., 541.433167, 403.082062),
                     (45., 517.080017, -433.881622),
@@ -903,7 +903,7 @@ mod tests {
                     if running { assert!((player_velocity.x - 245.).abs() < 0.001); }
                     else { assert_eq!(player_velocity.truncate(), glam::Vec2::ZERO); }
                     for components in 0..8 {
-                        let mut profile = unadmitted_smoke_air_primary_candidate();
+                        let mut profile = observed_smoke_air_primary_launch();
                         if components & 1 == 0 { profile.airborne_overhand_velocity = None; }
                         if components & 2 == 0 { profile.airborne_overhand_horizontal_inheritance = None; }
                         if components & 4 == 0 { profile.airborne_overhand_vertical_inheritance = None; }
@@ -911,7 +911,7 @@ mod tests {
                             ThrowMode::Overhand, Some(profile), running, true, pitch);
                         assert_eq!(actual_player_velocity, player_velocity);
                         let mut expected = if components & 1 != 0 {
-                            Vec3::new(hypothesis_x, 0., hypothesis_z)
+                            Vec3::new(observed_x, 0., base_z)
                         } else { movement::angle_vectors(Vec3::new(pitch, 0., 0.)).0 * 750. };
                         expected += Vec3::new(
                             player_velocity.x * if components & 2 != 0 { 1.25 } else { 0.5 },
@@ -933,8 +933,33 @@ mod tests {
     }
 
     #[test]
-    fn unadmitted_air_primary_preserves_ground_buttons_air_alternates_and_no_mode() {
-        let candidate = unadmitted_smoke_air_primary_candidate();
+    fn smoke_primary_matches_independent_constant_vz_native_controls() {
+        let mut world = arena();
+        let id = world.add_player("thrower", Team::Terrorist);
+        let catalog = weapons::Catalog::from_items_game(r#"items_game { items {
+            45 { name weapon_smokegrenade attributes { "primary default clip size" 1 } }
+        } }"#).unwrap();
+        let mut definition = catalog.weapons[0].clone();
+        definition.grenade_launch = Some(observed_smoke_air_primary_launch());
+        // Native sv_gravity=0 was read back after jump onset, leaving two
+        // constant player-Vz plateaus. No unknown flight age is subtracted.
+        for (grounded, player_vz, observed_z) in [
+            (true, 0., 117.212517),
+            (false, 217.618378, 389.235504),
+            (false, 123.868378, 272.048004),
+        ] {
+            let actor = world.player_mut(id).unwrap();
+            actor.movement.on_ground = grounded;
+            actor.movement.velocity = Vec3::Z * player_vz;
+            let actual = World::grenade_launch_velocity(world.player(id).unwrap(),
+                &definition, Some(ThrowMode::Overhand), Vec3::ZERO);
+            assert!((actual - Vec3::new(664.745239, 0., observed_z)).length() < 0.002);
+        }
+    }
+
+    #[test]
+    fn observed_air_primary_preserves_ground_buttons_air_alternates_and_no_mode() {
+        let candidate = observed_smoke_air_primary_launch();
         for rate in [64, 128] {
             for running in [false, true] {
                 for pitch in [0., -30., 45.] {
