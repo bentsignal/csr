@@ -935,6 +935,91 @@ mod tests {
         }
     }
 
+    fn observed_flash_ground_buttons_launch() -> weapons::GrenadeLaunch {
+        let mut launch = observed_ground_primary_launch("weapon_flashbang");
+        launch.grounded_underhand_velocity = Some(weapons::GrenadeLaunchVelocity {
+            speed: 202.5, upward_pitch_bias_degrees: 10.,
+        });
+        launch.grounded_combined_velocity = Some(weapons::GrenadeLaunchVelocity {
+            speed: 438.75, upward_pitch_bias_degrees: 10.,
+        });
+        launch.grounded_underhand_horizontal_inheritance = Some(1.25);
+        launch.grounded_combined_horizontal_inheritance = Some(1.25);
+        launch
+    }
+
+    #[test]
+    fn flash_ground_buttons_follow_independent_native_vectors_through_tick_input() {
+        for rate in [64, 128] {
+            for (mode, stationary, moving) in [
+                (ThrowMode::Underhand, [199.423584, 162.429962, 155.124008], 505.673584),
+                (ThrowMode::Combined, [432.084351, 351.931519, 336.101959], 738.334351),
+            ] {
+                for (pitch, running, native_x) in [(0., false, stationary[0]),
+                    (-30., false, stationary[1]), (45., false, stationary[2]), (0., true, moving)] {
+                    let (actual, player_velocity) = launch_utility_tick_input("weapon_flashbang", rate, mode,
+                        Some(observed_flash_ground_buttons_launch()), running, false, pitch);
+                    let (prior, prior_player_velocity) = launch_utility_tick_input("weapon_flashbang", rate, mode,
+                        Some(observed_ground_primary_launch("weapon_flashbang")), running, false, pitch);
+                    assert_eq!(actual.kind, Kind::Flash);
+                    assert_eq!(actual.born, prior.born);
+                    assert_eq!(player_velocity, prior_player_velocity);
+                    assert!((player_velocity.x - if running {245.} else {0.}).abs() < 0.001);
+                    assert!((actual.velocity.x - native_x).abs() < 0.002,
+                        "{rate}Hz {mode:?} pitch={pitch} running={running}");
+                    assert!((actual.pos - prior.pos - (actual.velocity - prior.velocity) / rate as f32).length() < 0.002,
+                        "release time and raw-aim spawn trace stay fixed");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn flash_ground_buttons_preserve_primary_air_missing_modes_and_independent_fallbacks() {
+        let candidate = observed_flash_ground_buttons_launch();
+        for rate in [64, 128] {
+            for mode in [ThrowMode::Overhand, ThrowMode::Underhand, ThrowMode::Combined] {
+                for jump in [false, true] {
+                    if !jump && mode != ThrowMode::Overhand {continue;}
+                    for running in [false, true] {
+                        assert_eq!(launch_utility_tick_input("weapon_flashbang", rate, mode,
+                            Some(candidate.clone()), running, jump, -30.),
+                            launch_utility_tick_input("weapon_flashbang", rate, mode,
+                                Some(observed_ground_primary_launch("weapon_flashbang")), running, jump, -30.));
+                    }
+                }
+            }
+            for mode in [ThrowMode::Underhand, ThrowMode::Combined] {
+                let mut absent = candidate.clone();
+                match mode {
+                    ThrowMode::Underhand => {
+                        absent.grounded_underhand_velocity = None;
+                        absent.grounded_underhand_horizontal_inheritance = None;
+                    }
+                    _ => {
+                        absent.grounded_combined_velocity = None;
+                        absent.grounded_combined_horizontal_inheritance = None;
+                    }
+                }
+                assert_eq!(launch_utility_tick_input("weapon_flashbang", rate, mode,
+                    Some(absent), true, false, -30.),
+                    launch_utility_tick_input("weapon_flashbang", rate, mode,
+                        Some(observed_ground_primary_launch("weapon_flashbang")), true, false, -30.));
+            }
+        }
+        let mut world = arena();
+        let id = world.add_player("missing mode", Team::Terrorist);
+        let catalog = weapons::Catalog::from_items_game(r#"items_game { items {
+            43 { name weapon_flashbang attributes { "primary default clip size" 1 } }
+        } }"#).unwrap();
+        let mut definition = catalog.weapons[0].clone();
+        definition.grenade_launch = Some(candidate);
+        let mut prior = definition.clone();
+        prior.grenade_launch = Some(observed_ground_primary_launch("weapon_flashbang"));
+        assert_eq!(world.grenade_release(world.player(id).unwrap(), &definition, None, Vec3::ZERO),
+            world.grenade_release(world.player(id).unwrap(), &prior, None, Vec3::ZERO));
+    }
+
     #[test]
     fn four_kinds_ground_primary_angles_and_independent_inheritance_follow_tick_input() {
         for (name, kind, horizontal) in [
