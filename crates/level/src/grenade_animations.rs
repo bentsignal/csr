@@ -174,9 +174,9 @@ pub(super) fn import(
 ) -> Option<[u8; 20]> {
     let mut digest = Sha1::new();
     digest.update(previous_hash?);
-    // Bind the independently observed Smoke airborne button responses while
-    // retaining the grounded button profiles and existing gravity integration.
-    digest.update(b"grenade-animation-timing-v16-smoke-air-button-response");
+    // Bind supported Smoke activation as well as the previously admitted
+    // launch responses; peers must agree on when a projectile becomes a field.
+    digest.update(b"grenade-animation-timing-v17-smoke-supported-activation");
     let mut definitions: Vec<_> = catalog
         .weapons
         .iter_mut()

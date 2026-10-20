@@ -10,6 +10,8 @@ mod throw_state;
 pub use throw_state::{ThrowMode,ThrowPhase,ThrowState};
 mod bot_lob;
 mod decoy;
+#[cfg(test)]
+mod lifecycle_tests;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Kind {
@@ -53,9 +55,9 @@ pub struct Projectile {
     pub kind: Kind,
     pub pos: Vec3,
     pub velocity: Vec3,
-    /// Presentation rests and contact audio stays silent after the existing
-    /// soft floor stop, despite the solver's small gravity/contact cycles.
-    /// Never skips ballistic integration.
+    /// Supported rest after the solver's soft floor stop. Smoke activation,
+    /// presentation and contact audio share this state through the solver's
+    /// small gravity/contact cycles. Never skips ballistic integration.
     pub settled: bool,
     pub born: f32,
     /// Immutable weapon ContentId captured when a decoy leaves the hand.
@@ -314,12 +316,22 @@ impl World {
                     Vec3::splat(2.0),
                     contents::MASK_SOLID,
                 );
-                p.settled = support.hit() && !support.start_solid && support.normal.z > FLOOR_NORMAL_Z;
+                // Rest integration can only add downward gravity to a stopped
+                // projectile. An upward or horizontal impulse invalidates the
+                // old rest mark even while the previous support is still near.
+                p.settled = previous_velocity.x == 0. && previous_velocity.y == 0.
+                    && previous_velocity.z <= 0.
+                    && support.hit() && !support.start_solid && support.normal.z > FLOOR_NORMAL_Z;
             }
             let age = time - p.born;
             let detonate = if p.kind.fire() {
                 (floor && age > 0.15) || age > 3.5
-            } else if matches!(p.kind, Kind::Smoke | Kind::Decoy) {
+            } else if p.kind == Kind::Smoke {
+                // A slow apex and an expired age timer are not landings.
+                // Reuse the floor stop/support check above: support loss must
+                // wake the projectile before its activation is considered.
+                age > 1.5 && p.settled && p.velocity.length() < 20.0
+            } else if p.kind == Kind::Decoy {
                 age > 1.5 && (p.velocity.length() < 20.0 || age > 3.0)
             } else {
                 age > 1.5
