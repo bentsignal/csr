@@ -550,6 +550,30 @@ salt remain unchanged. Received velocity does not establish initial Vz or exact
 spawn age.
 Source regressions are authored UNRUN; root owns runtime checks and integration.
 
+### Bot planning follows admitted grounded primary profiles (October 20)
+
+The new angular profiles exposed an integration mismatch: the existing bot
+solver admitted only HE/Smoke, so selected Flash/fire utilities still aimed and
+cleared a raw-speed-750 arc while authoritative release used their new metadata.
+The existing admission gate now accepts any known grenade Kind with grounded
+primary velocity metadata. Decoy is included when explicitly supplied to this
+solver; normal bot utility selection policy remains unchanged. Unknown names
+still fall back even if they carry launch metadata.
+
+The existing bot, grounded, primary-mode, untracked/no-separate-aim and selected
+definition/profile guards remain. Air, alternate modes, humans, missing primary
+metadata and unknown definitions/kinds retain their prior fallback. Numerical
+aim convergence, tolerances, clearance hull/sampling and authoritative release
+math are unchanged. No new launch coefficients, AI policy or shared API appear.
+
+The existing end-to-end regression now exercises all six known kinds through
+ordinary TickInput at 64/128 Hz, stationary and moving. It checks target-plane
+crossing before the shortest existing HE/Flash fuse, rejection of a midpoint
+blocker missed by the old arc, and actual matching-owner/kind contact at that
+blocker through either bounce or fire contact detonation. Guard/fallback cases
+remain covered for each kind. This is authored UNRUN source coverage, not native
+bot parity or runtime acceptance; root owns compilation and integration checks.
+
 ### Grounded HE button endpoint velocities
 
 A separate owned Train packet preregistered three level, stationary cases:

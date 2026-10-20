@@ -655,7 +655,7 @@ mod tests {
             assert_eq!(world.players[0].active_weapon().unwrap().grenade_throw.unwrap().phase, ThrowPhase::Holding);
             let target = Vec3::new(700., 120., 8.);
             for unsupported in ["air", "air-underhand", "air-combined", "underhand", "combined", "no-profile", "no-velocity", "human",
-                "tracked", "aim", "unknown-definition", "unknown-kind", "flash", "molotov", "incendiary", "decoy"] {
+                "tracked", "aim", "unknown-definition", "unknown-kind"] {
                 let mut actor = world.players[0].clone();
                 let mut definition = index;
                 match unsupported {
@@ -689,11 +689,8 @@ mod tests {
                     "tracked" => actor.tracked = Some(crate::TrackedPose::default()),
                     "aim" => actor.aim = Some(crate::AimRay::default()),
                     "unknown-definition" => definition += 10000,
-                    other => Arc::make_mut(&mut actor.weapons[0].def).class_name = match other {
-                        "flash" => "weapon_flashbang", "molotov" => "weapon_molotov",
-                        "incendiary" => "weapon_incgrenade", "decoy" => "weapon_decoy",
-                        _ => "weapon_unknown_grenade",
-                    }.into(),
+                    "unknown-kind" => Arc::make_mut(&mut actor.weapons[0].def).class_name = "weapon_unknown_grenade".into(),
+                    _ => unreachable!(),
                 }
                 let fallback = lob_angles(actor.eye(), target).unwrap();
                 assert_eq!(world.bot_lob_angles(&actor, definition, target), Some(fallback), "{unsupported}");
@@ -722,6 +719,11 @@ mod tests {
             let (from, velocity) = world.grenade_release(actor, &actor.weapons[0].def,
                 Some(ThrowMode::Overhand), angles).unwrap();
             let duration = (target - from).truncate().dot(velocity.truncate()) / velocity.truncate().length_squared();
+            let flight_ticks = (duration / world.dt()).ceil() as u32 + 1;
+            // Reach the target before the existing shortest HE/Flash fuse.
+            // This tests free-flight planning, not each kind's detonation law.
+            assert!(duration > 0. && flight_ticks as f32 * world.dt() < 1.5,
+                "{name}, {rate} Hz, moving={moving}: target must precede the fuse");
             let midpoint = from + velocity * (duration * 0.5) - Vec3::Z * 160. * (duration * 0.5).powi(2);
             let mut blocked = world.clone();
             blocked.collision = scene(Some(midpoint));
@@ -732,8 +734,8 @@ mod tests {
             let direction = velocity.truncate().normalize();
             let mut previous = from;
             let mut crossing = None;
-            let mut bounced = false;
-            for step in 1..=rate * 2 {
+            let mut hit_blocker = false;
+            for step in 1..=flight_ticks {
                 for candidate in [&mut world, &mut blocked] {
                     candidate.step(&[(owner, input(angles, moving, 0))]);
                 }
@@ -745,7 +747,15 @@ mod tests {
                     assert_eq!(world.projectiles[0].kind, kind);
                     assert!((world.projectiles[0].velocity - (velocity - Vec3::Z * 320. * world.dt())).length() < 0.001);
                 }
-                bounced |= blocked.events.iter().any(|e| matches!(e, GameEvent::UtilityBounced { .. }));
+                // Fire may terminate on a floor-facing contact instead of
+                // bouncing. Either event must identify this projectile's kind,
+                // owner and the actual midpoint blocker, not a later floor hit.
+                hit_blocker |= blocked.events.iter().any(|e| match e {
+                    GameEvent::UtilityBounced { player, kind: actual, pos }
+                    | GameEvent::UtilityDetonated { player, kind: actual, pos } =>
+                        *player == owner && *actual == kind && pos.distance(midpoint) < 10.,
+                    _ => false,
+                });
                 let p = world.projectiles.first().expect("free-flight projectile before target");
                 let time = step as f32 * world.dt();
                 let planned = from + velocity * time - Vec3::Z * 160. * time * time;
@@ -756,10 +766,14 @@ mod tests {
                 previous = p.pos;
             }
             assert!((crossing.expect("ordinary primary throw crosses the target plane") - target).length() < 1.0);
-            assert!(bounced, "the same TickInput launch hits the rejected path blocker");
+            assert!(hit_blocker, "the same TickInput launch hits the rejected path blocker");
         };
         for rate in [64, 128] {
-            for (name, index, kind) in [("weapon_hegrenade", 44, Kind::He), ("weapon_smokegrenade", 45, Kind::Smoke)] {
+            for (name, index, kind) in [
+                ("weapon_hegrenade", 44, Kind::He), ("weapon_smokegrenade", 45, Kind::Smoke),
+                ("weapon_flashbang", 43, Kind::Flash), ("weapon_molotov", 46, Kind::Molotov),
+                ("weapon_incgrenade", 48, Kind::Incendiary), ("weapon_decoy", 47, Kind::Decoy),
+            ] {
                 for moving in [false, true] { check(rate, name, index, kind, moving); }
             }
         }

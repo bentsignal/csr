@@ -11,7 +11,9 @@ impl World {
         let weapon = bot.weapons.iter().find(|w| w.def.def_index == definition)?;
         if weapon.grenade_throw.is_some_and(|s| s.mode != ThrowMode::Overhand) { return None; }
         let def = weapon.def.as_ref();
-        (matches!(Kind::from_name(&def.class_name), Some(Kind::He | Kind::Smoke))
+        // Every known utility kind can carry an admitted primary profile.
+        // Unknown names must not borrow the solver merely by carrying metadata.
+        (Kind::from_name(&def.class_name).is_some()
             && def.grenade_launch.as_ref()?.grounded_overhand_velocity.is_some()).then_some(def)
     }
 
