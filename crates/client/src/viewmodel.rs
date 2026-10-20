@@ -858,6 +858,42 @@ mod life_tests {
         assert_eq!(inspections.len(), 3, "all three installed inspect variants must be reachable");
     }
 
+    // UNRUN: the first idle frame and later frames must select the same clip.
+    #[test]
+    #[ignore = "requires the player's installed CS:GO Legacy; no GPU required"]
+    fn installed_completed_butterfly_variant_does_not_change_idle_on_the_next_frame() {
+        use std::time::Duration;
+        let (mut app, _) = installed_app(Some("weapon_knife_butterfly"));
+        app.world_mut().resource_mut::<ViewModelState>().knife_variants = knife_variants::KnifeVariants::seeded(0);
+        for activity in ["ACT_VM_DRAW", "INSPECT"] {
+            if activity == "INSPECT" {
+                // Advance real accepted requests until an alternate is selected.
+                for _ in 0..16 {
+                    app.world_mut().resource_mut::<crate::tracers::InspectRequest>().start();
+                    app.update();
+                    if app.world().resource::<ViewModelState>().clip_index == 1 { break; }
+                }
+            } else {
+                // A fresh viewing life picks the deterministic alternate Draw.
+                app.world_mut().resource_mut::<ViewModelState>().life = None;
+                app.update();
+            }
+            let state = app.world().resource::<ViewModelState>();
+            assert_eq!(state.activity, activity);
+            assert_eq!(state.clip_index, 1, "fixture must exercise the second activity variant");
+            let duration = app.world().resource::<ViewModels>().weapons["weapon_knife_butterfly"].clips[activity][1].clip.duration();
+            app.world_mut().resource_mut::<Time>().advance_by(Duration::from_secs_f32(duration + 0.01));
+            app.update();
+            let state = app.world().resource::<ViewModelState>();
+            assert_eq!(state.activity, "ACT_VM_IDLE");
+            assert_eq!(state.clip_index, 0, "completion explicitly samples the first idle sequence");
+            let first_idle = state.pose.clone();
+            app.update(); // identical timestamp; sequence ownership must be stable
+            assert_eq!(app.world().resource::<ViewModelState>().pose, first_idle,
+                "an old variant index must not select a different idle on the following frame");
+        }
+    }
+
     // UNRUN: source-only handoff; root owns Cargo and runtime verification.
     #[test]
     #[ignore = "requires the player's installed CS:GO Legacy; no GPU required"]
@@ -1576,6 +1612,9 @@ pub fn update(
     if grenade.is_none() && suppressor.is_none() && state.activity != "ACT_VM_IDLE" && t > clip.duration() && !reloading {
         state.activity = "ACT_VM_IDLE".into();
         state.started = now;
+        // This frame explicitly samples idle[0]. Retaining an attack/inspect
+        // variant index would silently select a different idle next frame.
+        if knife { state.clip_index = 0; }
         if let Some(idle) = view.clips.get("ACT_VM_IDLE").and_then(|c| c.first()) {
             seq = idle.clone();
             clip = idle.clip.clone();
