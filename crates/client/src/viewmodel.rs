@@ -807,6 +807,57 @@ mod life_tests {
         assert_eq!(views.weapons["weapon_knife_push"].clips["ACT_VM_MISSCENTER"].len(), 5);
     }
 
+    // UNRUN: source-only handoff; root owns Cargo and runtime verification.
+    #[test]
+    #[ignore = "requires the player's installed CS:GO Legacy; no GPU required"]
+    fn installed_rejected_knife_cancel_does_not_rebase_the_active_transition() {
+        use std::time::Duration;
+        let (mut app, id) = installed_app(Some("weapon_knife"));
+        for name in ["weapon_knife", "weapon_knife_t", "weapon_bayonet", "weapon_knife_flip",
+            "weapon_knife_gut", "weapon_knife_karambit", "weapon_knife_m9_bayonet",
+            "weapon_knife_tactical", "weapon_knife_butterfly", "weapon_knife_falchion", "weapon_knife_push"] {
+            {
+                let mut world = app.world_mut().resource_mut::<SimWorld>();
+                let def = Arc::new(world.0.catalog.get(name).unwrap().clone());
+                world.0.player_mut(id).unwrap().weapons[0] = sim::weapon::WeaponState::new(def);
+            }
+            app.update(); // replace the instance when the knife family changes
+            app.update(); // display its authored Draw
+            let authoritative = app.world().resource::<SimWorld>().0.state();
+            app.world_mut().resource_mut::<crate::tracers::InspectRequest>().start();
+            app.update();
+            app.world_mut().resource_mut::<Time>().advance_by(Duration::from_millis(150));
+            app.update();
+            app.world_mut().resource_mut::<crate::tracers::InspectRequest>().cancel();
+            app.update();
+            app.world_mut().resource_mut::<Time>().advance_by(Duration::from_millis(100));
+            app.update();
+            let displayed = app.world().resource::<ViewModelState>().pose.clone();
+            let transition = app.world().resource::<ViewModelState>().inspect_transition;
+            let started = app.world().resource::<ViewModelState>().started;
+
+            // Reload again while already cancelling. The request is consumed,
+            // but no accepted edge owns a new source pose or fade timeline.
+            app.world_mut().resource_mut::<crate::tracers::InspectRequest>().cancel();
+            app.update();
+            let state = app.world().resource::<ViewModelState>();
+            assert_eq!(state.activity, "INSPECT_CANCEL", "{name}");
+            assert_eq!((state.started, state.inspect_transition), (started, transition), "{name}");
+            assert_eq!(state.inspect_seen, app.world().resource::<crate::tracers::InspectRequest>().serial());
+            assert_eq!(state.pose, displayed, "{name}: rejected cancellation must not blend the visible pose twice");
+
+            // A real re-inspect at that exact render timestamp still captures
+            // the displayed pose and gets a distinct transition identity.
+            app.world_mut().resource_mut::<crate::tracers::InspectRequest>().start();
+            app.update();
+            let state = app.world().resource::<ViewModelState>();
+            assert_eq!(state.activity, "INSPECT", "{name}");
+            assert_eq!(state.inspect_transition, transition.wrapping_add(1));
+            assert_eq!(state.pose, displayed, "{name}: an accepted restart must retain its zero-weight endpoint");
+            assert_eq!(app.world().resource::<SimWorld>().0.state(), authoritative);
+        }
+    }
+
     #[test]
     #[ignore = "requires the player's installed CS:GO Legacy; no GPU required"]
     fn installed_secondary_slash_quick_inspect_continues_the_authored_attack() {
@@ -966,6 +1017,8 @@ pub struct ViewModelState {
     started: f32,
     last_attack_seen: u64,
     inspect_seen: u64,
+    /// Accepted presentation edges, distinct from consumed/rejected requests.
+    inspect_transition: u64,
     reloading: bool,
     /// Keep the captured inspect pose through an incoming magazine reload fade.
     reload_from_inspect: bool,
@@ -994,6 +1047,7 @@ impl ViewModelState {
         self.started = now;
         self.last_attack_seen = attack_serial;
         self.inspect_seen = inspect_serial;
+        self.inspect_transition = 0;
         self.reloading = false;
         self.reload_from_inspect = false;
         self.shell_seen = None;
@@ -1348,6 +1402,7 @@ pub fn update(
         state.activity = "INSPECT_CANCEL".into();
         state.started = now;
         state.clip_index = 0;
+        state.inspect_transition = state.inspect_transition.wrapping_add(1);
     }
     let reloading = w.is_some_and(|w| w.reload_end.is_some());
     // Consume reliable shot serials even while a newer suppressor transition
@@ -1389,6 +1444,7 @@ pub fn update(
     }
     if suppressor.is_none() && attack.is_none() && !reloading && p.plant_start.is_none() && w.is_some_and(|w|w.zoom_level==0 && (knife || w.next_attack<=world.0.time())) && inspect_action == Some(crate::tracers::InspectAction::Start) && view.clips.contains_key("INSPECT") {
         state.activity="INSPECT".into();state.started=now;state.clip_index=0;
+        state.inspect_transition = state.inspect_transition.wrapping_add(1);
     }
     if state.activity=="INSPECT" && w.is_some_and(|w|w.zoom_level>0) {state.activity="ACT_VM_IDLE".into();state.started=now;}
     if !reloading || state.activity != "ACT_VM_RELOAD" || grenade.is_some() || suppressor.is_some() {
@@ -1479,7 +1535,7 @@ pub fn update(
         seq.fade_in,
         &state.pose,
         if knife && state.activity == "INSPECT" { state.knife_attack.clone() } else { None },
-        state.inspect_seen,
+        state.inspect_transition,
         &state.activity,
     );
     inspection.sample_base(&mut state.pose);
