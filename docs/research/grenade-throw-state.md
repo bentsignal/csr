@@ -431,8 +431,9 @@ These finite horizontal observations admit a bounded empirical angular model,
 not unique engine internals, exact spawn age or complete trajectory parity.
 
 Only the exact observed items schema and each kind's own installed MDL header
-receive this grounded primary velocity profile. Horizontal inheritance stays
-at its unmeasured prior 0.5; vertical inheritance stays 0.5. Secondary/combined,
+receive this grounded primary velocity profile. Initially horizontal inheritance
+stays at its unmeasured prior 0.5; the independent Flash moving admission below
+supersedes that component for Flash only. Vertical inheritance stays 0.5. Secondary/combined,
 all airborne components and missing metadata/mode retain their independent
 fallbacks. Smoke's accepted ground/air/button profiles and supported-rest
 activation and HE's ground/air responses are preserved. The subsequent fire-kind
@@ -473,8 +474,9 @@ holdout without refitting.
 
 The existing exact schema/item/header gate now admits grounded primary angular
 profiles for all four newly measured kinds. Molotov retains its separately
-measured horizontal inheritance 1.25. Incendiary, Flash and Decoy retain their
-unmeasured prior 0.5 pending independent moving data. Grounded vertical
+measured horizontal inheritance 1.25. Incendiary and Decoy retain their
+unmeasured prior 0.5 pending independent moving data. Flash's independent moving
+admission follows below. Grounded vertical
 inheritance remains 0.5. Every new kind's secondary/combined and all airborne
 components retain their prior independent fallbacks. Smoke/HE and all lifecycle
 laws are unchanged. This extends the same pending v18 semantic increment; no
@@ -484,9 +486,28 @@ The existing identity/installed-loader and ordinary TickInput regressions are
 extended to all four kinds, including distinct retained inheritance and absent
 angular-component fallback. The Molotov/Smoke moving regression now uses the
 admitted Molotov angular profile. All are authored UNRUN; root owns source and
-runtime checks and combined integration. These observations do not admit moving
-inheritance for the three unmeasured kinds, airborne/other-mode families, initial
+runtime checks and combined integration. These angular observations alone do not
+admit movement inheritance, airborne/other-mode families, initial
 Vz/spawn age, contact/lifecycle law, native 64 Hz or historical equivalence.
+
+### Grounded primary Flash horizontal inheritance (October 20)
+
+Root separately reviewed all four original images for the level steady-forward
+Flash throw. The before/after player network VX is 245 on world ground,
+standing, with zero punch and the same active weapon. Held strength 1/pin true,
+weapon owner/projectile thrower and the actual first pre-contact
+CBaseCSGrenadeProjectile network VX agree. Projectile VX 970.995239 minus its
+independent stationary 664.745239 gives 306.25; divided by actual player VX 245
+this admits horizontal inheritance 1.25 for Flash grounded PRIMARY only.
+Original hashes, exact positions and root's personal review are private under
+`native-ground-moving-oct20-r1/flashbang-level-forward/root-review.json`.
+
+Flash's reference now includes angular and horizontal admission. The ordinary
+TickInput regression checks the independent moving level target and retained
+angular/absent-component behavior. Decoy/Incendiary retain 0.5 pending their own
+reviews; no grounded vertical, airborne or other-mode response is admitted.
+The same pending v18 salt remains unchanged. Tests are authored UNRUN and root
+retains runtime/integration ownership.
 
 ### Grounded HE button endpoint velocities
 

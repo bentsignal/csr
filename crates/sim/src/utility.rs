@@ -890,7 +890,7 @@ mod tests {
     fn observed_ground_primary_launch(name: &str) -> weapons::GrenadeLaunch {
         weapons::GrenadeLaunch {
             reference: format!("observed-{name}-ground-primary-angular-128hz"),
-            grounded_overhand_horizontal_inheritance: if name == "weapon_molotov" { 1.25 } else { 0.5 },
+            grounded_overhand_horizontal_inheritance: if matches!(name, "weapon_flashbang" | "weapon_molotov") { 1.25 } else { 0.5 },
             grounded_underhand_horizontal_inheritance: None,
             grounded_combined_horizontal_inheritance: None,
             grounded_overhand_velocity: Some(weapons::GrenadeLaunchVelocity {
@@ -911,9 +911,9 @@ mod tests {
     }
 
     #[test]
-    fn four_kinds_ground_primary_angles_follow_tick_input_without_changing_inheritance() {
+    fn four_kinds_ground_primary_angles_and_independent_inheritance_follow_tick_input() {
         for (name, kind, horizontal) in [
-            ("weapon_flashbang", Kind::Flash, 0.5), ("weapon_decoy", Kind::Decoy, 0.5),
+            ("weapon_flashbang", Kind::Flash, 1.25), ("weapon_decoy", Kind::Decoy, 0.5),
             ("weapon_molotov", Kind::Molotov, 1.25), ("weapon_incgrenade", Kind::Incendiary, 0.5),
         ] {
             for rate in [64, 128] {
@@ -942,6 +942,10 @@ mod tests {
                         // tick before inspection. Undo only that known sim tick.
                         assert!((actual.velocity + Vec3::Z * 320. * dt - expected).length() < 0.002,
                             "{name}, {rate}Hz, pitch={pitch}, running={running}");
+                        if pitch == 0. && running && matches!(name, "weapon_flashbang" | "weapon_molotov") {
+                            assert!((actual.velocity.x - 970.995239).abs() < 0.002,
+                                "each kind's independent steady-forward native level target");
+                        }
                         assert_eq!(actual.kind, kind);
                         assert_eq!(actual.born, prior.born);
                         assert!((actual.pos - prior.pos - (actual.velocity - prior.velocity) * dt).length() < 0.002,
