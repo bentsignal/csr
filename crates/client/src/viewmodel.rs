@@ -149,6 +149,7 @@ mod life_tests {
         state.shell_seen = Some(2);
         state.planting = true;
         state.clip_index = 2;
+        state.completed_knife_index = Some(4);
         // Render frames within this life retain the layered animation.
         assert!(!state.begin_life(1, &bones, 2., 8, 9));
         assert_ne!(state.pose, rest);
@@ -160,6 +161,7 @@ mod life_tests {
         assert_eq!((state.started, state.last_attack_seen, state.inspect_seen), (3., 10, 11));
         assert!(!state.reloading && !state.planting);
         assert_eq!((state.clip_index, state.shell_seen), (0, None));
+        assert_eq!(state.completed_knife_index, None);
     }
 
     fn installed_app(weapon_override: Option<&str>) -> (App, sim::PlayerId) {
@@ -894,6 +896,82 @@ mod life_tests {
         }
     }
 
+    // UNRUN: actual TickInput -> Melee event -> Effects -> viewmodel dispatch.
+    #[test]
+    #[ignore = "requires the player's installed CS:GO Legacy; no GPU required"]
+    fn installed_spaced_dagger_attacks_keep_cycling_after_completion_and_idle() {
+        use std::time::Duration;
+        let (mut app, id) = installed_app(Some("weapon_knife_push"));
+        // Keep the installed model/catalog but use empty collision so every
+        // actual melee input produces a miss, independent of the map spawn.
+        let mut collision = collision::CollisionWorld::new();
+        collision.finalize();
+        app.world_mut().resource_mut::<SimWorld>().0.collision = Arc::new(collision);
+        app.init_resource::<crate::effects::PendingEvents>()
+            .init_resource::<crate::tracers::Tracers>()
+            .init_resource::<crate::audio::SoundLibrary>()
+            .init_resource::<Assets<bevy::audio::AudioSource>>()
+            .init_resource::<crate::surfaces::SurfaceProps>()
+            .init_resource::<crate::settings::Settings>()
+            .init_resource::<crate::buymenu::BuyMenu>()
+            .init_resource::<crate::foley::Foley>()
+            .add_systems(Update, crate::effects::process.before(update));
+        // Empty sound declarations keep this fixture silent; production melee
+        // event routing and serial consumption still run without test hooks.
+        let clips = app.world().resource::<ViewModels>().weapons["weapon_knife_push"].clips["ACT_VM_MISSCENTER"].clone();
+        assert_eq!(clips.len(), 5);
+        let mut selected = Vec::new();
+        for expected in [1, 2, 3, 4, 0, 1, 2] {
+            let events = {
+                let mut world = app.world_mut().resource_mut::<SimWorld>();
+                let deadline = world.0.player(id).unwrap().active_weapon().unwrap().next_attack;
+                while world.0.time() <= deadline {
+                    world.0.step(&[(id, sim::TickInput::default())]);
+                }
+                world.0.step(&[(id, sim::TickInput {
+                    buttons: movement::buttons::ATTACK, ..Default::default()
+                })]);
+                world.0.events.iter().filter(|event| matches!(event,
+                    sim::GameEvent::Melee { player, secondary: false, hit: sim::MeleeHit::Miss, .. }
+                        if *player == id)).cloned().collect::<Vec<_>>()
+            };
+            assert_eq!(events.len(), 1, "each real input must produce one fresh light miss");
+            let authoritative = app.world().resource::<SimWorld>().0.state();
+            app.world_mut().resource_mut::<crate::effects::PendingEvents>().0.extend(events);
+            app.update();
+            let state = app.world().resource::<ViewModelState>();
+            assert_eq!(state.activity, "ACT_VM_MISSCENTER");
+            assert_eq!(state.last_attack_seen, app.world().resource::<crate::effects::Effects>().attack_serial);
+            let index = state.clip_index % clips.len();
+            assert_eq!(index, expected, "completion must preserve the existing five-clip cycle");
+            selected.push(index);
+
+            app.world_mut().resource_mut::<Time>()
+                .advance_by(Duration::from_secs_f32(clips[index].clip.duration() + 0.01));
+            app.update(); // completed attack selects the first idle
+            let state = app.world().resource::<ViewModelState>();
+            assert_eq!(state.activity, "ACT_VM_IDLE");
+            assert_eq!(state.clip_index, 0);
+            assert!(state.completed_knife_index.is_some());
+            let first_idle = state.pose.clone();
+            app.update(); // separate idle frame cannot erase the attack cursor
+            assert_eq!(app.world().resource::<ViewModelState>().pose, first_idle);
+            assert_eq!(app.world().resource::<SimWorld>().0.state(), authoritative,
+                "presentation cannot change attack readiness or simulation state");
+        }
+        assert_eq!(selected, [1, 2, 3, 4, 0, 1, 2]);
+
+        // Accepted non-attack actions keep their existing cursor boundary.
+        app.world_mut().resource_mut::<crate::tracers::InspectRequest>().start();
+        app.update();
+        assert_eq!(app.world().resource::<ViewModelState>().completed_knife_index, None);
+        app.world_mut().resource_mut::<crate::tracers::InspectRequest>().cancel();
+        app.update();
+        let state = app.world().resource::<ViewModelState>();
+        assert_eq!(state.activity, "INSPECT_CANCEL");
+        assert_eq!((state.clip_index, state.completed_knife_index), (0, None));
+    }
+
     // UNRUN: source-only handoff; root owns Cargo and runtime verification.
     #[test]
     #[ignore = "requires the player's installed CS:GO Legacy; no GPU required"]
@@ -1102,6 +1180,9 @@ pub struct ViewModelState {
     life: Option<u64>,
     activity: String,
     clip_index: usize,
+    /// Completion displays idle[0] without erasing the previous action's
+    /// cursor, which the existing knife attack cycle advances on its next edge.
+    completed_knife_index: Option<usize>,
     started: f32,
     last_attack_seen: u64,
     inspect_seen: u64,
@@ -1128,6 +1209,7 @@ pub struct ViewModelState {
 
 impl ViewModelState {
     fn select_knife_variant(&mut self, view: &WeaponView, activity: &str) {
+        self.completed_knife_index = None;
         self.clip_index = view.clips.get(activity)
             .map_or(0, |clips| self.knife_variants.choose(clips));
     }
@@ -1138,6 +1220,7 @@ impl ViewModelState {
         self.life = Some(life);
         self.activity = "ACT_VM_DRAW".into();
         self.clip_index = 0;
+        self.completed_knife_index = None;
         self.started = now;
         self.last_attack_seen = attack_serial;
         self.inspect_seen = inspect_serial;
@@ -1504,6 +1587,7 @@ pub fn update(
         state.activity = "INSPECT_CANCEL".into();
         state.started = now;
         state.clip_index = 0;
+        state.completed_knife_index = None;
         state.inspect_transition = state.inspect_transition.wrapping_add(1);
     }
     let reloading = w.is_some_and(|w| w.reload_end.is_some());
@@ -1540,7 +1624,9 @@ pub fn update(
         state.activity = activity.into();
         // Select against the actual activity's sequence count below. Shadow
         // Daggers author five light misses; a fixed three excluded two clips.
-        state.clip_index = if knife { state.clip_index.wrapping_add(1) }
+        state.clip_index = if knife {
+            state.completed_knife_index.take().unwrap_or(state.clip_index).wrapping_add(1)
+        }
             else { (state.clip_index + 1) % 3 };
         state.started = now;
     }
@@ -1614,7 +1700,10 @@ pub fn update(
         state.started = now;
         // This frame explicitly samples idle[0]. Retaining an attack/inspect
         // variant index would silently select a different idle next frame.
-        if knife { state.clip_index = 0; }
+        if knife {
+            state.completed_knife_index = Some(state.clip_index);
+            state.clip_index = 0;
+        }
         if let Some(idle) = view.clips.get("ACT_VM_IDLE").and_then(|c| c.first()) {
             seq = idle.clone();
             clip = idle.clip.clone();
