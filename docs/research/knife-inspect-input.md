@@ -51,3 +51,38 @@ receipts are unchanged; separate agent image reviews record these findings.
 This admits requested activity and model integrity only. A single cancel
 still image does not establish native easing, repeated-input timing or spin
 loop parity.
+
+## October 20: distinguish reload from the following inspect
+
+Bounded original Legacy controls now supersede the earlier assumption that
+reload itself should return a knife to idle. Untouched CT stock controls show
+that standalone inspect and reload presses preserve the active inspection.
+A post-completion inspect starts a fresh animation. A rapid R/F trial delays
+the closing cue to follow the final inspect, so absence of another opening
+sound alone cannot prove that a restart was rejected.
+
+A matched Butterfly control isolates that distinction. Inspect alone at about
+0.43 seconds after the initial press keeps the original closing cue at 3.494
+seconds after its opening cue. Adding one reload press before the same inspect
+produces a second opening cue and a closing cue 3.497 seconds after that second
+opening. Original images show the resumed handle motion. Both cases selected
+`lookat03`; this does not establish whether a restart always retains its variant.
+The private native selection used an ordinary local give plus a documented
+classname pickup workaround, with actual Butterfly model/HUD verified. The
+untouched stock controls provide a separate check on isolated input behavior.
+All twelve native preference snapshots were restored exactly after each run.
+
+Local presentation therefore keeps the current knife inspect when reload is
+pressed, and permits the next inspect to restart it once. Repeated inspect
+without reload is consumed without changing pose, variant, accepted edge or
+pending sounds. A fresh inspect after the selected authored clip completes is
+accepted even when no intervening render processed that completion. Accepted
+attacks, view/life/weapon changes and clock resets clear restart permission.
+Weapon readiness and TickInput remain authoritative and unchanged.
+
+This is a shared knife presentation rule inferred from the stock and Butterfly
+controls, not independent parity verification for every knife. Exact native
+restart variant selection, easing, simultaneous-key ordering, Karambit spin
+trajectories and historical-version differences remain open. Installed checks
+exercise the shared dispatch across all eleven early families; they do not
+replace those original-game observations.
