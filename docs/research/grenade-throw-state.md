@@ -409,6 +409,49 @@ prospective holdout, conservative received-vertical bounds, unchanged spawn
 origin and unchanged unobserved launch scopes. Compilation and integration
 verification are pending at this source checkpoint.
 
+### Grounded primary Flash and Decoy angular admission (October 20)
+
+Root independently qualified each kind's stationary grounded PRIMARY samples
+at actual pitch 0/-30/+45, yaw 0, in installed Legacy 1.38.8.1 (app 4465480,
+128 Hz). For all six cases root personally reviewed the original held weapon,
+player before release, first moving projectile and player after release.
+Primary strength 1, pulled pin, weapon owner/projectile thrower, unchanged
+active weapon, world ground, zero actual player velocity, standing eye 64.062561
+and zero punch agree. Per-case review records and original hashes remain
+private under `native-ground-families-oct20-r1/{flashbang,decoy}-{level,up30,down45}`.
+This source increment relies on root's admissions; it is not another personal
+image review or a new native run.
+
+Each kind independently gives horizontal network velocity 664.745239 at 0,
+541.433167 at -30 and 517.080017 at +45. The existing weighted-pitch family above
+fits each kind's first two angles with rounded speed 675/bias 10; the separate
++45 sample checks it without refitting, residual below 0.00003 units/second.
+Received normal-gravity Vz is already aged and is not admitted as initial Vz.
+These finite horizontal observations admit a bounded empirical angular model,
+not unique engine internals, exact spawn age or complete trajectory parity.
+
+Only the exact observed items schema and each kind's own installed MDL header
+receive this grounded primary velocity profile. Horizontal inheritance stays
+at its unmeasured prior 0.5; vertical inheritance stays 0.5. Secondary/combined,
+all airborne components and missing metadata/mode retain their independent
+fallbacks. Smoke's accepted ground/air/button profiles and supported-rest
+activation, HE's ground/air responses, Molotov's measured primary horizontal 1.25
+with absent angular family, and Incendiary's complete fallback are preserved.
+Molotov's known level sample alone does not admit its angular family. Root may
+extend the shared grounded-primary profile construction only after separately
+qualifying further observations.
+
+The catalog semantic generation advances once from v17 to v18 for the new
+grounded families while retaining v17 Smoke activation semantics. No fields,
+wire layout, TickInput, spawn trace, gravity, collision or lifecycle law change.
+Authored UNRUN regressions exercise ordinary hold/release TickInput at 64/128 Hz,
+the three native horizontal targets, retained movement inheritance, absent
+angular components, other modes and jump fallbacks. Separate loader tests cover
+exact kind/schema/header gating; a missing-mode test uses the production release
+seam because ordinary hold/release always supplies a mode. Native 64 Hz and moving,
+sideways, extreme-angle, VR and 2015 equivalence remain unmeasured. Root owns
+compilation, runtime verification and combined integration/publication.
+
 ### Grounded HE button endpoint velocities
 
 A separate owned Train packet preregistered three level, stationary cases:

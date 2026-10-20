@@ -887,6 +887,118 @@ mod tests {
         panic!("ordinary hold/release must create one {name}");
     }
 
+    fn observed_flash_decoy_ground_primary_launch(name: &str) -> weapons::GrenadeLaunch {
+        weapons::GrenadeLaunch {
+            reference: format!("observed-{name}-ground-primary-angular-128hz"),
+            grounded_overhand_horizontal_inheritance: 0.5,
+            grounded_underhand_horizontal_inheritance: None,
+            grounded_combined_horizontal_inheritance: None,
+            grounded_overhand_velocity: Some(weapons::GrenadeLaunchVelocity {
+                speed: 675., upward_pitch_bias_degrees: 10.,
+            }),
+            grounded_underhand_velocity: None,
+            grounded_combined_velocity: None,
+            airborne_overhand_velocity: None,
+            airborne_overhand_horizontal_inheritance: None,
+            airborne_overhand_vertical_inheritance: None,
+            airborne_underhand_velocity: None,
+            airborne_underhand_horizontal_inheritance: None,
+            airborne_underhand_vertical_inheritance: None,
+            airborne_combined_velocity: None,
+            airborne_combined_horizontal_inheritance: None,
+            airborne_combined_vertical_inheritance: None,
+        }
+    }
+
+    #[test]
+    fn flash_decoy_ground_primary_angles_follow_tick_input_without_changing_inheritance() {
+        for (name, kind) in [("weapon_flashbang", Kind::Flash), ("weapon_decoy", Kind::Decoy)] {
+            for rate in [64, 128] {
+                let dt = 1. / rate as f32;
+                // Each kind independently measured these horizontal values.
+                // Vz here is the candidate family's construction value, never
+                // a claim that a received native Vz is an initial velocity.
+                for (pitch, native_x, candidate_z) in [
+                    (0., 664.745239, 117.212517),
+                    (-30., 541.433167, 403.082062),
+                    (45., 517.080017, -433.881622),
+                ] {
+                    let mut stationary: Option<Vec3> = None;
+                    for running in [false, true] {
+                        let (actual, player_velocity) = launch_utility_tick_input(name, rate, ThrowMode::Overhand,
+                            Some(observed_flash_decoy_ground_primary_launch(name)), running, false, pitch);
+                        let (prior, prior_player_velocity) = launch_utility_tick_input(name, rate, ThrowMode::Overhand,
+                            None, running, false, pitch);
+                        assert_eq!(player_velocity, prior_player_velocity);
+                        if running { assert!((player_velocity.x - 245.).abs() < 0.001); }
+                        else { assert_eq!(player_velocity, Vec3::ZERO); }
+                        let expected = Vec3::new(native_x, 0., candidate_z) + player_velocity * 0.5;
+                        // Production spawning advances one ordinary free-flight
+                        // tick before inspection. Undo only that known sim tick.
+                        assert!((actual.velocity + Vec3::Z * 320. * dt - expected).length() < 0.002,
+                            "{name}, {rate}Hz, pitch={pitch}, running={running}");
+                        assert_eq!(actual.kind, kind);
+                        assert_eq!(actual.born, prior.born);
+                        assert!((actual.pos - prior.pos - (actual.velocity - prior.velocity) * dt).length() < 0.002,
+                            "only velocity changes; the raw-aim spawn trace stays fixed");
+                        if let Some(velocity) = stationary {
+                            assert!((actual.velocity - velocity - player_velocity * 0.5).length() < 0.002,
+                                "unmeasured movement inheritance retains its prior coefficient");
+                        } else { stationary = Some(actual.velocity); }
+
+                        let mut absent_velocity = observed_flash_decoy_ground_primary_launch(name);
+                        absent_velocity.grounded_overhand_velocity = None;
+                        assert_eq!(launch_utility_tick_input(name, rate, ThrowMode::Overhand,
+                            Some(absent_velocity), running, false, pitch), (prior, prior_player_velocity),
+                            "an absent angular component preserves the complete prior launch");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn flash_decoy_ground_primary_profiles_preserve_other_modes_air_and_missing_mode() {
+        for name in ["weapon_flashbang", "weapon_decoy"] {
+            for rate in [64, 128] {
+                for running in [false, true] {
+                    for pitch in [0., -30., 45.] {
+                        for mode in [ThrowMode::Overhand, ThrowMode::Underhand, ThrowMode::Combined] {
+                            for jump in [false, true] {
+                                if !jump && mode == ThrowMode::Overhand { continue; }
+                                assert_eq!(launch_utility_tick_input(name, rate, mode,
+                                    Some(observed_flash_decoy_ground_primary_launch(name)), running, jump, pitch),
+                                    launch_utility_tick_input(name, rate, mode, None, running, jump, pitch),
+                                    "{name}, {rate}Hz, pitch={pitch}, running={running}, mode={mode:?}, jump={jump}");
+                            }
+                        }
+                    }
+                }
+            }
+            // Missing mode is defensive release behavior, unreachable from the
+            // ordinary hold/release producer; exercise the same production seam.
+            let mut world = arena();
+            let id = world.add_player("thrower", Team::Terrorist);
+            let catalog = weapons::Catalog::from_items_game(&format!(r#"items_game {{ items {{
+                7343 {{ name {name} attributes {{ "primary default clip size" 1 }} }}
+            }} }}"#)).unwrap();
+            let mut definition = catalog.weapons[0].clone();
+            definition.grenade_launch = Some(observed_flash_decoy_ground_primary_launch(name));
+            let mut fallback = definition.clone();
+            fallback.grenade_launch = None;
+            for grounded in [false, true] {
+                let player = world.player_mut(id).unwrap();
+                player.movement.on_ground = grounded;
+                player.movement.velocity = Vec3::new(245., 80., 100.);
+                for pitch in [0., -30., 45.] {
+                    let angles = Vec3::new(pitch, 0., 0.);
+                    assert_eq!(world.grenade_release(world.player(id).unwrap(), &definition, None, angles),
+                        world.grenade_release(world.player(id).unwrap(), &fallback, None, angles));
+                }
+            }
+        }
+    }
+
     #[test]
     fn molotov_and_smoke_tick_input_preserve_inheritance_with_admitted_smoke_button_vectors() {
         fn launch(name: &str, rate: u32, mode: ThrowMode, measured: bool, running: bool, jump: bool, pitch: f32) -> (Projectile, Vec3) {
