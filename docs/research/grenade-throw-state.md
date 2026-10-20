@@ -435,11 +435,8 @@ receive this grounded primary velocity profile. Horizontal inheritance stays
 at its unmeasured prior 0.5; vertical inheritance stays 0.5. Secondary/combined,
 all airborne components and missing metadata/mode retain their independent
 fallbacks. Smoke's accepted ground/air/button profiles and supported-rest
-activation, HE's ground/air responses, Molotov's measured primary horizontal 1.25
-with absent angular family, and Incendiary's complete fallback are preserved.
-Molotov's known level sample alone does not admit its angular family. Root may
-extend the shared grounded-primary profile construction only after separately
-qualifying further observations.
+activation and HE's ground/air responses are preserved. The subsequent fire-kind
+admission below extends the same construction after independent observations.
 
 The catalog semantic generation advances once from v17 to v18 for the new
 grounded families while retaining v17 Smoke activation semantics. No fields,
@@ -451,6 +448,45 @@ exact kind/schema/header gating; a missing-mode test uses the production release
 seam because ordinary hold/release always supplies a mode. Native 64 Hz and moving,
 sideways, extreme-angle, VR and 2015 equivalence remain unmeasured. Root owns
 compilation, runtime verification and combined integration/publication.
+
+### Grounded primary Molotov and Incendiary angular admission (October 20)
+
+Root then qualified each fire kind's own stationary grounded primary samples
+at pitch 0/-30/+45, yaw 0. Molotov's independently known and freshly checked
+level VX is 664.745239; its new -30/+45 VX values are 541.433167/517.080017.
+Incendiary independently gives the same three values. Each case's actual held
+weapon identifies the kind, with matching owner/thrower and actual
+CMolotovProjectile network velocity; the shared projectile class alone cannot
+distinguish these grenades. Root personally reviewed the held/before/projectile0/
+after originals. Records and hashes remain private alongside the prior kinds
+under `native-ground-families-oct20-r1/{molotov,incgrenade}-{level,up30,down45}`.
+
+Both +45 cases have a narrower bracket: the after-release pdump closed. Their
+after images establish stable console getpos/eye and zero velocity only;
+after-release active weapon, ground and punch fields were unavailable. The
+grounded held/before state, pin true, strength 1, standing eye, zero movement
+and punch, actual angle and identified first pre-contact projectile VX admit
+the angular holdout. They do not establish a complete after-release state
+bracket. Received Vz is not initial Vz. The same bounded speed 675/bias 10 family
+fits each kind's 0/-30 observations and checks against its independent +45
+holdout without refitting.
+
+The existing exact schema/item/header gate now admits grounded primary angular
+profiles for all four newly measured kinds. Molotov retains its separately
+measured horizontal inheritance 1.25. Incendiary, Flash and Decoy retain their
+unmeasured prior 0.5 pending independent moving data. Grounded vertical
+inheritance remains 0.5. Every new kind's secondary/combined and all airborne
+components retain their prior independent fallbacks. Smoke/HE and all lifecycle
+laws are unchanged. This extends the same pending v18 semantic increment; no
+additional salt advance or wire/API change occurs.
+
+The existing identity/installed-loader and ordinary TickInput regressions are
+extended to all four kinds, including distinct retained inheritance and absent
+angular-component fallback. The Molotov/Smoke moving regression now uses the
+admitted Molotov angular profile. All are authored UNRUN; root owns source and
+runtime checks and combined integration. These observations do not admit moving
+inheritance for the three unmeasured kinds, airborne/other-mode families, initial
+Vz/spawn age, contact/lifecycle law, native 64 Hz or historical equivalence.
 
 ### Grounded HE button endpoint velocities
 

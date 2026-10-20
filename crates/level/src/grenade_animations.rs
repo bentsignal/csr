@@ -92,9 +92,10 @@ fn observed_launch(name: &str, schema: Option<[u8; 20]>, header: &str) -> Option
     if schema == Some(OBSERVED_LAUNCH_SCHEMA)
         && OBSERVED_HEADERS.iter().any(|&(item, expected)| name == item && header == expected) {
         let primary = match name {
-            // Existing independent movement observation; no angular family yet.
+            // Independent stationary angular family and existing moving pair.
             "weapon_molotov" => Some((
-                "legacy-1.38.8.1-molotov-ground-primary-horizontal-128hz", 1.25, None)),
+                "legacy-1.38.8.1-molotov-ground-primary-angular-horizontal-128hz", 1.25,
+                Some(weapons::GrenadeLaunchVelocity { speed: 675., upward_pitch_bias_degrees: 10. }))),
             // Each kind's own grounded stationary 0/-30 fit and +45 holdout.
             // Horizontal movement inheritance is still unmeasured: retain 0.5.
             "weapon_flashbang" => Some((
@@ -102,6 +103,9 @@ fn observed_launch(name: &str, schema: Option<[u8; 20]>, header: &str) -> Option
                 Some(weapons::GrenadeLaunchVelocity { speed: 675., upward_pitch_bias_degrees: 10. }))),
             "weapon_decoy" => Some((
                 "legacy-1.38.8.1-decoy-ground-primary-angular-128hz", 0.5,
+                Some(weapons::GrenadeLaunchVelocity { speed: 675., upward_pitch_bias_degrees: 10. }))),
+            "weapon_incgrenade" => Some((
+                "legacy-1.38.8.1-incendiary-ground-primary-angular-128hz", 0.5,
                 Some(weapons::GrenadeLaunchVelocity { speed: 675., upward_pitch_bias_degrees: 10. }))),
             _ => None,
         };
@@ -250,15 +254,17 @@ pub(super) fn import(
 #[cfg(test)]
 mod tests {
     #[test]
-    fn flash_and_decoy_admit_only_exact_grounded_primary_angular_profiles() {
+    fn four_kinds_admit_only_exact_grounded_primary_angular_profiles() {
         use super::*;
-        for (name, header, reference) in [
-            ("weapon_flashbang", OBSERVED_HEADERS[1].1, "legacy-1.38.8.1-flash-ground-primary-angular-128hz"),
-            ("weapon_decoy", OBSERVED_HEADERS[5].1, "legacy-1.38.8.1-decoy-ground-primary-angular-128hz"),
+        for (name, header, reference, inheritance) in [
+            ("weapon_flashbang", OBSERVED_HEADERS[1].1, "legacy-1.38.8.1-flash-ground-primary-angular-128hz", 0.5),
+            ("weapon_decoy", OBSERVED_HEADERS[5].1, "legacy-1.38.8.1-decoy-ground-primary-angular-128hz", 0.5),
+            ("weapon_molotov", OBSERVED_HEADERS[3].1, "legacy-1.38.8.1-molotov-ground-primary-angular-horizontal-128hz", 1.25),
+            ("weapon_incgrenade", OBSERVED_HEADERS[4].1, "legacy-1.38.8.1-incendiary-ground-primary-angular-128hz", 0.5),
         ] {
             let profile = observed_launch(name, Some(OBSERVED_LAUNCH_SCHEMA), header).unwrap();
             assert_eq!(profile.reference, reference);
-            assert_eq!(profile.grounded_overhand_horizontal_inheritance, 0.5);
+            assert_eq!(profile.grounded_overhand_horizontal_inheritance, inheritance);
             let velocity = profile.grounded_overhand_velocity.as_ref().unwrap();
             assert_eq!(velocity.speed, 675.);
             assert_eq!(velocity.upward_pitch_bias_degrees, 10.);
@@ -286,7 +292,6 @@ mod tests {
             }
             assert!(observed_launch("pack_flash", Some(OBSERVED_LAUNCH_SCHEMA), header).is_none());
         }
-        assert!(observed_launch("weapon_incgrenade", Some(OBSERVED_LAUNCH_SCHEMA), OBSERVED_HEADERS[4].1).is_none());
     }
 
     #[test]
@@ -353,7 +358,9 @@ mod tests {
             } else {
                 assert!(launch.grounded_underhand_horizontal_inheritance.is_none()
                     && launch.grounded_combined_horizontal_inheritance.is_none());
-                assert!(launch.grounded_overhand_velocity.is_none());
+                let velocity = launch.grounded_overhand_velocity.as_ref().unwrap();
+                assert_eq!(velocity.speed, 675.);
+                assert_eq!(velocity.upward_pitch_bias_degrees, 10.);
                 assert!(launch.grounded_underhand_velocity.is_none() && launch.grounded_combined_velocity.is_none());
             }
             for (name, schema, header) in [
@@ -383,7 +390,7 @@ mod tests {
         for name in ["weapon_molotov", "weapon_smokegrenade"] {
             let launch = level.catalog.get(name).unwrap().grenade_launch.as_ref().unwrap();
             assert_eq!(launch.grounded_overhand_horizontal_inheritance, 1.25);
-            assert_eq!(launch.grounded_overhand_velocity.is_some(), name == "weapon_smokegrenade");
+            assert!(launch.grounded_overhand_velocity.is_some());
             assert_eq!(launch.grounded_underhand_velocity.is_some(), name == "weapon_smokegrenade");
             assert_eq!(launch.grounded_combined_velocity.is_some(), name == "weapon_smokegrenade");
             if name == "weapon_smokegrenade" {
@@ -403,9 +410,10 @@ mod tests {
             assert_eq!(launch.grounded_underhand_horizontal_inheritance, expected);
             assert_eq!(launch.grounded_combined_horizontal_inheritance, expected);
         }
-        for name in ["weapon_flashbang", "weapon_decoy"] {
+        for name in ["weapon_flashbang", "weapon_decoy", "weapon_molotov", "weapon_incgrenade"] {
             let launch = level.catalog.get(name).unwrap().grenade_launch.as_ref().unwrap();
-            assert_eq!(launch.grounded_overhand_horizontal_inheritance, 0.5);
+            assert_eq!(launch.grounded_overhand_horizontal_inheritance,
+                if name == "weapon_molotov" { 1.25 } else { 0.5 });
             let velocity = launch.grounded_overhand_velocity.as_ref().unwrap();
             assert_eq!(velocity.speed, 675.);
             assert_eq!(velocity.upward_pitch_bias_degrees, 10.);
@@ -414,7 +422,6 @@ mod tests {
             assert!(launch.grounded_underhand_horizontal_inheritance.is_none());
             assert!(launch.grounded_combined_horizontal_inheritance.is_none());
         }
-        assert!(level.catalog.get("weapon_incgrenade").unwrap().grenade_launch.is_none());
         for name in [
             "weapon_hegrenade",
             "weapon_flashbang",
