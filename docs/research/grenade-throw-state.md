@@ -1236,3 +1236,58 @@ are retained separately. Other grenade kinds, release timing, spawn tracing,
 collision/gravity, lifecycle and serialization stay intact. Decoy and fire
 alternate-air responses remain unqualified; these measurements do not establish
 their coefficients or full-flight/historical-lineup parity.
+
+## Decoy secondary and combined jump-throw response (October 20)
+
+Fourteen separate owned Legacy 1.38.8.1 sessions independently qualify Decoy's
+alternate-air launch components. Root reviewed the original held-object,
+player before/after and three projectile panels for every case, with private
+raw hashes and manual transcriptions in
+`overpass-20261019/native-decoy-air-buttons-oct20-r1`. All sessions closed and
+restored twelve exact native preference snapshots. No Flash/HE rows supply
+Decoy evidence.
+
+The held `weapon_decoy` declares `v_eq_decoy`, `w_eq_decoy` and dropped model253;
+pin is pulled with strength0 for secondary and0.5 for combined. Actual angles
+match each request, yaw and punches are zero, standing eye offset is64.062561,
+and the player is not ducked. The unique returned `C_DecoyProjectile` has
+model253, the actual owner/thrower, and NULL ground throughout the sampled
+precontact vectors. Only its network velocity is admitted; its generic
+absolute velocity differs and is not used.
+
+| Actual pitch / movement | Decoy secondary VX | Decoy combined VX |
+|---|---:|---:|
+| 0, stationary |199.423584|432.084351|
+| -30, stationary |162.429962|351.931519|
+| +45, stationary holdout |155.124008|336.101959|
+| 0, steady forward |505.673584|738.334351|
+
+All three VX samples agree in each case. Independent level/-30 fits recover
+speeds202.500011 and438.749942 with weighted upward pitch bias approximately10;
++45 holdout residuals are below0.000016. Both moving pairs read player VX245
+before/after release, independently supporting horizontal inheritance1.25.
+
+Gravity0 is read back. In each following case player VZ agrees before/after,
+and projectile VZ agrees across all three samples:
+
+| Mode | Actual player support/VZ | Actual projectile VZ |
+|---|---|---:|
+| Secondary |World,0|35.163757|
+| Secondary |NULL,223.868378|314.999237|
+| Secondary |NULL,123.868378|189.999237|
+| Combined |World,0|76.188133|
+| Combined |NULL,223.868378|356.023621|
+| Combined |NULL,123.868378|231.023621|
+
+Each own ground baseline subtracted from both airborne plateaus independently
+supports vertical inheritance1.25 within displayed float precision. Normal-
+gravity received VZ is not treated as construction velocity or reconstructed
+from network elapsed time.
+
+Only the exact schema/item/MDL-gated Decoy profile gains these six optional
+components; the semantic digest advances to v26. Existing actual TickInput
+64/128Hz alternate-mode/fallback and ground/primary-preservation coverage now
+includes Decoy, with its own constant-VZ/moving rows retained separately.
+Fire alternate-air modes remain unqualified. No release timing, spawn trace,
+collision/gravity, lifecycle, audio or serialization changes are admitted, nor
+full-flight/historical-lineup parity.

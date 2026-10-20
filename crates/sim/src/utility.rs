@@ -1284,6 +1284,24 @@ mod tests {
         }
     }
 
+    // Decoy's own secondary/combined angular, steady-forward and constant-VZ controls.
+    fn observed_decoy_air_buttons_launch() -> weapons::GrenadeLaunch {
+        weapons::GrenadeLaunch {
+            reference: "observed-decoy-air-button-response-128hz".into(),
+            airborne_underhand_velocity: Some(weapons::GrenadeLaunchVelocity {
+                speed: 202.5, upward_pitch_bias_degrees: 10.,
+            }),
+            airborne_underhand_horizontal_inheritance: Some(1.25),
+            airborne_underhand_vertical_inheritance: Some(1.25),
+            airborne_combined_velocity: Some(weapons::GrenadeLaunchVelocity {
+                speed: 438.75, upward_pitch_bias_degrees: 10.,
+            }),
+            airborne_combined_horizontal_inheritance: Some(1.25),
+            airborne_combined_vertical_inheritance: Some(1.25),
+            ..observed_decoy_air_primary_launch()
+        }
+    }
+
     // Independently qualified Molotov primary-air response; alternate air modes stay absent.
     fn observed_molotov_air_primary_launch() -> weapons::GrenadeLaunch {
         weapons::GrenadeLaunch {
@@ -1380,6 +1398,9 @@ mod tests {
             ("weapon_flashbang", Kind::Flash,
                 observed_flash_air_primary_launch as fn() -> weapons::GrenadeLaunch,
                 observed_flash_air_buttons_launch as fn() -> weapons::GrenadeLaunch),
+            ("weapon_decoy", Kind::Decoy,
+                observed_decoy_air_primary_launch as fn() -> weapons::GrenadeLaunch,
+                observed_decoy_air_buttons_launch as fn() -> weapons::GrenadeLaunch),
         ] {
             for (mode, raw_speed, observations) in [
                 (ThrowMode::Underhand, 225., [
@@ -1453,6 +1474,8 @@ mod tests {
                 observed_he_air_buttons_launch as fn() -> weapons::GrenadeLaunch),
             ("weapon_flashbang", observed_flash_air_primary_launch as fn() -> weapons::GrenadeLaunch,
                 observed_flash_air_buttons_launch as fn() -> weapons::GrenadeLaunch),
+            ("weapon_decoy", observed_decoy_air_primary_launch as fn() -> weapons::GrenadeLaunch,
+                observed_decoy_air_buttons_launch as fn() -> weapons::GrenadeLaunch),
         ] {
             for rate in [64, 128] {
                 for running in [false, true] {
@@ -1576,6 +1599,43 @@ mod tests {
         } }"#).unwrap();
         let mut definition = catalog.weapons[0].clone();
         definition.grenade_launch = Some(observed_flash_air_buttons_launch());
+        for (mode, observed_x, moving_x, controls) in [
+            (ThrowMode::Underhand, 199.423584, 505.673584, [
+                (true, 0., 35.163757), (false, 223.868378, 314.999237), (false, 123.868378, 189.999237),
+            ]),
+            (ThrowMode::Combined, 432.084351, 738.334351, [
+                (true, 0., 76.188133), (false, 223.868378, 356.023621), (false, 123.868378, 231.023621),
+            ]),
+        ] {
+            // Own zero-G player VZ is constant before/after release, and each
+            // projectile VZ is constant across three precontact samples.
+            for (grounded, player_vz, observed_z) in controls {
+                let actor = world.player_mut(id).unwrap();
+                actor.movement.on_ground = grounded;
+                actor.movement.velocity = Vec3::Z * player_vz;
+                let actual = World::grenade_launch_velocity(world.player(id).unwrap(),
+                    &definition, Some(mode), Vec3::ZERO);
+                assert!((actual - Vec3::new(observed_x, 0., observed_z)).length() < 0.002);
+            }
+            let actor = world.player_mut(id).unwrap();
+            actor.movement.on_ground = false;
+            actor.movement.velocity = Vec3::new(245., 0., 211.368378);
+            let actual = World::grenade_launch_velocity(world.player(id).unwrap(),
+                &definition, Some(mode), Vec3::ZERO);
+            // Normal-gravity forward samples qualify horizontal velocity only.
+            assert!((actual.x - moving_x).abs() < 0.002);
+        }
+    }
+
+    #[test]
+    fn decoy_air_button_modes_match_own_native_constant_vz_and_moving_controls() {
+        let mut world = arena();
+        let id = world.add_player("thrower", Team::Terrorist);
+        let catalog = weapons::Catalog::from_items_game(r#"items_game { items {
+            47 { name weapon_decoy attributes { "primary default clip size" 1 } }
+        } }"#).unwrap();
+        let mut definition = catalog.weapons[0].clone();
+        definition.grenade_launch = Some(observed_decoy_air_buttons_launch());
         for (mode, observed_x, moving_x, controls) in [
             (ThrowMode::Underhand, 199.423584, 505.673584, [
                 (true, 0., 35.163757), (false, 223.868378, 314.999237), (false, 123.868378, 189.999237),
