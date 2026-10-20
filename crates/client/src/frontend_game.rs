@@ -60,21 +60,13 @@ fn add_classic_map(root: &mut kv::Block, archive: &workshop::OldMap) {
             group.set("imagename", kv::Value::Str(format!("csr-classic-card|{}|{base_image}", archive.name)));
         }
     }
-    let qualification = if archive.name.ends_with("_2015") {
-        "Compatibility archive; rewritten rendering and gameplay still require fidelity validation."
-    } else {
-        "Compatibility archive; exact 2015 parity is not established."
-    };
     map.set("name", kv::Value::Str(archive.name.into()));
     map.set("nameID", kv::Value::Str(title.into()));
     group.set("name", kv::Value::Str(classic_group.clone()));
     group.set("nameID", kv::Value::Str(title.into()));
     group.set(
         "tooltipID",
-        kv::Value::Str(format!(
-            "{}. {qualification}",
-            archive.note.trim_end_matches('.')
-        )),
+        kv::Value::Str(format!("{}.", archive.note.trim_end_matches('.'))),
     );
     group.set(
         "maps",
@@ -458,7 +450,6 @@ mod tests {
             Some("csr-classic-card|de_overpass_2015|map-overpass-overall"));
         assert_eq!(card.str("nameID"), Some("Overpass (2015)"));
         assert!(card.str("tooltipID").unwrap().contains("October 13, 2015"));
-        assert!(card.str("tooltipID").unwrap().contains("CS:GO 1.35.0.6"));
         assert_eq!(map_group_subkeys(&root, "mg_de_overpass_2015", "maps"),
             archive.name);
         assert_eq!(root.block("mapgroups").unwrap().block("mg_de_overpass").unwrap(),

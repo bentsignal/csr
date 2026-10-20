@@ -1,55 +1,48 @@
 # Current owner priorities
 
-Status: **resumed October 19: older Overpass first, then the accepted backlog
-order, continuing until the owner interrupts**. The owner works today and will
-request the next coherent test when available. Subagents are explicitly
-authorized to parallelize work. Do not stop merely because one increment is
-merged or staged. VISION defines the product. The newest observations are in
-[the October 19 playtest record](PLAYTEST-2026-10-19.md); earlier feedback remains in
-[the October 18 record](PLAYTEST-2026-10-18.md).
-Maintain priorities through conversation; the GUI is retired.
+Status: **resumed October 20: work through the owner-approved queue until the
+owner interrupts for a test**. Parallel source preparation is authorized; root
+serializes builds, native observations and integration. Do not stop after one
+increment or ask for repeated small tests. Stop before later expansion for an
+owner discussion. VISION defines the product; maintain priorities in chat.
 
 ## Active batch and accepted order
 
-The owner completed the October 19 selection discussion and explicitly resumed
-implementation. Finish older Overpass with correct appearance, playability and
-its own historical picture first. Continue through the consolidated order in
-the October 19 record: movement; weapon/hand motion; weapon handling; hit audio;
-original-CS:GO throws; grenade effects/reliability; remaining historical
-maps/selection; lighting/materials; HUD; positional audio; interactions/combat
-effects; bots; menus/setup; inventory; performance polish; later expansion.
-Parallel source preparation is authorized; root serializes builds/native jobs
-and integrates complete outcomes in this order. No new review is required
-between completed items. Continue until interrupted by the owner.
+The [October 20 playtest and direction](PLAYTEST-2026-10-20.md) supersede the
+previous batch order:
 
-Quiet walking, airborne/landing weapon motion, intermittent/distant hit cues and
-Train selection clarity remain open. Crouch speed is uncertain, not a confirmed
-request to slow it. The weapon/hand-motion outcome now explicitly includes the
-knife slash-to-quick-inspect hand jiggle and access to the early CS:GO knife set
-for owner testing. Preserve accepted maps, input, binds, performance, grounded
-motion and the accepted classic thumbnails.
+1. Clean player-facing map descriptions: useful names/era/details, no engineering
+   caveats or fidelity-validation commentary.
+2. Core original-CS:GO grenade behavior and presentation together: smoke
+   activation after landing/settling, consistent throw behavior across types,
+   Molotov contact/air expiration and visible surface triangles/flicker.
+3. Hit-sound consistency across weapons: fix AK attacker headshot feedback;
+   preserve heard M4 feedback, nearby positional body hits and distant attacker
+   headshot cues.
+4. Knife/hand animations: attack-to-inspect, repeated inspect/cancel, butterfly
+   draw variants/spinning and karambit transitions across the early knife set.
+5. Movement and weapon motion: remaining quiet-walk/crouch confirmation and
+   smooth jump/landing presentation, preserving accepted grounded motion.
+6. Coherent original HUD.
+7. Positional audio, especially wall/floor footstep occlusion.
+8. Loading and menu responsiveness; preserve accepted general FPS gains.
+9. Remaining reported map defects and regressions, preserving accepted maps.
 
-The owner tested staged Release `989fdc6`. The follow-on motion candidate now
-carries the viewing-life/render-timeline corrections and the knife
-secondary-slash-to-inspect continuity fix. Workspace, installed-model and normal
-Release/Dust II checks pass; rendered review, CI and delivery are in progress.
-This does not complete the missing native landing response or establish owner
-acceptance. Original-menu knife equip/persistence remains separate unfinished
-work; the requested early knives can be reviewed through isolated practice
-shortcuts without changing the saved collection.
+Inventory/settings and later expansion remain recorded but are not automatic
+follow-on scope: discuss with the owner before moving beyond this playable-base
+queue. Earlier weapon handling, bots and combat-effect items remain in the
+historical backlog; do not invent a new order or silently erase them.
 
-Continue concrete fixes with proportional existing checks and prepare coherent
-review builds; no small repeated tests or new diagnostic framework/backlog GUI.
-October 2015 Overpass now passes qualified traversal, Release simulation,
-rendered map/control and original-picker launch checks, with its historical
-photo distinct from installed Legacy. PR #247 passed CI and was merged; the
-verified Release is staged in the October 19 Maps Desktop playtest folder.
-The original fence VMT remains missing; the measured shared fallback preserves
-its strict probe diagnostic. Owner review remains open; complete historical
-coverage is not claimed.
-The lower backlog (HUD, positional audio, interactions, bots, combat effects,
-menus/reliability, performance polish, multiplayer, inventory and later expansion)
-is retained; avoid unrelated expansion while these core outcomes remain.
+The owner accepts Smoke trajectories as good enough and no longer requires
+historical lineup reproduction. Preserve the measured corrections; activation
+in midair is a separate confirmed bug. Older Overpass mostly passes. Knife
+practice access is available, but original-menu equip/persistence and the
+reported animation defects remain unfinished. Do not requeue accepted AWP,
+controls, grounded motion or broad map/performance passes.
+
+Continue concrete implementation with proportional existing checks. No new
+verification framework or backlog GUI. Do not claim a feature complete from
+source-only reviews, synthetic fixtures or a few improved screenshots.
 
 ## Current direction: October 18
 
