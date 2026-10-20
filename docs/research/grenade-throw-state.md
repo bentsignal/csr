@@ -780,3 +780,74 @@ Private original packet: `overpass-20261019/native-flash-ground-buttons-oct20-r1
 All eight sessions closed normally and restored all twelve native preference
 snapshots exactly. Raw images/logs and their hashes remain private; numeric
 review records distinguish source images from unresampled analysis crops.
+
+### October 20: grounded Decoy secondary and combined throws
+
+Eight separate owned Legacy 1.38.8.1 sessions, requesting 128 Hz, independently
+qualify Decoy's two grounded alternate modes. Held model names identify Decoy,
+with pin pulled and strength 0 or 0.5. Actual stationary pitch is 0, -30 or +45,
+yaw 0; before/after player views retain World support, standing height, zero
+velocity and punch. Three pre-contact moving network samples per case agree
+on VX. These are Decoy observations, independent of the preceding Flash packet.
+
+| Mode | Pitch 0 VX | Pitch -30 VX | Pitch +45 VX | Steady-forward pitch 0 VX |
+| --- | ---: | ---: | ---: | ---: |
+| Secondary | 199.423584 | 162.429962 | 155.124008 | 505.673584 |
+| Combined | 432.084351 | 351.931519 | 336.101959 | 738.334351 |
+
+Fitting each mode's own first two angles yields speeds 202.5 and 438.75 with
+the existing pitch-weighted 10-degree upward adjustment. The +45 holdout
+agrees within 0.000051 units/second. Each separate running case shows player
+network VX 245 before and after release, VZ zero and unchanged grounded
+height/eye/angles. Its own stationary subtraction is 306.25, admitting
+horizontal inheritance 1.25 independently for each mode.
+
+Only Decoy's exact schema/item/model gate gains the grounded alternate velocity
+and horizontal components. Primary, airborne and missing-mode behavior,
+physical spawn trace, release timing and lifecycle remain unchanged. Received
+VZ samples are not construction-time vertical velocities. Ordinary TickInput
+regressions exercise all eight observed endpoints at 64/128 Hz, alongside the
+content-bound loader checks. The catalog semantic salt advances to v21 without
+changing wire structures.
+
+Private packet: `overpass-20261019/native-decoy-ground-buttons-oct20-r1`.
+All eight sessions closed normally with twelve exact preference restorations
+each. Original captures/logs, hashes and root numeric reviews remain private.
+
+### October 20: grounded Molotov and Incendiary alternate throws
+
+A further eight owned Legacy 1.38.8.1 sessions per kind independently measured
+Molotov and Incendiary secondary/combined throws at 128 Hz. The held model
+names distinguish Molotov from Incendiary even though both client projectile
+classes are `C_MolotovProjectile`; their dropped-model indices also differ.
+Every held view shows pin pulled and strength 0 or 0.5. Each stationary pair
+shows standing World support, zero player velocity/punch and actual pitches
+0, -30 or +45 at yaw 0. Moving projectile network VX is used rather than the
+zero generic absolute-velocity field.
+
+| Kind | Mode | Pitch 0 VX | Pitch -30 VX | Pitch +45 VX | Forward pitch 0 VX |
+| --- | --- | ---: | ---: | ---: | ---: |
+| Molotov | Secondary | 199.423584 | 162.429962 | 155.124008 | 505.673584 |
+| Molotov | Combined | 432.084351 | 351.931519 | 336.101959 | 738.334351 |
+| Incendiary | Secondary | 199.423584 | 162.429962 | 155.124008 | 505.673584 |
+| Incendiary | Combined | 432.084351 | 351.931519 | 336.101959 | 738.334351 |
+
+Each kind/mode's own 0/-30 fit yields speed 202.5 or 438.75 and the existing
+pitch-weighted upward adjustment of 10 degrees. Each independent +45 holdout
+agrees within 0.000051 units/second. Separate moving pairs retain player
+network VX 245 before and after release, VZ zero and World support. Each
+moving-minus-stationary VX is 306.25, admitting horizontal inheritance 1.25.
+These observations agree with the independently measured Flash/Decoy values;
+no kind inherits qualification from another.
+
+The same v21 batch admits only these exact installed kinds' grounded alternate
+velocity/horizontal components. Primary and airborne response, spawn tracing,
+release timing, fire contact/expiry and all other utility lifecycle behavior
+remain unchanged. Received VZ is not admitted as construction-time velocity.
+The actual TickInput endpoint regression covers all three newly admitted kinds
+at 64/128 Hz; content identity and absent-air-component checks remain enforced.
+
+Private packets: `overpass-20261019/native-molotov-ground-buttons-oct20-r1` and
+`overpass-20261019/native-incgrenade-ground-buttons-oct20-r1`. All sixteen
+sessions closed normally and reported twelve exact preference restorations
+each. Raw evidence and root numeric reviews remain private.

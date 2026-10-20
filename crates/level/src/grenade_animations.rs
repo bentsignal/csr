@@ -94,7 +94,7 @@ fn observed_launch(name: &str, schema: Option<[u8; 20]>, header: &str) -> Option
         let primary = match name {
             // Independent stationary angular family and existing moving pair.
             "weapon_molotov" => Some((
-                "legacy-1.38.8.1-molotov-ground-primary-angular-horizontal-128hz", 1.25,
+                "legacy-1.38.8.1-molotov-ground-button-response-128hz", 1.25,
                 Some(weapons::GrenadeLaunchVelocity { speed: 675., upward_pitch_bias_degrees: 10. }))),
             // Each kind's own grounded stationary 0/-30 fit and +45 holdout.
             // Flash's separate steady-forward pair admits horizontal 1.25.
@@ -103,28 +103,26 @@ fn observed_launch(name: &str, schema: Option<[u8; 20]>, header: &str) -> Option
                 Some(weapons::GrenadeLaunchVelocity { speed: 675., upward_pitch_bias_degrees: 10. }))),
             // Decoy's own stationary/steady-forward pair also admits 1.25.
             "weapon_decoy" => Some((
-                "legacy-1.38.8.1-decoy-ground-primary-angular-horizontal-128hz", 1.25,
+                "legacy-1.38.8.1-decoy-ground-button-response-128hz", 1.25,
                 Some(weapons::GrenadeLaunchVelocity { speed: 675., upward_pitch_bias_degrees: 10. }))),
             // Incendiary's separate moving pair independently admits 1.25.
             "weapon_incgrenade" => Some((
-                "legacy-1.38.8.1-incendiary-ground-primary-angular-horizontal-128hz", 1.25,
+                "legacy-1.38.8.1-incendiary-ground-button-response-128hz", 1.25,
                 Some(weapons::GrenadeLaunchVelocity { speed: 675., upward_pitch_bias_degrees: 10. }))),
             _ => None,
         };
         if let Some((reference, inheritance, velocity)) = primary {
             let mut launch = grounded_primary_launch(reference, inheritance, velocity);
-            if name == "weapon_flashbang" {
-                // Independent secondary/combined 0/-30 fits and +45 holdouts;
-                // each mode also has its own stationary/steady-forward pair.
-                launch.grounded_underhand_velocity = Some(weapons::GrenadeLaunchVelocity {
-                    speed: 202.5, upward_pitch_bias_degrees: 10.,
-                });
-                launch.grounded_combined_velocity = Some(weapons::GrenadeLaunchVelocity {
-                    speed: 438.75, upward_pitch_bias_degrees: 10.,
-                });
-                launch.grounded_underhand_horizontal_inheritance = Some(1.25);
-                launch.grounded_combined_horizontal_inheritance = Some(1.25);
-            }
+            // Each kind has independent secondary/combined 0/-30 fits and +45 holdouts;
+            // each mode also has its own stationary/steady-forward pair.
+            launch.grounded_underhand_velocity = Some(weapons::GrenadeLaunchVelocity {
+                speed: 202.5, upward_pitch_bias_degrees: 10.,
+            });
+            launch.grounded_combined_velocity = Some(weapons::GrenadeLaunchVelocity {
+                speed: 438.75, upward_pitch_bias_degrees: 10.,
+            });
+            launch.grounded_underhand_horizontal_inheritance = Some(1.25);
+            launch.grounded_combined_horizontal_inheritance = Some(1.25);
             return Some(launch);
         }
     }
@@ -215,8 +213,8 @@ pub(super) fn import(
     let mut digest = Sha1::new();
     digest.update(previous_hash?);
     // Retain prior launch/contact/expiry policies while distinguishing the
-    // independently observed grounded Flash button response. Wire layout stays fixed.
-    digest.update(b"grenade-animation-timing-v20-flash-ground-button-response");
+    // independently observed grounded Decoy/fire button responses. Wire layout stays fixed.
+    digest.update(b"grenade-animation-timing-v21-ground-button-response");
     let mut definitions: Vec<_> = catalog
         .weapons
         .iter_mut()
@@ -271,9 +269,9 @@ mod tests {
         use super::*;
         for (name, header, reference, inheritance) in [
             ("weapon_flashbang", OBSERVED_HEADERS[1].1, "legacy-1.38.8.1-flash-ground-button-response-128hz", 1.25),
-            ("weapon_decoy", OBSERVED_HEADERS[5].1, "legacy-1.38.8.1-decoy-ground-primary-angular-horizontal-128hz", 1.25),
-            ("weapon_molotov", OBSERVED_HEADERS[3].1, "legacy-1.38.8.1-molotov-ground-primary-angular-horizontal-128hz", 1.25),
-            ("weapon_incgrenade", OBSERVED_HEADERS[4].1, "legacy-1.38.8.1-incendiary-ground-primary-angular-horizontal-128hz", 1.25),
+            ("weapon_decoy", OBSERVED_HEADERS[5].1, "legacy-1.38.8.1-decoy-ground-button-response-128hz", 1.25),
+            ("weapon_molotov", OBSERVED_HEADERS[3].1, "legacy-1.38.8.1-molotov-ground-button-response-128hz", 1.25),
+            ("weapon_incgrenade", OBSERVED_HEADERS[4].1, "legacy-1.38.8.1-incendiary-ground-button-response-128hz", 1.25),
         ] {
             let profile = observed_launch(name, Some(OBSERVED_LAUNCH_SCHEMA), header).unwrap();
             assert_eq!(profile.reference, reference);
@@ -281,12 +279,11 @@ mod tests {
             let velocity = profile.grounded_overhand_velocity.as_ref().unwrap();
             assert_eq!(velocity.speed, 675.);
             assert_eq!(velocity.upward_pitch_bias_degrees, 10.);
-            let flash = name == "weapon_flashbang";
-            assert_eq!(profile.grounded_underhand_horizontal_inheritance, flash.then_some(1.25));
-            assert_eq!(profile.grounded_combined_horizontal_inheritance, flash.then_some(1.25));
+            assert_eq!(profile.grounded_underhand_horizontal_inheritance, Some(1.25));
+            assert_eq!(profile.grounded_combined_horizontal_inheritance, Some(1.25));
             for (velocity, speed) in [(&profile.grounded_underhand_velocity, 202.5),
                 (&profile.grounded_combined_velocity, 438.75)] {
-                assert_eq!(velocity.is_some(), flash);
+                assert!(velocity.is_some());
                 if let Some(velocity) = velocity {
                     assert_eq!(velocity.speed, speed);
                     assert_eq!(velocity.upward_pitch_bias_degrees, 10.);
@@ -376,12 +373,14 @@ mod tests {
                     assert_eq!(velocity.upward_pitch_bias_degrees, 10.);
                 }
             } else {
-                assert!(launch.grounded_underhand_horizontal_inheritance.is_none()
-                    && launch.grounded_combined_horizontal_inheritance.is_none());
-                let velocity = launch.grounded_overhand_velocity.as_ref().unwrap();
-                assert_eq!(velocity.speed, 675.);
-                assert_eq!(velocity.upward_pitch_bias_degrees, 10.);
-                assert!(launch.grounded_underhand_velocity.is_none() && launch.grounded_combined_velocity.is_none());
+                assert_eq!(launch.grounded_underhand_horizontal_inheritance, Some(1.25));
+                assert_eq!(launch.grounded_combined_horizontal_inheritance, Some(1.25));
+                for (velocity, speed) in [(&launch.grounded_overhand_velocity, 675.),
+                    (&launch.grounded_underhand_velocity, 202.5), (&launch.grounded_combined_velocity, 438.75)] {
+                    let velocity = velocity.as_ref().unwrap();
+                    assert_eq!(velocity.speed, speed);
+                    assert_eq!(velocity.upward_pitch_bias_degrees, 10.);
+                }
             }
             for (name, schema, header) in [
                 (name, Some(OBSERVED_LAUNCH_SCHEMA), header),
@@ -411,8 +410,8 @@ mod tests {
             let launch = level.catalog.get(name).unwrap().grenade_launch.as_ref().unwrap();
             assert_eq!(launch.grounded_overhand_horizontal_inheritance, 1.25);
             assert!(launch.grounded_overhand_velocity.is_some());
-            assert_eq!(launch.grounded_underhand_velocity.is_some(), name == "weapon_smokegrenade");
-            assert_eq!(launch.grounded_combined_velocity.is_some(), name == "weapon_smokegrenade");
+            assert!(launch.grounded_underhand_velocity.is_some());
+            assert!(launch.grounded_combined_velocity.is_some());
             if name == "weapon_smokegrenade" {
                 for (velocity, speed) in [
                     (&launch.grounded_overhand_velocity, 675.),
@@ -426,7 +425,7 @@ mod tests {
                     assert_eq!(velocity.upward_pitch_bias_degrees, 10.);
                 }
             }
-            let expected = (name == "weapon_smokegrenade").then_some(1.25);
+            let expected = Some(1.25);
             assert_eq!(launch.grounded_underhand_horizontal_inheritance, expected);
             assert_eq!(launch.grounded_combined_horizontal_inheritance, expected);
         }
@@ -436,17 +435,16 @@ mod tests {
             let velocity = launch.grounded_overhand_velocity.as_ref().unwrap();
             assert_eq!(velocity.speed, 675.);
             assert_eq!(velocity.upward_pitch_bias_degrees, 10.);
-            let flash = name == "weapon_flashbang";
             for (velocity, speed) in [(&launch.grounded_underhand_velocity, 202.5),
                 (&launch.grounded_combined_velocity, 438.75)] {
-                assert_eq!(velocity.is_some(), flash);
+                assert!(velocity.is_some());
                 if let Some(velocity) = velocity {
                     assert_eq!(velocity.speed, speed);
                     assert_eq!(velocity.upward_pitch_bias_degrees, 10.);
                 }
             }
-            assert_eq!(launch.grounded_underhand_horizontal_inheritance, flash.then_some(1.25));
-            assert_eq!(launch.grounded_combined_horizontal_inheritance, flash.then_some(1.25));
+            assert_eq!(launch.grounded_underhand_horizontal_inheritance, Some(1.25));
+            assert_eq!(launch.grounded_combined_horizontal_inheritance, Some(1.25));
         }
         for name in [
             "weapon_hegrenade",
