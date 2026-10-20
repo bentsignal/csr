@@ -474,9 +474,9 @@ holdout without refitting.
 
 The existing exact schema/item/header gate now admits grounded primary angular
 profiles for all four newly measured kinds. Molotov retains its separately
-measured horizontal inheritance 1.25. Incendiary retains its
-unmeasured prior 0.5 pending independent moving data. Flash's and Decoy's
-independent moving admissions follow below. Grounded vertical
+measured horizontal inheritance 1.25. Incendiary initially retains its
+unmeasured prior 0.5; the independent moving admissions below supersede this
+component for Incendiary, Flash and Decoy. Grounded vertical
 inheritance remains 0.5. Every new kind's secondary/combined and all airborne
 components retain their prior independent fallbacks. Smoke/HE and all lifecycle
 laws are unchanged. This extends the same pending v18 semantic increment; no
@@ -522,10 +522,33 @@ Original hashes and root's personal review remain private under
 `native-ground-moving-oct20-r1/decoy-level-forward/root-review.json`.
 
 Decoy's exact-gated reference and tests now include angular/horizontal admission,
-with its own explicit native moving level target. Incendiary remains 0.5 pending
-its own moving review. Grounded vertical, airborne and other-mode components
+with its own explicit native moving level target. Incendiary's separate moving
+admission follows below. Grounded vertical, airborne and other-mode components
 remain unchanged; no extra semantic increment occurs beyond pending v18. All
 regressions remain authored UNRUN, with runtime/integration owned by root.
+
+### Grounded primary Incendiary horizontal inheritance (October 20)
+
+Root separately reviewed all four original Incendiary level steady-forward
+images. Held Incendiary strength 1/pin true and owner/projectile thrower match;
+the actual before/after player network VX is 245 on world ground, standing,
+zero punch, with the same active weapon. The player moves from
+[-344.675323,-875,-319.96875] to [-283.425323,-875,-319.96875]. First pre-contact
+CMolotovProjectile network VX 970.995239 against Incendiary's own stationary
+664.745239 gives horizontal inheritance (306.25 / 245) = 1.25. Its held weapon
+identity distinguishes Incendiary from Molotov; no projectile-class inference
+supplies the kind. Original hashes and personal review remain private under
+`native-ground-moving-oct20-r1/incgrenade-level-forward/root-review.json`.
+
+Incendiary's exact-gated reference and existing identity/installed/TickInput
+regressions now include this independent inheritance and native moving target.
+All four newly measured grounded PRIMARY profiles now independently admit the
+bounded angular family 675/bias 10 and horizontal inheritance 1.25. Grounded
+vertical remains 0.5; their secondary/combined and airborne components remain
+absent with independent prior fallbacks. Smoke/HE, lifecycle and pending v18
+salt remain unchanged. Received velocity does not establish initial Vz or exact
+spawn age.
+Source regressions are authored UNRUN; root owns runtime checks and integration.
 
 ### Grounded HE button endpoint velocities
 
