@@ -1040,6 +1040,12 @@ mod life_tests {
     fn installed_spaced_dagger_attacks_keep_cycling_after_completion_and_idle() {
         use std::time::Duration;
         let (mut app, id) = installed_app(Some("weapon_knife_push"));
+        // Ordinary simulation ticks dress newly held knives from the owner's
+        // loadout. Select the Daggers there too, so the first input does not
+        // legitimately replace the fixture's model with the CT stock knife.
+        app.world_mut().resource_mut::<SimWorld>().0.set_loadout(id, sim::Loadout {
+            knife: Some("weapon_knife_push".into()), ..Default::default()
+        });
         // Keep the installed model/catalog but use empty collision so every
         // actual melee input produces a miss, independent of the map spawn.
         let mut collision = collision::CollisionWorld::new();
@@ -1070,8 +1076,8 @@ mod life_tests {
                     buttons: movement::buttons::ATTACK, ..Default::default()
                 })]);
                 world.0.events.iter().filter(|event| matches!(event,
-                    sim::GameEvent::Melee { player, secondary: false, hit: sim::MeleeHit::Miss, .. }
-                        if *player == id)).cloned().collect::<Vec<_>>()
+                    sim::GameEvent::Melee { player, weapon, secondary: false, hit: sim::MeleeHit::Miss, .. }
+                        if *player == id && weapon == "weapon_knife_push")).cloned().collect::<Vec<_>>()
             };
             assert_eq!(events.len(), 1, "each real input must produce one fresh light miss");
             let authoritative = app.world().resource::<SimWorld>().0.state();
