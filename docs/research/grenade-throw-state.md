@@ -1109,3 +1109,72 @@ All seven sessions closed normally and restored twelve exact native preference
 snapshots each. Original captures/logs, hashes and root numeric reviews remain
 private. No new air-expiry/contact law, full-trajectory/visual or historical-2015
 parity is inferred from these early-flight observations.
+
+
+## HE secondary and combined jump-throw response (October 20)
+
+Fourteen separate owned Legacy 1.38.8.1 sessions qualify the HE alternate-air
+components: seven for short right-click throws and seven for both-button throws.
+Each mode independently supplies level and -30-degree angular measurements, a
++45-degree holdout, steady-forward movement, and ground/early-air/later-air
+zero-gravity controls. Original held, player and three projectile dumps were
+personally reviewed; every session closed with all twelve native preference
+snapshots restored. Raw captures remain private.
+
+The held object is the actual HE with `v_eq_fraggrenade`,
+`w_eq_fraggrenade` and dropped model251, with pin pulled. Actual strength is0
+for secondary and0.5 for combined. Player angles match the requested samples,
+yaw/punch are zero, standing eye offset is64.062561 and the player is airborne
+before and after each jump release. The emitted object is the unique returned
+`C_BaseCSGrenadeProjectile`, owned/thrown by that player, with model251 and
+NULL ground at every sampled precontact vector. Use its network velocity;
+the generic absolute-velocity dump is zero and supplies no launch estimate.
+
+| Actual pitch / movement | HE secondary VX | HE combined VX |
+|---|---:|---:|
+| 0, stationary |199.423584|432.084351|
+| -30, stationary |162.429962|351.931519|
+| +45, stationary holdout |155.124008|336.101959|
+| 0, steady forward |505.673584|738.334351|
+
+Each value remains constant across all three projectile samples. The running
+player independently reads245 units/s before and after release in both modes;
+each moving-minus-stationary difference is306.25, supporting horizontal
+inheritance1.25. Normal-gravity received VZ is deliberately not treated as
+construction VZ or used to fit an unknown network, birth or think age.
+
+The level/-30 fits independently recover speed202.500011 and bias9.999996 for
+secondary, speed438.749942 and bias9.999995 for combined. Applying those fits
+to the untouched +45 holdouts leaves absolute VX residuals below0.000016.
+Thus each mode admits its own speed202.5 or438.75 and weighted upward pitch
+bias10, rather than borrowing an airborne response from HE primary or Smoke.
+
+Actual gravity0 is read back for the vertical controls. Each airborne player
+has equal network VZ before/after release and every projectile has constant
+VZ across its three samples:
+
+| Mode | Actual player support/VZ | Actual projectile VZ |
+|---|---|---:|
+| Secondary |World,0|35.163757|
+| Secondary |NULL,223.868378|314.999237|
+| Secondary |NULL,123.868378|189.999237|
+| Combined |World,0|76.188133|
+| Combined |NULL,217.618378|348.211121|
+| Combined |NULL,123.868378|231.023621|
+
+Subtracting each mode's own ground baseline and dividing by its own airborne
+player VZ independently yields1.25 within float/display precision at both
+plateaus. In particular, the early combined player VZ is217.618378, not the
+secondary session's223.868378. These controls qualify vertical inheritance;
+no normal-gravity clock correction is needed.
+
+Only the existing exact schema/item/MDL gate for HE receives these six optional
+alternate-air components. Grounded modes, primary air, other grenade kinds,
+release timing, trace placement, collision/gravity and lifecycle stay intact.
+The existing content digest advances to v24; serialization remains unchanged.
+Actual TickInput coverage at64/128Hz extends the existing alternate-air
+component/fallback and grounded/primary preservation cases to HE, alongside
+Smoke. Separate HE fixtures retain its own constant-VZ rows and forward pair.
+Other kinds' missing alternate-air components still use the prior fallback;
+these observations do not admit them, contact/expiry changes or historical
+lineup/full-trajectory parity.
