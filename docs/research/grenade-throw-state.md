@@ -725,3 +725,16 @@ grounded-launch/Smoke change does not claim those fire laws are complete.
 The unshipped fire-orientation experiment still shows hard sprite edges.
 Scene-depth blending and native omitted renderer defaults remain unresolved;
 it is not part of this gameplay candidate.
+
+### October 20 fire expiry correction
+
+The fire-grenade fallback now uses the exposed 2.0-second value with the
+existing projectile-age clock and tick polling. Expiry removes the projectile
+and emits its existing terminal event; only a qualifying direct floor contact
+creates persistent fire. This prevents an airborne expiration from leaving a
+floating damaging field. Both Molotov and Incendiary use this path.
+
+The previous contact normal cutoff and early-contact guard are preserved.
+Exact native birth/think timing, near-floor projection, slope conversion and
+air-burst particles/audio remain separate qualification work. No launch
+parameters, other grenade lifecycle laws or network structures change.
