@@ -860,12 +860,150 @@ mod life_tests {
         assert_eq!(inspections.len(), 3, "all three installed inspect variants must be reachable");
     }
 
+    // UNRUN: real dispatch and tick foley share one installed Draw selection.
+    #[test]
+    #[ignore = "requires the player's installed CS:GO Legacy; no GPU required"]
+    fn installed_selected_butterfly_draw_schedules_its_own_foley_once() {
+        fn equip(app: &mut App, id: sim::PlayerId, name: &str) {
+            let mut world = app.world_mut().resource_mut::<SimWorld>();
+            let def = Arc::new(world.0.catalog.get(name).unwrap().clone());
+            world.0.player_mut(id).unwrap().weapons[0] = sim::weapon::WeaponState::new(def);
+            world.0.tick += 1;
+        }
+
+        let (mut app, id) = installed_unposed_app(Some("weapon_knife"));
+        app.init_resource::<crate::audio::SoundLibrary>()
+            .init_resource::<Assets<bevy::audio::AudioSource>>()
+            .init_resource::<crate::surfaces::SurfaceProps>()
+            .init_resource::<crate::foley::Foley>()
+            .add_systems(FixedUpdate, crate::foley::update);
+        let clips = app.world().resource::<ViewModels>().weapons["weapon_knife_butterfly"].clips["ACT_VM_DRAW"].clone();
+        assert_eq!(clips.len(), 2);
+        let seed_for = |index| (0..128).find(|seed|
+            knife_variants::KnifeVariants::seeded(*seed).choose(&clips) == index).unwrap();
+        for render_first in [false, true] {
+            for (index, entry) in [(0, "ButterflyKnife.draw01"), (1, "ButterflyKnife.draw02")] {
+                equip(&mut app, id, "weapon_knife");
+                app.world_mut().run_schedule(FixedUpdate);
+                app.update();
+                app.update();
+                app.world_mut().resource_mut::<crate::foley::Foley>().scheduled.clear();
+                app.world_mut().resource_mut::<ViewModelState>().knife_variants =
+                    knife_variants::KnifeVariants::seeded(seed_for(index));
+                equip(&mut app, id, "weapon_knife_butterfly");
+                let authoritative = app.world().resource::<SimWorld>().0.state();
+                let deployed = app.world().resource::<SimWorld>().0.time();
+                if render_first { app.update(); }
+                app.world_mut().run_schedule(FixedUpdate);
+                app.update();
+                app.update();
+                let state = app.world().resource::<ViewModelState>();
+                assert_eq!(state.activity, "ACT_VM_DRAW");
+                assert_eq!(state.clip_index, index);
+                let serial = state.knife_draw_serial;
+                assert_eq!(app.world().resource::<crate::foley::Foley>().scheduled,
+                    [(id, "weapon_knife_butterfly".to_string(), entry.to_string(), deployed)],
+                    "selected Draw must schedule its declared cycle-zero cue once, at the original deploy time");
+                assert_eq!(app.world().resource::<SimWorld>().0.state(), authoritative);
+
+                app.world_mut().run_schedule(FixedUpdate); // repeated tick
+                app.update();
+                app.world_mut().resource_mut::<SimWorld>().0.tick += 1;
+                app.world_mut().run_schedule(FixedUpdate); // later tick, same weapon
+                app.update();
+                assert_eq!(app.world().resource::<ViewModelState>().knife_draw_serial, serial);
+                assert_eq!(app.world().resource::<ViewModelState>().clip_index, index);
+                assert_eq!(app.world().resource::<crate::foley::Foley>().scheduled.len(), 1);
+            }
+        }
+
+        // Foley sees an intervening switch which rendering never presents.
+        // Returning to the same weapon must still present that new deployment.
+        equip(&mut app, id, "weapon_knife");
+        app.world_mut().run_schedule(FixedUpdate);
+        app.world_mut().resource_mut::<ViewModelState>().knife_variants =
+            knife_variants::KnifeVariants::seeded(seed_for(0));
+        app.world_mut().resource_mut::<crate::foley::Foley>().scheduled.clear();
+        equip(&mut app, id, "weapon_knife_butterfly");
+        let authoritative = app.world().resource::<SimWorld>().0.state();
+        let deployed = app.world().resource::<SimWorld>().0.time();
+        app.world_mut().run_schedule(FixedUpdate);
+        app.update();
+        assert_eq!(app.world().resource::<ViewModelState>().clip_index, 0);
+        assert_eq!(app.world().resource::<ViewModelState>().activity, "ACT_VM_DRAW");
+        assert_eq!(app.world().resource::<crate::foley::Foley>().scheduled,
+            [(id, "weapon_knife_butterfly".to_string(), "ButterflyKnife.draw01".to_string(), deployed)]);
+        assert_eq!(app.world().resource::<SimWorld>().0.state(), authoritative);
+
+        // Firearms and utility retain the first-sequence declaration and the
+        // existing simulation-time event schedule; they do not use this cache.
+        for name in ["weapon_m4a1", "weapon_smokegrenade"] {
+            app.world_mut().resource_mut::<crate::foley::Foley>().scheduled.clear();
+            equip(&mut app, id, name);
+            let deployed = app.world().resource::<SimWorld>().0.time();
+            let (duration, events) = app.world().resource::<ViewModels>()
+                .activity_sounds(name, "ACT_VM_DRAW").unwrap();
+            let expected: Vec<_> = events.iter().map(|(cycle, entry)|
+                (id, name.to_string(), entry.clone(), deployed + cycle * duration)).collect();
+            let authoritative = app.world().resource::<SimWorld>().0.state();
+            app.world_mut().run_schedule(FixedUpdate);
+            app.update();
+            app.update();
+            assert_eq!(app.world().resource::<crate::foley::Foley>().scheduled, expected);
+            assert!(app.world().resource::<ViewModelState>().knife_draw_choice.is_none());
+            assert_eq!(app.world().resource::<SimWorld>().0.state(), authoritative);
+        }
+    }
+
+    // UNRUN: readiness, life and view-owner boundaries of the shared receipt.
+    #[test]
+    #[ignore = "requires the player's installed CS:GO Legacy; no GPU required"]
+    fn installed_knife_draw_choice_never_caches_a_missing_clip_fallback() {
+        let (app, id) = installed_unposed_app(Some("weapon_knife_butterfly"));
+        let mut player = app.world().resource::<SimWorld>().0.player(id).unwrap().clone();
+        let views = app.world().resource::<ViewModels>();
+        let view = &views.weapons["weapon_knife_butterfly"];
+        let mut state = ViewModelState::default();
+        state.knife_variants = knife_variants::KnifeVariants::seeded(0);
+        assert_eq!(state.knife_draw_index(&player, None), None);
+        let mut unavailable = WeaponView {
+            scope_center: view.scope_center, scope_rear: view.scope_rear,
+            asset: view.asset.clone(), clips: HashMap::new(), grenade_hold: None,
+        };
+        assert_eq!(state.knife_draw_index(&player, Some(&unavailable)), None);
+        let mut undecoded = view.clips["ACT_VM_DRAW"].clone();
+        Arc::make_mut(&mut undecoded[0].clip).frames.clear();
+        unavailable.clips.insert("ACT_VM_DRAW".into(), undecoded);
+        assert_eq!(state.knife_draw_index(&player, Some(&unavailable)), None);
+        assert!(state.knife_draw_choice.is_none());
+        assert_eq!(state.knife_draw_serial, 0);
+        let index = state.knife_draw_index(&player, Some(view)).unwrap();
+        assert_eq!(state.knife_draw_serial, 1);
+        assert_eq!(state.knife_draw_index(&player, Some(view)), Some(index));
+        assert_eq!(state.knife_draw_serial, 1, "the second observer must reuse the first choice");
+
+        player.life_epoch += 1;
+        state.knife_draw_index(&player, Some(view));
+        assert_eq!(state.knife_draw_serial, 2);
+        player.id += 1;
+        state.knife_draw_index(&player, Some(view));
+        assert_eq!(state.knife_draw_serial, 3);
+
+        // An unavailable intervening model invalidates the prior choice, but
+        // does not resolve index0 or advance the cosmetic RNG/deployment serial.
+        assert_eq!(state.knife_draw_index(&player, None), None);
+        assert!(state.knife_draw_choice.is_none());
+        assert_eq!(state.knife_draw_serial, 3);
+        state.knife_draw_index(&player, Some(view));
+        assert_eq!(state.knife_draw_serial, 4);
+    }
+
     // UNRUN: the first idle frame and later frames must select the same clip.
     #[test]
     #[ignore = "requires the player's installed CS:GO Legacy; no GPU required"]
     fn installed_completed_butterfly_variant_does_not_change_idle_on_the_next_frame() {
         use std::time::Duration;
-        let (mut app, _) = installed_app(Some("weapon_knife_butterfly"));
+        let (mut app, id) = installed_app(Some("weapon_knife_butterfly"));
         app.world_mut().resource_mut::<ViewModelState>().knife_variants = knife_variants::KnifeVariants::seeded(0);
         for activity in ["ACT_VM_DRAW", "INSPECT"] {
             if activity == "INSPECT" {
@@ -877,7 +1015,7 @@ mod life_tests {
                 }
             } else {
                 // A fresh viewing life picks the deterministic alternate Draw.
-                app.world_mut().resource_mut::<ViewModelState>().life = None;
+                app.world_mut().resource_mut::<SimWorld>().0.player_mut(id).unwrap().life_epoch += 1;
                 app.update();
             }
             let state = app.world().resource::<ViewModelState>();
@@ -1133,7 +1271,11 @@ impl ViewModels {
     /// Animation-event sounds of a weapon's first sequence for an activity
     /// (`ACT_VM_DRAW`, `ACT_VM_RELOAD`, ...) and that sequence's duration.
     pub fn activity_sounds(&self, weapon: &str, activity: &str) -> Option<(f32, Arc<Vec<(f32, String)>>)> {
-        let seq = self.weapons.get(weapon)?.clips.get(activity)?.first()?;
+        self.sequence_sounds(weapon, activity, 0)
+    }
+
+    fn sequence_sounds(&self, weapon: &str, activity: &str, index: usize) -> Option<(f32, Arc<Vec<(f32, String)>>)> {
+        let seq = self.weapons.get(weapon)?.clips.get(activity)?.get(index)?;
         Some((seq.clip.duration(), seq.sounds.clone()))
     }
 
@@ -1170,6 +1312,13 @@ mod asset_ownership_tests {
         assert_eq!(names, ["arms_ct", "arms_t", "decoration", "glove", "weapon"]);
     }
 }
+struct KnifeDrawChoice {
+    owner: sim::PlayerId,
+    life: u64,
+    weapon: String,
+    index: usize,
+}
+
 #[derive(Resource, Default)]
 pub struct ViewModelState {
     weapon: Option<(String, SkinnedInstance, Option<SkinnedInstance>, Vec<Handle<WorldMaterial>>)>,
@@ -1189,6 +1338,11 @@ pub struct ViewModelState {
     /// Accepted presentation edges, distinct from consumed/rejected requests.
     inspect_transition: u64,
     knife_variants: knife_variants::KnifeVariants,
+    /// Shared with tick foley: whichever observes a deployment first chooses
+    /// once; the other consumes the same installed sequence identity.
+    knife_draw_choice: Option<KnifeDrawChoice>,
+    knife_draw_serial: u64,
+    knife_draw_seen: u64,
     reloading: bool,
     /// Keep the captured inspect pose through an incoming magazine reload fade.
     reload_from_inspect: bool,
@@ -1208,6 +1362,41 @@ pub struct ViewModelState {
 }
 
 impl ViewModelState {
+    fn knife_draw_index(&mut self, player: &sim::Player, view: Option<&WeaponView>) -> Option<usize> {
+        let weapon = player.active_weapon().filter(|w|
+            player.alive && w.def.class == weapons::WeaponClass::Knife);
+        let clips = view.and_then(|view| view.clips.get("ACT_VM_DRAW")).filter(|clips|
+            !clips.is_empty() && clips.iter().all(|seq| !seq.clip.frames.is_empty()));
+        let (Some(weapon), Some(clips)) = (weapon, clips) else {
+            // Observe intervening weapons even when their models are not yet
+            // available. Never retain or cache a guessed first-sequence choice.
+            self.knife_draw_choice = None;
+            return None;
+        };
+        if let Some(choice) = &self.knife_draw_choice {
+            if choice.owner == player.id && choice.life == player.life_epoch
+                && choice.weapon == weapon.def.class_name && choice.index < clips.len() {
+                return Some(choice.index);
+            }
+        }
+        let index = self.knife_variants.choose(clips);
+        self.knife_draw_serial = self.knife_draw_serial.wrapping_add(1);
+        self.knife_draw_choice = Some(KnifeDrawChoice {
+            owner: player.id, life: player.life_epoch,
+            weapon: weapon.def.class_name.clone(), index,
+        });
+        Some(index)
+    }
+
+    /// The viewed knife's actual Draw declaration, shared by render and tick
+    /// foley. This neither schedules an event nor changes simulation state.
+    pub(crate) fn knife_draw_sounds(&mut self, player: &sim::Player, views: &ViewModels)
+        -> Option<(f32, Arc<Vec<(f32, String)>>)> {
+        let name = player.active_weapon().map(|w| w.def.class_name.as_str()).unwrap_or_default();
+        let index = self.knife_draw_index(player, views.weapons.get(name))?;
+        views.sequence_sounds(name, "ACT_VM_DRAW", index)
+    }
+
     fn select_knife_variant(&mut self, view: &WeaponView, activity: &str) {
         self.completed_knife_index = None;
         self.clip_index = view.clips.get(activity)
@@ -1491,6 +1680,13 @@ pub fn update(
         state.air_lowering.sample(now, !motion.animation.input.on_ground)
     } else { state.air_lowering.clear(); 0. };
     let active = p.active_weapon().map(|w| w.def.class_name.clone()).unwrap_or_default();
+    let knife_draw_index = state.knife_draw_index(p, models.weapons.get(&active));
+    if knife_draw_index.is_some() && state.knife_draw_seen != state.knife_draw_serial {
+        // Tick foley can observe an intervening switch which rendering never
+        // presents. Its new deployment still resets playback, even when the
+        // final weapon/owner/life matches the cached instance.
+        state.life = None;
+    }
 
     let glove=if p.id==local.id{inventory.active("gloves").map(|i|i.weapon.as_str()).unwrap_or("")}else{""};
     // Respawn the viewmodel when the weapon or team changes.
@@ -1525,8 +1721,9 @@ pub fn update(
             state.life = None;
             state.begin_life(p.life_epoch, &view.asset.model.bones, now,
                 effects.attack_serial, request.serial());
-            if w.is_some_and(|w| w.def.class == weapons::WeaponClass::Knife) {
-                state.select_knife_variant(view, "ACT_VM_DRAW");
+            if let Some(index) = knife_draw_index {
+                state.clip_index = index;
+                state.knife_draw_seen = state.knife_draw_serial;
             }
             if std::env::var_os("CSR_WEAPON_TRACE").is_some() { info!("weapon activity: {} ACT_VM_DRAW", active); }
         }
@@ -1535,8 +1732,9 @@ pub fn update(
     if let Some(view) = models.weapons.get(&active) {
         if state.begin_life(p.life_epoch, &view.asset.model.bones, now,
             effects.attack_serial, request.serial()) {
-            if w.is_some_and(|w| w.def.class == weapons::WeaponClass::Knife) {
-                state.select_knife_variant(view, "ACT_VM_DRAW");
+            if let Some(index) = knife_draw_index {
+                state.clip_index = index;
+                state.knife_draw_seen = state.knife_draw_serial;
             }
             if std::env::var_os("CSR_WEAPON_TRACE").is_some() {
                 info!("weapon activity: {} ACT_VM_DRAW life {}", active, p.life_epoch);
