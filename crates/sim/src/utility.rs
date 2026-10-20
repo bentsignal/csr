@@ -1209,47 +1209,65 @@ mod tests {
         }
     }
 
+    // Independently qualified HE primary-air response; alternate air modes stay absent.
+    fn observed_he_air_primary_launch() -> weapons::GrenadeLaunch {
+        weapons::GrenadeLaunch {
+            reference: "observed-he-air-primary-response-128hz".into(),
+            airborne_overhand_velocity: Some(weapons::GrenadeLaunchVelocity {
+                speed: 675., upward_pitch_bias_degrees: 10.,
+            }),
+            airborne_overhand_horizontal_inheritance: Some(1.25),
+            airborne_overhand_vertical_inheritance: Some(1.25),
+            ..observed_ground_buttons_launch("weapon_hegrenade")
+        }
+    }
+
     #[test]
     fn observed_air_primary_components_follow_ordinary_jump_release_independently() {
-        for rate in [64, 128] {
-            let dt = 1. / rate as f32;
-            for running in [false, true] {
-                // Native airborne VX at each angle; base VZ is calculated from
-                // the qualified angular family, not a normal-gravity age fit.
-                for (pitch, observed_x, base_z) in [
-                    (0., 664.745239, 117.212517),
-                    (-30., 541.433167, 403.082062),
-                    (45., 517.080017, -433.881622),
-                ] {
-                    let (prior, player_velocity) = launch_utility_tick_input("weapon_smokegrenade", rate,
-                        ThrowMode::Overhand, Some(observed_smoke_launch()), running, true, pitch);
-                    assert!(player_velocity.z > 0., "ordinary JUMP must still be ascending at release");
-                    if running { assert!((player_velocity.x - 245.).abs() < 0.001); }
-                    else { assert_eq!(player_velocity.truncate(), glam::Vec2::ZERO); }
-                    for components in 0..8 {
-                        let mut profile = observed_smoke_air_primary_launch();
-                        if components & 1 == 0 { profile.airborne_overhand_velocity = None; }
-                        if components & 2 == 0 { profile.airborne_overhand_horizontal_inheritance = None; }
-                        if components & 4 == 0 { profile.airborne_overhand_vertical_inheritance = None; }
-                        let (actual, actual_player_velocity) = launch_utility_tick_input("weapon_smokegrenade", rate,
-                            ThrowMode::Overhand, Some(profile), running, true, pitch);
-                        assert_eq!(actual_player_velocity, player_velocity);
-                        let mut expected = if components & 1 != 0 {
-                            Vec3::new(observed_x, 0., base_z)
-                        } else { movement::angle_vectors(Vec3::new(pitch, 0., 0.)).0 * 750. };
-                        expected += Vec3::new(
-                            player_velocity.x * if components & 2 != 0 { 1.25 } else { 0.5 },
-                            player_velocity.y * if components & 2 != 0 { 1.25 } else { 0.5 },
-                            player_velocity.z * if components & 4 != 0 { 1.25 } else { 0.5 });
-                        // First emitted projectile has already advanced through
-                        // one ordinary free-flight tick; do not fit spawn age.
-                        assert!((actual.velocity + Vec3::Z * 320. * dt - expected).length() < 0.002,
-                            "{rate}Hz, running={running}, pitch={pitch}, components={components}");
-                        assert!((actual.pos - prior.pos - (actual.velocity - prior.velocity) * dt).length() < 0.002,
-                            "air velocity changes preserve the existing spawn trace");
-                        assert_eq!(actual.born, prior.born);
-                        assert_eq!(actual.kind, Kind::Smoke);
-                        if components == 0 { assert_eq!(actual, prior); }
+        for (name, kind, prior_profile, candidate) in [
+            ("weapon_smokegrenade", Kind::Smoke, observed_smoke_launch(), observed_smoke_air_primary_launch()),
+            ("weapon_hegrenade", Kind::He, observed_ground_buttons_launch("weapon_hegrenade"), observed_he_air_primary_launch()),
+        ] {
+            for rate in [64, 128] {
+                let dt = 1. / rate as f32;
+                for running in [false, true] {
+                    // Native airborne VX at each angle; base VZ is calculated from
+                    // the qualified angular family, not a normal-gravity age fit.
+                    for (pitch, observed_x, base_z) in [
+                        (0., 664.745239, 117.212517),
+                        (-30., 541.433167, 403.082062),
+                        (45., 517.080017, -433.881622),
+                    ] {
+                        let (prior, player_velocity) = launch_utility_tick_input(name, rate,
+                            ThrowMode::Overhand, Some(prior_profile.clone()), running, true, pitch);
+                        assert!(player_velocity.z > 0., "ordinary JUMP must still be ascending at release");
+                        if running { assert!((player_velocity.x - 245.).abs() < 0.001); }
+                        else { assert_eq!(player_velocity.truncate(), glam::Vec2::ZERO); }
+                        for components in 0..8 {
+                            let mut profile = candidate.clone();
+                            if components & 1 == 0 { profile.airborne_overhand_velocity = None; }
+                            if components & 2 == 0 { profile.airborne_overhand_horizontal_inheritance = None; }
+                            if components & 4 == 0 { profile.airborne_overhand_vertical_inheritance = None; }
+                            let (actual, actual_player_velocity) = launch_utility_tick_input(name, rate,
+                                ThrowMode::Overhand, Some(profile), running, true, pitch);
+                            assert_eq!(actual_player_velocity, player_velocity);
+                            let mut expected = if components & 1 != 0 {
+                                Vec3::new(observed_x, 0., base_z)
+                            } else { movement::angle_vectors(Vec3::new(pitch, 0., 0.)).0 * 750. };
+                            expected += Vec3::new(
+                                player_velocity.x * if components & 2 != 0 { 1.25 } else { 0.5 },
+                                player_velocity.y * if components & 2 != 0 { 1.25 } else { 0.5 },
+                                player_velocity.z * if components & 4 != 0 { 1.25 } else { 0.5 });
+                            // First emitted projectile has already advanced through
+                            // one ordinary free-flight tick; do not fit spawn age.
+                            assert!((actual.velocity + Vec3::Z * 320. * dt - expected).length() < 0.002,
+                                "{name} {rate}Hz, running={running}, pitch={pitch}, components={components}");
+                            assert!((actual.pos - prior.pos - (actual.velocity - prior.velocity) * dt).length() < 0.002,
+                                "air velocity changes preserve the existing spawn trace");
+                            assert_eq!(actual.born, prior.born);
+                            assert_eq!(actual.kind, kind);
+                            if components == 0 { assert_eq!(actual, prior); }
+                        }
                     }
                 }
             }
@@ -1425,18 +1443,47 @@ mod tests {
     }
 
     #[test]
+    fn he_primary_matches_own_constant_vz_native_controls() {
+        let mut world = arena();
+        let id = world.add_player("thrower", Team::Terrorist);
+        let catalog = weapons::Catalog::from_items_game(r#"items_game { items {
+            44 { name weapon_hegrenade attributes { "primary default clip size" 1 } }
+        } }"#).unwrap();
+        let mut definition = catalog.weapons[0].clone();
+        definition.grenade_launch = Some(observed_he_air_primary_launch());
+        // Native sv_gravity=0 was read back after jump onset, leaving two
+        // constant player-Vz plateaus. No unknown flight age is subtracted.
+        for (grounded, player_vz, observed_z) in [
+            (true, 0., 117.212517),
+            (false, 223.868378, 397.048004),
+            (false, 123.868378, 272.048004),
+        ] {
+            let actor = world.player_mut(id).unwrap();
+            actor.movement.on_ground = grounded;
+            actor.movement.velocity = Vec3::Z * player_vz;
+            let actual = World::grenade_launch_velocity(world.player(id).unwrap(),
+                &definition, Some(ThrowMode::Overhand), Vec3::ZERO);
+            assert!((actual - Vec3::new(664.745239, 0., observed_z)).length() < 0.002);
+        }
+    }
+
+    #[test]
     fn observed_air_primary_preserves_ground_buttons_air_alternates_and_no_mode() {
-        let candidate = observed_smoke_air_primary_launch();
-        for rate in [64, 128] {
-            for running in [false, true] {
-                for pitch in [0., -30., 45.] {
-                    for mode in [ThrowMode::Overhand, ThrowMode::Underhand, ThrowMode::Combined] {
-                        for jump in [false, true] {
-                            if jump && mode == ThrowMode::Overhand { continue; }
-                            assert_eq!(
-                                launch_utility_tick_input("weapon_smokegrenade", rate, mode, Some(candidate.clone()), running, jump, pitch),
-                                launch_utility_tick_input("weapon_smokegrenade", rate, mode, Some(observed_smoke_launch()), running, jump, pitch),
-                                "{rate}Hz, running={running}, pitch={pitch}, mode={mode:?}, jump={jump}");
+        for (name, prior_profile, candidate) in [
+            ("weapon_smokegrenade", observed_smoke_launch(), observed_smoke_air_primary_launch()),
+            ("weapon_hegrenade", observed_ground_buttons_launch("weapon_hegrenade"), observed_he_air_primary_launch()),
+        ] {
+            for rate in [64, 128] {
+                for running in [false, true] {
+                    for pitch in [0., -30., 45.] {
+                        for mode in [ThrowMode::Overhand, ThrowMode::Underhand, ThrowMode::Combined] {
+                            for jump in [false, true] {
+                                if jump && mode == ThrowMode::Overhand { continue; }
+                                assert_eq!(
+                                    launch_utility_tick_input(name, rate, mode, Some(candidate.clone()), running, jump, pitch),
+                                    launch_utility_tick_input(name, rate, mode, Some(prior_profile.clone()), running, jump, pitch),
+                                    "{rate}Hz, running={running}, pitch={pitch}, mode={mode:?}, jump={jump}");
+                            }
                         }
                     }
                 }

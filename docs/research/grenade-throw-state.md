@@ -851,3 +851,53 @@ Private packets: `overpass-20261019/native-molotov-ground-buttons-oct20-r1` and
 `overpass-20261019/native-incgrenade-ground-buttons-oct20-r1`. All sixteen
 sessions closed normally and reported twelve exact preference restorations
 each. Raw evidence and root numeric reviews remain private.
+
+### October 20: HE airborne primary response
+
+Seven separate owned Legacy 1.38.8.1 sessions, requesting 128 Hz, qualify only
+HE's primary airborne angular/horizontal/vertical components. Held views show
+`v_eq_fraggrenade`, `w_eq_fraggrenade` and the matching dropped model, pin
+pulled and strength 1. Player views before/after retain the actual requested
+pitch/yaw, standing eye offset 64.062561, zero punch and NULL ground support in
+the jump cases. The separate zero-gravity ground control remains World-supported.
+
+| Primary case | Projectile network VX | Received network VZ, first sample |
+| --- | ---: | ---: |
+| Air, pitch 0 | 664.745239 | 247.048004 |
+| Air, pitch -30 | 541.433167 | 532.917542 |
+| Air, pitch +45 | 517.080017 | -296.233643 |
+| Air, forward, pitch 0 | 970.995239 | 252.360504 |
+
+The first two horizontal observations independently fit speed 675 and the
+existing pitch-weighted 10-degree upward adjustment. The +45 holdout agrees
+without refitting; maximum horizontal residual is below 0.000018 units/second.
+The moving pair shows player network VX 245 before and after release. Its
+projectile-minus-stationary VX is 306.25, admitting horizontal inheritance 1.25.
+Normal-gravity player VZ changes during acquisition; received projectile VZ
+is not treated as construction-time velocity or used to fit a spawn delay.
+
+Three additional sessions read back `sv_gravity=0` after establishing ground
+or two different ascending speeds. In each, before/after player VZ and all
+three pre-contact network projectile velocities remain constant:
+
+| Control | Player VZ before/after | Projectile VZ |
+| --- | ---: | ---: |
+| Grounded zero-gravity baseline | 0 | 117.212517 |
+| Air, early zero-gravity plateau | 223.868378 | 397.048004 |
+| Air, later zero-gravity plateau | 123.868378 | 272.048004 |
+
+Subtracting this kind's own baseline yields vertical inheritance 1.25 at both
+plateaus, within recorded float precision. No physical birth/think clock is
+needed for that subtraction. Generic absolute-velocity zeros are excluded.
+
+Only the exact installed HE schema/item/header gate gains these three primary
+air components. HE's ground modes and alternate air fallbacks, all other kinds,
+spawn tracing, release timing, lifecycles and wire structures retain their
+prior behavior. The catalog semantic salt advances to v22. Ordinary TickInput
+regressions exercise ascending primary releases at 64/128 Hz, independent
+missing-component fallbacks and preservation of the other HE modes, alongside
+the content-bound loader and measured constant-VZ checks.
+
+Private packet: `overpass-20261019/native-he-air-primary-oct20-r1`. All seven
+sessions closed normally and reported twelve exact preference restorations
+each. Original captures/logs, hashes and root numeric review records stay private.
