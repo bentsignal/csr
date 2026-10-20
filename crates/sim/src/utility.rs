@@ -10,6 +10,8 @@ mod throw_state;
 pub use throw_state::{ThrowMode,ThrowPhase,ThrowState};
 mod bot_lob;
 mod decoy;
+#[cfg(test)]
+mod lifecycle_tests;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Kind {
@@ -53,9 +55,9 @@ pub struct Projectile {
     pub kind: Kind,
     pub pos: Vec3,
     pub velocity: Vec3,
-    /// Presentation rests and contact audio stays silent after the existing
-    /// soft floor stop, despite the solver's small gravity/contact cycles.
-    /// Never skips ballistic integration.
+    /// Supported rest after the solver's soft floor stop. Smoke activation,
+    /// presentation and contact audio share this state through the solver's
+    /// small gravity/contact cycles. Never skips ballistic integration.
     pub settled: bool,
     pub born: f32,
     /// Immutable weapon ContentId captured when a decoy leaves the hand.
@@ -314,12 +316,22 @@ impl World {
                     Vec3::splat(2.0),
                     contents::MASK_SOLID,
                 );
-                p.settled = support.hit() && !support.start_solid && support.normal.z > FLOOR_NORMAL_Z;
+                // Rest integration can only add downward gravity to a stopped
+                // projectile. An upward or horizontal impulse invalidates the
+                // old rest mark even while the previous support is still near.
+                p.settled = previous_velocity.x == 0. && previous_velocity.y == 0.
+                    && previous_velocity.z <= 0.
+                    && support.hit() && !support.start_solid && support.normal.z > FLOOR_NORMAL_Z;
             }
             let age = time - p.born;
             let detonate = if p.kind.fire() {
                 (floor && age > 0.15) || age > 3.5
-            } else if matches!(p.kind, Kind::Smoke | Kind::Decoy) {
+            } else if p.kind == Kind::Smoke {
+                // A slow apex and an expired age timer are not landings.
+                // Reuse the floor stop/support check above: support loss must
+                // wake the projectile before its activation is considered.
+                age > 1.5 && p.settled && p.velocity.length() < 20.0
+            } else if p.kind == Kind::Decoy {
                 age > 1.5 && (p.velocity.length() < 20.0 || age > 3.0)
             } else {
                 age > 1.5
@@ -643,7 +655,7 @@ mod tests {
             assert_eq!(world.players[0].active_weapon().unwrap().grenade_throw.unwrap().phase, ThrowPhase::Holding);
             let target = Vec3::new(700., 120., 8.);
             for unsupported in ["air", "air-underhand", "air-combined", "underhand", "combined", "no-profile", "no-velocity", "human",
-                "tracked", "aim", "unknown-definition", "unknown-kind", "flash", "molotov", "incendiary", "decoy"] {
+                "tracked", "aim", "unknown-definition", "unknown-kind"] {
                 let mut actor = world.players[0].clone();
                 let mut definition = index;
                 match unsupported {
@@ -677,11 +689,8 @@ mod tests {
                     "tracked" => actor.tracked = Some(crate::TrackedPose::default()),
                     "aim" => actor.aim = Some(crate::AimRay::default()),
                     "unknown-definition" => definition += 10000,
-                    other => Arc::make_mut(&mut actor.weapons[0].def).class_name = match other {
-                        "flash" => "weapon_flashbang", "molotov" => "weapon_molotov",
-                        "incendiary" => "weapon_incgrenade", "decoy" => "weapon_decoy",
-                        _ => "weapon_unknown_grenade",
-                    }.into(),
+                    "unknown-kind" => Arc::make_mut(&mut actor.weapons[0].def).class_name = "weapon_unknown_grenade".into(),
+                    _ => unreachable!(),
                 }
                 let fallback = lob_angles(actor.eye(), target).unwrap();
                 assert_eq!(world.bot_lob_angles(&actor, definition, target), Some(fallback), "{unsupported}");
@@ -710,6 +719,11 @@ mod tests {
             let (from, velocity) = world.grenade_release(actor, &actor.weapons[0].def,
                 Some(ThrowMode::Overhand), angles).unwrap();
             let duration = (target - from).truncate().dot(velocity.truncate()) / velocity.truncate().length_squared();
+            let flight_ticks = (duration / world.dt()).ceil() as u32 + 1;
+            // Reach the target before the existing shortest HE/Flash fuse.
+            // This tests free-flight planning, not each kind's detonation law.
+            assert!(duration > 0. && flight_ticks as f32 * world.dt() < 1.5,
+                "{name}, {rate} Hz, moving={moving}: target must precede the fuse");
             let midpoint = from + velocity * (duration * 0.5) - Vec3::Z * 160. * (duration * 0.5).powi(2);
             let mut blocked = world.clone();
             blocked.collision = scene(Some(midpoint));
@@ -720,8 +734,8 @@ mod tests {
             let direction = velocity.truncate().normalize();
             let mut previous = from;
             let mut crossing = None;
-            let mut bounced = false;
-            for step in 1..=rate * 2 {
+            let mut hit_blocker = false;
+            for step in 1..=flight_ticks {
                 for candidate in [&mut world, &mut blocked] {
                     candidate.step(&[(owner, input(angles, moving, 0))]);
                 }
@@ -733,7 +747,15 @@ mod tests {
                     assert_eq!(world.projectiles[0].kind, kind);
                     assert!((world.projectiles[0].velocity - (velocity - Vec3::Z * 320. * world.dt())).length() < 0.001);
                 }
-                bounced |= blocked.events.iter().any(|e| matches!(e, GameEvent::UtilityBounced { .. }));
+                // Fire may terminate on a floor-facing contact instead of
+                // bouncing. Either event must identify this projectile's kind,
+                // owner and the actual midpoint blocker, not a later floor hit.
+                hit_blocker |= blocked.events.iter().any(|e| match e {
+                    GameEvent::UtilityBounced { player, kind: actual, pos }
+                    | GameEvent::UtilityDetonated { player, kind: actual, pos } =>
+                        *player == owner && *actual == kind && pos.distance(midpoint) < 10.,
+                    _ => false,
+                });
                 let p = world.projectiles.first().expect("free-flight projectile before target");
                 let time = step as f32 * world.dt();
                 let planned = from + velocity * time - Vec3::Z * 160. * time * time;
@@ -744,10 +766,14 @@ mod tests {
                 previous = p.pos;
             }
             assert!((crossing.expect("ordinary primary throw crosses the target plane") - target).length() < 1.0);
-            assert!(bounced, "the same TickInput launch hits the rejected path blocker");
+            assert!(hit_blocker, "the same TickInput launch hits the rejected path blocker");
         };
         for rate in [64, 128] {
-            for (name, index, kind) in [("weapon_hegrenade", 44, Kind::He), ("weapon_smokegrenade", 45, Kind::Smoke)] {
+            for (name, index, kind) in [
+                ("weapon_hegrenade", 44, Kind::He), ("weapon_smokegrenade", 45, Kind::Smoke),
+                ("weapon_flashbang", 43, Kind::Flash), ("weapon_molotov", 46, Kind::Molotov),
+                ("weapon_incgrenade", 48, Kind::Incendiary), ("weapon_decoy", 47, Kind::Decoy),
+            ] {
                 for moving in [false, true] { check(rate, name, index, kind, moving); }
             }
         }
@@ -875,29 +901,141 @@ mod tests {
         panic!("ordinary hold/release must create one {name}");
     }
 
+    fn observed_ground_primary_launch(name: &str) -> weapons::GrenadeLaunch {
+        weapons::GrenadeLaunch {
+            reference: format!("observed-{name}-ground-primary-angular-horizontal-128hz"),
+            grounded_overhand_horizontal_inheritance: 1.25,
+            grounded_underhand_horizontal_inheritance: None,
+            grounded_combined_horizontal_inheritance: None,
+            grounded_overhand_velocity: Some(weapons::GrenadeLaunchVelocity {
+                speed: 675., upward_pitch_bias_degrees: 10.,
+            }),
+            grounded_underhand_velocity: None,
+            grounded_combined_velocity: None,
+            airborne_overhand_velocity: None,
+            airborne_overhand_horizontal_inheritance: None,
+            airborne_overhand_vertical_inheritance: None,
+            airborne_underhand_velocity: None,
+            airborne_underhand_horizontal_inheritance: None,
+            airborne_underhand_vertical_inheritance: None,
+            airborne_combined_velocity: None,
+            airborne_combined_horizontal_inheritance: None,
+            airborne_combined_vertical_inheritance: None,
+        }
+    }
+
+    #[test]
+    fn four_kinds_ground_primary_angles_and_independent_inheritance_follow_tick_input() {
+        for (name, kind, horizontal) in [
+            ("weapon_flashbang", Kind::Flash, 1.25), ("weapon_decoy", Kind::Decoy, 1.25),
+            ("weapon_molotov", Kind::Molotov, 1.25), ("weapon_incgrenade", Kind::Incendiary, 1.25),
+        ] {
+            for rate in [64, 128] {
+                let dt = 1. / rate as f32;
+                // Each kind independently measured these horizontal values.
+                // Vz here is the candidate family's construction value, never
+                // a claim that a received native Vz is an initial velocity.
+                for (pitch, native_x, candidate_z) in [
+                    (0., 664.745239, 117.212517),
+                    (-30., 541.433167, 403.082062),
+                    (45., 517.080017, -433.881622),
+                ] {
+                    let mut stationary: Option<Vec3> = None;
+                    for running in [false, true] {
+                        let (actual, player_velocity) = launch_utility_tick_input(name, rate, ThrowMode::Overhand,
+                            Some(observed_ground_primary_launch(name)), running, false, pitch);
+                        let (prior, prior_player_velocity) = launch_utility_tick_input(name, rate, ThrowMode::Overhand,
+                            None, running, false, pitch);
+                        assert_eq!(player_velocity, prior_player_velocity);
+                        if running { assert!((player_velocity.x - 245.).abs() < 0.001); }
+                        else { assert_eq!(player_velocity, Vec3::ZERO); }
+                        let inherited = Vec3::new(player_velocity.x * horizontal,
+                            player_velocity.y * horizontal, player_velocity.z * 0.5);
+                        let expected = Vec3::new(native_x, 0., candidate_z) + inherited;
+                        // Production spawning advances one ordinary free-flight
+                        // tick before inspection. Undo only that known sim tick.
+                        assert!((actual.velocity + Vec3::Z * 320. * dt - expected).length() < 0.002,
+                            "{name}, {rate}Hz, pitch={pitch}, running={running}");
+                        if pitch == 0. && running {
+                            assert!((actual.velocity.x - 970.995239).abs() < 0.002,
+                                "each kind's independent steady-forward native level target");
+                        }
+                        assert_eq!(actual.kind, kind);
+                        assert_eq!(actual.born, prior.born);
+                        assert!((actual.pos - prior.pos - (actual.velocity - prior.velocity) * dt).length() < 0.002,
+                            "only velocity changes; the raw-aim spawn trace stays fixed");
+                        if let Some(velocity) = stationary {
+                            assert!((actual.velocity - velocity - inherited).length() < 0.002,
+                                "movement inheritance retains each kind's existing coefficient");
+                        } else { stationary = Some(actual.velocity); }
+
+                        let mut absent_velocity = observed_ground_primary_launch(name);
+                        absent_velocity.grounded_overhand_velocity = None;
+                        let (absent, absent_player_velocity) = launch_utility_tick_input(name, rate, ThrowMode::Overhand,
+                            Some(absent_velocity), running, false, pitch);
+                        assert_eq!(absent_player_velocity, prior_player_velocity);
+                        let raw = movement::angle_vectors(Vec3::new(pitch, 0., 0.)).0 * 750.;
+                        assert!((prior.velocity + Vec3::Z * 320. * dt - raw - player_velocity * 0.5).length() < 0.002,
+                            "missing metadata retains the complete raw-aim fallback");
+                        assert!((absent.velocity + Vec3::Z * 320. * dt - raw - inherited).length() < 0.002,
+                            "an absent angular component preserves independent inheritance");
+                        assert_eq!(absent.born, prior.born);
+                        assert_eq!(absent.kind, prior.kind);
+                        assert!((absent.pos - prior.pos - (absent.velocity - prior.velocity) * dt).length() < 0.002);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn four_kinds_ground_primary_profiles_preserve_other_modes_air_and_missing_mode() {
+        for name in ["weapon_flashbang", "weapon_decoy", "weapon_molotov", "weapon_incgrenade"] {
+            for rate in [64, 128] {
+                for running in [false, true] {
+                    for pitch in [0., -30., 45.] {
+                        for mode in [ThrowMode::Overhand, ThrowMode::Underhand, ThrowMode::Combined] {
+                            for jump in [false, true] {
+                                if !jump && mode == ThrowMode::Overhand { continue; }
+                                assert_eq!(launch_utility_tick_input(name, rate, mode,
+                                    Some(observed_ground_primary_launch(name)), running, jump, pitch),
+                                    launch_utility_tick_input(name, rate, mode, None, running, jump, pitch),
+                                    "{name}, {rate}Hz, pitch={pitch}, running={running}, mode={mode:?}, jump={jump}");
+                            }
+                        }
+                    }
+                }
+            }
+            // Missing mode is defensive release behavior, unreachable from the
+            // ordinary hold/release producer; exercise the same production seam.
+            let mut world = arena();
+            let id = world.add_player("thrower", Team::Terrorist);
+            let catalog = weapons::Catalog::from_items_game(&format!(r#"items_game {{ items {{
+                7343 {{ name {name} attributes {{ "primary default clip size" 1 }} }}
+            }} }}"#)).unwrap();
+            let mut definition = catalog.weapons[0].clone();
+            definition.grenade_launch = Some(observed_ground_primary_launch(name));
+            let mut fallback = definition.clone();
+            fallback.grenade_launch = None;
+            for grounded in [false, true] {
+                let player = world.player_mut(id).unwrap();
+                player.movement.on_ground = grounded;
+                player.movement.velocity = Vec3::new(245., 80., 100.);
+                for pitch in [0., -30., 45.] {
+                    let angles = Vec3::new(pitch, 0., 0.);
+                    assert_eq!(world.grenade_release(world.player(id).unwrap(), &definition, None, angles),
+                        world.grenade_release(world.player(id).unwrap(), &fallback, None, angles));
+                }
+            }
+        }
+    }
+
     #[test]
     fn molotov_and_smoke_tick_input_preserve_inheritance_with_admitted_smoke_button_vectors() {
         fn launch(name: &str, rate: u32, mode: ThrowMode, measured: bool, running: bool, jump: bool, pitch: f32) -> (Projectile, Vec3) {
             let profile = measured.then(|| {
                 if name == "weapon_smokegrenade" { observed_smoke_launch() }
-                else { weapons::GrenadeLaunch {
-                    reference: format!("observed-{name}-primary"),
-                    grounded_overhand_horizontal_inheritance: 1.25,
-                    grounded_underhand_horizontal_inheritance: None,
-                    grounded_combined_horizontal_inheritance: None,
-                    grounded_overhand_velocity: None,
-                    grounded_underhand_velocity: None,
-                    grounded_combined_velocity: None,
-                    airborne_overhand_velocity: None,
-                    airborne_overhand_horizontal_inheritance: None,
-                    airborne_overhand_vertical_inheritance: None,
-                    airborne_underhand_velocity: None,
-                    airborne_underhand_horizontal_inheritance: None,
-                    airborne_underhand_vertical_inheritance: None,
-                    airborne_combined_velocity: None,
-                    airborne_combined_horizontal_inheritance: None,
-                    airborne_combined_vertical_inheritance: None,
-                } }
+                else { observed_ground_primary_launch(name) }
             });
             launch_utility_tick_input(name, rate, mode, profile, running, jump, pitch)
         }
@@ -908,12 +1046,8 @@ mod tests {
                 assert!((player_velocity.x - 245.).abs() < 0.001);
                 // Independently observed for each grenade:970.995239 -664.745239 =306.25.
                 assert!((moving.velocity.x - stationary.velocity.x - 306.25).abs() < 0.002);
-                if name == "weapon_smokegrenade" {
-                    assert!((stationary.velocity.x - 664.745239).abs() < 0.002);
-                    assert!((moving.velocity.x - 970.995239).abs() < 0.002);
-                } else {
-                    assert_eq!(stationary.velocity, launch(name, rate, ThrowMode::Overhand, false, false, false, 0.).0.velocity);
-                }
+                assert!((stationary.velocity.x - 664.745239).abs() < 0.002);
+                assert!((moving.velocity.x - 970.995239).abs() < 0.002);
                 assert_eq!(moving.velocity.z, stationary.velocity.z);
                 for mode in [ThrowMode::Overhand, ThrowMode::Underhand, ThrowMode::Combined] {
                     assert_eq!(launch(name, rate, mode, true, true, true, 0.), launch(name, rate, mode, false, true, true, 0.),

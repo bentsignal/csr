@@ -409,6 +409,171 @@ prospective holdout, conservative received-vertical bounds, unchanged spawn
 origin and unchanged unobserved launch scopes. Compilation and integration
 verification are pending at this source checkpoint.
 
+### Grounded primary Flash and Decoy angular admission (October 20)
+
+Root independently qualified each kind's stationary grounded PRIMARY samples
+at actual pitch 0/-30/+45, yaw 0, in installed Legacy 1.38.8.1 (app 4465480,
+128 Hz). For all six cases root personally reviewed the original held weapon,
+player before release, first moving projectile and player after release.
+Primary strength 1, pulled pin, weapon owner/projectile thrower, unchanged
+active weapon, world ground, zero actual player velocity, standing eye 64.062561
+and zero punch agree. Per-case review records and original hashes remain
+private under `native-ground-families-oct20-r1/{flashbang,decoy}-{level,up30,down45}`.
+This source increment relies on root's admissions; it is not another personal
+image review or a new native run.
+
+Each kind independently gives horizontal network velocity 664.745239 at 0,
+541.433167 at -30 and 517.080017 at +45. The existing weighted-pitch family above
+fits each kind's first two angles with rounded speed 675/bias 10; the separate
++45 sample checks it without refitting, residual below 0.00003 units/second.
+Received normal-gravity Vz is already aged and is not admitted as initial Vz.
+These finite horizontal observations admit a bounded empirical angular model,
+not unique engine internals, exact spawn age or complete trajectory parity.
+
+Only the exact observed items schema and each kind's own installed MDL header
+receive this grounded primary velocity profile. Initially horizontal inheritance
+stays at its unmeasured prior 0.5; the independent moving admissions below
+supersede that component for Flash and Decoy. Vertical inheritance stays 0.5. Secondary/combined,
+all airborne components and missing metadata/mode retain their independent
+fallbacks. Smoke's accepted ground/air/button profiles and supported-rest
+activation and HE's ground/air responses are preserved. The subsequent fire-kind
+admission below extends the same construction after independent observations.
+
+The catalog semantic generation advances once from v17 to v18 for the new
+grounded families while retaining v17 Smoke activation semantics. No fields,
+wire layout, TickInput, spawn trace, gravity, collision or lifecycle law change.
+Authored UNRUN regressions exercise ordinary hold/release TickInput at 64/128 Hz,
+the three native horizontal targets, retained movement inheritance, absent
+angular components, other modes and jump fallbacks. Separate loader tests cover
+exact kind/schema/header gating; a missing-mode test uses the production release
+seam because ordinary hold/release always supplies a mode. Native 64 Hz and moving,
+sideways, extreme-angle, VR and 2015 equivalence remain unmeasured. Root owns
+compilation, runtime verification and combined integration/publication.
+
+### Grounded primary Molotov and Incendiary angular admission (October 20)
+
+Root then qualified each fire kind's own stationary grounded primary samples
+at pitch 0/-30/+45, yaw 0. Molotov's independently known and freshly checked
+level VX is 664.745239; its new -30/+45 VX values are 541.433167/517.080017.
+Incendiary independently gives the same three values. Each case's actual held
+weapon identifies the kind, with matching owner/thrower and actual
+CMolotovProjectile network velocity; the shared projectile class alone cannot
+distinguish these grenades. Root personally reviewed the held/before/projectile0/
+after originals. Records and hashes remain private alongside the prior kinds
+under `native-ground-families-oct20-r1/{molotov,incgrenade}-{level,up30,down45}`.
+
+Both +45 cases have a narrower bracket: the after-release pdump closed. Their
+after images establish stable console getpos/eye and zero velocity only;
+after-release active weapon, ground and punch fields were unavailable. The
+grounded held/before state, pin true, strength 1, standing eye, zero movement
+and punch, actual angle and identified first pre-contact projectile VX admit
+the angular holdout. They do not establish a complete after-release state
+bracket. Received Vz is not initial Vz. The same bounded speed 675/bias 10 family
+fits each kind's 0/-30 observations and checks against its independent +45
+holdout without refitting.
+
+The existing exact schema/item/header gate now admits grounded primary angular
+profiles for all four newly measured kinds. Molotov retains its separately
+measured horizontal inheritance 1.25. Incendiary initially retains its
+unmeasured prior 0.5; the independent moving admissions below supersede this
+component for Incendiary, Flash and Decoy. Grounded vertical
+inheritance remains 0.5. Every new kind's secondary/combined and all airborne
+components retain their prior independent fallbacks. Smoke/HE and all lifecycle
+laws are unchanged. This extends the same pending v18 semantic increment; no
+additional salt advance or wire/API change occurs.
+
+The existing identity/installed-loader and ordinary TickInput regressions are
+extended to all four kinds, including distinct retained inheritance and absent
+angular-component fallback. The Molotov/Smoke moving regression now uses the
+admitted Molotov angular profile. All are authored UNRUN; root owns source and
+runtime checks and combined integration. These angular observations alone do not
+admit movement inheritance, airborne/other-mode families, initial
+Vz/spawn age, contact/lifecycle law, native 64 Hz or historical equivalence.
+
+### Grounded primary Flash horizontal inheritance (October 20)
+
+Root separately reviewed all four original images for the level steady-forward
+Flash throw. The before/after player network VX is 245 on world ground,
+standing, with zero punch and the same active weapon. Held strength 1/pin true,
+weapon owner/projectile thrower and the actual first pre-contact
+CBaseCSGrenadeProjectile network VX agree. Projectile VX 970.995239 minus its
+independent stationary 664.745239 gives 306.25; divided by actual player VX 245
+this admits horizontal inheritance 1.25 for Flash grounded PRIMARY only.
+Original hashes, exact positions and root's personal review are private under
+`native-ground-moving-oct20-r1/flashbang-level-forward/root-review.json`.
+
+Flash's reference now includes angular and horizontal admission. The ordinary
+TickInput regression checks the independent moving level target and retained
+angular/absent-component behavior. No grounded vertical, airborne or other-mode
+response is admitted.
+The same pending v18 salt remains unchanged. Tests are authored UNRUN and root
+retains runtime/integration ownership.
+
+### Grounded primary Decoy horizontal inheritance (October 20)
+
+Root independently reviewed Decoy's four original level steady-forward images.
+The actual player network VX is 245 before/after, with world ground, standing
+eye, zero punch and the same active weapon. Held pin true/strength 1, actual
+DecoyProjectile identity and owner/thrower match. Player origin moves from
+[-342.761261,-875,-319.96875] to [-281.511261,-875,-319.96875]. First pre-contact
+projectile VX 970.995239 minus Decoy's independently observed stationary
+664.745239, divided by player VX 245, separately admits horizontal 1.25.
+Original hashes and root's personal review remain private under
+`native-ground-moving-oct20-r1/decoy-level-forward/root-review.json`.
+
+Decoy's exact-gated reference and tests now include angular/horizontal admission,
+with its own explicit native moving level target. Incendiary's separate moving
+admission follows below. Grounded vertical, airborne and other-mode components
+remain unchanged; no extra semantic increment occurs beyond pending v18. All
+regressions remain authored UNRUN, with runtime/integration owned by root.
+
+### Grounded primary Incendiary horizontal inheritance (October 20)
+
+Root separately reviewed all four original Incendiary level steady-forward
+images. Held Incendiary strength 1/pin true and owner/projectile thrower match;
+the actual before/after player network VX is 245 on world ground, standing,
+zero punch, with the same active weapon. The player moves from
+[-344.675323,-875,-319.96875] to [-283.425323,-875,-319.96875]. First pre-contact
+CMolotovProjectile network VX 970.995239 against Incendiary's own stationary
+664.745239 gives horizontal inheritance (306.25 / 245) = 1.25. Its held weapon
+identity distinguishes Incendiary from Molotov; no projectile-class inference
+supplies the kind. Original hashes and personal review remain private under
+`native-ground-moving-oct20-r1/incgrenade-level-forward/root-review.json`.
+
+Incendiary's exact-gated reference and existing identity/installed/TickInput
+regressions now include this independent inheritance and native moving target.
+All four newly measured grounded PRIMARY profiles now independently admit the
+bounded angular family 675/bias 10 and horizontal inheritance 1.25. Grounded
+vertical remains 0.5; their secondary/combined and airborne components remain
+absent with independent prior fallbacks. Smoke/HE, lifecycle and pending v18
+salt remain unchanged. Received velocity does not establish initial Vz or exact
+spawn age.
+Source regressions are authored UNRUN; root owns runtime checks and integration.
+
+### Bot planning follows admitted grounded primary profiles (October 20)
+
+The new angular profiles exposed an integration mismatch: the existing bot
+solver admitted only HE/Smoke, so selected Flash/fire utilities still aimed and
+cleared a raw-speed-750 arc while authoritative release used their new metadata.
+The existing admission gate now accepts any known grenade Kind with grounded
+primary velocity metadata. Decoy is included when explicitly supplied to this
+solver; normal bot utility selection policy remains unchanged. Unknown names
+still fall back even if they carry launch metadata.
+
+The existing bot, grounded, primary-mode, untracked/no-separate-aim and selected
+definition/profile guards remain. Air, alternate modes, humans, missing primary
+metadata and unknown definitions/kinds retain their prior fallback. Numerical
+aim convergence, tolerances, clearance hull/sampling and authoritative release
+math are unchanged. No new launch coefficients, AI policy or shared API appear.
+
+The existing end-to-end regression now exercises all six known kinds through
+ordinary TickInput at 64/128 Hz, stationary and moving. It checks target-plane
+crossing before the shortest existing HE/Flash fuse, rejection of a midpoint
+blocker missed by the old arc, and actual matching-owner/kind contact at that
+blocker through either bounce or fire contact detonation. Guard/fallback cases
+remain covered for each kind. This is authored UNRUN source coverage, not native
+bot parity or runtime acceptance; root owns compilation and integration checks.
+
 ### Grounded HE button endpoint velocities
 
 A separate owned Train packet preregistered three level, stationary cases:
@@ -539,3 +704,24 @@ perpendicular movement, crouch, native64Hz and historical2015 equivalence remain
 unmeasured. Independent forward combined throws also remain unmeasured.
 Compilation and integration checks are pending for this separate
 source checkpoint.
+### October 20 lifecycle observation boundary
+
+Original Legacy 1.38.8.1, requested 128 Hz, was observed privately on Train
+and Dust II after the grounded-family comparisons. An upward Smoke remained
+a moving canister through descent and repeated contacts, then emitted smoke
+after its network velocity became zero on the floor. This supports removing
+the old unconditional airborne deadline; it does not establish an exact native
+settling threshold, dwell time, bounce count or activation polling cadence.
+
+Separate Molotov and Incendiary throws on Dust II visibly burst in the air
+and faded without an `inferno` entity. Their current public console settings
+reported `molotov_throw_detonate_time = 2.0` and
+`weapon_molotov_maxdetonateslope = 30.0`. The capture clock changed from 0.01
+to 0.25 timescale and does not independently bind physical projectile birth
+to server expiration. These observations flag the retained 3.5-second fire
+fallback and unconditional airborne field creation for correction; this
+grounded-launch/Smoke change does not claim those fire laws are complete.
+
+The unshipped fire-orientation experiment still shows hard sprite edges.
+Scene-depth blending and native omitted renderer defaults remain unresolved;
+it is not part of this gameplay candidate.
