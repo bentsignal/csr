@@ -738,3 +738,45 @@ The previous contact normal cutoff and early-contact guard are preserved.
 Exact native birth/think timing, near-floor projection, slope conversion and
 air-burst particles/audio remain separate qualification work. No launch
 parameters, other grenade lifecycle laws or network structures change.
+
+### October 20: grounded Flash secondary and combined throws
+
+Separate owned Legacy 1.38.8.1 sessions, requesting 128 Hz, measured Flash's
+secondary and combined throws at actual pitch 0, -30 and +45, yaw 0. Each held
+weapon was identified as Flash, with pin pulled and strength 0 or 0.5. Player
+views before and after release showed a standing World-supported body, zero
+velocity and punch, origin Z -319.96875 and eye offset 64.062561. Three moving
+pre-contact network projectile samples in each case agreed on horizontal
+velocity; the generic absolute-velocity zero was not used.
+
+| Mode | Pitch 0 VX | Pitch -30 VX | Pitch +45 VX | Steady-forward pitch 0 VX |
+| --- | ---: | ---: | ---: | ---: |
+| Secondary | 199.423584 | 162.429962 | 155.124008 | 505.673584 |
+| Combined | 432.084351 | 351.931519 | 336.101959 | 738.334351 |
+
+Each mode's first two stationary samples fit its angular family independently:
+202.5 or 438.75 speed, with 10 degrees of pitch-weighted upward adjustment.
+The positive-45 holdout agrees without refitting; maximum horizontal residual
+against those values is below 0.000051 units/second. The old raw-aim alternate
+fallback instead has level horizontal speeds 225 and 487.5 and no upward
+adjustment.
+
+The separate moving sessions show player network VX 245 before and after
+release, unchanged grounded height/eye/angle and zero punch. Subtracting each
+mode's own stationary level VX gives 306.25, independently admitting horizontal
+inheritance 1.25 for each. Received VZ samples decline under gravity; none is
+claimed as the physical construction-time vertical velocity.
+
+Only the exact installed Flash schema/item/model-header gate gains these two
+grounded velocity and horizontal inheritance components. Airborne Flash,
+other kinds' alternate modes, spawn traces, throw timing, vertical inheritance
+and utility lifecycles retain their existing behavior. The catalog semantic
+salt advances to v20; no wire structure changes. Ordinary TickInput regressions
+at 64/128 exercise the measured endpoints, preserved release/spawn behavior
+and the untouched primary/air/missing-mode fallbacks, alongside the installed
+loader's content-bound admission checks.
+
+Private original packet: `overpass-20261019/native-flash-ground-buttons-oct20-r1`.
+All eight sessions closed normally and restored all twelve native preference
+snapshots exactly. Raw images/logs and their hashes remain private; numeric
+review records distinguish source images from unresampled analysis crops.
