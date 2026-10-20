@@ -23,6 +23,7 @@ use std::sync::Arc;
 mod grenade_hold;
 mod air_lowering;
 mod inspection;
+mod knife_variants;
 mod look_motion;
 mod sequence_pose;
 mod settling;
@@ -803,8 +804,58 @@ mod life_tests {
             }
         }
         assert_eq!(views.weapons["weapon_knife_butterfly"].clips["INSPECT"].len(), 3);
+        assert_eq!(views.weapons["weapon_knife_butterfly"].clips["ACT_VM_DRAW"].iter()
+            .map(|seq| seq.activity_weight).collect::<Vec<_>>(), [1, 4]);
+        assert_eq!(views.weapons["weapon_knife_butterfly"].clips["INSPECT"].iter()
+            .map(|seq| seq.activity_weight).collect::<Vec<_>>(), [1, 1, 1]);
         assert_eq!(views.weapons["weapon_knife_falchion"].clips["INSPECT"].len(), 2);
+        assert_eq!(views.weapons["weapon_knife_falchion"].clips["INSPECT"].iter()
+            .map(|seq| seq.activity_weight).collect::<Vec<_>>(), [100, 1]);
         assert_eq!(views.weapons["weapon_knife_push"].clips["ACT_VM_MISSCENTER"].len(), 5);
+    }
+
+    // UNRUN: selection through production dispatch; no native RNG parity claim.
+    #[test]
+    #[ignore = "requires the player's installed CS:GO Legacy; no GPU required"]
+    fn installed_butterfly_draw_and_reinspect_select_and_hold_authored_variants() {
+        let (mut app, id) = installed_app(Some("weapon_knife_butterfly"));
+        app.world_mut().resource_mut::<ViewModelState>().knife_variants = knife_variants::KnifeVariants::seeded(0);
+        let mut expected = knife_variants::KnifeVariants::seeded(0);
+        let draw = app.world().resource::<ViewModels>().weapons["weapon_knife_butterfly"].clips["ACT_VM_DRAW"].clone();
+        let inspect = app.world().resource::<ViewModels>().weapons["weapon_knife_butterfly"].clips["INSPECT"].clone();
+        let mut draws = std::collections::HashSet::new();
+        let mut inspections = std::collections::HashSet::new();
+        for _ in 0..32 {
+            for name in ["weapon_knife", "weapon_knife_butterfly"] {
+                let mut world = app.world_mut().resource_mut::<SimWorld>();
+                let def = Arc::new(world.0.catalog.get(name).unwrap().clone());
+                world.0.player_mut(id).unwrap().weapons[0] = sim::weapon::WeaponState::new(def);
+                drop(world);
+                app.update();
+                app.update();
+            }
+            let authoritative = app.world().resource::<SimWorld>().0.state();
+            let index = expected.choose(&draw);
+            assert_eq!(app.world().resource::<ViewModelState>().clip_index, index);
+            draws.insert(index);
+            app.update();
+            assert_eq!(app.world().resource::<ViewModelState>().clip_index, index,
+                "a rendered Draw must not reroll its selected clip");
+
+            for _ in 0..3 {
+                app.world_mut().resource_mut::<crate::tracers::InspectRequest>().start();
+                app.update();
+                let index = expected.choose(&inspect);
+                assert_eq!(app.world().resource::<ViewModelState>().clip_index, index);
+                inspections.insert(index);
+                app.update();
+                assert_eq!(app.world().resource::<ViewModelState>().clip_index, index,
+                    "an ongoing inspect must not reroll its selected clip");
+            }
+            assert_eq!(app.world().resource::<SimWorld>().0.state(), authoritative);
+        }
+        assert_eq!(draws.len(), 2, "both installed openings must be reachable");
+        assert_eq!(inspections.len(), 3, "all three installed inspect variants must be reachable");
     }
 
     // UNRUN: source-only handoff; root owns Cargo and runtime verification.
@@ -929,6 +980,7 @@ pub fn vertical_fov(horizontal_4x3_deg: f32) -> f32 {
 struct SeqClip {
     clip: Arc<Clip>,
     weights: Arc<Vec<f32>>,
+    activity_weight: i32,
     /// Authored sequence transition length; not the clip's playback duration.
     fade_in: f32,
     left_muzzle: bool,
@@ -1019,6 +1071,7 @@ pub struct ViewModelState {
     inspect_seen: u64,
     /// Accepted presentation edges, distinct from consumed/rejected requests.
     inspect_transition: u64,
+    knife_variants: knife_variants::KnifeVariants,
     reloading: bool,
     /// Keep the captured inspect pose through an incoming magazine reload fade.
     reload_from_inspect: bool,
@@ -1038,6 +1091,11 @@ pub struct ViewModelState {
 }
 
 impl ViewModelState {
+    fn select_knife_variant(&mut self, view: &WeaponView, activity: &str) {
+        self.clip_index = view.clips.get(activity)
+            .map_or(0, |clips| self.knife_variants.choose(clips));
+    }
+
     fn begin_life(&mut self, life: u64, bones: &[mdl::skeleton::Bone], now: f32,
         attack_serial: u64, inspect_serial: u64) -> bool {
         if self.life == Some(life) { return false; }
@@ -1144,6 +1202,7 @@ pub fn load(
                         clips.entry(if inspect {"INSPECT".into()}else{seq.activity.to_ascii_uppercase()}).or_default().push(SeqClip {
                             clip: Arc::new(clip),
                             weights: Arc::new(weights),
+                            activity_weight: seq.activity_weight,
                             fade_in: seq.fade_in,
                             left_muzzle: seq.name.to_ascii_lowercase().contains("left"),
                             sounds: Arc::new(seq.events.iter().filter_map(|e| Some((e.cycle, e.client_sound()?.to_string()))).collect()),
@@ -1347,15 +1406,22 @@ pub fn update(
             state.life = None;
             state.begin_life(p.life_epoch, &view.asset.model.bones, now,
                 effects.attack_serial, request.serial());
+            if w.is_some_and(|w| w.def.class == weapons::WeaponClass::Knife) {
+                state.select_knife_variant(view, "ACT_VM_DRAW");
+            }
             if std::env::var_os("CSR_WEAPON_TRACE").is_some() { info!("weapon activity: {} ACT_VM_DRAW", active); }
         }
         return;
     }
     if let Some(view) = models.weapons.get(&active) {
         if state.begin_life(p.life_epoch, &view.asset.model.bones, now,
-            effects.attack_serial, request.serial())
-            && std::env::var_os("CSR_WEAPON_TRACE").is_some() {
-            info!("weapon activity: {} ACT_VM_DRAW life {}", active, p.life_epoch);
+            effects.attack_serial, request.serial()) {
+            if w.is_some_and(|w| w.def.class == weapons::WeaponClass::Knife) {
+                state.select_knife_variant(view, "ACT_VM_DRAW");
+            }
+            if std::env::var_os("CSR_WEAPON_TRACE").is_some() {
+                info!("weapon activity: {} ACT_VM_DRAW life {}", active, p.life_epoch);
+            }
         }
     }
     let Some((name, gun, arms, mats)) = &mut state.weapon else { return };
@@ -1444,6 +1510,7 @@ pub fn update(
     }
     if suppressor.is_none() && attack.is_none() && !reloading && p.plant_start.is_none() && w.is_some_and(|w|w.zoom_level==0 && (knife || w.next_attack<=world.0.time())) && inspect_action == Some(crate::tracers::InspectAction::Start) && view.clips.contains_key("INSPECT") {
         state.activity="INSPECT".into();state.started=now;state.clip_index=0;
+        if knife { state.select_knife_variant(view, "INSPECT"); }
         state.inspect_transition = state.inspect_transition.wrapping_add(1);
     }
     if state.activity=="INSPECT" && w.is_some_and(|w|w.zoom_level>0) {state.activity="ACT_VM_IDLE".into();state.started=now;}

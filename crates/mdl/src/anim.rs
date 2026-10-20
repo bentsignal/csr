@@ -64,6 +64,8 @@ impl AnimDesc {
 pub struct Sequence {
     pub name: String,
     pub activity: String,
+    /// Relative selection weight within the declared activity, not a bone mask.
+    pub activity_weight: i32,
     pub flags: i32,
     /// Animation indices, `group_size[0] * group_size[1]` (blend grid).
     pub anims: Vec<i16>,
@@ -211,6 +213,7 @@ pub(crate) fn read_sequences(r: &R, count: usize, index: usize, num_bones: usize
         out.push(Sequence {
             name: label,
             activity,
+            activity_weight: r.i32(o + 20)?,
             flags: r.i32(o + 12)?,
             anims,
             group_size,
@@ -617,6 +620,35 @@ pub fn decode_clip(mdl: &[u8], ani: Option<&[u8]>, blocks: &[(u32, u32)], desc: 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // UNRUN: source-only handoff; root owns Cargo verification.
+    #[test]
+    fn sequence_activity_weight_is_independent_of_bone_weights_and_fades() {
+        let mut data = vec![0u8; SEQDESC_STRIDE + 64];
+        data[4..8].copy_from_slice(&(SEQDESC_STRIDE as i32).to_le_bytes());
+        data[8..12].copy_from_slice(&((SEQDESC_STRIDE + 8) as i32).to_le_bytes());
+        data[20..24].copy_from_slice(&4i32.to_le_bytes());
+        data[60..64].copy_from_slice(&((SEQDESC_STRIDE + 24) as i32).to_le_bytes());
+        data[104..108].copy_from_slice(&0.2f32.to_le_bytes());
+        data[108..112].copy_from_slice(&0.4f32.to_le_bytes());
+        data[156..160].copy_from_slice(&((SEQDESC_STRIDE + 28) as i32).to_le_bytes());
+        data[SEQDESC_STRIDE..SEQDESC_STRIDE + 6].copy_from_slice(b"draw2\0");
+        data[SEQDESC_STRIDE + 8..SEQDESC_STRIDE + 20].copy_from_slice(b"ACT_VM_DRAW\0");
+        data[SEQDESC_STRIDE + 28..SEQDESC_STRIDE + 32].copy_from_slice(&0.5f32.to_le_bytes());
+        let sequence = read_sequences(&R(&data), 1, 0, 1).unwrap().remove(0);
+        assert_eq!(sequence.name, "draw2");
+        assert_eq!(sequence.activity, "ACT_VM_DRAW");
+        assert_eq!(sequence.activity_weight, 4);
+        assert_eq!(sequence.weight(0), 0.5);
+        assert_eq!((sequence.fade_in, sequence.fade_out), (0.2, 0.4));
+
+        // Named single-sequence inspection has no activity and a zero weight.
+        data[8..12].fill(0);
+        data[20..24].fill(0);
+        let sequence = read_sequences(&R(&data), 1, 0, 1).unwrap().remove(0);
+        assert!(sequence.activity.is_empty());
+        assert_eq!(sequence.activity_weight, 0);
+    }
 
     #[test]
     fn animation_sound_events_support_old_and_named_styles() {
