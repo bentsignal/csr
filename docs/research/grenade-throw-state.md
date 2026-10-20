@@ -704,3 +704,24 @@ perpendicular movement, crouch, native64Hz and historical2015 equivalence remain
 unmeasured. Independent forward combined throws also remain unmeasured.
 Compilation and integration checks are pending for this separate
 source checkpoint.
+### October 20 lifecycle observation boundary
+
+Original Legacy 1.38.8.1, requested 128 Hz, was observed privately on Train
+and Dust II after the grounded-family comparisons. An upward Smoke remained
+a moving canister through descent and repeated contacts, then emitted smoke
+after its network velocity became zero on the floor. This supports removing
+the old unconditional airborne deadline; it does not establish an exact native
+settling threshold, dwell time, bounce count or activation polling cadence.
+
+Separate Molotov and Incendiary throws on Dust II visibly burst in the air
+and faded without an `inferno` entity. Their current public console settings
+reported `molotov_throw_detonate_time = 2.0` and
+`weapon_molotov_maxdetonateslope = 30.0`. The capture clock changed from 0.01
+to 0.25 timescale and does not independently bind physical projectile birth
+to server expiration. These observations flag the retained 3.5-second fire
+fallback and unconditional airborne field creation for correction; this
+grounded-launch/Smoke change does not claim those fire laws are complete.
+
+The unshipped fire-orientation experiment still shows hard sprite edges.
+Scene-depth blending and native omitted renderer defaults remain unresolved;
+it is not part of this gameplay candidate.
