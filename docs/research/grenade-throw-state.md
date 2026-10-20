@@ -1178,3 +1178,61 @@ Smoke. Separate HE fixtures retain its own constant-VZ rows and forward pair.
 Other kinds' missing alternate-air components still use the prior fallback;
 these observations do not admit them, contact/expiry changes or historical
 lineup/full-trajectory parity.
+
+## Flashbang secondary and combined jump-throw response (October 20)
+
+Fourteen separate owned Legacy 1.38.8.1 sessions independently qualify Flashbang's
+alternate-air components. Each mode has its own stationary level/-30 angular
+fit, +45 holdout, steady-forward pair and three gravity-zero controls. Root
+personally reviewed the held object, player before/after release and three
+projectile dumps in each session. All sessions closed normally and restored
+twelve exact native preference snapshots. Captures and hashes stay private in
+`overpass-20261019/native-flashbang-air-buttons-oct20-r1`.
+
+The held object is `weapon_flashbang`, with `v_eq_flashbang`, `w_eq_flashbang`
+and dropped model252; pin is pulled and actual strength is0 for secondary,
+0.5 for combined. Actual angles match the samples with yaw/punch zero, standing
+eye offset64.062561 and no duck. The unique returned owned/thrown
+`C_BaseCSGrenadeProjectile` has model252 and NULL ground at every sampled
+precontact vector. Network velocity is used; generic absolute velocity is not
+an alternative launch estimate.
+
+| Actual pitch / movement | Flash secondary VX | Flash combined VX |
+|---|---:|---:|
+| 0, stationary |199.423584|432.084351|
+| -30, stationary |162.429962|351.931519|
+| +45, stationary holdout |155.124008|336.101959|
+| 0, steady forward |505.673584|738.334351|
+
+Each VX is constant across three samples. Own level/-30 fits recover speeds
+202.500011 and438.749942 with weighted upward pitch bias approximately10;
+the untouched +45 holdouts have absolute residuals below0.000016. The running
+player independently reads245 units/s before and after release in both modes;
+each VX difference306.25 supports horizontal inheritance1.25.
+
+Gravity0 is positively read back. Every following player VZ is equal before
+and after release, and projectile VZ is constant across all three samples:
+
+| Mode | Actual player support/VZ | Actual projectile VZ |
+|---|---|---:|
+| Secondary |World,0|35.163757|
+| Secondary |NULL,223.868378|314.999237|
+| Secondary |NULL,123.868378|189.999237|
+| Combined |World,0|76.188133|
+| Combined |NULL,223.868378|356.023621|
+| Combined |NULL,123.868378|231.023621|
+
+Subtracting each mode's own ground baseline independently yields vertical
+inheritance1.25 at both plateaus within float/display precision. Flash's early
+combined player VZ223.868378 differs from HE's217.618378: the raw rows are not
+substituted across kinds. No normal-gravity received VZ or elapsed network
+clock is treated as construction velocity.
+
+Only Flash's existing exact schema/item/MDL gate gains these six optional
+components. The semantic digest advances to v25. Existing TickInput tests at
+64/128Hz now include Flash alternate modes, independent component fallbacks,
+and unchanged ground/primary-air controls. Its own constant-VZ and forward rows
+are retained separately. Other grenade kinds, release timing, spawn tracing,
+collision/gravity, lifecycle and serialization stay intact. Decoy and fire
+alternate-air responses remain unqualified; these measurements do not establish
+their coefficients or full-flight/historical-lineup parity.
