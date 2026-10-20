@@ -203,9 +203,9 @@ pub(super) fn import(
 ) -> Option<[u8; 20]> {
     let mut digest = Sha1::new();
     digest.update(previous_hash?);
-    // Retain v17's supported Smoke activation and bind the newly admitted
-    // grounded primary families; wire layout and other launch scopes stay fixed.
-    digest.update(b"grenade-animation-timing-v18-ground-primary-families-smoke-supported-activation");
+    // Retain the admitted launch/Smoke policies and distinguish fire expiry
+    // from contact ignition. This changes simulation semantics, not wire layout.
+    digest.update(b"grenade-animation-timing-v19-fire-expiry-without-airborne-field");
     let mut definitions: Vec<_> = catalog
         .weapons
         .iter_mut()

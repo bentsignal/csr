@@ -5,6 +5,10 @@ use glam::Vec3;
 use serde::{Deserialize, Serialize};
 
 const FIRE_DAMAGE_RADIUS: f32 = 140.0;
+// Owned Legacy 1.38.8.1 console exposes molotov_throw_detonate_time = 2.0.
+// Keep the existing projectile-age clock and per-tick polling; the observed
+// airborne bursts do not independently establish native birth/think cadence.
+const FIRE_DETONATE_TIME_SECONDS: f32 = 2.0;
 
 mod throw_state;
 pub use throw_state::{ThrowMode,ThrowPhase,ThrowState};
@@ -324,8 +328,12 @@ impl World {
                     && support.hit() && !support.start_solid && support.normal.z > FLOOR_NORMAL_Z;
             }
             let age = time - p.born;
+            // Retain the existing contact slope/age gate pending independent
+            // surface-law evidence. Expiry alone must not create ground fire.
+            // No guessed downward projection range is introduced here.
+            let ignite = p.kind.fire() && floor && age > 0.15;
             let detonate = if p.kind.fire() {
-                (floor && age > 0.15) || age > 3.5
+                ignite || age > FIRE_DETONATE_TIME_SECONDS
             } else if p.kind == Kind::Smoke {
                 // A slow apex and an expired age timer are not landings.
                 // Reuse the floor stop/support check above: support loss must
@@ -347,12 +355,12 @@ impl World {
                 });
             }
             if detonate {
-                exploded.push(p.clone());
+                exploded.push((p.clone(), ignite));
             }
         }
         self.projectiles
-            .retain(|p| !exploded.iter().any(|e| e.id == p.id));
-        for p in exploded {
+            .retain(|p| !exploded.iter().any(|(e, _)| e.id == p.id));
+        for (p, ignite) in exploded {
             self.events.push(GameEvent::UtilityDetonated {
                 player: p.owner,
                 kind: p.kind,
@@ -384,6 +392,9 @@ impl World {
                     }
                 }
                 Kind::He => self.blast_utility(p.owner, p.kind, p.pos, 350.0, 98.0),
+                // Aerial fire bursts share the existing terminal event, but
+                // have no persistent hazard/field (observed with no inferno).
+                kind if kind.fire() && !ignite => {},
                 kind => self.utility_fields.push(Field {
                     id: p.id,
                     owner: p.owner,
