@@ -901,3 +901,211 @@ the content-bound loader and measured constant-VZ checks.
 Private packet: `overpass-20261019/native-he-air-primary-oct20-r1`. All seven
 sessions closed normally and reported twelve exact preference restorations
 each. Original captures/logs, hashes and root numeric review records stay private.
+
+
+### October 20: Flashbang airborne primary response
+
+Seven separate owned Legacy 1.38.8.1 sessions, requesting 128 Hz, independently
+qualify Flashbang's primary airborne angular/horizontal/vertical components.
+Root reviewed each session's held weapon, before/after player, and three actual
+projectile views. Held models are `v_eq_flashbang`, `w_eq_flashbang`, and
+`w_eq_flashbang_dropped`, pin pulled and strength 1. The projectile is the
+matching dropped model (index 252 in these sessions), client class
+`C_BaseCSGrenadeProjectile`. Player angles match the requested pitch/yaw,
+standing eye offset is 64.062561, and view/aim punch remain zero. Jump cases
+have NULL ground support before/after release; the separate ground control
+remains World-supported. All three projectile samples are pre-contact.
+
+| Primary case | Projectile network VX | Received network VZ, first sample |
+| --- | ---: | ---: |
+| Air, pitch 0 | 664.745239 | 249.548004 |
+| Air, pitch -30 | 541.433167 | 540.730042 |
+| Air, pitch +45 | 517.080017 | -296.233643 |
+| Air, forward, pitch 0 | 970.995239 | 244.548004 |
+
+The 0/-30 horizontal fit independently gives speed 675 and the existing
+pitch-weighted 10-degree upward adjustment. The +45 holdout agrees without
+refitting (maximum horizontal residual below 0.000018 units/second).
+The moving case has player network VX 245 before and after release, so the
+306.25 projectile VX increase independently admits horizontal inheritance 1.25.
+Normal-gravity received VZ is not construction-time VZ and does not fit a
+physical spawn delay.
+
+Three further sessions read back `sv_gravity=0` after establishing ground or
+ascending movement. Before/after player VZ and all three projectile network
+velocities stay constant in each control:
+
+| Control | Player VZ before/after | Projectile VZ |
+| --- | ---: | ---: |
+| Grounded zero-gravity baseline | 0 | 117.212517 |
+| Air, early zero-gravity plateau | 223.868378 | 397.048004 |
+| Air, later zero-gravity plateau | 130.118378 | 279.860504 |
+
+Subtracting Flashbang's own baseline gives vertical inheritance 1.25 at both
+plateaus within recorded float precision. The later plateau differs from HE's
+own session; the actual Flashbang value is used, not the requested delay or
+another grenade's player velocity. Generic absolute-velocity zeros are excluded.
+
+Only the exact installed Flashbang schema/item/model gate gains the three
+primary-air components. Ground modes, alternate-air fallbacks, release timing,
+spawn tracing and lifecycles retain prior behavior. Actual TickInput fixtures
+cover 64/128 Hz ordinary jump releases, stationary/running controls, independently
+missing components, and preservation of the other modes. Constant-VZ fixtures
+use this kind's own observations. Native observations do not establish runtime implementation or full historical
+parity by themselves; source fixtures exercise the separately measured components.
+
+Private packet: `overpass-20261019/native-flashbang-air-primary-oct20-r1`.
+All seven sessions closed normally and reported twelve exact native preference
+restorations each. Original captures/logs, hashes and per-case root review records
+remain private.
+
+
+### October 20: Decoy airborne primary response
+
+Seven separate owned Legacy 1.38.8.1 sessions at requested 128 Hz independently
+qualify Decoy primary-air components. Root reviewed each held weapon, both
+player views and three actual projectile samples. Held `v_eq_decoy`,
+`w_eq_decoy` and `w_eq_decoy_dropped` models show pin pulled and strength 1;
+the observed projectile is `C_DecoyProjectile`, dropped model index 253 in
+these sessions. Actual pitch/yaw, standing eye offset 64.062561 and zero punch
+are retained. Jump players are NULL-supported before/after; the separate
+zero-gravity ground control remains World-supported. All projectile samples
+remain pre-contact.
+
+| Primary case | Projectile network VX | Received network VZ, first sample |
+| --- | ---: | ---: |
+| Air, pitch 0 | 664.745239 | 254.860504 |
+| Air, pitch -30 | 541.433167 | 540.730042 |
+| Air, pitch +45 | 517.080017 | -296.233643 |
+| Air, forward, pitch 0 | 970.995239 | 244.548004 |
+
+Decoy's own 0/-30 horizontal fit gives speed 675 and the pitch-weighted
+10-degree upward adjustment, with the independent +45 holdout agreeing below
+0.000018 units/second residual. The forward player network VX is 245 before
+and after release; the 306.25 projectile VX increase admits horizontal
+inheritance 1.25. These values consistently use the network `m_vecVelocity`:
+Decoy's generic absolute-velocity field can differ, so the two fields are not
+mixed. Normal-gravity received VZ does not establish construction-time velocity.
+
+The three further sessions read back `sv_gravity=0`. Player network VZ before
+and after release and all three projectile velocities are constant per case:
+
+| Control | Player VZ before/after | Projectile VZ |
+| --- | ---: | ---: |
+| Grounded zero-gravity baseline | 0 | 117.212517 |
+| Air, early zero-gravity plateau | 223.868378 | 397.048004 |
+| Air, later zero-gravity plateau | 123.868378 | 272.048004 |
+
+Subtracting Decoy's own baseline admits vertical inheritance 1.25 at both
+plateaus within recorded precision. No physical spawn delay is inferred.
+Only Decoy's exact installed schema/item/model gate gains primary-air metadata;
+its ground modes, alternate air fallbacks and existing lifecycle remain intact.
+Actual TickInput component/fallback/preservation fixtures cover 64/128 Hz, and
+the constant-VZ fixture retains this kind's own measured controls. Source fixtures retain the independent measurement boundaries.
+
+Private packet: `overpass-20261019/native-decoy-air-primary-oct20-r1`.
+All seven sessions closed normally with twelve exact native preference
+restorations each. Raw images/logs and root numeric/hash reviews remain private;
+no full trajectory, later activation law or historical-2015 parity is claimed.
+
+
+### October 20: Molotov airborne primary response
+
+Seven separate owned Legacy 1.38.8.1 sessions at requested 128 Hz independently
+qualify Molotov primary-air components. Root reviewed each held weapon, both
+player views and three actual projectile samples. Held `v_eq_molotov`,
+`w_eq_molotov` and `w_eq_molotov_dropped` models show the generic pin-pulled
+field true and throw strength 1. The actual projectile is `C_MolotovProjectile`,
+matching dropped model index 248 in these sessions. Player pitch/yaw and eye
+offset 64.062561 match the requested standing controls; punch is zero. Jump
+players have NULL support before/after; the zero-gravity ground control remains
+World-supported. The projectile samples are pre-contact.
+
+| Primary case | Projectile network VX | Received network VZ, first sample |
+| --- | ---: | ---: |
+| Air, pitch 0 | 664.745239 | 254.860504 |
+| Air, pitch -30 | 541.433167 | 540.730042 |
+| Air, pitch +45 | 517.080017 | -296.233643 |
+| Air, forward, pitch 0 | 970.995239 | 244.548004 |
+
+Molotov's own 0/-30 horizontal fit gives speed 675 and the pitch-weighted
+10-degree upward adjustment. Its independent +45 holdout agrees within
+0.000018 units/second. Player network VX is 245 before and after the forward
+release, so the projectile VX increase of 306.25 admits horizontal inheritance
+1.25. Normal-gravity received VZ is not construction-time VZ; generic absolute
+velocity zeros are not substituted for the moving network velocity.
+
+Three separate sessions read back `sv_gravity=0`, with constant player network
+VZ before/after and three constant projectile velocities in each case:
+
+| Control | Player VZ before/after | Projectile VZ |
+| --- | ---: | ---: |
+| Grounded zero-gravity baseline | 0 | 117.212517 |
+| Air, early zero-gravity plateau | 223.868378 | 397.048004 |
+| Air, later zero-gravity plateau | 123.868378 | 272.048004 |
+
+Subtracting Molotov's own baseline admits vertical inheritance 1.25 at both
+plateaus within recorded float precision, without inferring a physical birth
+clock. Only the exact installed Molotov schema/item/model gate gains primary-air
+metadata. Ground buttons, alternate air fallbacks, raw spawn tracing, release
+timing, fire contact/expiry and wire layouts stay unchanged. The existing
+TickInput component/fallback/preservation matrix includes this kind at 64/128 Hz;
+its constant-VZ fixture uses the own-kind observations above. The source fixtures retain the independent measurement boundaries.
+
+Private packet: `overpass-20261019/native-molotov-air-primary-oct20-r1`.
+All seven sessions closed normally with twelve exact native preference
+restorations each. Raw assets/captures/logs and root numeric/hash reviews stay
+private. These launch observations do not qualify a different contact/expiry
+law, full visual presentation or historical-2015 parity.
+
+
+### October 20: Incendiary airborne primary response
+
+Seven separate owned Legacy 1.38.8.1 sessions at requested 128 Hz independently
+qualify Incendiary primary-air components. Root reviewed each held weapon,
+before/after player and three actual projectile views. The held models are
+`v_eq_incendiarygrenade`, `w_eq_incendiarygrenade` and their matching dropped
+model, pin-pulled field true and strength 1. The projectile is
+`C_MolotovProjectile`, matching dropped model index 249 in these sessions.
+Player angles, standing eye offset 64.062561 and zero punch match the controls;
+jump players have NULL support and the separate ground control remains
+World-supported. All projectile samples remain pre-contact.
+
+| Primary case | Projectile network VX | Received network VZ, first sample |
+| --- | ---: | ---: |
+| Air, pitch 0 | 664.745239 | 254.860504 |
+| Air, pitch -30 | 541.433167 | 540.730042 |
+| Air, pitch +45 | 517.080017 | -304.046143 |
+| Air, forward, pitch 0 | 970.995239 | 252.360504 |
+
+The independent 0/-30 horizontal fit gives speed 675 and the pitch-weighted
+10-degree upward adjustment. The +45 holdout agrees within 0.000018
+units/second. Player network VX is 245 before/after the forward release;
+the 306.25 projectile VX increase admits horizontal inheritance 1.25.
+Normal-gravity player VZ changes during acquisition, and its received projectile
+VZ values are not initial VZ or a physical spawn-clock fit.
+
+Three separate controls read back `sv_gravity=0` and retain constant player
+VZ before/after and three constant projectile network velocities per case:
+
+| Control | Player VZ before/after | Projectile VZ |
+| --- | ---: | ---: |
+| Grounded zero-gravity baseline | 0 | 117.212517 |
+| Air, early zero-gravity plateau | 223.868378 | 397.048004 |
+| Air, later zero-gravity plateau | 123.868378 | 272.048004 |
+
+Subtracting Incendiary's own baseline admits vertical inheritance 1.25 at both
+plateaus within recorded float precision. Generic absolute-velocity zeros are
+excluded. These observations only qualify the exact installed Incendiary
+schema/item/model's primary-air metadata; ground buttons, alternate-air
+fallbacks, release timing, spawn tracing and fire contact/expiry are preserved.
+The catalog semantic salt advances to v23 for the four newly qualified
+primary-air profiles. Actual TickInput fixtures cover 64/128 Hz with independent
+component fallbacks and preservation controls, alongside the own-kind measured
+constant-VZ fixtures and exact-identity installed loader checks.
+
+Private packet: `overpass-20261019/native-incgrenade-air-primary-oct20-r1`.
+All seven sessions closed normally and restored twelve exact native preference
+snapshots each. Original captures/logs, hashes and root numeric reviews remain
+private. No new air-expiry/contact law, full-trajectory/visual or historical-2015
+parity is inferred from these early-flight observations.
