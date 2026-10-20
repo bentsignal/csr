@@ -749,7 +749,7 @@ mod life_tests {
 
     #[test]
     #[ignore = "requires the player's installed CS:GO Legacy; no GPU required"]
-    fn installed_knife_inspect_and_cancel_preserve_the_actual_stab_deadline() {
+    fn installed_knife_inspect_and_reload_rearm_preserve_the_actual_stab_deadline() {
         let (mut app, id) = installed_app(Some("weapon_knife"));
         let input = sim::TickInput { buttons: movement::buttons::ATTACK2, ..Default::default() };
         let deadline = {
@@ -777,7 +777,8 @@ mod life_tests {
         assert_ne!(visible_inspect, visible_stab);
         app.world_mut().resource_mut::<crate::tracers::InspectRequest>().cancel();
         app.update();
-        assert_eq!(app.world().resource::<ViewModelState>().activity, "INSPECT_CANCEL");
+        assert_eq!(app.world().resource::<ViewModelState>().activity, "INSPECT");
+        assert!(app.world().resource::<ViewModelState>().knife_reinspect.is_some());
         assert_eq!(app.world().resource::<ViewModelState>().pose, visible_inspect);
         let mut world = app.world_mut().resource_mut::<SimWorld>();
         assert_eq!(world.0.player(id).unwrap().active_weapon().unwrap().next_attack, deadline);
@@ -845,6 +846,8 @@ mod life_tests {
                 "a rendered Draw must not reroll its selected clip");
 
             for _ in 0..3 {
+                app.world_mut().resource_mut::<crate::tracers::InspectRequest>().cancel();
+                app.update();
                 app.world_mut().resource_mut::<crate::tracers::InspectRequest>().start();
                 app.update();
                 let index = expected.choose(&inspect);
@@ -975,6 +978,10 @@ mod life_tests {
     }
 
     fn start_selected_inspect(app: &mut App, name: &str, index: usize) -> (f32, SeqClip) {
+        if app.world().resource::<ViewModelState>().activity == "INSPECT" {
+            app.world_mut().resource_mut::<crate::tracers::InspectRequest>().cancel();
+            app.update();
+        }
         let clips = app.world().resource::<ViewModels>().weapons[name].clips["INSPECT"].clone();
         let seed = (0..4096).find(|seed|
             knife_variants::KnifeVariants::seeded(*seed).choose(&clips) == index).unwrap();
@@ -1036,7 +1043,7 @@ mod life_tests {
         }
     }
 
-    // UNRUN: cancellation and viewing/life/weapon boundaries are processed by
+    // Viewing/life/weapon boundaries are processed by
     // production dispatch before this frame's already-due final cue.
     #[test]
     #[ignore = "requires the player's installed CS:GO Legacy; no GPU required"]
@@ -1048,7 +1055,7 @@ mod life_tests {
             .add_systems(FixedUpdate, crate::foley::update);
         let other = app.world_mut().resource_mut::<SimWorld>().0
             .add_player("inspect observer", sim::Team::Terrorist);
-        for boundary in 0..8 {
+        for boundary in 1..8 {
             {
                 let mut local = app.world_mut().resource_mut::<LocalPlayer>();
                 local.noclip = false;
@@ -1061,10 +1068,12 @@ mod life_tests {
             let (_, seq) = start_selected_inspect(&mut app, "weapon_knife_butterfly", 0);
             let before = app.world().resource::<crate::foley::Foley>().inspected.clone();
             assert_eq!(before.len(), 1);
+            app.world_mut().resource_mut::<crate::tracers::InspectRequest>().cancel();
+            app.update();
+            assert!(app.world().resource::<ViewModelState>().knife_reinspect.is_some());
             app.world_mut().resource_mut::<Time>()
                 .advance_by(Duration::from_secs_f32(seq.clip.duration() * 0.8));
             match boundary {
-                0 => app.world_mut().resource_mut::<crate::tracers::InspectRequest>().cancel(),
                 1 => app.world_mut().resource_mut::<SimWorld>().0.respawn(id),
                 2 => app.world_mut().resource_mut::<SimWorld>().0.damage_environment(id, 1000, "fixture"),
                 3 => app.world_mut().resource_mut::<LocalPlayer>().spectating = Some(other),
@@ -1084,13 +1093,7 @@ mod life_tests {
             app.update();
             assert_eq!(app.world().resource::<crate::foley::Foley>().inspected, before,
                 "boundary {boundary} must suppress a cue already due on this render");
-            if boundary == 0 {
-                let edge = app.world().resource::<ViewModelState>().inspect_transition;
-                app.world_mut().resource_mut::<crate::tracers::InspectRequest>().cancel();
-                app.update();
-                assert_eq!(app.world().resource::<ViewModelState>().inspect_transition, edge,
-                    "rejected duplicate Cancel cannot produce a new accepted edge");
-            }
+            assert!(app.world().resource::<ViewModelState>().knife_reinspect.is_none());
             app.world_mut().resource_mut::<Time>()
                 .advance_by(Duration::from_secs_f32(seq.clip.duration() + 1.));
             app.update();
@@ -1324,57 +1327,67 @@ mod life_tests {
         app.world_mut().resource_mut::<crate::tracers::InspectRequest>().cancel();
         app.update();
         let state = app.world().resource::<ViewModelState>();
-        assert_eq!(state.activity, "INSPECT_CANCEL");
+        assert_eq!(state.activity, "INSPECT");
+        assert!(state.knife_reinspect.is_some());
         assert_eq!((state.clip_index, state.completed_knife_index), (0, None));
     }
 
-    // UNRUN: source-only handoff; root owns Cargo and runtime verification.
     #[test]
     #[ignore = "requires the player's installed CS:GO Legacy; no GPU required"]
-    fn installed_rejected_knife_cancel_does_not_rebase_the_active_transition() {
+    fn installed_knife_inspect_requires_reload_for_one_active_restart() {
         use std::time::Duration;
         let (mut app, id) = installed_app(Some("weapon_knife"));
         for name in ["weapon_knife", "weapon_knife_t", "weapon_bayonet", "weapon_knife_flip",
             "weapon_knife_gut", "weapon_knife_karambit", "weapon_knife_m9_bayonet",
             "weapon_knife_tactical", "weapon_knife_butterfly", "weapon_knife_falchion", "weapon_knife_push"] {
-            {
-                let mut world = app.world_mut().resource_mut::<SimWorld>();
-                let def = Arc::new(world.0.catalog.get(name).unwrap().clone());
-                world.0.player_mut(id).unwrap().weapons[0] = sim::weapon::WeaponState::new(def);
-            }
-            app.update(); // replace the instance when the knife family changes
-            app.update(); // display its authored Draw
+            equip_inspect_fixture(&mut app, id, name);
             let authoritative = app.world().resource::<SimWorld>().0.state();
             app.world_mut().resource_mut::<crate::tracers::InspectRequest>().start();
             app.update();
             app.world_mut().resource_mut::<Time>().advance_by(Duration::from_millis(150));
             app.update();
-            app.world_mut().resource_mut::<crate::tracers::InspectRequest>().cancel();
-            app.update();
-            app.world_mut().resource_mut::<Time>().advance_by(Duration::from_millis(100));
-            app.update();
             let displayed = app.world().resource::<ViewModelState>().pose.clone();
-            let transition = app.world().resource::<ViewModelState>().inspect_transition;
+            let edge = app.world().resource::<ViewModelState>().inspect_transition;
             let started = app.world().resource::<ViewModelState>().started;
-
-            // Reload again while already cancelling. The request is consumed,
-            // but no accepted edge owns a new source pose or fade timeline.
-            app.world_mut().resource_mut::<crate::tracers::InspectRequest>().cancel();
+            let index = app.world().resource::<ViewModelState>().clip_index;
+            // F alone is consumed, without rerolling, rebasing or replaying later.
+            app.world_mut().resource_mut::<crate::tracers::InspectRequest>().start();
             app.update();
             let state = app.world().resource::<ViewModelState>();
-            assert_eq!(state.activity, "INSPECT_CANCEL", "{name}");
-            assert_eq!((state.started, state.inspect_transition), (started, transition), "{name}");
+            assert_eq!((state.started, state.inspect_transition, state.clip_index), (started, edge, index), "{name}");
+            assert_eq!(state.pose, displayed, "{name}");
             assert_eq!(state.inspect_seen, app.world().resource::<crate::tracers::InspectRequest>().serial());
-            assert_eq!(state.pose, displayed, "{name}: rejected cancellation must not blend the visible pose twice");
-
-            // A real re-inspect at that exact render timestamp still captures
-            // the displayed pose and gets a distinct transition identity.
+            // R alone preserves both the displayed pose and sound receipt.
+            for _ in 0..2 {
+                app.world_mut().resource_mut::<crate::tracers::InspectRequest>().cancel();
+                app.update();
+                let state = app.world().resource::<ViewModelState>();
+                assert!(state.knife_reinspect.is_some(), "{name}");
+                assert_eq!((state.started, state.inspect_transition, state.clip_index), (started, edge, index));
+                assert_eq!(state.knife_inspect.as_ref().unwrap().key.edge, edge);
+                assert_eq!(state.pose, displayed, "{name}");
+            }
+            app.world_mut().resource_mut::<crate::tracers::InspectRequest>().start();
+            app.update();
+            let state = app.world().resource::<ViewModelState>();
+            assert_eq!(state.inspect_transition, edge.wrapping_add(1), "{name}");
+            assert!(state.knife_reinspect.is_none());
+            assert_eq!(state.pose, displayed, "{name}: accepted restart retains the displayed endpoint");
+            let restarted = state.started;
+            let index = state.clip_index;
+            let duration = app.world().resource::<ViewModels>().weapons[name].clips["INSPECT"][index].clip.duration();
+            app.world_mut().resource_mut::<crate::tracers::InspectRequest>().start();
+            app.update();
+            assert_eq!(app.world().resource::<ViewModelState>().inspect_transition, edge.wrapping_add(1),
+                "{name}: R permission is single-use");
+            // No render has processed completion yet: this F must still work.
+            app.world_mut().resource_mut::<Time>().advance_by(Duration::from_secs_f32(duration + 0.01));
             app.world_mut().resource_mut::<crate::tracers::InspectRequest>().start();
             app.update();
             let state = app.world().resource::<ViewModelState>();
             assert_eq!(state.activity, "INSPECT", "{name}");
-            assert_eq!(state.inspect_transition, transition.wrapping_add(1));
-            assert_eq!(state.pose, displayed, "{name}: an accepted restart must retain its zero-weight endpoint");
+            assert_eq!(state.inspect_transition, edge.wrapping_add(2), "{name}");
+            assert!(state.started > restarted);
             assert_eq!(app.world().resource::<SimWorld>().0.state(), authoritative);
         }
     }
@@ -1429,6 +1442,8 @@ mod life_tests {
         assert_eq!(app.world().resource::<ViewModelState>().pose, expected,
             "quick inspect must fade a continuing slash, not a frozen hand snapshot");
 
+        app.world_mut().resource_mut::<crate::tracers::InspectRequest>().cancel();
+        app.update();
         app.world_mut().resource_mut::<crate::tracers::InspectRequest>().start();
         app.update();
         assert_eq!(app.world().resource::<ViewModelState>().pose, expected,
@@ -1574,6 +1589,9 @@ pub struct ViewModelState {
     /// Accepted presentation edges, distinct from consumed/rejected requests.
     inspect_transition: u64,
     pub(crate) knife_inspect: Option<KnifeInspect>,
+    /// Reload permits one re-inspect without replacing the currently visible clip.
+    /// Its simulation clock stamp prevents permission surviving a world reset.
+    knife_reinspect: Option<(u64, u32)>,
     knife_variants: knife_variants::KnifeVariants,
     /// Shared with tick foley: whichever observes a deployment first chooses
     /// once; the other consumes the same installed sequence identity.
@@ -1652,6 +1670,7 @@ impl ViewModelState {
         self.inspect_seen = inspect_serial;
         self.inspect_transition = 0;
         self.knife_inspect = None;
+        self.knife_reinspect = None;
         self.reloading = false;
         self.reload_from_inspect = false;
         self.shell_seen = None;
@@ -1886,6 +1905,7 @@ pub fn update(
     let dt = time.delta_secs();
     let Some(p) = world.0.player(local.view_target()) else {
         state.knife_inspect = None;
+        state.knife_reinspect = None;
         state.look_motion.clear();
         state.air_lowering.clear();
         return;
@@ -1900,6 +1920,7 @@ pub fn update(
                 || p.active_weapon().is_none_or(|w| w.def.class_name != inspect.key.weapon
                     || w.def.class != weapons::WeaponClass::Knife)) {
         state.knife_inspect = None;
+        state.knife_reinspect = None;
     }
     // Look history belongs to the viewing life, not the selected weapon.
     // Switching within that life keeps the accepted response across the arsenal.
@@ -1939,6 +1960,7 @@ pub fn update(
     let current = state.weapon.as_ref().map(|w| w.0.clone());
     if current.as_deref() != Some(active.as_str()) || state.team != Some(p.team) || state.owner != Some(p.id) || state.glove!=glove {
         state.knife_inspect = None;
+        state.knife_reinspect = None;
         if let Some((_, gun, arms, _)) = state.weapon.take() {
             despawn(&mut commands, &gun);
             if let Some(a) = arms {
@@ -2002,6 +2024,7 @@ pub fn update(
     if !p.alive || local.noclip { state.look_motion.clear(); return; }
     let Some(view) = models.weapons.get(&name) else {
         state.knife_inspect = None;
+        state.knife_reinspect = None;
         return;
     };
 
@@ -2031,13 +2054,20 @@ pub fn update(
     let inspect_action = request.after(&mut state.inspect_seen)
         .filter(|_| show && p.id == local.id && local.spectating.is_none());
     let knife = w.is_some_and(|w| w.def.class == weapons::WeaponClass::Knife);
-    if knife && inspect_action == Some(crate::tracers::InspectAction::Cancel) && state.activity == "INSPECT" {
-        state.activity = "INSPECT_CANCEL".into();
-        state.started = now;
-        state.clip_index = 0;
-        state.completed_knife_index = None;
-        state.inspect_transition = state.inspect_transition.wrapping_add(1);
-        state.knife_inspect = None;
+    // Requests are consumed above, but only accepted edges may restart a clip.
+    // Original stock/Butterfly controls distinguish F from R -> F: R preserves
+    // the playing inspection and permits one subsequent restart. Determine
+    // completion here too, before the ordinary completion pass below, so a
+    // render gap cannot discard the first post-completion Inspect request.
+    let knife_inspect_active = knife && state.activity == "INSPECT"
+        && now >= state.started && view.clips.get("INSPECT")
+            .and_then(|clips| clips.get(state.clip_index))
+            .is_some_and(|seq| !seq.clip.frames.is_empty()
+                && now - state.started <= seq.clip.duration());
+    if !knife_inspect_active || state.knife_reinspect.is_some_and(|(tick, rate)|
+        world.0.tick < tick || world.0.tick_rate != rate) { state.knife_reinspect = None; }
+    if knife_inspect_active && inspect_action == Some(crate::tracers::InspectAction::Cancel) {
+        state.knife_reinspect = Some((world.0.tick, world.0.tick_rate));
     }
     let reloading = w.is_some_and(|w| w.reload_end.is_some());
     // Consume reliable shot serials even while a newer suppressor transition
@@ -2079,9 +2109,12 @@ pub fn update(
             else { (state.clip_index + 1) % 3 };
         state.started = now;
     }
-    if suppressor.is_none() && attack.is_none() && !reloading && p.plant_start.is_none() && w.is_some_and(|w|w.zoom_level==0 && (knife || w.next_attack<=world.0.time())) && inspect_action == Some(crate::tracers::InspectAction::Start) && view.clips.contains_key("INSPECT") {
+    if suppressor.is_none() && attack.is_none() && !reloading && p.plant_start.is_none() && w.is_some_and(|w|w.zoom_level==0 && (knife || w.next_attack<=world.0.time())) && inspect_action == Some(crate::tracers::InspectAction::Start) && (!knife || !knife_inspect_active || state.knife_reinspect.is_some()) && view.clips.contains_key("INSPECT") {
         state.activity="INSPECT".into();state.started=now;state.clip_index=0;
-        if knife { state.select_knife_variant(view, "INSPECT"); }
+        if knife {
+            state.knife_reinspect = None;
+            state.select_knife_variant(view, "INSPECT");
+        }
         state.inspect_transition = state.inspect_transition.wrapping_add(1);
         if knife {
             state.knife_inspect = view.clips.get("INSPECT")
@@ -2120,11 +2153,10 @@ pub fn update(
     // final declared cue crossed by this render frame can still be emitted.
     if state.activity != "INSPECT" {
         state.knife_inspect = None;
+        state.knife_reinspect = None;
     }
     // The installed draw activities carry explicit first-frame SHOW/HIDE events.
-    let activity = if state.activity == "INSPECT_CANCEL" {
-        "ACT_VM_IDLE"
-    } else if state.activity == "ACT_VM_DRAW" {
+    let activity = if state.activity == "ACT_VM_DRAW" {
         w.map_or("ACT_VM_DRAW", |w| w.draw_activity())
     } else { state.activity.as_str() };
     let clips = view
@@ -2142,6 +2174,7 @@ pub fn update(
         .or_else(|| view.clips.get("ACT_VM_IDLE").filter(|c| !c.is_empty()));
     let Some(clips) = clips else {
         state.knife_inspect = None;
+        state.knife_reinspect = None;
         return;
     };
     let mut seq = clips[state.clip_index % clips.len()].clone();
@@ -2165,6 +2198,7 @@ pub fn update(
         }
     }
     if grenade.is_none() && suppressor.is_none() && state.activity != "ACT_VM_IDLE" && t > clip.duration() && !reloading {
+        state.knife_reinspect = None;
         state.activity = "ACT_VM_IDLE".into();
         state.started = now;
         // This frame explicitly samples idle[0]. Retaining an attack/inspect
@@ -2182,6 +2216,7 @@ pub fn update(
 
     if clip.frames.is_empty() {
         state.knife_inspect = None;
+        state.knife_reinspect = None;
         return;
     }
     if state.started == now && std::env::var_os("CSR_WEAPON_TRACE").is_some() {
@@ -2197,7 +2232,7 @@ pub fn update(
     // would turn the authored duration into a frame-rate-dependent filter.
     let mut inspection = std::mem::take(&mut state.inspection);
     inspection.begin(
-        (matches!(state.activity.as_str(), "INSPECT" | "INSPECT_CANCEL")
+        (state.activity == "INSPECT"
             || state.reload_from_inspect).then_some(state.started),
         seq.fade_in,
         &state.pose,
