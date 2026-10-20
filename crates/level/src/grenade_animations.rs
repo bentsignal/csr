@@ -101,10 +101,11 @@ fn observed_launch(name: &str, schema: Option<[u8; 20]>, header: &str) -> Option
             "weapon_flashbang" => Some((
                 "legacy-1.38.8.1-flash-ground-primary-angular-horizontal-128hz", 1.25,
                 Some(weapons::GrenadeLaunchVelocity { speed: 675., upward_pitch_bias_degrees: 10. }))),
-            // Decoy/Incendiary movement is still unmeasured: retain 0.5.
+            // Decoy's own stationary/steady-forward pair also admits 1.25.
             "weapon_decoy" => Some((
-                "legacy-1.38.8.1-decoy-ground-primary-angular-128hz", 0.5,
+                "legacy-1.38.8.1-decoy-ground-primary-angular-horizontal-128hz", 1.25,
                 Some(weapons::GrenadeLaunchVelocity { speed: 675., upward_pitch_bias_degrees: 10. }))),
+            // Incendiary movement is still unmeasured: retain 0.5.
             "weapon_incgrenade" => Some((
                 "legacy-1.38.8.1-incendiary-ground-primary-angular-128hz", 0.5,
                 Some(weapons::GrenadeLaunchVelocity { speed: 675., upward_pitch_bias_degrees: 10. }))),
@@ -259,7 +260,7 @@ mod tests {
         use super::*;
         for (name, header, reference, inheritance) in [
             ("weapon_flashbang", OBSERVED_HEADERS[1].1, "legacy-1.38.8.1-flash-ground-primary-angular-horizontal-128hz", 1.25),
-            ("weapon_decoy", OBSERVED_HEADERS[5].1, "legacy-1.38.8.1-decoy-ground-primary-angular-128hz", 0.5),
+            ("weapon_decoy", OBSERVED_HEADERS[5].1, "legacy-1.38.8.1-decoy-ground-primary-angular-horizontal-128hz", 1.25),
             ("weapon_molotov", OBSERVED_HEADERS[3].1, "legacy-1.38.8.1-molotov-ground-primary-angular-horizontal-128hz", 1.25),
             ("weapon_incgrenade", OBSERVED_HEADERS[4].1, "legacy-1.38.8.1-incendiary-ground-primary-angular-128hz", 0.5),
         ] {
@@ -414,7 +415,7 @@ mod tests {
         for name in ["weapon_flashbang", "weapon_decoy", "weapon_molotov", "weapon_incgrenade"] {
             let launch = level.catalog.get(name).unwrap().grenade_launch.as_ref().unwrap();
             assert_eq!(launch.grounded_overhand_horizontal_inheritance,
-                if matches!(name, "weapon_flashbang" | "weapon_molotov") { 1.25 } else { 0.5 });
+                if matches!(name, "weapon_flashbang" | "weapon_decoy" | "weapon_molotov") { 1.25 } else { 0.5 });
             let velocity = launch.grounded_overhand_velocity.as_ref().unwrap();
             assert_eq!(velocity.speed, 675.);
             assert_eq!(velocity.upward_pitch_bias_degrees, 10.);

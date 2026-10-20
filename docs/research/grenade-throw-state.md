@@ -432,8 +432,8 @@ not unique engine internals, exact spawn age or complete trajectory parity.
 
 Only the exact observed items schema and each kind's own installed MDL header
 receive this grounded primary velocity profile. Initially horizontal inheritance
-stays at its unmeasured prior 0.5; the independent Flash moving admission below
-supersedes that component for Flash only. Vertical inheritance stays 0.5. Secondary/combined,
+stays at its unmeasured prior 0.5; the independent moving admissions below
+supersede that component for Flash and Decoy. Vertical inheritance stays 0.5. Secondary/combined,
 all airborne components and missing metadata/mode retain their independent
 fallbacks. Smoke's accepted ground/air/button profiles and supported-rest
 activation and HE's ground/air responses are preserved. The subsequent fire-kind
@@ -474,9 +474,9 @@ holdout without refitting.
 
 The existing exact schema/item/header gate now admits grounded primary angular
 profiles for all four newly measured kinds. Molotov retains its separately
-measured horizontal inheritance 1.25. Incendiary and Decoy retain their
-unmeasured prior 0.5 pending independent moving data. Flash's independent moving
-admission follows below. Grounded vertical
+measured horizontal inheritance 1.25. Incendiary retains its
+unmeasured prior 0.5 pending independent moving data. Flash's and Decoy's
+independent moving admissions follow below. Grounded vertical
 inheritance remains 0.5. Every new kind's secondary/combined and all airborne
 components retain their prior independent fallbacks. Smoke/HE and all lifecycle
 laws are unchanged. This extends the same pending v18 semantic increment; no
@@ -504,10 +504,28 @@ Original hashes, exact positions and root's personal review are private under
 
 Flash's reference now includes angular and horizontal admission. The ordinary
 TickInput regression checks the independent moving level target and retained
-angular/absent-component behavior. Decoy/Incendiary retain 0.5 pending their own
-reviews; no grounded vertical, airborne or other-mode response is admitted.
+angular/absent-component behavior. No grounded vertical, airborne or other-mode
+response is admitted.
 The same pending v18 salt remains unchanged. Tests are authored UNRUN and root
 retains runtime/integration ownership.
+
+### Grounded primary Decoy horizontal inheritance (October 20)
+
+Root independently reviewed Decoy's four original level steady-forward images.
+The actual player network VX is 245 before/after, with world ground, standing
+eye, zero punch and the same active weapon. Held pin true/strength 1, actual
+DecoyProjectile identity and owner/thrower match. Player origin moves from
+[-342.761261,-875,-319.96875] to [-281.511261,-875,-319.96875]. First pre-contact
+projectile VX 970.995239 minus Decoy's independently observed stationary
+664.745239, divided by player VX 245, separately admits horizontal 1.25.
+Original hashes and root's personal review remain private under
+`native-ground-moving-oct20-r1/decoy-level-forward/root-review.json`.
+
+Decoy's exact-gated reference and tests now include angular/horizontal admission,
+with its own explicit native moving level target. Incendiary remains 0.5 pending
+its own moving review. Grounded vertical, airborne and other-mode components
+remain unchanged; no extra semantic increment occurs beyond pending v18. All
+regressions remain authored UNRUN, with runtime/integration owned by root.
 
 ### Grounded HE button endpoint velocities
 
