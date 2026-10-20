@@ -1222,11 +1222,67 @@ mod tests {
         }
     }
 
+    // Independently qualified Flash primary-air response; alternate air modes stay absent.
+    fn observed_flash_air_primary_launch() -> weapons::GrenadeLaunch {
+        weapons::GrenadeLaunch {
+            reference: "observed-flash-air-primary-response-128hz".into(),
+            airborne_overhand_velocity: Some(weapons::GrenadeLaunchVelocity {
+                speed: 675., upward_pitch_bias_degrees: 10.,
+            }),
+            airborne_overhand_horizontal_inheritance: Some(1.25),
+            airborne_overhand_vertical_inheritance: Some(1.25),
+            ..observed_ground_buttons_launch("weapon_flashbang")
+        }
+    }
+
+    // Independently qualified Decoy primary-air response; alternate air modes stay absent.
+    fn observed_decoy_air_primary_launch() -> weapons::GrenadeLaunch {
+        weapons::GrenadeLaunch {
+            reference: "observed-decoy-air-primary-response-128hz".into(),
+            airborne_overhand_velocity: Some(weapons::GrenadeLaunchVelocity {
+                speed: 675., upward_pitch_bias_degrees: 10.,
+            }),
+            airborne_overhand_horizontal_inheritance: Some(1.25),
+            airborne_overhand_vertical_inheritance: Some(1.25),
+            ..observed_ground_buttons_launch("weapon_decoy")
+        }
+    }
+
+    // Independently qualified Molotov primary-air response; alternate air modes stay absent.
+    fn observed_molotov_air_primary_launch() -> weapons::GrenadeLaunch {
+        weapons::GrenadeLaunch {
+            reference: "observed-molotov-air-primary-response-128hz".into(),
+            airborne_overhand_velocity: Some(weapons::GrenadeLaunchVelocity {
+                speed: 675., upward_pitch_bias_degrees: 10.,
+            }),
+            airborne_overhand_horizontal_inheritance: Some(1.25),
+            airborne_overhand_vertical_inheritance: Some(1.25),
+            ..observed_ground_buttons_launch("weapon_molotov")
+        }
+    }
+
+    // Independently qualified Incendiary primary-air response; alternate air modes stay absent.
+    fn observed_incendiary_air_primary_launch() -> weapons::GrenadeLaunch {
+        weapons::GrenadeLaunch {
+            reference: "observed-incendiary-air-primary-response-128hz".into(),
+            airborne_overhand_velocity: Some(weapons::GrenadeLaunchVelocity {
+                speed: 675., upward_pitch_bias_degrees: 10.,
+            }),
+            airborne_overhand_horizontal_inheritance: Some(1.25),
+            airborne_overhand_vertical_inheritance: Some(1.25),
+            ..observed_ground_buttons_launch("weapon_incgrenade")
+        }
+    }
+
     #[test]
     fn observed_air_primary_components_follow_ordinary_jump_release_independently() {
         for (name, kind, prior_profile, candidate) in [
             ("weapon_smokegrenade", Kind::Smoke, observed_smoke_launch(), observed_smoke_air_primary_launch()),
             ("weapon_hegrenade", Kind::He, observed_ground_buttons_launch("weapon_hegrenade"), observed_he_air_primary_launch()),
+            ("weapon_flashbang", Kind::Flash, observed_ground_buttons_launch("weapon_flashbang"), observed_flash_air_primary_launch()),
+            ("weapon_decoy", Kind::Decoy, observed_ground_buttons_launch("weapon_decoy"), observed_decoy_air_primary_launch()),
+            ("weapon_molotov", Kind::Molotov, observed_ground_buttons_launch("weapon_molotov"), observed_molotov_air_primary_launch()),
+            ("weapon_incgrenade", Kind::Incendiary, observed_ground_buttons_launch("weapon_incgrenade"), observed_incendiary_air_primary_launch()),
         ] {
             for rate in [64, 128] {
                 let dt = 1. / rate as f32;
@@ -1468,10 +1524,114 @@ mod tests {
     }
 
     #[test]
+    fn flash_primary_matches_own_constant_vz_native_controls() {
+        let mut world = arena();
+        let id = world.add_player("thrower", Team::Terrorist);
+        let catalog = weapons::Catalog::from_items_game(r#"items_game { items {
+            43 { name weapon_flashbang attributes { "primary default clip size" 1 } }
+        } }"#).unwrap();
+        let mut definition = catalog.weapons[0].clone();
+        definition.grenade_launch = Some(observed_flash_air_primary_launch());
+        // Native sv_gravity=0 was read back after jump onset, leaving two
+        // constant player-Vz plateaus. No unknown flight age is subtracted.
+        for (grounded, player_vz, observed_z) in [
+            (true, 0., 117.212517),
+            (false, 223.868378, 397.048004),
+            (false, 130.118378, 279.860504),
+        ] {
+            let actor = world.player_mut(id).unwrap();
+            actor.movement.on_ground = grounded;
+            actor.movement.velocity = Vec3::Z * player_vz;
+            let actual = World::grenade_launch_velocity(world.player(id).unwrap(),
+                &definition, Some(ThrowMode::Overhand), Vec3::ZERO);
+            assert!((actual - Vec3::new(664.745239, 0., observed_z)).length() < 0.002);
+        }
+    }
+
+    #[test]
+    fn decoy_primary_matches_own_constant_vz_native_controls() {
+        let mut world = arena();
+        let id = world.add_player("thrower", Team::Terrorist);
+        let catalog = weapons::Catalog::from_items_game(r#"items_game { items {
+            47 { name weapon_decoy attributes { "primary default clip size" 1 } }
+        } }"#).unwrap();
+        let mut definition = catalog.weapons[0].clone();
+        definition.grenade_launch = Some(observed_decoy_air_primary_launch());
+        // Native sv_gravity=0 was read back after jump onset, leaving two
+        // constant player-Vz plateaus. No unknown flight age is subtracted.
+        for (grounded, player_vz, observed_z) in [
+            (true, 0., 117.212517),
+            (false, 223.868378, 397.048004),
+            (false, 123.868378, 272.048004),
+        ] {
+            let actor = world.player_mut(id).unwrap();
+            actor.movement.on_ground = grounded;
+            actor.movement.velocity = Vec3::Z * player_vz;
+            let actual = World::grenade_launch_velocity(world.player(id).unwrap(),
+                &definition, Some(ThrowMode::Overhand), Vec3::ZERO);
+            assert!((actual - Vec3::new(664.745239, 0., observed_z)).length() < 0.002);
+        }
+    }
+
+    #[test]
+    fn molotov_primary_matches_own_constant_vz_native_controls() {
+        let mut world = arena();
+        let id = world.add_player("thrower", Team::Terrorist);
+        let catalog = weapons::Catalog::from_items_game(r#"items_game { items {
+            46 { name weapon_molotov attributes { "primary default clip size" 1 } }
+        } }"#).unwrap();
+        let mut definition = catalog.weapons[0].clone();
+        definition.grenade_launch = Some(observed_molotov_air_primary_launch());
+        // Native sv_gravity=0 was read back after jump onset, leaving two
+        // constant player-Vz plateaus. No unknown flight age is subtracted.
+        for (grounded, player_vz, observed_z) in [
+            (true, 0., 117.212517),
+            (false, 223.868378, 397.048004),
+            (false, 123.868378, 272.048004),
+        ] {
+            let actor = world.player_mut(id).unwrap();
+            actor.movement.on_ground = grounded;
+            actor.movement.velocity = Vec3::Z * player_vz;
+            let actual = World::grenade_launch_velocity(world.player(id).unwrap(),
+                &definition, Some(ThrowMode::Overhand), Vec3::ZERO);
+            assert!((actual - Vec3::new(664.745239, 0., observed_z)).length() < 0.002);
+        }
+    }
+
+    #[test]
+    fn incendiary_primary_matches_own_constant_vz_native_controls() {
+        let mut world = arena();
+        let id = world.add_player("thrower", Team::Terrorist);
+        let catalog = weapons::Catalog::from_items_game(r#"items_game { items {
+            48 { name weapon_incgrenade attributes { "primary default clip size" 1 } }
+        } }"#).unwrap();
+        let mut definition = catalog.weapons[0].clone();
+        definition.grenade_launch = Some(observed_incendiary_air_primary_launch());
+        // Native sv_gravity=0 was read back after jump onset, leaving two
+        // constant player-Vz plateaus. No unknown flight age is subtracted.
+        for (grounded, player_vz, observed_z) in [
+            (true, 0., 117.212517),
+            (false, 223.868378, 397.048004),
+            (false, 123.868378, 272.048004),
+        ] {
+            let actor = world.player_mut(id).unwrap();
+            actor.movement.on_ground = grounded;
+            actor.movement.velocity = Vec3::Z * player_vz;
+            let actual = World::grenade_launch_velocity(world.player(id).unwrap(),
+                &definition, Some(ThrowMode::Overhand), Vec3::ZERO);
+            assert!((actual - Vec3::new(664.745239, 0., observed_z)).length() < 0.002);
+        }
+    }
+
+    #[test]
     fn observed_air_primary_preserves_ground_buttons_air_alternates_and_no_mode() {
         for (name, prior_profile, candidate) in [
             ("weapon_smokegrenade", observed_smoke_launch(), observed_smoke_air_primary_launch()),
             ("weapon_hegrenade", observed_ground_buttons_launch("weapon_hegrenade"), observed_he_air_primary_launch()),
+            ("weapon_flashbang", observed_ground_buttons_launch("weapon_flashbang"), observed_flash_air_primary_launch()),
+            ("weapon_decoy", observed_ground_buttons_launch("weapon_decoy"), observed_decoy_air_primary_launch()),
+            ("weapon_molotov", observed_ground_buttons_launch("weapon_molotov"), observed_molotov_air_primary_launch()),
+            ("weapon_incgrenade", observed_ground_buttons_launch("weapon_incgrenade"), observed_incendiary_air_primary_launch()),
         ] {
             for rate in [64, 128] {
                 for running in [false, true] {

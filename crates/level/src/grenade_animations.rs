@@ -94,20 +94,20 @@ fn observed_launch(name: &str, schema: Option<[u8; 20]>, header: &str) -> Option
         let primary = match name {
             // Independent stationary angular family and existing moving pair.
             "weapon_molotov" => Some((
-                "legacy-1.38.8.1-molotov-ground-button-response-128hz", 1.25,
+                "legacy-1.38.8.1-molotov-ground-buttons-and-air-primary-response-128hz", 1.25,
                 Some(weapons::GrenadeLaunchVelocity { speed: 675., upward_pitch_bias_degrees: 10. }))),
             // Each kind's own grounded stationary 0/-30 fit and +45 holdout.
             // Flash's separate steady-forward pair admits horizontal 1.25.
             "weapon_flashbang" => Some((
-                "legacy-1.38.8.1-flash-ground-button-response-128hz", 1.25,
+                "legacy-1.38.8.1-flash-ground-buttons-and-air-primary-response-128hz", 1.25,
                 Some(weapons::GrenadeLaunchVelocity { speed: 675., upward_pitch_bias_degrees: 10. }))),
             // Decoy's own stationary/steady-forward pair also admits 1.25.
             "weapon_decoy" => Some((
-                "legacy-1.38.8.1-decoy-ground-button-response-128hz", 1.25,
+                "legacy-1.38.8.1-decoy-ground-buttons-and-air-primary-response-128hz", 1.25,
                 Some(weapons::GrenadeLaunchVelocity { speed: 675., upward_pitch_bias_degrees: 10. }))),
             // Incendiary's separate moving pair independently admits 1.25.
             "weapon_incgrenade" => Some((
-                "legacy-1.38.8.1-incendiary-ground-button-response-128hz", 1.25,
+                "legacy-1.38.8.1-incendiary-ground-buttons-and-air-primary-response-128hz", 1.25,
                 Some(weapons::GrenadeLaunchVelocity { speed: 675., upward_pitch_bias_degrees: 10. }))),
             _ => None,
         };
@@ -123,6 +123,13 @@ fn observed_launch(name: &str, schema: Option<[u8; 20]>, header: &str) -> Option
             });
             launch.grounded_underhand_horizontal_inheritance = Some(1.25);
             launch.grounded_combined_horizontal_inheritance = Some(1.25);
+            // Each of these four exact identities has its own primary-air
+            // angles, steady-forward pair and two constant-Vz controls.
+            launch.airborne_overhand_velocity = Some(weapons::GrenadeLaunchVelocity {
+                speed: 675., upward_pitch_bias_degrees: 10.,
+            });
+            launch.airborne_overhand_horizontal_inheritance = Some(1.25);
+            launch.airborne_overhand_vertical_inheritance = Some(1.25);
             return Some(launch);
         }
     }
@@ -216,8 +223,8 @@ pub(super) fn import(
     let mut digest = Sha1::new();
     digest.update(previous_hash?);
     // Retain prior launch/contact/expiry policies while distinguishing the
-    // independently observed HE airborne primary response. Wire layout stays fixed.
-    digest.update(b"grenade-animation-timing-v22-he-air-primary-response");
+    // independently observed primary-air responses. Wire layout stays fixed.
+    digest.update(b"grenade-animation-timing-v23-air-primary-response");
     let mut definitions: Vec<_> = catalog
         .weapons
         .iter_mut()
@@ -271,10 +278,10 @@ mod tests {
     fn four_kinds_keep_exact_item_and_per_component_ground_launch_admission() {
         use super::*;
         for (name, header, reference, inheritance) in [
-            ("weapon_flashbang", OBSERVED_HEADERS[1].1, "legacy-1.38.8.1-flash-ground-button-response-128hz", 1.25),
-            ("weapon_decoy", OBSERVED_HEADERS[5].1, "legacy-1.38.8.1-decoy-ground-button-response-128hz", 1.25),
-            ("weapon_molotov", OBSERVED_HEADERS[3].1, "legacy-1.38.8.1-molotov-ground-button-response-128hz", 1.25),
-            ("weapon_incgrenade", OBSERVED_HEADERS[4].1, "legacy-1.38.8.1-incendiary-ground-button-response-128hz", 1.25),
+            ("weapon_flashbang", OBSERVED_HEADERS[1].1, "legacy-1.38.8.1-flash-ground-buttons-and-air-primary-response-128hz", 1.25),
+            ("weapon_decoy", OBSERVED_HEADERS[5].1, "legacy-1.38.8.1-decoy-ground-buttons-and-air-primary-response-128hz", 1.25),
+            ("weapon_molotov", OBSERVED_HEADERS[3].1, "legacy-1.38.8.1-molotov-ground-buttons-and-air-primary-response-128hz", 1.25),
+            ("weapon_incgrenade", OBSERVED_HEADERS[4].1, "legacy-1.38.8.1-incendiary-ground-buttons-and-air-primary-response-128hz", 1.25),
         ] {
             let profile = observed_launch(name, Some(OBSERVED_LAUNCH_SCHEMA), header).unwrap();
             assert_eq!(profile.reference, reference);
@@ -293,12 +300,14 @@ mod tests {
                 }
             }
             for (velocity, horizontal, vertical) in [
-                (&profile.airborne_overhand_velocity, profile.airborne_overhand_horizontal_inheritance, profile.airborne_overhand_vertical_inheritance),
                 (&profile.airborne_underhand_velocity, profile.airborne_underhand_horizontal_inheritance, profile.airborne_underhand_vertical_inheritance),
                 (&profile.airborne_combined_velocity, profile.airborne_combined_horizontal_inheritance, profile.airborne_combined_vertical_inheritance),
             ] {
                 assert!(velocity.is_none() && horizontal.is_none() && vertical.is_none());
             }
+            assert!(profile.airborne_overhand_velocity.is_some());
+            assert_eq!(profile.airborne_overhand_horizontal_inheritance, Some(1.25));
+            assert_eq!(profile.airborne_overhand_vertical_inheritance, Some(1.25));
             assert!(observed_launch(name, None, header).is_none());
             let mut changed_schema = OBSERVED_LAUNCH_SCHEMA;
             changed_schema[19] ^= 1;
@@ -320,10 +329,9 @@ mod tests {
         for &(name, header) in OBSERVED_HEADERS {
             if let Some(profile) = observed_launch(name, Some(OBSERVED_LAUNCH_SCHEMA), header) {
                 let smoke = name == "weapon_smokegrenade";
-                let primary_air = smoke || name == "weapon_hegrenade";
-                assert_eq!(profile.airborne_overhand_horizontal_inheritance, primary_air.then_some(1.25));
-                assert_eq!(profile.airborne_overhand_vertical_inheritance, primary_air.then_some(1.25));
-                assert_eq!(profile.airborne_overhand_velocity.is_some(), primary_air);
+                assert_eq!(profile.airborne_overhand_horizontal_inheritance, Some(1.25));
+                assert_eq!(profile.airborne_overhand_vertical_inheritance, Some(1.25));
+                assert!(profile.airborne_overhand_velocity.is_some());
                 if let Some(velocity) = profile.airborne_overhand_velocity {
                     assert_eq!(velocity.speed, 675.);
                     assert_eq!(velocity.upward_pitch_bias_degrees, 10.);
@@ -460,10 +468,9 @@ mod tests {
         ] {
             let definition = level.catalog.get(name).unwrap();
             let smoke = name == "weapon_smokegrenade";
-            let primary_air = smoke || name == "weapon_hegrenade";
-            assert_eq!(definition.grenade_launch.as_ref().and_then(|p| p.airborne_overhand_horizontal_inheritance), primary_air.then_some(1.25));
-            assert_eq!(definition.grenade_launch.as_ref().and_then(|p| p.airborne_overhand_vertical_inheritance), primary_air.then_some(1.25));
-            assert_eq!(definition.grenade_launch.as_ref().and_then(|p| p.airborne_overhand_velocity.as_ref()).is_some(), primary_air);
+            assert_eq!(definition.grenade_launch.as_ref().and_then(|p| p.airborne_overhand_horizontal_inheritance), Some(1.25));
+            assert_eq!(definition.grenade_launch.as_ref().and_then(|p| p.airborne_overhand_vertical_inheritance), Some(1.25));
+            assert!(definition.grenade_launch.as_ref().and_then(|p| p.airborne_overhand_velocity.as_ref()).is_some());
             assert_eq!(definition.grenade_launch.as_ref().and_then(|p| p.airborne_underhand_velocity.as_ref()).is_some(), smoke);
             assert_eq!(definition.grenade_launch.as_ref().and_then(|p| p.airborne_combined_velocity.as_ref()).is_some(), smoke);
             assert_eq!(definition.grenade_launch.as_ref().and_then(|p| p.airborne_underhand_horizontal_inheritance), smoke.then_some(1.25));
