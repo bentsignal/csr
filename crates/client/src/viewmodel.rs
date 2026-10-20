@@ -876,7 +876,8 @@ mod life_tests {
             .init_resource::<Assets<bevy::audio::AudioSource>>()
             .init_resource::<crate::surfaces::SurfaceProps>()
             .init_resource::<crate::foley::Foley>()
-            .add_systems(FixedUpdate, crate::foley::update);
+            .add_systems(FixedUpdate, crate::foley::update)
+            .add_systems(Update, crate::foley::inspect.after(update));
         let clips = app.world().resource::<ViewModels>().weapons["weapon_knife_butterfly"].clips["ACT_VM_DRAW"].clone();
         assert_eq!(clips.len(), 2);
         let seed_for = |index| (0..128).find(|seed|
@@ -953,6 +954,217 @@ mod life_tests {
             assert!(app.world().resource::<ViewModelState>().knife_draw_choice.is_none());
             assert_eq!(app.world().resource::<SimWorld>().0.state(), authoritative);
         }
+    }
+
+    fn install_inspect_foley(app: &mut App) {
+        app.init_resource::<crate::audio::SoundLibrary>()
+            .init_resource::<Assets<bevy::audio::AudioSource>>()
+            .init_resource::<crate::foley::Foley>()
+            .add_systems(Update, crate::foley::inspect.after(update));
+    }
+
+    fn equip_inspect_fixture(app: &mut App, id: sim::PlayerId, name: &str) {
+        let mut world = app.world_mut().resource_mut::<SimWorld>();
+        let def = Arc::new(world.0.catalog.get(name).unwrap().clone());
+        world.0.player_mut(id).unwrap().weapons = vec![sim::weapon::WeaponState::new(def)];
+        world.0.player_mut(id).unwrap().active = 0;
+        world.0.set_loadout(id, sim::Loadout { knife: Some(name.into()), ..Default::default() });
+        drop(world);
+        app.update();
+        app.update();
+    }
+
+    fn start_selected_inspect(app: &mut App, name: &str, index: usize) -> (f32, SeqClip) {
+        let clips = app.world().resource::<ViewModels>().weapons[name].clips["INSPECT"].clone();
+        let seed = (0..4096).find(|seed|
+            knife_variants::KnifeVariants::seeded(*seed).choose(&clips) == index).unwrap();
+        app.world_mut().resource_mut::<ViewModelState>().knife_variants =
+            knife_variants::KnifeVariants::seeded(seed);
+        app.world_mut().resource_mut::<crate::foley::Foley>().inspected.clear();
+        let authoritative = app.world().resource::<SimWorld>().0.state();
+        app.world_mut().resource_mut::<crate::tracers::InspectRequest>().start();
+        app.update();
+        let state = app.world().resource::<ViewModelState>();
+        assert_eq!(state.activity, "INSPECT");
+        assert_eq!(state.clip_index, index);
+        assert_eq!(state.knife_inspect.as_ref().unwrap().key.sequence, index);
+        assert_eq!(app.world().resource::<SimWorld>().0.state(), authoritative);
+        (state.started, clips[index].clone())
+    }
+
+    // UNRUN: actual accepted render dispatch -> render-clock foley. Empty
+    // SoundLibrary keeps the fixture silent; no device or waveform claim.
+    #[test]
+    #[ignore = "requires the player's installed CS:GO Legacy; no GPU required"]
+    fn installed_selected_inspect_foley_uses_each_declared_variant_once() {
+        use std::time::Duration;
+        let (mut app, id) = installed_app(Some("weapon_knife_butterfly"));
+        install_inspect_foley(&mut app);
+        // Deliberately unrelated clocks: scheduling must use actual render
+        // start, without borrowing a simulation tick or its interpolation.
+        app.world_mut().resource_mut::<Time>().advance_by(Duration::from_secs(7));
+        for (name, declarations) in [
+            ("weapon_knife_butterfly", vec![
+                vec![(0., "ButterflyKnife.look01_a"), (0.6666667, "ButterflyKnife.look01_b")],
+                vec![(0., "ButterflyKnife.look02_a"), (0.6962963, "ButterflyKnife.look02_b")],
+                vec![(0., "ButterflyKnife.look03_a"), (0.73103446, "ButterflyKnife.look03_b")]]),
+            ("weapon_knife_falchion", vec![vec![(0., "KnifeFalchion.inspect")],
+                vec![(0.8806818, "KnifeFalchion.Catch")]]),
+        ] {
+            equip_inspect_fixture(&mut app, id, name);
+            for (index, declared) in declarations.iter().enumerate() {
+                let (started, seq) = start_selected_inspect(&mut app, name, index);
+                assert_eq!(seq.sounds.len(), declared.len());
+                for ((cycle, entry), (declared_cycle, declared_entry)) in seq.sounds.iter().zip(declared) {
+                    assert!((cycle - declared_cycle).abs() < 0.000001);
+                    assert_eq!(entry.as_str(), *declared_entry);
+                }
+                let expected: Vec<_> = seq.sounds.iter().map(|(cycle, entry)|
+                    (entry.clone(), started + cycle * seq.clip.duration())).collect();
+                let first: Vec<_> = expected.iter().filter(|(_, at)| *at <= started).cloned().collect();
+                assert_eq!(app.world().resource::<crate::foley::Foley>().inspected, first);
+                app.update(); // identical timestamp must neither reroll nor replay
+                assert_eq!(app.world().resource::<crate::foley::Foley>().inspected, first);
+                let authoritative = app.world().resource::<SimWorld>().0.state();
+                app.world_mut().resource_mut::<Time>()
+                    .advance_by(Duration::from_secs_f32(seq.clip.duration() + 0.01));
+                app.update(); // also crosses natural completion before due emission
+                app.update();
+                assert_eq!(app.world().resource::<crate::foley::Foley>().inspected, expected);
+                assert_eq!(app.world().resource::<SimWorld>().0.state(), authoritative);
+            }
+        }
+    }
+
+    // UNRUN: cancellation and viewing/life/weapon boundaries are processed by
+    // production dispatch before this frame's already-due final cue.
+    #[test]
+    #[ignore = "requires the player's installed CS:GO Legacy; no GPU required"]
+    fn installed_inspect_foley_suppresses_interrupted_cues_before_emission() {
+        use std::time::Duration;
+        let (mut app, id) = installed_app(Some("weapon_knife_butterfly"));
+        install_inspect_foley(&mut app);
+        app.init_resource::<crate::surfaces::SurfaceProps>()
+            .add_systems(FixedUpdate, crate::foley::update);
+        let other = app.world_mut().resource_mut::<SimWorld>().0
+            .add_player("inspect observer", sim::Team::Terrorist);
+        for boundary in 0..8 {
+            {
+                let mut local = app.world_mut().resource_mut::<LocalPlayer>();
+                local.noclip = false;
+                local.spectating = None;
+            }
+            app.world_mut().resource_mut::<SimWorld>().0.respawn(id);
+            equip_inspect_fixture(&mut app, id, "weapon_knife_butterfly");
+            app.world_mut().resource_mut::<SimWorld>().0.tick = 10;
+            app.world_mut().run_schedule(FixedUpdate);
+            let (_, seq) = start_selected_inspect(&mut app, "weapon_knife_butterfly", 0);
+            let before = app.world().resource::<crate::foley::Foley>().inspected.clone();
+            assert_eq!(before.len(), 1);
+            app.world_mut().resource_mut::<Time>()
+                .advance_by(Duration::from_secs_f32(seq.clip.duration() * 0.8));
+            match boundary {
+                0 => app.world_mut().resource_mut::<crate::tracers::InspectRequest>().cancel(),
+                1 => app.world_mut().resource_mut::<SimWorld>().0.respawn(id),
+                2 => app.world_mut().resource_mut::<SimWorld>().0.damage_environment(id, 1000, "fixture"),
+                3 => app.world_mut().resource_mut::<LocalPlayer>().spectating = Some(other),
+                4 => app.world_mut().resource_mut::<LocalPlayer>().noclip = true,
+                5 => {
+                    let mut world = app.world_mut().resource_mut::<SimWorld>();
+                    let def = Arc::new(world.0.catalog.get("weapon_m4a1").unwrap().clone());
+                    world.0.player_mut(id).unwrap().weapons[0] = sim::weapon::WeaponState::new(def);
+                }
+                6 => { *app.world_mut().resource_mut::<Time>() = Time::default(); }
+                _ => {
+                    app.world_mut().resource_mut::<SimWorld>().0.tick = 9;
+                    app.world_mut().run_schedule(FixedUpdate);
+                }
+            }
+            let authoritative = app.world().resource::<SimWorld>().0.state();
+            app.update();
+            assert_eq!(app.world().resource::<crate::foley::Foley>().inspected, before,
+                "boundary {boundary} must suppress a cue already due on this render");
+            if boundary == 0 {
+                let edge = app.world().resource::<ViewModelState>().inspect_transition;
+                app.world_mut().resource_mut::<crate::tracers::InspectRequest>().cancel();
+                app.update();
+                assert_eq!(app.world().resource::<ViewModelState>().inspect_transition, edge,
+                    "rejected duplicate Cancel cannot produce a new accepted edge");
+            }
+            app.world_mut().resource_mut::<Time>()
+                .advance_by(Duration::from_secs_f32(seq.clip.duration() + 1.));
+            app.update();
+            assert_eq!(app.world().resource::<crate::foley::Foley>().inspected, before);
+            assert_eq!(app.world().resource::<SimWorld>().0.state(), authoritative);
+        }
+    }
+
+    // UNRUN: actual melee event priority rejects the simultaneous inspect,
+    // while a cooldown-rejected melee input leaves an accepted Inspect alone.
+    #[test]
+    #[ignore = "requires the player's installed CS:GO Legacy; no GPU required"]
+    fn installed_inspect_foley_follows_accepted_melee_priority_and_reinspect() {
+        use std::time::Duration;
+        let (mut app, id) = installed_app(Some("weapon_knife_butterfly"));
+        install_inspect_foley(&mut app);
+        equip_inspect_fixture(&mut app, id, "weapon_knife_butterfly");
+        app.init_resource::<crate::effects::PendingEvents>()
+            .init_resource::<crate::tracers::Tracers>()
+            .init_resource::<crate::surfaces::SurfaceProps>()
+            .init_resource::<crate::settings::Settings>()
+            .init_resource::<crate::buymenu::BuyMenu>()
+            .add_systems(Update, crate::effects::process.before(update));
+        let (_, seq) = start_selected_inspect(&mut app, "weapon_knife_butterfly", 0);
+        let before = app.world().resource::<crate::foley::Foley>().inspected.clone();
+        app.world_mut().resource_mut::<Time>()
+            .advance_by(Duration::from_secs_f32(seq.clip.duration() * 0.8));
+        let melee = sim::TickInput { buttons: movement::buttons::ATTACK, ..Default::default() };
+        let events = {
+            let mut world = app.world_mut().resource_mut::<SimWorld>();
+            world.0.step(&[(id, melee.clone())]);
+            world.0.events.iter().filter(|event| matches!(event,
+                sim::GameEvent::Melee { player, weapon, .. }
+                    if *player == id && weapon == "weapon_knife_butterfly")).cloned().collect::<Vec<_>>()
+        };
+        assert_eq!(events.len(), 1, "actual held/loadout knife must produce the accepted attack");
+        app.world_mut().resource_mut::<crate::effects::PendingEvents>().0.extend(events);
+        // The request is consumed, but actual attack dispatch has priority.
+        app.world_mut().resource_mut::<crate::tracers::InspectRequest>().start();
+        let authoritative = app.world().resource::<SimWorld>().0.state();
+        app.update();
+        assert!(knife_attack_activity(&app.world().resource::<ViewModelState>().activity));
+        assert!(app.world().resource::<ViewModelState>().knife_inspect.is_none());
+        assert_eq!(app.world().resource::<crate::foley::Foley>().inspected, before,
+            "accepted attack suppresses the already-due old cue; rejected Inspect emits nothing");
+        assert_eq!(app.world().resource::<SimWorld>().0.state(), authoritative);
+
+        // A fresh inspect after the consumed attack is accepted without
+        // changing its deadline. A second accepted edge at the exact same
+        // timestamp must replace the old queue and emit its own first cue.
+        let (started, _) = start_selected_inspect(&mut app, "weapon_knife_butterfly", 0);
+        let old_edge = app.world().resource::<ViewModelState>().inspect_transition;
+        let (restarted, selected) = start_selected_inspect(&mut app, "weapon_knife_butterfly", 1);
+        assert_eq!(restarted, started);
+        assert_eq!(app.world().resource::<ViewModelState>().inspect_transition, old_edge + 1);
+        let first = app.world().resource::<crate::foley::Foley>().inspected.clone();
+        assert_eq!(first, [("ButterflyKnife.look02_a".into(), restarted)]);
+        {
+            let mut world = app.world_mut().resource_mut::<SimWorld>();
+            world.0.step(&[(id, melee)]); // still inside the real attack cooldown
+            assert!(!world.0.events.iter().any(|event| matches!(event, sim::GameEvent::Melee { .. })));
+        }
+        let authoritative = app.world().resource::<SimWorld>().0.state();
+        app.update();
+        assert_eq!(app.world().resource::<ViewModelState>().activity, "INSPECT");
+        assert_eq!(app.world().resource::<crate::foley::Foley>().inspected, first);
+        app.world_mut().resource_mut::<Time>()
+            .advance_by(Duration::from_secs_f32(selected.clip.duration() + 0.01));
+        app.update();
+        let expected: Vec<_> = selected.sounds.iter().map(|(cycle, entry)|
+            (entry.clone(), restarted + cycle * selected.clip.duration())).collect();
+        assert_eq!(app.world().resource::<crate::foley::Foley>().inspected, expected,
+            "only the final accepted variant's queue survives");
+        assert_eq!(app.world().resource::<SimWorld>().0.state(), authoritative);
     }
 
     // UNRUN: readiness, life and view-owner boundaries of the shared receipt.
@@ -1325,6 +1537,24 @@ struct KnifeDrawChoice {
     index: usize,
 }
 
+/// Accepted local presentation edge, on the same clock as sequence sampling.
+/// Retain only identity and the selected clip's declared sound timing.
+#[derive(Clone, PartialEq)]
+pub(crate) struct KnifeInspectKey {
+    pub owner: sim::PlayerId,
+    pub life: u64,
+    pub weapon: String,
+    edge: u64,
+    sequence: usize,
+    pub started: f32,
+}
+
+pub(crate) struct KnifeInspect {
+    pub key: KnifeInspectKey,
+    pub duration: f32,
+    pub sounds: Arc<Vec<(f32, String)>>,
+}
+
 #[derive(Resource, Default)]
 pub struct ViewModelState {
     weapon: Option<(String, SkinnedInstance, Option<SkinnedInstance>, Vec<Handle<WorldMaterial>>)>,
@@ -1343,6 +1573,7 @@ pub struct ViewModelState {
     inspect_seen: u64,
     /// Accepted presentation edges, distinct from consumed/rejected requests.
     inspect_transition: u64,
+    pub(crate) knife_inspect: Option<KnifeInspect>,
     knife_variants: knife_variants::KnifeVariants,
     /// Shared with tick foley: whichever observes a deployment first chooses
     /// once; the other consumes the same installed sequence identity.
@@ -1420,6 +1651,7 @@ impl ViewModelState {
         self.last_attack_seen = attack_serial;
         self.inspect_seen = inspect_serial;
         self.inspect_transition = 0;
+        self.knife_inspect = None;
         self.reloading = false;
         self.reload_from_inspect = false;
         self.shell_seen = None;
@@ -1653,6 +1885,7 @@ pub fn update(
     let now = time.elapsed_secs();
     let dt = time.delta_secs();
     let Some(p) = world.0.player(local.view_target()) else {
+        state.knife_inspect = None;
         state.look_motion.clear();
         state.air_lowering.clear();
         return;
@@ -1661,6 +1894,13 @@ pub fn update(
     // moment. Raw command-state velocity/ground flags are one tick newer.
     let motion = poses.sample_at(p, fixed.overstep_fraction(), world.0.tick, world.0.tick_rate);
     let show = p.alive && !local.noclip && !p.active_weapon().is_some_and(|w| w.hides_viewmodel());
+    if !show || p.id != local.id || local.spectating.is_some()
+        || state.knife_inspect.as_ref().is_some_and(|inspect|
+            inspect.key.owner != p.id || inspect.key.life != p.life_epoch
+                || p.active_weapon().is_none_or(|w| w.def.class_name != inspect.key.weapon
+                    || w.def.class != weapons::WeaponClass::Knife)) {
+        state.knife_inspect = None;
+    }
     // Look history belongs to the viewing life, not the selected weapon.
     // Switching within that life keeps the accepted response across the arsenal.
     if state.owner != Some(p.id) || state.life != Some(p.life_epoch) {
@@ -1698,6 +1938,7 @@ pub fn update(
     // Respawn the viewmodel when the weapon or team changes.
     let current = state.weapon.as_ref().map(|w| w.0.clone());
     if current.as_deref() != Some(active.as_str()) || state.team != Some(p.team) || state.owner != Some(p.id) || state.glove!=glove {
+        state.knife_inspect = None;
         if let Some((_, gun, arms, _)) = state.weapon.take() {
             despawn(&mut commands, &gun);
             if let Some(a) = arms {
@@ -1759,7 +2000,10 @@ pub fn update(
     let (name, gun, arms) = (name.clone(), gun.clone(), arms.clone());
     let entities: Vec<Entity> = gun.meshes.iter().chain(arms.iter().flat_map(|a| a.meshes.iter())).copied().collect();
     if !p.alive || local.noclip { state.look_motion.clear(); return; }
-    let Some(view) = models.weapons.get(&name) else { return };
+    let Some(view) = models.weapons.get(&name) else {
+        state.knife_inspect = None;
+        return;
+    };
 
     // Pick the activity from the weapon state.
     let grenade = w.and_then(|w|w.grenade_throw);
@@ -1793,6 +2037,7 @@ pub fn update(
         state.clip_index = 0;
         state.completed_knife_index = None;
         state.inspect_transition = state.inspect_transition.wrapping_add(1);
+        state.knife_inspect = None;
     }
     let reloading = w.is_some_and(|w| w.reload_end.is_some());
     // Consume reliable shot serials even while a newer suppressor transition
@@ -1838,6 +2083,17 @@ pub fn update(
         state.activity="INSPECT".into();state.started=now;state.clip_index=0;
         if knife { state.select_knife_variant(view, "INSPECT"); }
         state.inspect_transition = state.inspect_transition.wrapping_add(1);
+        if knife {
+            state.knife_inspect = view.clips.get("INSPECT")
+                .and_then(|clips| clips.get(state.clip_index))
+                .filter(|seq| !seq.clip.frames.is_empty())
+                .map(|seq| KnifeInspect {
+                    key: KnifeInspectKey { owner: p.id, life: p.life_epoch,
+                        weapon: name.clone(), edge: state.inspect_transition,
+                        sequence: state.clip_index, started: state.started },
+                    duration: seq.clip.duration(), sounds: seq.sounds.clone(),
+                });
+        }
     }
     if state.activity=="INSPECT" && w.is_some_and(|w|w.zoom_level>0) {state.activity="ACT_VM_IDLE".into();state.started=now;}
     if !reloading || state.activity != "ACT_VM_RELOAD" || grenade.is_some() || suppressor.is_some() {
@@ -1859,6 +2115,12 @@ pub fn update(
             state.activity = if start { "ACT_SHOTGUN_RELOAD_START" } else { "ACT_VM_RELOAD" }.into();
         }
     }
+    // Dispatch has now applied accepted interruptions. Rejected requests do
+    // not touch the receipt. Natural completion below may retain it so a
+    // final declared cue crossed by this render frame can still be emitted.
+    if state.activity != "INSPECT" {
+        state.knife_inspect = None;
+    }
     // The installed draw activities carry explicit first-frame SHOW/HIDE events.
     let activity = if state.activity == "INSPECT_CANCEL" {
         "ACT_VM_IDLE"
@@ -1878,7 +2140,10 @@ pub fn update(
             }
         })
         .or_else(|| view.clips.get("ACT_VM_IDLE").filter(|c| !c.is_empty()));
-    let Some(clips) = clips else { return };
+    let Some(clips) = clips else {
+        state.knife_inspect = None;
+        return;
+    };
     let mut seq = clips[state.clip_index % clips.len()].clone();
     let mut clip = seq.clip.clone();
     let mut t = now - state.started;
@@ -1915,7 +2180,10 @@ pub fn update(
         }
     }
 
-    if clip.frames.is_empty() { return; }
+    if clip.frames.is_empty() {
+        state.knife_inspect = None;
+        return;
+    }
     if state.started == now && std::env::var_os("CSR_WEAPON_TRACE").is_some() {
         info!("weapon activity: {} {}", name, state.activity);
     }

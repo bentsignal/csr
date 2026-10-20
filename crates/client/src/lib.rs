@@ -280,7 +280,7 @@ impl Plugin for CsgoPlugin {
                     characters::sync,
                     items::sync,
                     (doors::sync, breakables::sync, window_fade::update).chain(),
-                    (viewmodel::update, utility_fx::update_wick).chain(),
+                    (viewmodel::update, foley::inspect, utility_fx::update_wick).chain(),
                     tracers::draw,
                     scope::update,
                     buymenu::draw,

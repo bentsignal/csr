@@ -3,9 +3,8 @@
 //!
 //! Footstep timings were measured in CS:GO Legacy with `snd_showstart`
 //! (docs/FIDELITY.md, "Sound audit"); weapon events use the installed clips.
-//! Everything here is derived from the
-//! simulation's player state, so it works the same for the local player,
-//! bots and (later) networked players.
+//! Tick foley is derived from simulation state. Local knife inspection instead
+//! follows the accepted viewmodel playback on its presentation clock.
 
 use crate::audio::{Emit, SoundLibrary};
 use crate::player::{LocalPlayer, SimWorld};
@@ -93,15 +92,48 @@ struct Queued {
     primary_attack: bool,
 }
 
+#[derive(Default)]
+struct InspectFoley {
+    key: Option<crate::viewmodel::KnifeInspectKey>,
+    queue: Vec<(f32, String)>,
+    last_render: Option<f32>,
+}
+
+impl InspectFoley {
+    fn due(&mut self, receipt: Option<&crate::viewmodel::KnifeInspect>, now: f32)
+        -> Vec<(f32, String)> {
+        if self.last_render.replace(now).is_some_and(|previous| now < previous) {
+            // An old absolute playback cannot survive a presentation reset.
+            // Keep its consumed identity; do not replay it at the new time.
+            self.queue.clear();
+        }
+        let key = receipt.map(|receipt| &receipt.key);
+        if self.key.as_ref() != key {
+            self.queue.clear();
+            self.key = key.cloned();
+            if let Some(receipt) = receipt {
+                self.queue.extend(receipt.sounds.iter().map(|(cycle, entry)|
+                    (receipt.key.started + cycle * receipt.duration, entry.clone())));
+            }
+        }
+        let (due, keep) = self.queue.drain(..).partition(|(at, _)| *at <= now);
+        self.queue = keep;
+        due
+    }
+}
+
 #[derive(Resource, Default)]
 pub struct Foley {
     players: HashMap<sim::PlayerId, PlayerFoley>,
     queue: Vec<Queued>,
     last_tick: Option<(u64, u32)>,
+    inspect: InspectFoley,
     /// Test-only witness of the existing scheduler, including cycle-zero cues
     /// which leave the queue in the same update. No audio device is required.
     #[cfg(test)]
     pub(crate) scheduled: Vec<(sim::PlayerId, String, String, f32)>,
+    #[cfg(test)]
+    pub(crate) inspected: Vec<(String, f32)>,
 }
 
 impl Foley {
@@ -116,6 +148,7 @@ impl Foley {
                 // A new clock cannot continue old absolute animation times.
                 self.players.clear();
                 self.queue.clear();
+                self.inspect.queue.clear();
                 tick_seconds
             }
             None => tick_seconds,
@@ -149,6 +182,41 @@ impl Foley {
         let first = self.queue.len();
         self.schedule(player, weapon, now, duration, events, false);
         for q in &mut self.queue[first..] { q.primary_attack = true; }
+    }
+}
+
+/// Runs after viewmodel dispatch, never on the tick clock. Accepted attacks,
+/// cancellation and viewing boundaries have invalidated the receipt before
+/// any due Inspect cue can play. This queue cannot remove deploy/reload/bolt
+/// cues, and repeating a render timestamp cannot replay a consumed event.
+#[allow(clippy::too_many_arguments)]
+pub fn inspect(
+    mut commands: Commands,
+    world: Res<SimWorld>,
+    local: Res<LocalPlayer>,
+    view_state: Res<ViewModelState>,
+    time: Res<Time>,
+    level: Res<LoadedLevel>,
+    mut sounds: ResMut<SoundLibrary>,
+    mut sources: ResMut<Assets<AudioSource>>,
+    mut foley: ResMut<Foley>,
+) {
+    let receipt = view_state.knife_inspect.as_ref().filter(|receipt|
+        !local.noclip && local.spectating.is_none() && local.id == receipt.key.owner
+            && local.view_target() == receipt.key.owner
+            && world.0.player(receipt.key.owner).is_some_and(|p|
+                p.alive && p.life_epoch == receipt.key.life && p.active_weapon().is_some_and(|w|
+                    w.def.class == weapons::WeaponClass::Knife
+                        && w.def.class_name == receipt.key.weapon && !w.hides_viewmodel())));
+    let due = foley.inspect.due(receipt, time.elapsed_secs());
+    let Some(receipt) = receipt else { return; };
+    let Some(player) = world.0.player(receipt.key.owner) else { return; };
+    for (at, entry) in due {
+        #[cfg(test)]
+        foley.inspected.push((entry.clone(), at));
+        let _ = at;
+        sounds.play_with(&mut commands, &level.0.vfs, &mut sources, &entry,
+            emit_for(player, &local, player.eye()));
     }
 }
 
