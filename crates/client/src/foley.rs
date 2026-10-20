@@ -10,7 +10,7 @@
 use crate::audio::{Emit, SoundLibrary};
 use crate::player::{LocalPlayer, SimWorld};
 use crate::surfaces::SurfaceProps;
-use crate::viewmodel::ViewModels;
+use crate::viewmodel::{ViewModels, ViewModelState};
 use crate::LoadedLevel;
 use bevy::audio::AudioSource;
 use bevy::prelude::*;
@@ -98,6 +98,10 @@ pub struct Foley {
     players: HashMap<sim::PlayerId, PlayerFoley>,
     queue: Vec<Queued>,
     last_tick: Option<(u64, u32)>,
+    /// Test-only witness of the existing scheduler, including cycle-zero cues
+    /// which leave the queue in the same update. No audio device is required.
+    #[cfg(test)]
+    pub(crate) scheduled: Vec<(sim::PlayerId, String, String, f32)>,
 }
 
 impl Foley {
@@ -131,6 +135,8 @@ impl Foley {
 
     fn schedule(&mut self, player: sim::PlayerId, weapon: &str, now: f32, duration: f32, events: &[(f32, String)], reload: bool) {
         for (cycle, entry) in events {
+            #[cfg(test)]
+            self.scheduled.push((player, weapon.to_string(), entry.clone(), now + cycle * duration));
             self.queue.push(Queued { at: now + cycle * duration, player, weapon: weapon.to_string(), entry: entry.clone(), reload, suppressor: None, grenade_pull: None, primary_attack: false });
         }
     }
@@ -185,6 +191,7 @@ pub fn update(
     world: Res<SimWorld>,
     local: Res<LocalPlayer>,
     views: Res<ViewModels>,
+    mut view_state: ResMut<ViewModelState>,
     props: Res<SurfaceProps>,
     level: Res<LoadedLevel>,
     mut sounds: ResMut<SoundLibrary>,
@@ -204,6 +211,15 @@ pub fn update(
             ..PlayerFoley::default()
         });
         let weapon = p.active_weapon().map(|w| w.def.class_name.clone()).unwrap_or_default();
+        // Tick foley may precede the first render of this weapon. Share its
+        // cosmetic choice instead of independently rolling or using draw[0].
+        // Observing every viewed weapon also invalidates an intervening switch
+        // even when rendering never presents that short-lived selection.
+        let selected_draw = if p.id == local.view_target() {
+            view_state.knife_draw_sounds(p, &views)
+        } else { None };
+        let viewed_knife = p.id == local.view_target() && p.active_weapon()
+            .is_some_and(|w| w.def.class == weapons::WeaponClass::Knife);
         // Deploy: the draw sequence's sounds, at its own speed.
         if weapon != st.weapon {
             st.weapon = weapon.clone();
@@ -212,7 +228,10 @@ pub fn update(
             st.suppressor_transition = None;
             foley.queue.retain(|q| q.player != p.id);
             if p.active_weapon().is_none_or(|w| w.suppressor_transition.is_none()) {
-                if let Some((duration, events)) = views.activity_sounds(&weapon, p.active_weapon().map_or("ACT_VM_DRAW", |w| w.draw_activity())) {
+                let draw = if viewed_knife { selected_draw } else {
+                    views.activity_sounds(&weapon, p.active_weapon().map_or("ACT_VM_DRAW", |w| w.draw_activity()))
+                };
+                if let Some((duration, events)) = draw {
                     foley.schedule(p.id, &weapon, now, duration, &events, false);
                 }
             }

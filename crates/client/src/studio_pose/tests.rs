@@ -33,7 +33,7 @@ fn fixture() -> mdl::Model {
     mdl::Model {
         bones, raw: std::sync::Arc::new(raw), animations: vec![decoy, desc],
         sequences: vec![mdl::anim::Sequence {
-            name: "first, not named idle".into(), activity: String::new(), flags: 0,
+            name: "first, not named idle".into(), activity: String::new(), activity_weight: 0, flags: 0,
             anims: vec![1], group_size: [1, 1], param_index: [-1, -1],
             param_start: [0.; 2], param_end: [0.; 2], fade_in: 0., fade_out: 0.,
             bone_weights: vec![1.; 2], events: Vec::new(),
