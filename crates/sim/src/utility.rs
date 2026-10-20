@@ -935,8 +935,8 @@ mod tests {
         }
     }
 
-    fn observed_flash_ground_buttons_launch() -> weapons::GrenadeLaunch {
-        let mut launch = observed_ground_primary_launch("weapon_flashbang");
+    fn observed_ground_buttons_launch(name: &str) -> weapons::GrenadeLaunch {
+        let mut launch = observed_ground_primary_launch(name);
         launch.grounded_underhand_velocity = Some(weapons::GrenadeLaunchVelocity {
             speed: 202.5, upward_pitch_bias_degrees: 10.,
         });
@@ -958,7 +958,7 @@ mod tests {
                 for (pitch, running, native_x) in [(0., false, stationary[0]),
                     (-30., false, stationary[1]), (45., false, stationary[2]), (0., true, moving)] {
                     let (actual, player_velocity) = launch_utility_tick_input("weapon_flashbang", rate, mode,
-                        Some(observed_flash_ground_buttons_launch()), running, false, pitch);
+                        Some(observed_ground_buttons_launch("weapon_flashbang")), running, false, pitch);
                     let (prior, prior_player_velocity) = launch_utility_tick_input("weapon_flashbang", rate, mode,
                         Some(observed_ground_primary_launch("weapon_flashbang")), running, false, pitch);
                     assert_eq!(actual.kind, Kind::Flash);
@@ -975,8 +975,38 @@ mod tests {
     }
 
     #[test]
+    fn remaining_ground_buttons_follow_own_native_vectors_through_tick_input() {
+        // Each kind has its own eight native cases, with identical VX endpoints.
+        for (name, kind) in [("weapon_decoy", Kind::Decoy),
+            ("weapon_molotov", Kind::Molotov), ("weapon_incgrenade", Kind::Incendiary)] {
+            for rate in [64, 128] {
+                for (mode, stationary, moving) in [
+                    (ThrowMode::Underhand, [199.423584, 162.429962, 155.124008], 505.673584),
+                    (ThrowMode::Combined, [432.084351, 351.931519, 336.101959], 738.334351),
+                ] {
+                    for (pitch, running, native_x) in [(0., false, stationary[0]),
+                        (-30., false, stationary[1]), (45., false, stationary[2]), (0., true, moving)] {
+                        let (actual, player_velocity) = launch_utility_tick_input(name, rate, mode,
+                            Some(observed_ground_buttons_launch(name)), running, false, pitch);
+                        let (prior, prior_player_velocity) = launch_utility_tick_input(name, rate, mode,
+                            Some(observed_ground_primary_launch(name)), running, false, pitch);
+                        assert_eq!(actual.kind, kind);
+                        assert_eq!(actual.born, prior.born);
+                        assert_eq!(player_velocity, prior_player_velocity);
+                        assert!((player_velocity.x - if running {245.} else {0.}).abs() < 0.001);
+                        assert!((actual.velocity.x - native_x).abs() < 0.002,
+                            "{name} {rate}Hz {mode:?} pitch={pitch} running={running}");
+                        assert!((actual.pos - prior.pos - (actual.velocity - prior.velocity) / rate as f32).length() < 0.002,
+                            "release time and raw-aim spawn trace stay fixed");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn flash_ground_buttons_preserve_primary_air_missing_modes_and_independent_fallbacks() {
-        let candidate = observed_flash_ground_buttons_launch();
+        let candidate = observed_ground_buttons_launch("weapon_flashbang");
         for rate in [64, 128] {
             for mode in [ThrowMode::Overhand, ThrowMode::Underhand, ThrowMode::Combined] {
                 for jump in [false, true] {
