@@ -1222,6 +1222,24 @@ mod tests {
         }
     }
 
+    // Each HE alternate mode has independently measured air angles and movement controls.
+    fn observed_he_air_buttons_launch() -> weapons::GrenadeLaunch {
+        weapons::GrenadeLaunch {
+            reference: "observed-he-ground-and-air-button-response-128hz".into(),
+            airborne_underhand_velocity: Some(weapons::GrenadeLaunchVelocity {
+                speed: 202.5, upward_pitch_bias_degrees: 10.,
+            }),
+            airborne_underhand_horizontal_inheritance: Some(1.25),
+            airborne_underhand_vertical_inheritance: Some(1.25),
+            airborne_combined_velocity: Some(weapons::GrenadeLaunchVelocity {
+                speed: 438.75, upward_pitch_bias_degrees: 10.,
+            }),
+            airborne_combined_horizontal_inheritance: Some(1.25),
+            airborne_combined_vertical_inheritance: Some(1.25),
+            ..observed_he_air_primary_launch()
+        }
+    }
+
     // Independently qualified Flash primary-air response; alternate air modes stay absent.
     fn observed_flash_air_primary_launch() -> weapons::GrenadeLaunch {
         weapons::GrenadeLaunch {
@@ -1334,61 +1352,70 @@ mod tests {
     fn observed_air_buttons_follow_ordinary_jump_release_with_independent_fallbacks() {
         // Each mode's independent native airborne VX; base VZ is calculated
         // from its qualified angular family, not a normal-gravity age fit.
-        for (mode, raw_speed, observations) in [
-            (ThrowMode::Underhand, 225., [
-                (0., 199.423584, 35.16376),
-                (-30., 162.429962, 120.92462),
-                (45., 155.124008, -130.16449),
-            ]),
-            (ThrowMode::Combined, 487.5, [
-                (0., 432.084351, 76.18813),
-                (-30., 351.931519, 262.00333),
-                (45., 336.101959, -282.02304),
-            ]),
+        for (name, kind, primary, buttons) in [
+            ("weapon_smokegrenade", Kind::Smoke,
+                observed_smoke_air_primary_launch as fn() -> weapons::GrenadeLaunch,
+                observed_smoke_air_buttons_launch as fn() -> weapons::GrenadeLaunch),
+            ("weapon_hegrenade", Kind::He,
+                observed_he_air_primary_launch as fn() -> weapons::GrenadeLaunch,
+                observed_he_air_buttons_launch as fn() -> weapons::GrenadeLaunch),
         ] {
-            for rate in [64, 128] {
-                let dt = 1. / rate as f32;
-                for running in [false, true] {
-                    for (pitch, observed_x, base_z) in observations {
-                        let (prior, player_velocity) = launch_utility_tick_input("weapon_smokegrenade", rate,
-                            mode, Some(observed_smoke_air_primary_launch()), running, true, pitch);
-                        assert!(player_velocity.z > 0., "ordinary standing/running JUMP must be ascending");
-                        if running { assert!((player_velocity.x - 245.).abs() < 0.001); }
-                        else { assert_eq!(player_velocity.truncate(), glam::Vec2::ZERO); }
-                        for components in 0..8 {
-                            let mut profile = observed_smoke_air_buttons_launch();
-                            let (velocity, horizontal, vertical) = match mode {
-                                ThrowMode::Underhand => (&mut profile.airborne_underhand_velocity,
-                                    &mut profile.airborne_underhand_horizontal_inheritance,
-                                    &mut profile.airborne_underhand_vertical_inheritance),
-                                ThrowMode::Combined => (&mut profile.airborne_combined_velocity,
-                                    &mut profile.airborne_combined_horizontal_inheritance,
-                                    &mut profile.airborne_combined_vertical_inheritance),
-                                ThrowMode::Overhand => unreachable!(),
-                            };
-                            if components & 1 == 0 { *velocity = None; }
-                            if components & 2 == 0 { *horizontal = None; }
-                            if components & 4 == 0 { *vertical = None; }
-                            // Primary and the other alternate mode stay populated:
-                            // absent components must never borrow their values.
-                            let (actual, actual_player_velocity) = launch_utility_tick_input("weapon_smokegrenade", rate,
-                                mode, Some(profile), running, true, pitch);
-                            assert_eq!(actual_player_velocity, player_velocity);
-                            let mut expected = if components & 1 != 0 {
-                                Vec3::new(observed_x, 0., base_z)
-                            } else { movement::angle_vectors(Vec3::new(pitch, 0., 0.)).0 * raw_speed };
-                            expected += Vec3::new(
-                                player_velocity.x * if components & 2 != 0 { 1.25 } else { 0.5 },
-                                player_velocity.y * if components & 2 != 0 { 1.25 } else { 0.5 },
-                                player_velocity.z * if components & 4 != 0 { 1.25 } else { 0.5 });
-                            // Undo the first ordinary free-flight gravity tick;
-                            // this does not assert an observed native spawn age.
-                            assert!((actual.velocity + Vec3::Z * 320. * dt - expected).length() < 0.002,
-                                "{mode:?}, {rate}Hz, running={running}, pitch={pitch}, components={components}");
-                            assert!((actual.pos - prior.pos - (actual.velocity - prior.velocity) * dt).length() < 0.002);
-                            assert_eq!(actual.born, prior.born);
-                            assert_eq!(actual.kind, Kind::Smoke);
-                            if components == 0 { assert_eq!(actual, prior); }
+            for (mode, raw_speed, observations) in [
+                (ThrowMode::Underhand, 225., [
+                    (0., 199.423584, 35.16376),
+                    (-30., 162.429962, 120.92462),
+                    (45., 155.124008, -130.16449),
+                ]),
+                (ThrowMode::Combined, 487.5, [
+                    (0., 432.084351, 76.18813),
+                    (-30., 351.931519, 262.00333),
+                    (45., 336.101959, -282.02304),
+                ]),
+            ] {
+                for rate in [64, 128] {
+                    let dt = 1. / rate as f32;
+                    for running in [false, true] {
+                        for (pitch, observed_x, base_z) in observations {
+                            let (prior, player_velocity) = launch_utility_tick_input(name, rate,
+                                mode, Some(primary()), running, true, pitch);
+                            assert!(player_velocity.z > 0., "ordinary standing/running JUMP must be ascending");
+                            if running { assert!((player_velocity.x - 245.).abs() < 0.001); }
+                            else { assert_eq!(player_velocity.truncate(), glam::Vec2::ZERO); }
+                            for components in 0..8 {
+                                let mut profile = buttons();
+                                let (velocity, horizontal, vertical) = match mode {
+                                    ThrowMode::Underhand => (&mut profile.airborne_underhand_velocity,
+                                        &mut profile.airborne_underhand_horizontal_inheritance,
+                                        &mut profile.airborne_underhand_vertical_inheritance),
+                                    ThrowMode::Combined => (&mut profile.airborne_combined_velocity,
+                                        &mut profile.airborne_combined_horizontal_inheritance,
+                                        &mut profile.airborne_combined_vertical_inheritance),
+                                    ThrowMode::Overhand => unreachable!(),
+                                };
+                                if components & 1 == 0 { *velocity = None; }
+                                if components & 2 == 0 { *horizontal = None; }
+                                if components & 4 == 0 { *vertical = None; }
+                                // Primary and the other alternate mode stay populated:
+                                // absent components must never borrow their values.
+                                let (actual, actual_player_velocity) = launch_utility_tick_input(name, rate,
+                                    mode, Some(profile), running, true, pitch);
+                                assert_eq!(actual_player_velocity, player_velocity);
+                                let mut expected = if components & 1 != 0 {
+                                    Vec3::new(observed_x, 0., base_z)
+                                } else { movement::angle_vectors(Vec3::new(pitch, 0., 0.)).0 * raw_speed };
+                                expected += Vec3::new(
+                                    player_velocity.x * if components & 2 != 0 { 1.25 } else { 0.5 },
+                                    player_velocity.y * if components & 2 != 0 { 1.25 } else { 0.5 },
+                                    player_velocity.z * if components & 4 != 0 { 1.25 } else { 0.5 });
+                                // Undo the first ordinary free-flight gravity tick;
+                                // this does not assert an observed native spawn age.
+                                assert!((actual.velocity + Vec3::Z * 320. * dt - expected).length() < 0.002,
+                                    "{name}, {mode:?}, {rate}Hz, running={running}, pitch={pitch}, components={components}");
+                                assert!((actual.pos - prior.pos - (actual.velocity - prior.velocity) * dt).length() < 0.002);
+                                assert_eq!(actual.born, prior.born);
+                                assert_eq!(actual.kind, kind);
+                                if components == 0 { assert_eq!(actual, prior); }
+                            }
                         }
                     }
                 }
@@ -1398,18 +1425,25 @@ mod tests {
 
     #[test]
     fn observed_air_buttons_preserve_ground_modes_and_admitted_primary_air() {
-        for rate in [64, 128] {
-            for running in [false, true] {
-                for pitch in [0., -30., 45.] {
-                    for mode in [ThrowMode::Overhand, ThrowMode::Underhand, ThrowMode::Combined] {
-                        for jump in [false, true] {
-                            if jump && mode != ThrowMode::Overhand { continue; }
-                            assert_eq!(
-                                launch_utility_tick_input("weapon_smokegrenade", rate, mode,
-                                    Some(observed_smoke_air_buttons_launch()), running, jump, pitch),
-                                launch_utility_tick_input("weapon_smokegrenade", rate, mode,
-                                    Some(observed_smoke_air_primary_launch()), running, jump, pitch),
-                                "{rate}Hz, running={running}, pitch={pitch}, mode={mode:?}, jump={jump}");
+        for (name, primary, buttons) in [
+            ("weapon_smokegrenade", observed_smoke_air_primary_launch as fn() -> weapons::GrenadeLaunch,
+                observed_smoke_air_buttons_launch as fn() -> weapons::GrenadeLaunch),
+            ("weapon_hegrenade", observed_he_air_primary_launch as fn() -> weapons::GrenadeLaunch,
+                observed_he_air_buttons_launch as fn() -> weapons::GrenadeLaunch),
+        ] {
+            for rate in [64, 128] {
+                for running in [false, true] {
+                    for pitch in [0., -30., 45.] {
+                        for mode in [ThrowMode::Overhand, ThrowMode::Underhand, ThrowMode::Combined] {
+                            for jump in [false, true] {
+                                if jump && mode != ThrowMode::Overhand { continue; }
+                                assert_eq!(
+                                    launch_utility_tick_input(name, rate, mode,
+                                        Some(buttons()), running, jump, pitch),
+                                    launch_utility_tick_input(name, rate, mode,
+                                        Some(primary()), running, jump, pitch),
+                                    "{name}, {rate}Hz, running={running}, pitch={pitch}, mode={mode:?}, jump={jump}");
+                            }
                         }
                     }
                 }
@@ -1451,6 +1485,43 @@ mod tests {
             ]),
             (ThrowMode::Combined, 432.084351, 738.334351, [
                 (true, 0., 76.188133), (false, 217.618378, 348.211121), (false, 130.118378, 238.836121),
+            ]),
+        ] {
+            // Each native zero-G session reads back gravity=0 and equal player
+            // VZ before/after. No physical projectile age is subtracted.
+            for (grounded, player_vz, observed_z) in controls {
+                let actor = world.player_mut(id).unwrap();
+                actor.movement.on_ground = grounded;
+                actor.movement.velocity = Vec3::Z * player_vz;
+                let actual = World::grenade_launch_velocity(world.player(id).unwrap(),
+                    &definition, Some(mode), Vec3::ZERO);
+                assert!((actual - Vec3::new(observed_x, 0., observed_z)).length() < 0.002);
+            }
+            let actor = world.player_mut(id).unwrap();
+            actor.movement.on_ground = false;
+            actor.movement.velocity = Vec3::new(245., 0., 211.368378);
+            let actual = World::grenade_launch_velocity(world.player(id).unwrap(),
+                &definition, Some(mode), Vec3::ZERO);
+            // Normal-gravity steady-forward VX only; its initial VZ is unknown.
+            assert!((actual.x - moving_x).abs() < 0.002);
+        }
+    }
+
+    #[test]
+    fn he_air_button_modes_match_own_native_constant_vz_and_moving_controls() {
+        let mut world = arena();
+        let id = world.add_player("thrower", Team::Terrorist);
+        let catalog = weapons::Catalog::from_items_game(r#"items_game { items {
+            44 { name weapon_hegrenade attributes { "primary default clip size" 1 } }
+        } }"#).unwrap();
+        let mut definition = catalog.weapons[0].clone();
+        definition.grenade_launch = Some(observed_he_air_buttons_launch());
+        for (mode, observed_x, moving_x, controls) in [
+            (ThrowMode::Underhand, 199.423584, 505.673584, [
+                (true, 0., 35.163757), (false, 223.868378, 314.999237), (false, 123.868378, 189.999237),
+            ]),
+            (ThrowMode::Combined, 432.084351, 738.334351, [
+                (true, 0., 76.188133), (false, 217.618378, 348.211121), (false, 123.868378, 231.023621),
             ]),
         ] {
             // Each native zero-G session reads back gravity=0 and equal player
