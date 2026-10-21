@@ -64,6 +64,67 @@ fn normal_ak_and_m4_reload_released_empty_magazines_and_replay_from_snapshot() {
 fn held() -> TickInput { TickInput { buttons: buttons::ATTACK, ..Default::default() } }
 
 #[test]
+fn magazine_reload_holster_cancels_and_completed_reload_preserves_trigger_mode() {
+    for rate in [64, 128] { for automatic in [false, true] {
+        let class = if automatic { WeaponClass::Rifle } else { WeaponClass::Pistol };
+        let mut gun = def("weapon_pack_magazine", 902, class, Side::Both, 1000, 6);
+        gun.full_auto = automatic;
+        gun.reserve_ammo = 12;
+        let (mut world, id) = equipped(rate, gun);
+        // Keep another slot available without changing the selected gun.
+        let other = world.catalog.get(if automatic { "weapon_hkp2000" } else { "weapon_m4a1" }).unwrap().clone();
+        let other_slot = weapon::slot(&other);
+        world.players[0].weapons.push(WeaponState::new(Arc::new(other)));
+        world.players[0].weapons[0].clip = 2;
+        let reload = TickInput { buttons: buttons::RELOAD, ..Default::default() };
+        world.step(&[(id, reload)]);
+        let cancelled_end = world.players[0].weapons[0].reload_end.unwrap();
+        assert!(world.events.iter().any(|event| matches!(event,
+            GameEvent::Reload { player } if *player == id)));
+
+        world.step(&[(id, TickInput { weapon_slot: other_slot, ..Default::default() })]);
+        assert_eq!(world.players[0].active, 1);
+        // Wait beyond the abandoned deadline: a holstered magazine must
+        // neither finish loading nor consume any reserve ammunition.
+        while world.time() <= cancelled_end + world.dt() {
+            world.step(&[(id, TickInput::default())]);
+        }
+        let gun = &world.players[0].weapons[0];
+        assert_eq!((gun.clip, gun.reserve, gun.reload_end), (2, 12, None));
+        world.step(&[(id, TickInput { weapon_slot: SLOT_LAST, ..Default::default() })]);
+        assert_eq!(world.players[0].active, 0);
+        let ready = world.players[0].weapons[0].next_attack;
+        while world.time() < ready { world.step(&[(id, TickInput::default())]); }
+
+        world.step(&[(id, reload)]);
+        let end = world.players[0].weapons[0].reload_end.unwrap();
+        while world.players[0].weapons[0].reload_end.is_some() {
+            assert!(world.time() <= end + world.dt(), "reload must finish at its deadline");
+            world.step(&[(id, held())]);
+            assert_eq!(world.players[0].shots, 0, "no magazine-reload interruption by firing");
+        }
+        let gun = &world.players[0].weapons[0];
+        assert_eq!((gun.clip, gun.reserve, gun.reload_end), (6, 8, None));
+        for _ in 0..world.ticks(0.25) { world.step(&[(id, held())]); }
+        let shots = world.players[0].shots;
+        if automatic {
+            assert!(shots >= 2, "{rate} Hz: held automatic trigger must resume sustained fire");
+        } else {
+            assert_eq!(shots, 0, "{rate} Hz: a held pistol trigger needs a new press");
+        }
+        let gun = &world.players[0].weapons[0];
+        assert_eq!((gun.clip, gun.reserve), (6 - shots as i32, 8));
+
+        // A released/repressed trigger works after either reload path.
+        let ready = world.players[0].weapons[0].next_attack;
+        world.step(&[(id, TickInput::default())]);
+        while world.time() < ready { world.step(&[(id, TickInput::default())]); }
+        world.step(&[(id, held())]);
+        assert_eq!(world.players[0].shots, shots + 1);
+    } }
+}
+
+#[test]
 fn sustained_actual_fire_spans_one_authored_magazine_without_accumulating_tick_ceil() {
     for rate in [64, 128] {
         let (mut world, id) = rifle(rate);
