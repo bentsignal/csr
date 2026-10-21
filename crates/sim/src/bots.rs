@@ -882,10 +882,10 @@ fn follow_path(
     // Feet may be above the mesh during a jump or on a prop, but being
     // underneath a ledge is not arrival on its upper floor. Match the small
     // below-floor tolerance used by nearest_area's floor preference.
-    let inside = |id: u32| {
+    let in_area = |id: u32, margin: f32| {
         mesh.area(id).is_some_and(|a| {
             let dz = pos.z - a.z_at(pos.x, pos.y);
-            a.contains_xy(pos, -2.0) && (-8.0..120.0).contains(&dz)
+            a.contains_xy(pos, margin) && (-8.0..120.0).contains(&dz)
         })
     };
     let old_failed_count = brain.failed_transitions.len();
@@ -898,6 +898,15 @@ fn follow_path(
     if brain.last_navigation_tick.is_some_and(|tick| world.tick.saturating_sub(tick) > 1) {
         brain.progress_time = time;
         brain.progress_pos = pos;
+        // Combat strafing can leave the cached route. Its old portal is no
+        // longer an approach from this position; retrying it can steer into
+        // walls and eventually blacklist a crossing we never attempted.
+        // Keep routes the normal look-ahead can still advance, including
+        // their boundary seams, and otherwise plan from the current area.
+        if !brain.path.iter().skip(brain.path_index).take(4).any(|&id| in_area(id, 0.0)) {
+            brain.path.clear();
+            brain.path_index = 0;
+        }
     }
     brain.last_navigation_tick = Some(world.tick);
     if goal != brain.goal_area {
@@ -911,7 +920,7 @@ fn follow_path(
     if need_path {
         let start = mesh.nearest_area(pos).map(|a| a.id);
         if let (Some(g), Some(s)) = (goal, start) {
-            if s == g && inside(g) {
+            if s == g && in_area(g, -2.0) {
                 // In the goal area: walk to the exact point, if any.
                 if let Some(p) = point {
                     if (p - pos).truncate().length() > 16.0 {
@@ -960,7 +969,7 @@ fn follow_path(
     // the mesh on a prop, or drop past a small area).
     for ahead in (1..=3).rev() {
         let k = brain.path_index + ahead;
-        if k < brain.path.len() && inside(brain.path[k]) {
+        if k < brain.path.len() && in_area(brain.path[k], -2.0) {
             brain.path_index = k;
             brain.progress_pos = pos;
             brain.progress_time = time;
@@ -1362,6 +1371,63 @@ mod tests {
         brain.path = mesh.find_path(1, 4).unwrap();
         assert_eq!(brain.path, [1, 2, 4]);
         (mesh, world, id, brain)
+    }
+
+    #[test]
+    fn navigation_resumes_from_the_area_reached_during_combat() {
+        let area = |id, x0, y0, x1, y1, connections| nav::Area {
+            id, flags: 0, nw: Vec3::new(x0, y0, 0.), se: Vec3::new(x1, y1, 0.),
+            ne_z: 0., sw_z: 0., connections, place: 0, hiding_spots: vec![],
+        };
+        // Two northern rooms lead east, then south to the goal. Combat may
+        // instead strafe the bot into the southwest room, whose exit is east.
+        let mesh = NavMesh::from_areas(vec![
+            area(1, -128., -128., 0., 0., [vec![], vec![2], vec![], vec![]]),
+            area(2, 0., -128., 128., 0., [vec![], vec![], vec![4], vec![]]),
+            area(3, -128., 0., 0., 128., [vec![], vec![4], vec![], vec![]]),
+            area(4, 0., 0., 128., 128., Default::default()),
+        ]);
+        for rate in [64, 128] {
+            for resumed_pos in [
+                Vec3::new(-64., -64., 0.), // unchanged: reuse the cached path
+                Vec3::new(-1., -64., 0.), // near a seam: the arrival inset is irrelevant
+                Vec3::new(64., -64., 0.), // on the next area: normal advancement still works
+                Vec3::new(-64., 64., 0.), // off-route: replan before moving
+            ] {
+                let (_, mut world, id, mut brain) = stuck_path_fixture();
+                world.set_tick_rate(rate);
+                let start = Vec3::new(-64., -64., 0.);
+                let bot = world.player_mut(id).unwrap();
+                bot.movement.origin = start;
+                bot.movement.on_ground = true;
+                brain.path = mesh.find_path(1, 4).unwrap();
+                brain.goal_area = Some(4);
+                brain.progress_pos = start;
+                let mut rng = Rng::from_parts(&[17]);
+                world.tick = 1;
+                follow_path(&mesh, &world, world.player(id).unwrap(), &mut brain,
+                    &mut TickInput::default(), &mut rng, world.time(), 4., Some(4), None);
+                world.tick = world.ticks(3.0);
+                world.player_mut(id).unwrap().movement.origin = resumed_pos;
+                let mut input = TickInput::default();
+                follow_path(&mesh, &world, world.player(id).unwrap(), &mut brain,
+                    &mut input, &mut rng, world.time(), 4., Some(4), None);
+                let off_route = resumed_pos.y > 0.;
+                assert_eq!(brain.path, if off_route { vec![3, 4] } else { vec![1, 2, 4] },
+                    "resume at {resumed_pos:?}, {rate} Hz");
+                assert_eq!(brain.path_index, if resumed_pos.x > 0. { 1 } else { 0 });
+                assert_eq!(brain.route_searches, if off_route { 1 } else { 0 });
+                assert!(brain.failed_transitions.is_empty(), "combat is not a failed crossing");
+                assert_eq!(input.buttons & buttons::JUMP, 0, "combat is not stuck time");
+                assert_eq!(brain.progress_time, world.time());
+                if off_route {
+                    let (forward, right, _) = movement::angle_vectors(Vec3::new(0., brain.yaw, 0.));
+                    let wish = forward * input.forward_move + right * input.side_move;
+                    assert!(wish.x > 0. && wish.y.abs() < 0.001,
+                        "use the current room's east exit, not the old room's portal: {wish:?}");
+                }
+            }
+        }
     }
 
     #[test]
