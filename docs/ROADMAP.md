@@ -11,8 +11,9 @@
 - [x] Retained classic gun shots, lower local AK masking, compact HUD/kill feed,
   airborne easing, wall/floor footstep attenuation and trimmed loading work
   (#270). Walking coefficients were preserved; final feel remains owner-tested.
-- [ ] Finish the combined fire-intersection, bot navigation, impact/decal and
-  dropped-weapon placement pass, then publish through the same launch entry.
+- [ ] Publish the combined fire-intersection, bot navigation, impact/decal,
+  dropped-weapon placement and prop-loading pass through the same launch entry.
+  Source and focused PLAY checks pass; fire card borders remain a known limit.
 
 > **October 18 follow-up:** implementation approved: classic maps/playability,
 > then movement/viewmodels, hit-audio consistency, then grenades. Grenade feel
