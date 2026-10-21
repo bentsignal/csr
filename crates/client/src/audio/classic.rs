@@ -1,6 +1,8 @@
-//! Retained classic shots with their authored volume and finite distance bounds.
+//! Optional private historical shots, with verified retained-file fallback.
 //! Classic shots keep their declared normal pitch instead of modern resampling.
 //! Historical scripts/assets are never embedded in this module.
+mod historical;
+
 use super::{Entry, decoded_audio};
 use content::{ContentId, ContentKind};
 use sha2::{Digest, Sha256};
@@ -77,9 +79,10 @@ impl ShotMix {
 }
 
 // Shot paths come from the published December 2015 sound declarations. Sizes
-// and SHA256 pin the retained files in Legacy app 4465480, not downloaded audio.
-// Some retained files differ from the 2015 directory CRC/size; those are playable
-// approximations of the declared classic identity, not exact historical bytes.
+// and SHA256 pin the retained fallback files in Legacy app 4465480. The optional
+// private pack has separate verified historical fingerprints in historical.rs.
+// Some retained files differ from the 2015 directory CRC/size; those fallback
+// approximations are only used when a complete historical pair is unavailable.
 // The cached 2015 game_sounds_weapons and sound_operator_stacks declarations
 // supply literal volumes/bounds only. Keep installed limits and the renderer's
 // mixer/curve shape rather than transplanting the historical operator graph.
@@ -258,8 +261,15 @@ impl Profile {
             ..Default::default()
         };
         if era == SoundEra::Classic2015 {
+            // Resource-only packs are explicitly opted into by this profile.
+            // Never mount them into the world's VFS or read them in modern mode.
+            let historical = historical::Historical::open(
+                &packs::Installed::current().dir().join(historical::FILENAME),
+            );
             for spec in STOCK {
-                if let Err(reason) = profile.install(fs, entries, spec) {
+                if let Err(reason) = profile.install_with_historical(
+                    fs, entries, spec, historical.as_ref(),
+                ) {
                     // Fixed identifiers/reasons, at most one diagnostic per stock state.
                     bevy::log::warn!(
                         "Classic2015 {} unavailable: {}; using installed shot",
@@ -272,11 +282,22 @@ impl Profile {
         profile
     }
 
+    #[cfg(test)]
     fn install(
         &mut self,
         fs: &vfs::Vfs,
         entries: &mut HashMap<String, Entry>,
         spec: &WeaponSpec<'_>,
+    ) -> Result<(), &'static str> {
+        self.install_with_historical(fs, entries, spec, None)
+    }
+
+    fn install_with_historical(
+        &mut self,
+        fs: &vfs::Vfs,
+        entries: &mut HashMap<String, Entry>,
+        spec: &WeaponSpec<'_>,
+        historical: Option<&historical::Historical>,
     ) -> Result<(), &'static str> {
         if entries.contains_key(spec.alias)
             || spec
@@ -295,7 +316,16 @@ impl Profile {
         }
         // Validate the complete pair before publishing anything. Never mix a
         // classic near shot with a modern distant waveform after a partial failure.
-        let near_audio = verified_wave(fs, &spec.near_wave)?;
+        let (near_audio, far_audio) = match historical.and_then(|pack| pack.pair(spec).ok()) {
+            Some(pair) => pair,
+            None => {
+                let near = verified_wave(fs, &spec.near_wave)?;
+                let far = spec.distant.as_ref()
+                    .map(|far| verified_wave(fs, &far.wave))
+                    .transpose()?;
+                (near, far)
+            }
+        };
         let distant = if let Some(far) = &spec.distant {
             let mut distant = if let Some(binding) = far.binding {
                 entries.get(binding).cloned().ok_or("installed distant entry missing")?
@@ -308,9 +338,8 @@ impl Profile {
                 entry.limit = None; // Historical partner has no start stack.
                 entry
             };
-            let audio = verified_wave(fs, &far.wave)?;
             distant.waves = vec![far.wave.path.to_string()];
-            distant.frozen_wave = Some(audio);
+            distant.frozen_wave = far_audio;
             distant.pitch = (100.0, 100.0);
             if spec.mix.is_some() {
                 ShotMix::STOCK.apply(&mut distant);
@@ -448,6 +477,125 @@ mod tests {
             ])),
         );
         fs
+    }
+
+    fn private_pack(near: &[u8], far: Option<&[u8]>, origin: &str, wrong_id: bool) -> packs::Pack {
+        let mut inputs = vec![("sound/old_near.wav", near)];
+        if let Some(far) = far {
+            inputs.push(("sound/old_distant.wav", far));
+        }
+        let resources: Vec<_> = inputs.iter().map(|(path, _)| packs::ResourceDef {
+            id: ContentId::new(
+                GameOrigin::from_prefix(origin), ContentKind::Sound,
+                if wrong_id { "wrong" } else { path.strip_prefix("sound/").unwrap() },
+            ).to_string(),
+            path: path.to_string(),
+        }).collect();
+        let manifest = packs::Manifest {
+            format_version: 1,
+            id: "classic_weapon_audio_2015".into(),
+            name: "Synthetic historical audio".into(),
+            version: "1.0.0".into(),
+            origin: origin.into(),
+            kind: packs::PackKind::Assets,
+            provides: resources.iter().map(|r| r.id.clone()).collect(),
+            content_hash: String::new(),
+            min_game_version: "0.0.0".into(),
+            description: String::new(),
+            maps: Vec::new(),
+            resources,
+        };
+        packs::Pack::from_bytes(packs::build(&manifest, &inputs).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn private_historical_pair_replaces_both_retained_waves_without_mutating_public_entries() {
+        let old_near = wav(7000);
+        let old_far = wav(-8000);
+        let near = wav(1000);
+        let far = wav(-2000);
+        let old_near_hash = format!("{:x}", Sha256::digest(&old_near));
+        let old_far_hash = format!("{:x}", Sha256::digest(&old_far));
+        let historical_spec = spec(&old_near_hash, &old_far_hash);
+        let historical = historical::Historical::from_pack(
+            private_pack(&old_near, Some(&old_far), "classic2015", false),
+            &[historical_spec.near_wave, historical_spec.distant.unwrap().wave],
+        ).unwrap();
+        let near_hash = format!("{:x}", Sha256::digest(&near));
+        let far_hash = format!("{:x}", Sha256::digest(&far));
+        let mut entries = entries();
+        let mut profile = Profile::default();
+        profile.install_with_historical(
+            &fs(near, far), &mut entries, &spec(&near_hash, &far_hash), Some(&historical),
+        ).unwrap();
+        assert_eq!(entries["csr.test.near"].frozen_wave.as_ref().unwrap().bytes.as_ref(), old_near);
+        assert_eq!(entries["csr.test.distant"].frozen_wave.as_ref().unwrap().bytes.as_ref(), old_far);
+        assert!(entries["test.single"].frozen_wave.is_none());
+        assert!(entries["test.distant"].frozen_wave.is_none());
+        assert_eq!(profile.select(&ContentId::csgo(ContentKind::Weapon, "ak47"), "Test.Single"), Some("csr.test.near"));
+        assert_eq!(entries["csr.test.near"].pitch, (100.0, 100.0));
+        assert_eq!(entries["csr.test.distant"].pitch, (100.0, 100.0));
+    }
+
+    #[test]
+    fn absent_private_pack_keeps_verified_retained_pair() {
+        let missing = std::env::temp_dir().join(format!(
+            "csr-classic-absent-{}", std::process::id(),
+        )).join(historical::FILENAME);
+        assert!(!missing.exists());
+        let historical = historical::Historical::open(&missing);
+        assert!(historical.is_none());
+        let near = wav(1000);
+        let far = wav(-2000);
+        let near_hash = format!("{:x}", Sha256::digest(&near));
+        let far_hash = format!("{:x}", Sha256::digest(&far));
+        let mut entries = entries();
+        Profile::default().install_with_historical(
+            &fs(near.clone(), far.clone()), &mut entries,
+            &spec(&near_hash, &far_hash), historical.as_ref(),
+        ).unwrap();
+        assert_eq!(entries["csr.test.near"].frozen_wave.as_ref().unwrap().bytes.as_ref(), near);
+        assert_eq!(entries["csr.test.distant"].frozen_wave.as_ref().unwrap().bytes.as_ref(), far);
+    }
+
+    #[test]
+    fn corrupt_or_missing_private_far_falls_back_as_a_complete_retained_pair() {
+        let old_near = wav(7000);
+        let old_far = wav(-8000);
+        let corrupt_far = wav(-7999);
+        let near = wav(1000);
+        let far = wav(-2000);
+        let old_near_hash = format!("{:x}", Sha256::digest(&old_near));
+        let old_far_hash = format!("{:x}", Sha256::digest(&old_far));
+        let near_hash = format!("{:x}", Sha256::digest(&near));
+        let far_hash = format!("{:x}", Sha256::digest(&far));
+        for private_far in [Some(corrupt_far.as_slice()), None] {
+            let historical_spec = spec(&old_near_hash, &old_far_hash);
+            let historical = historical::Historical::from_pack(
+                private_pack(&old_near, private_far, "classic2015", false),
+                &[historical_spec.near_wave, historical_spec.distant.unwrap().wave],
+            ).unwrap();
+            let mut entries = entries();
+            Profile::default().install_with_historical(
+                &fs(near.clone(), far.clone()), &mut entries,
+                &spec(&near_hash, &far_hash), Some(&historical),
+            ).unwrap();
+            assert_eq!(entries["csr.test.near"].frozen_wave.as_ref().unwrap().bytes.as_ref(), near);
+            assert_eq!(entries["csr.test.distant"].frozen_wave.as_ref().unwrap().bytes.as_ref(), far);
+        }
+    }
+
+    #[test]
+    fn valid_pack_with_wrong_namespace_or_resource_identity_is_refused() {
+        let near = wav(1000);
+        let hash = format!("{:x}", Sha256::digest(&near));
+        let spec = spec(&hash, "");
+        for (origin, wrong_id) in [("unrelated", false), ("classic2015", true)] {
+            let pack = private_pack(&near, None, origin, wrong_id);
+            assert!(historical::Historical::from_pack(pack, &[WaveSpec {
+                path: spec.near_wave.path, size: spec.near_wave.size, sha256: &hash,
+            }]).is_err());
+        }
     }
 
     #[test]
