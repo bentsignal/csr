@@ -90,15 +90,15 @@ fn check_shot(weapon: &str, distance: f32, armored: bool, fatal: bool, head: boo
     let victim = world.add_player("victim", sim::Team::CounterTerrorist);
     let def = Arc::new(world.catalog.get(weapon).unwrap().clone());
     let shooter = world.player_mut(attacker).unwrap();
-    shooter.movement = sim::PlayerMove::spawn_at(glam::Vec3::Z);
+    shooter.movement = movement::PlayerMove::spawn_at(glam::Vec3::Z);
     shooter.weapons = vec![sim::weapon::WeaponState::new(def)];
     shooter.active = 0;
     let target = world.player_mut(victim).unwrap();
-    target.movement = sim::PlayerMove::spawn_at(glam::Vec3::new(distance, 0.0, 1.0));
+    target.movement = movement::PlayerMove::spawn_at(glam::Vec3::new(distance, 0.0, 1.0));
     target.health = if fatal { 1 } else { 1000 };
     target.armor = if armored { 100 } else { 0 };
     target.helmet = armored;
-    world.step(&[(attacker, sim::TickInput { buttons: sim::buttons::ATTACK,
+    world.step(&[(attacker, sim::TickInput { buttons: movement::buttons::ATTACK,
         aim: Some(sim::AimRay { origin: glam::Vec3::Z * if head { 64.0 } else { 50.0 },
             direction: glam::Vec3::X }), ..Default::default() })]);
     let expected_group = if head { HitGroup::Head } else { HitGroup::Chest };
@@ -114,7 +114,7 @@ fn check_shot(weapon: &str, distance: f32, armored: bool, fatal: bool, head: boo
     assert_eq!(kill_index.is_some(), fatal);
     if let Some(kill) = kill_index { assert!(damage_index < kill); }
 
-    let mut local = LocalPlayer::new(if perspective == "victim" || feedback { victim }
+    let mut local = LocalPlayer::new(if perspective == "victim" { victim }
         else if matches!(perspective, "bystander" | "spectator") { 99 } else { attacker }, glam::Vec3::ZERO, 0.0);
     local.noclip = perspective == "noclip";
     if perspective == "spectator" { local.spectating = Some(attacker); }
