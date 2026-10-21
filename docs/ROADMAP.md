@@ -16,8 +16,11 @@
   entry (#271). Fire card borders and broader behavior remain unfinished.
 - [x] Correct classic shot pitch and declared mix, make attacker head cues
   audible across the map, and preserve airborne transition velocity (#272).
-- [ ] Deliver the recovered original 2015 sound pairs, improved fire card
-  edges, hidden-surface decal exclusions and combat-displaced bot replanning.
+- [x] Deliver recovered original 2015 sound pairs, prop-loading scratch/output
+  reuse, hidden-surface decal exclusions and combat-displaced bot replanning
+  (#273). Installed arsenal firing/reloading passed at 64/128 Hz.
+- [ ] Remove the remaining fire card boundaries; failed visual experiments were
+  reverted, with targeted layer isolation prepared for the next render pass.
 - [ ] Finish unresolved player outcomes in the approved order; an increment or
   first pass does not finish its backlog category.
 

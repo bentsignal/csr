@@ -13,9 +13,14 @@ October 21: #272 is merged and staged through the same desktop launcher. It
 corrects shot pitch/mix and listener-local attacker head cues, plus interrupted
 airborne easing. Quiet-walk input and weapon speed scaling match existing
 native measurements; saved Shift=crouch and Ctrl=walk are preserved. Original
-2015 waveform recovery succeeded privately; reader/decoder checks select 35
-weapon modes, with revolver fallback. The next combined delivery includes that
-pack and remaining fire/weapon/combat/bot work; it is still being validated.
+2015 waveform recovery is now staged with #273: 67 private original files,
+35 selected weapon modes and revolver fallback. The same delivery includes
+prop-loading allocation/conversion cleanup, hidden-receiver decal exclusions
+and bot replanning after combat displacement. Installed arsenal firing/reload
+checks passed at 64/128 Hz, and bounded ten-player Nuke remained playable.
+Fire card boundaries remain unresolved: the padding/feather/underlay-omission
+experiments did not fix them and were reverted. Continue the targeted layer
+check and the remaining player outcomes; these increments do not end the queue.
 
 ## Active batch and accepted order
 
