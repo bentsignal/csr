@@ -1,4 +1,4 @@
-//! Retained classic shot selection; installed spatial mixing metadata is retained.
+//! Retained classic shots with their authored volume and finite distance bounds.
 //! Classic shots keep their declared normal pitch instead of modern resampling.
 //! Historical scripts/assets are never embedded in this module.
 use super::{Entry, decoded_audio};
@@ -42,20 +42,47 @@ struct WeaponSpec<'a> {
     alias: &'static str,
     near_wave: WaveSpec<'a>,
     distant: Option<DistantSpec<'a>>,
+    mix: Option<ShotMix>,
 }
 
 struct DistantSpec<'a> {
-    binding: &'static str,
+    // None restores a historical partner absent from the installed declarations.
+    binding: Option<&'static str>,
     alias: &'static str,
     wave: WaveSpec<'a>,
+}
+
+#[derive(Clone, Copy)]
+struct ShotMix {
+    volume: f32,
+    falloff_max: Option<f32>,
+}
+
+impl ShotMix {
+    const STOCK: Self = Self { volume: 1.0, falloff_max: Some(3937.0) };
+
+    fn apply(self, entry: &mut Entry) {
+        entry.volume = (self.volume, self.volume);
+        if let Some(max) = self.falloff_max {
+            // Literal CS_update_weapon defaults from the cached shipped 2015
+            // stack. Keep the renderer's fitted curve/floor, not a new DSP model.
+            let mut curve = entry.weapon_falloff.unwrap_or_default();
+            curve.min = 400.0;
+            curve.max = max;
+            curve.curve_amount = 0.7;
+            entry.weapon_falloff = Some(curve);
+            entry.xfade_bounds = (800.0, 2800.0);
+        }
+    }
 }
 
 // Shot paths come from the published December 2015 sound declarations. Sizes
 // and SHA256 pin the retained files in Legacy app 4465480, not downloaded audio.
 // Some retained files differ from the 2015 directory CRC/size; those are playable
 // approximations of the declared classic identity, not exact historical bytes.
-// Keep the installed near/far bindings and mixer rather than transplanting a
-// historical operator graph into newer player-feedback routing.
+// The cached 2015 game_sounds_weapons and sound_operator_stacks declarations
+// supply literal volumes/bounds only. Keep installed limits and the renderer's
+// mixer/curve shape rather than transplanting the historical operator graph.
 // Every selected historical near/distant declaration uses PITCH_NORM (or 100).
 // Modern pitch changes belong to the modern waves: M4A4 uses 120, Dual Berettas
 // 110, distant FAMAS 105 and several pistols add jitter. Applying those to the
@@ -69,6 +96,7 @@ macro_rules! shot {
             alias: concat!("csr.classic2015.", $weapon, ".", $mode),
             near_wave: WaveSpec { path: $path, size: $size, sha256: $hash },
             distant: None,
+            mix: Some(ShotMix::STOCK),
         }
     };
     ($weapon:literal, $binding:literal, $mode:literal,
@@ -76,7 +104,7 @@ macro_rules! shot {
         ($far_binding:literal, $far_path:literal, $far_size:literal, $far_hash:literal)) => {
         WeaponSpec {
             distant: Some(DistantSpec {
-                binding: $far_binding,
+                binding: Some($far_binding),
                 alias: concat!("csr.classic2015.", $weapon, ".", $mode, ".distant"),
                 wave: WaveSpec { path: $far_path, size: $far_size, sha256: $far_hash },
             }),
@@ -98,9 +126,10 @@ const STOCK: &[WeaponSpec<'static>] = &[
     shot!("glock", "Weapon_Glock.Single", "single",
         ("sound/weapons/glock18/glock18-1.wav", 195596, "ec0b1f71d4ff2a56df7c676cfa21b9825eaa9e68071e4e68ffe4b9762e981495"),
         ("weapon_glock.singledistant", "sound/weapons/glock18/glock18-1-distant.wav", 202972, "46f5909a39f11930199429969b5f14148d0590b0815d8817acd5935cd198c75f")),
-    shot!("ak47", "Weapon_AK47.Single", "single",
+    WeaponSpec { mix: Some(ShotMix { volume: 0.7, ..ShotMix::STOCK }),
+        ..shot!("ak47", "Weapon_AK47.Single", "single",
         ("sound/weapons/ak47/ak47-1.wav", 288436, "a504312e586d54332bc42b533242bb7b57ba8704439138a624bf4edc18f71903"),
-        ("weapon_ak47.singledistant", "sound/weapons/ak47/ak47-1-distant.wav", 203206, "260c3237643c74e4950ba2a96d1179228023f9e759235c43e4d1bc34f5ab95b9")),
+        ("weapon_ak47.singledistant", "sound/weapons/ak47/ak47-1-distant.wav", 203206, "260c3237643c74e4950ba2a96d1179228023f9e759235c43e4d1bc34f5ab95b9")) },
     shot!("aug", "Weapon_AUG.Single", "single",
         ("sound/weapons/aug/aug-1.wav", 407788, "b28184046c10ff5d717771a7e877efadc9f59bce4afc95c6b09fbf970cd346ca"),
         ("weapon_aug.singledistant", "sound/weapons/aug/aug-1-distant.wav", 257936, "b70c9151cbde7013dc4ae0ad796df760899b1a00745077270bb2ad1133c1b26e")),
@@ -149,8 +178,9 @@ const STOCK: &[WeaponSpec<'static>] = &[
     shot!("tec9", "Weapon_tec9.Single", "single",
         ("sound/weapons/tec9/tec9-1.wav", 270416, "a2dd44715b23d2d152fec60b203d930efc254d264836982b504b376e07692365"),
         ("weapon_tec9.singledistant", "sound/weapons/tec9/tec9-1-distant.wav", 203206, "fd909ebda3a5a2d512d6701808161cd749df79353f064c70c6bb5390a6a511d6")),
-    shot!("taser", "Weapon_Taser.Single", "single",
-        ("sound/weapons/taser/taser_shoot.wav", 257448, "13125cdb85f84ab71ed3921fa55977288dfcafb8e36a414a83b1420468586748")),
+    WeaponSpec { mix: Some(ShotMix { volume: 1.0, falloff_max: None }),
+        ..shot!("taser", "Weapon_Taser.Single", "single",
+        ("sound/weapons/taser/taser_shoot.wav", 257448, "13125cdb85f84ab71ed3921fa55977288dfcafb8e36a414a83b1420468586748")) },
     shot!("hkp2000", "Weapon_hkp2000.Single", "single",
         ("sound/weapons/hkp2000/hkp2000-1.wav", 371628, "cb2583cd776030758225310911cf1ab18f6540dfa2508a968469f1c8c03d7241"),
         ("weapon_hkp2000.singledistant", "sound/weapons/hkp2000/hkp2000-1-distant.wav", 290358, "d21e30b500130bc0dce69e91083b63280a6d877d885d40e1dacba38b33e5f400")),
@@ -178,13 +208,26 @@ const STOCK: &[WeaponSpec<'static>] = &[
     shot!("m4a1_silencer", "Weapon_M4A1.SilencedSingle", "unsilenced",
         ("sound/weapons/m4a1/m4a1-1-single.wav", 247626, "c05556215073c7a6a9243efe517efdf08362dd22ca89a357cb6dc379309026c3"),
         ("weapon_m4a1.usdistant", "sound/weapons/m4a1/m4a1-1-distant.wav", 23122, "fe23d5c351f5b095437c4326a715693cd380c8e81b1f0f8fa2793a2b9970f80c")),
-    shot!("m4a1_silencer", "Weapon_M4A1.Silenced", "silenced",
-        ("sound/weapons/m4a1/m4a1-1.wav", 44438, "8548c3b0937bf07656c73021439b76a946a4a8bb339b208508af6e916f072195")),
+    WeaponSpec {
+        mix: Some(ShotMix { falloff_max: Some(1377.0), ..ShotMix::STOCK }),
+        distant: Some(DistantSpec {
+            binding: None,
+            alias: "csr.classic2015.m4a1_silencer.silenced.distant",
+            wave: WaveSpec {
+                path: "sound/weapons/m4a1/m4a1-1-distant.wav",
+                size: 23122,
+                sha256: "fe23d5c351f5b095437c4326a715693cd380c8e81b1f0f8fa2793a2b9970f80c",
+            },
+        }),
+        ..shot!("m4a1_silencer", "Weapon_M4A1.Silenced", "silenced",
+        ("sound/weapons/m4a1/m4a1-1.wav", 44438, "8548c3b0937bf07656c73021439b76a946a4a8bb339b208508af6e916f072195"))
+    },
     shot!("usp_silencer", "Weapon_USP.Single", "unsilenced",
         ("sound/weapons/usp/usp_unsil-1.wav", 196608, "3176347649f491669d715dd325eb40a6f69884245af7c3757cbf18d6d07e510f"),
         ("weapon_usp.singledistant", "sound/weapons/usp/usp_unsil-1-distant.wav", 173596, "a4605b061f28a9101a0d3f265377d35dee290808135c2ae8b9e7f03884689cfb")),
-    shot!("usp_silencer", "Weapon_USP.SilencedShot", "silenced",
-        ("sound/weapons/usp/usp1.wav", 45830, "7ec5f84a2c36ea263b71571b7ee548833fd66dca8e81336032e0214084fa5c0a")),
+    WeaponSpec { mix: Some(ShotMix { falloff_max: Some(1378.0), ..ShotMix::STOCK }),
+        ..shot!("usp_silencer", "Weapon_USP.SilencedShot", "silenced",
+        ("sound/weapons/usp/usp1.wav", 45830, "7ec5f84a2c36ea263b71571b7ee548833fd66dca8e81336032e0214084fa5c0a")) },
     shot!("cz75a", "Weapon_CZ75A.Single", "single",
         ("sound/weapons/cz75a/cz75a-1.wav", 247542, "015a8969485640892238a8c29d978b4412483011a3cb48e71ac43295d3b7d77b"),
         ("weapon_cz75a.singledistant", "sound/weapons/cz75a/cz75a-1-distant.wav", 191940, "9b5d41885f0031c73c626f978cd279e115cd2f3c65e56c95251b57c7c80820ad")),
@@ -247,31 +290,47 @@ impl Profile {
             .get(&spec.binding.to_ascii_lowercase())
             .cloned()
             .ok_or("installed shot entry missing")?;
-        if near.distant.as_deref() != spec.distant.as_ref().map(|d| d.binding) {
+        if near.distant.as_deref() != spec.distant.as_ref().and_then(|d| d.binding) {
             return Err("installed distant binding differs");
         }
         // Validate the complete pair before publishing anything. Never mix a
         // classic near shot with a modern distant waveform after a partial failure.
         let near_audio = verified_wave(fs, &spec.near_wave)?;
-        let distant = if let Some(spec) = &spec.distant {
-            let mut distant = entries
-                .get(spec.binding)
-                .cloned()
-                .ok_or("installed distant entry missing")?;
-            let audio = verified_wave(fs, &spec.wave)?;
-            distant.waves = vec![spec.wave.path.to_string()];
+        let distant = if let Some(far) = &spec.distant {
+            let mut distant = if let Some(binding) = far.binding {
+                entries.get(binding).cloned().ok_or("installed distant entry missing")?
+            } else {
+                // Suppressed M4's historical partner has verified retained bytes
+                // but no modern entry. Reuse the weapon voice shape, then bind
+                // its declared far literals; do not borrow another gun's mixer.
+                let mut entry = near.clone();
+                entry.soundlevel = 94.0;
+                entry.limit = None; // Historical partner has no start stack.
+                entry
+            };
+            let audio = verified_wave(fs, &far.wave)?;
+            distant.waves = vec![far.wave.path.to_string()];
             distant.frozen_wave = Some(audio);
             distant.pitch = (100.0, 100.0);
-            // Retain the measured current mixer/limits; era-specific DSP is unknown.
+            if spec.mix.is_some() {
+                ShotMix::STOCK.apply(&mut distant);
+            }
+            distant.explicit_near_fade = false;
             distant.distant = None;
             distant.distant_layer = true;
-            Some((spec.alias, distant))
+            Some((far.alias, distant))
         } else {
             None
         };
         near.waves = vec![spec.near_wave.path.to_string()];
         near.frozen_wave = Some(near_audio);
         near.pitch = (100.0, 100.0);
+        if let Some(mix) = spec.mix {
+            mix.apply(&mut near);
+            if mix.falloff_max.is_some() {
+                near.explicit_near_fade = true;
+            }
+        }
         near.distant = distant.as_ref().map(|(alias, _)| alias.to_string());
         entries.insert(spec.alias.to_string(), near);
         if let Some((alias, entry)) = distant {
@@ -301,7 +360,8 @@ impl Profile {
     /// Same-wave native PCM supports lowering the modern 0.9 local response;
     /// this declared response is a playable approximation, not a calibrated
     /// speaker-output match. Do not multiply another FirstWeapons mixer gain.
-    /// World shots, distant layers and player feedback retain installed mixing.
+    /// This replaces the local gain rather than multiplying the authored volume;
+    /// world shots/distant layers use their own literals, feedback stays separate.
     pub(super) fn local_gain(&self, entry: &str) -> Option<f32> {
         let alias = self.select(
             &ContentId::csgo(ContentKind::Weapon, "ak47"),
@@ -366,7 +426,7 @@ mod tests {
                 sha256: near,
             },
             distant: Some(DistantSpec {
-                binding: "test.distant",
+                binding: Some("test.distant"),
                 alias: "csr.test.distant",
                 wave: WaveSpec {
                     path: "sound/old_distant.wav",
@@ -374,6 +434,7 @@ mod tests {
                     sha256: distant,
                 },
             }),
+            mix: None,
         }
     }
 
@@ -419,7 +480,7 @@ mod tests {
     }
 
     #[test]
-    fn classic_ak_local_balance_does_not_change_world_or_public_entry_gains() {
+    fn classic_ak_local_balance_survives_authored_world_volume() {
         use bevy::{audio::AudioSource, ecs::world::CommandQueue, prelude::*};
         use super::super::{Emit, Emitter, SoundGain, SoundLibrary};
         let near = wav(1000);
@@ -437,6 +498,7 @@ mod tests {
         let mut profile = Profile::default();
         let mut spec = spec(&near_hash, &far_hash);
         spec.binding = "Weapon_AK47.Single";
+        spec.mix = STOCK.iter().find(|s| s.weapon == "ak47").unwrap().mix;
         profile.install(&fs, &mut entries, &spec).unwrap();
         let mut library = SoundLibrary { entries, classic: profile, ..Default::default() };
         let mut world = World::new();
@@ -457,15 +519,68 @@ mod tests {
         let voice = |owner| library.playing.iter()
             .find(|p| p.owner == owner && p.entry != "csr.test.distant").unwrap().entity;
         assert!((world.get::<SoundGain>(voice(1)).unwrap().0 - 0.385).abs() < 1e-6);
-        for owner in [2, 3] {
-            assert_eq!(world.get::<SoundGain>(voice(owner)).unwrap().0, 0.9);
-        }
+        assert_eq!(world.get::<SoundGain>(voice(2)).unwrap().0, 0.7);
+        assert_eq!(world.get::<SoundGain>(voice(3)).unwrap().0, 0.9);
         let emitter = world.get::<Emitter>(voice(4)).unwrap();
-        assert_eq!(emitter.base, 0.9 * super::super::Category::Weapon.field());
+        assert_eq!(emitter.base, 0.7 * super::super::Category::Weapon.field());
         assert!(emitter.gunfire.is_some());
         assert_eq!(library.entries["weapon_ak47.single"].volume, (0.9, 0.9));
-        assert_eq!(library.entries["csr.test.distant"].volume, (0.2, 0.2));
+        assert_eq!(library.entries["csr.test.distant"].volume, (1.0, 1.0));
         assert_eq!(Profile::default().local_gain("csr.test.near"), None);
+    }
+
+    #[test]
+    fn historical_m4_pair_restores_literals_atomically_without_a_modern_far_entry() {
+        let stock = STOCK.iter().find(|s| s.binding == "Weapon_M4A1.Silenced").unwrap();
+        let far = stock.distant.as_ref().unwrap();
+        assert!(far.binding.is_none());
+        assert_eq!(far.wave.path, "sound/weapons/m4a1/m4a1-1-distant.wav");
+        let near = wav(1000);
+        let distant = wav(-2000);
+        let near_hash = format!("{:x}", Sha256::digest(&near));
+        let distant_hash = format!("{:x}", Sha256::digest(&distant));
+        let fixture = spec(&near_hash, &distant_hash);
+        let spec = WeaponSpec {
+            weapon: stock.weapon, binding: "Test.Single", alias: stock.alias,
+            mix: stock.mix, near_wave: fixture.near_wave,
+            distant: Some(DistantSpec {
+                binding: far.binding, alias: far.alias,
+                wave: fixture.distant.unwrap().wave,
+            }),
+        };
+        for corrupt_far in [false, true] {
+            let fs = fs(near.clone(), if corrupt_far { wav(-1999) } else { distant.clone() });
+            let mut entries = entries();
+            entries.remove("test.distant");
+            let installed = entries.get_mut("test.single").unwrap();
+            installed.distant = None;
+            installed.weapon_falloff.as_mut().unwrap().max = 800.0;
+            installed.weapon_falloff.as_mut().unwrap().curve_amount = 0.9;
+            installed.xfade_bounds = (800.0, 1500.0);
+            let mut profile = Profile::default();
+            assert_eq!(profile.install(&fs, &mut entries, &spec).is_ok(), !corrupt_far);
+            assert_eq!(entries["test.single"].volume, (0.9, 0.9));
+            assert_eq!(entries["test.single"].xfade_bounds, (800.0, 1500.0));
+            assert!(entries["test.single"].distant.is_none());
+            if corrupt_far {
+                assert_eq!(entries.len(), 1);
+                assert!(profile.selections.is_empty());
+                continue;
+            }
+            for (alias, max) in [(stock.alias, 1377.0), (far.alias, 3937.0)] {
+                let entry = &entries[alias];
+                assert_eq!(entry.volume, (1.0, 1.0));
+                let curve = entry.weapon_falloff.unwrap();
+                assert_eq!((curve.min, curve.max, curve.curve_amount), (400.0, max, 0.7));
+                assert_eq!(entry.xfade_bounds, (800.0, 2800.0));
+                assert_eq!(entry.pitch, (100.0, 100.0));
+            }
+            assert_eq!(entries[stock.alias].distant.as_deref(), Some(far.alias));
+            assert!(entries[stock.alias].explicit_near_fade);
+            assert!(entries[far.alias].distant_layer);
+            assert_eq!(entries[far.alias].soundlevel, 94.0);
+            assert_eq!(entries[far.alias].limit, None);
+        }
     }
 
     #[test]
