@@ -907,10 +907,21 @@ fn smoke_test(
             l.latched |= movement::buttons::RELOAD;
         }
     }
-    if *frame==capture_frame.saturating_sub(90) {
+    // Isolation cases use a fixed field birth and spawn time, independent of
+    // render-frame pacing. A sim-time capture cannot use capture_frame - 90:
+    // capture_frame is unknown until the requested sim time has already arrived.
+    let isolated_fire = std::env::var("CSR_TEST_UTILITY").ok()
+        .is_some_and(|kind| utility_fx::isolated_fire_layer(&kind).is_some());
+    let utility_fixture_due = if isolated_fire {
+        world.as_ref().is_some_and(|w| w.0.time() >= 0.5
+            && !w.0.utility_fields.iter().any(|f| f.id == 999999))
+    } else {
+        *frame == capture_frame.saturating_sub(90)
+    };
+    if utility_fixture_due {
         if let (Some(w),Some(l),Ok(kind))=(world.as_mut(),local.as_ref(),std::env::var("CSR_TEST_UTILITY")) {
             let (forward,_,_)=movement::angle_vectors(glam::Vec3::new(0.0,l.yaw,0.0));
-            let now=w.0.time();
+            let now=if isolated_fire {0.5} else {w.0.time()};
             // A decoy shell is much smaller than the smoke/fire field fixtures.
             // Keep its snapshot-only fixture on clear nearby floor, at the
             // projectile hull's two-unit rest height, for readable inspection.
@@ -919,7 +930,7 @@ fn smoke_test(
                 + if kind=="decoy" {glam::Vec3::Z*2.0} else {glam::Vec3::ZERO};
             if kind=="he" {w.0.projectiles.push(sim::utility::Projectile{id:999998,owner:l.id,kind:sim::utility::Kind::He,pos:pos+glam::Vec3::Z*3.0,velocity:glam::Vec3::ZERO,settled:false,born:now-2.0,decoy_weapon:None});}
             else if kind=="flash" {if let Some(p)=w.0.player_mut(l.view_target()){p.flash_until=now+5.0;}}
-            else {w.0.utility_fields.push(sim::utility::Field{id:999999,owner:l.id,kind:match kind.as_str(){"fire"=>sim::utility::Kind::Molotov,"decoy"=>sim::utility::Kind::Decoy,_=>sim::utility::Kind::Smoke},pos,born:now-1.0,until:now+20.0,decoy_weapon:None});}
+            else {w.0.utility_fields.push(sim::utility::Field{id:999999,owner:l.id,kind:match kind.as_str(){"fire"|"fire-center"|"fire-fancy"|"fire-child"=>sim::utility::Kind::Molotov,"decoy"=>sim::utility::Kind::Decoy,_=>sim::utility::Kind::Smoke},pos,born:now-1.0,until:now+20.0,decoy_weapon:None});}
         }
     }
     if *frame == capture_frame {
