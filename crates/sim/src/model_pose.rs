@@ -89,7 +89,16 @@ impl Sample {
             || self.last_fire_tick != next.last_fire_tick
             || self.input.reload_progress.is_some() != next.input.reload_progress.is_some()
         {
-            return self;
+            let mut held = self;
+            // Gesture/stance changes do not stop time within the same flight.
+            // Holding this clock while the actor's transform interpolates makes
+            // airborne legs pause on every shot (or crouch/reload transition).
+            // Keep takeoff/landing discrete so no later flight is shown early.
+            if !self.input.on_ground && !next.input.on_ground {
+                held.input.air_time =
+                    self.input.air_time + (next.input.air_time - self.input.air_time) * t;
+            }
+            return held;
         }
         let mut value = self;
         let lerp = |a: f32, b: f32| a + (b - a) * t;
@@ -107,6 +116,69 @@ impl Sample {
         let delta = (next.move_cycle - self.move_cycle + 0.5).rem_euclid(1.) - 0.5;
         value.move_cycle = (self.move_cycle + delta * t).rem_euclid(1.);
         value
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn airborne() -> Sample {
+        Sample {
+            input: AnimInput {
+                speed: 130.,
+                move_yaw: 0.,
+                on_ground: false,
+                ducked: false,
+                pitch: 0.,
+                class: weapons::WeaponClass::Rifle,
+                time_since_fire: 0.2,
+                reload_progress: None,
+                air_time: 0.25,
+            },
+            move_cycle: 0.3,
+            last_fire_tick: Some(1),
+        }
+    }
+
+    #[test]
+    fn airborne_clock_continues_while_later_animation_events_are_held() {
+        for rate in [64, 128] {
+            let older = airborne();
+            for event in 0..4 {
+                let mut newer = older;
+                newer.input.air_time += 4. / rate as f32;
+                match event {
+                    0 => {
+                        newer.last_fire_tick = Some(5);
+                        newer.input.time_since_fire = 0.;
+                    }
+                    1 => newer.input.ducked = true,
+                    2 => newer.input.class = weapons::WeaponClass::Pistol,
+                    _ => newer.input.reload_progress = Some(0.),
+                }
+                for alpha in [0., 0.25, 0.5, 0.75] {
+                    let mut expected = older;
+                    expected.input.air_time += (4. / rate as f32) * alpha;
+                    assert_eq!(older.interpolate(newer, alpha), expected);
+                }
+                assert_eq!(older.interpolate(newer, 1.), newer);
+            }
+        }
+    }
+
+    #[test]
+    fn ground_transitions_hold_the_clock_until_their_frame() {
+        let air = airborne();
+        let mut ground = air;
+        ground.input.on_ground = true;
+        ground.input.air_time = 0.;
+        for (older, newer) in [(ground, air), (air, ground)] {
+            for alpha in [0., 0.25, 0.5, 0.75] {
+                assert_eq!(older.interpolate(newer, alpha), older);
+            }
+            assert_eq!(older.interpolate(newer, 1.), newer);
+        }
     }
 }
 

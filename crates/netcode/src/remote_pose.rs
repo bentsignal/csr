@@ -415,6 +415,51 @@ mod tests {
     }
 
     #[test]
+    fn airborne_shot_keeps_pose_clock_on_the_interpolated_transform_timeline() {
+        for rate in [64, 128] {
+            let (mut world, id) = world();
+            world.set_tick_rate(rate);
+            world.tick = rate as u64;
+            let actor = &mut world.players[0];
+            actor.movement.on_ground = false;
+            actor.movement.origin = Vec3::ZERO;
+            actor.animation.air_time = 0.25;
+            let mut history = history(rate);
+            history.push(&world.state()).unwrap();
+
+            world.tick += 4;
+            let actor = &mut world.players[0];
+            actor.movement.origin = Vec3::new(8., 0., 4.);
+            actor.animation.air_time += 4. / rate as f32;
+            actor.animation.last_fire_tick = Some(world.tick);
+            let before = world.state();
+            history.push(&before).unwrap();
+            for offset in [1., 2., 3.] {
+                let sample = history
+                    .sample(id, (world.tick - 4) as f64 + offset)
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(sample.mode, SampleMode::Interpolated);
+                assert_eq!(
+                    sample.pose.origin,
+                    Vec3::new(2., 0., 1.) * offset as f32
+                );
+                assert_eq!(
+                    sample.pose.animation.input.air_time,
+                    0.25 + offset as f32 / rate as f32
+                );
+                assert_eq!(sample.pose.animation.last_fire_tick, None);
+            }
+            assert_eq!(
+                history.sample(id, world.tick as f64).unwrap().unwrap()
+                    .pose.animation.last_fire_tick,
+                Some(world.tick)
+            );
+            assert_eq!(world.state(), before);
+        }
+    }
+
+    #[test]
     fn invalid_animation_snapshots_do_not_replace_the_sampled_history() {
         let (mut world, _) = world(); let mut history = history(128);
         history.push(&world.state()).unwrap(); world.tick = 4;
