@@ -196,6 +196,21 @@ fn surface_directional_light(
 }
 
 type SurfaceKey = ([u32; 3], [u32; 3]);
+type PendingSurface<T> = (SurfaceKey, glam::Vec3, glam::Vec3, T);
+
+/// Cache the exact data mesh assembly consumes, including half-float packing.
+/// Seam duplicates need neither another conversion nor another light evaluation.
+#[derive(Clone, Copy, Default)]
+struct DirectionalSample {
+    color: glam::Vec3,
+    packed: [[u32; 4]; 3],
+}
+
+impl DirectionalSample {
+    fn new(light: PropLight, normal: glam::Vec3) -> Self {
+        Self { color: light.eval(normal), packed: irradiance::pack(&light) }
+    }
+}
 
 fn surface_key(position: glam::Vec3, normal: glam::Vec3) -> SurfaceKey {
     (position.to_array().map(f32::to_bits), normal.to_array().map(f32::to_bits))
@@ -208,6 +223,7 @@ fn surface_key(position: glam::Vec3, normal: glam::Vec3) -> SurfaceKey {
 #[allow(clippy::too_many_arguments)]
 fn prepare_surface_lighting<'a, T: Copy + Send, F>(
     cache: &mut HashMap<SurfaceKey, T>,
+    pending: &mut Vec<PendingSurface<T>>,
     mesh: &mdl::Mesh,
     prop: &bsp::StaticProp,
     rot: glam::Mat3,
@@ -226,7 +242,7 @@ fn prepare_surface_lighting<'a, T: Copy + Send, F>(
     // single-pass path. Query workspaces are allocated lazily and die with spawn.
     let Some(pool) = pool.filter(|p| p.thread_num() > 1) else { return; };
     if mesh.vertices.len() < MIN_SAMPLES_PER_TASK * 2 { return; }
-    let mut pending = Vec::new();
+    pending.clear();
     for v in &mesh.vertices {
         let position = prop.origin + rot * (v.position * scale);
         let normal = (rot * v.normal).normalize_or_zero();
@@ -241,7 +257,7 @@ fn prepare_surface_lighting<'a, T: Copy + Send, F>(
     if pending.is_empty() { return; }
     let tasks = (pending.len() / MIN_SAMPLES_PER_TASK).clamp(1, pool.thread_num().min(MAX_TASKS));
     if tasks == 1 {
-        for (_, position, normal, result) in &mut pending {
+        for (_, position, normal, result) in pending.iter_mut() {
             *result = calculate(&mut queries[0], *position, *normal);
         }
     } else {
@@ -260,7 +276,7 @@ fn prepare_surface_lighting<'a, T: Copy + Send, F>(
             }
         });
     }
-    for (key, _, _, result) in pending {
+    for (key, _, _, result) in pending.drain(..) {
         *cache.get_mut(&key).expect("reserved surface sample") = result;
     }
 }
@@ -385,6 +401,8 @@ pub fn spawn(
 
     // One material per resolved VMT, shared by every prop that uses it.
     let mut material_cache: HashMap<String, Option<Handle<WorldMaterial>>> = HashMap::new();
+    // Resolve search paths only once per model texture, including rejected VMTs.
+    let mut model_materials: HashMap<(u16, usize), Option<Handle<WorldMaterial>>> = HashMap::new();
     let mut batches: HashMap<(AssetId<WorldMaterial>, bool, [i32; 3], bool), (Handle<WorldMaterial>, Batch)> = HashMap::new();
 
     // Six ambient faces, Sun direction/color, then per-instance diffuse tint.
@@ -399,6 +417,13 @@ pub fn spawn(
     // Bounded map-load query workspaces; gameplay keeps the normal grid.
     let mut lighting_queries = vec![collision.prepare_prop_lighting()];
     let lighting_pool = ComputeTaskPool::try_get().map(|pool| &**pool);
+    // Retain peak-instance/mesh capacity only until this map's spawn finishes.
+    // Clear both caches per instance: positions alone do not encode the owner
+    // excluded from occlusion or the instance's missing-leaf fallback cube.
+    let mut surface_cache = HashMap::<SurfaceKey, glam::Vec3>::new();
+    let mut directional_cache = HashMap::<SurfaceKey, DirectionalSample>::new();
+    let mut surface_pending = Vec::new();
+    let mut directional_pending = Vec::new();
     for (prop_index, prop) in bsp.static_props.props.iter().enumerate() {
         let Some(Some((model, flips))) = models.get(&prop.model) else { continue };
         let authored = vertex_lighting::load(level, prop_index, model);
@@ -408,10 +433,10 @@ pub fn spawn(
         let light = prop_light(bsp, &mut lighting_queries[0], sun, center, prop, prop_index);
         // Exact geometric duplicates at UV/material seams share the query.
         // No spatial quantization: neighboring vertices can straddle a shadow
-        // or leaf boundary. The cache dies with this placed instance, so another
-        // instance of the same model cannot reuse its lighting/occlusion.
-        let mut surface_cache = HashMap::<SurfaceKey, glam::Vec3>::new();
-        let mut directional_cache = HashMap::<SurfaceKey, PropLight>::new();
+        // or leaf boundary. Clear between placed instances so another instance
+        // of the same model cannot reuse its lighting/occlusion.
+        surface_cache.clear();
+        directional_cache.clear();
         let cube = irradiance::CUBE_ORDER.map(|i| light.cube[i].extend(1.0));
         // Opacity changes need separate native admission and material modes.
         // Unsupported layouts/alpha retain the previous identity modulation.
@@ -445,11 +470,10 @@ pub fn spawn(
 
         for (mesh_index, (mesh, &flip)) in model.meshes.iter().zip(flips).enumerate() {
             let tex = model.skin_texture(prop.skin.max(0) as usize, mesh.material);
-            let candidates = model.material_candidates(tex);
-            let key = candidates.first().cloned().unwrap_or_default();
-            let material = material_cache
-                .entry(key)
-                .or_insert_with(|| {
+            let material = model_materials.entry((prop.model, tex)).or_insert_with(|| {
+                let candidates = model.material_candidates(tex);
+                let key = candidates.first().cloned().unwrap_or_default();
+                material_cache.entry(key).or_insert_with(|| {
                     let vmt = candidates.iter().find_map(|c| vmt::Material::load(c, &read));
                     // Unsupported water/refraction effects otherwise become
                     // opaque white geometry. Omit their visual mesh until the
@@ -459,8 +483,8 @@ pub fn spawn(
                     }
                     stats.materials += 1;
                     Some(materials.add(material_from_vmt(vmt.as_ref(), fs, textures, images, shared, exposure, false)))
-                })
-                .clone();
+                }).clone()
+            }).clone();
             let Some(material) = material else { continue; };
             if let Some(m) = materials.get(&material).filter(|m| m.params.flags & crate::material::flags::DETAIL != 0) {
                 detail_meshes += 1;
@@ -493,21 +517,22 @@ pub fn spawn(
                     colors.len(), bsp.static_props.models[prop.model as usize]);
             }
             if spatial_fallback {
-                prepare_surface_lighting(&mut surface_cache, mesh, prop, rot, scale, glam::Vec3::ZERO,
+                prepare_surface_lighting(&mut surface_cache, &mut surface_pending, mesh, prop, rot, scale, glam::Vec3::ZERO,
                     collision, &mut lighting_queries, lighting_pool, |query, position, normal|
                         surface_light(bsp, query, sun, &light, position, normal, prop_index));
             } else if directional_fallback {
-                prepare_surface_lighting(&mut directional_cache, mesh, prop, rot, scale, light,
+                prepare_surface_lighting(&mut directional_cache, &mut directional_pending, mesh, prop, rot, scale, DirectionalSample::default(),
                     collision, &mut lighting_queries, lighting_pool, |query, position, normal|
-                        surface_directional_light(bsp, query, sun, &light, position, normal, prop_index));
+                        DirectionalSample::new(surface_directional_light(bsp, query, sun, &light, position, normal, prop_index), normal));
             }
             let (_, batch) = batches
                 .entry((material.id(), in_sky.is_some(), crate::world_mesh::spatial_cell(prop.origin), directional_fallback))
                 .or_insert_with(|| (material.clone(), Batch::default()));
             let base = batch.positions.len() as u32;
+            let tangents = tangent_cache.get(&(prop.model, mesh_index));
             for (vertex_index, v) in mesh.vertices.iter().enumerate() {
                 let n_source = (rot * v.normal).normalize_or_zero();
-                let tangent = tangent_cache.get(&(prop.model, mesh_index)).and_then(|t| t.get(vertex_index)).copied().unwrap_or([1.0,0.0,0.0,1.0]);
+                let tangent = tangents.and_then(|t| t.get(vertex_index)).copied().unwrap_or([1.0,0.0,0.0,1.0]);
                 let t = to_bevy(rot * glam::Vec3::new(tangent[0], tangent[1], tangent[2]));
                 batch.tangents.push([t.x,t.y,t.z,tangent[3]]);
                 let lit = if let Some(colors) = authored_colors {
@@ -523,13 +548,13 @@ pub fn spawn(
                     let position = prop.origin + rot * (v.position * scale);
                     let key = surface_key(position, n_source);
                     let surface = directional_cache.entry(key).or_insert_with(||
-                        surface_directional_light(bsp, &mut lighting_queries[0], sun, &light, position, n_source, prop_index));
-                    for (values, packed) in batch.irradiance.iter_mut().zip(irradiance::pack(surface)) {
+                        DirectionalSample::new(surface_directional_light(bsp, &mut lighting_queries[0], sun, &light, position, n_source, prop_index), n_source));
+                    for (values, packed) in batch.irradiance.iter_mut().zip(surface.packed) {
                         values.push(packed);
                     }
                     // Retain the color stream/layout; the directional shader
                     // replaces it once, after perturbing the normal.
-                    surface.eval(n_source)
+                    surface.color
                 } else {
                     light.eval(n_source)
                 };
@@ -552,6 +577,7 @@ pub fn spawn(
     }
 
     drop(lighting_queries);
+    drop((surface_cache, directional_cache, surface_pending, directional_pending));
 
     use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
     let lighting = images.add(Image::new(
@@ -689,46 +715,58 @@ mod lighting_tests {
         // UV/material seam duplicates must not become extra parallel queries.
         mesh.vertices.extend(mesh.vertices.clone());
         let mut queries = vec![w.prepare_prop_lighting()];
+        let mut plain_cache = HashMap::new();
+        let mut directional_cache = HashMap::new();
+        let mut plain_pending = Vec::new();
+        let mut directional_pending = Vec::new();
         let mut previous_instance = None;
         for (ordinal, prop) in map.static_props.props.iter().enumerate() {
             let rot = mdl::angles_to_mat3(prop.angles);
             let scale = 1.25;
+            // Different placed meshes may meet at exactly the same world
+            // samples. Keep these points identical while changing the owner
+            // excluded from the Sun ray, so stale instance data is detectable.
+            let mut placed_mesh = mesh.clone();
+            for v in &mut placed_mesh.vertices {
+                v.position -= prop.origin / scale;
+            }
             let center = prop.origin;
             let light = prop_light(&map, &mut queries[0], Some(SUN), center, prop, ordinal);
-            let mut plain_cache = HashMap::new();
-            let mut directional_cache = HashMap::new();
+            plain_cache.clear();
+            directional_cache.clear();
             let calls = AtomicUsize::new(0);
             // The second pass represents a later mesh of the same instance.
             for _ in 0..2 {
-                prepare_surface_lighting(&mut plain_cache, &mesh, prop, rot, scale, SourceVec3::ZERO,
+                prepare_surface_lighting(&mut plain_cache, &mut plain_pending, &placed_mesh, prop, rot, scale, SourceVec3::ZERO,
                     &w, &mut queries, Some(&pool), |query, position, normal| {
                         calls.fetch_add(1, Ordering::Relaxed);
                         surface_light(&map, query, Some(SUN), &light, position, normal, ordinal)
                     });
-                prepare_surface_lighting(&mut directional_cache, &mesh, prop, rot, scale, light,
+                prepare_surface_lighting(&mut directional_cache, &mut directional_pending, &placed_mesh, prop, rot, scale, DirectionalSample::default(),
                     &w, &mut queries, Some(&pool), |query, position, normal| {
                         calls.fetch_add(1, Ordering::Relaxed);
-                        surface_directional_light(&map, query, Some(SUN), &light, position, normal, ordinal)
+                        DirectionalSample::new(surface_directional_light(&map, query, Some(SUN), &light, position, normal, ordinal), normal)
                     });
             }
             assert_eq!(calls.load(Ordering::Relaxed), 2048);
             assert_eq!(queries.len(), 4, "reuse bounded query workspaces across instances");
             let mut actual = Vec::new();
-            for v in &mesh.vertices {
+            for v in &placed_mesh.vertices {
                 let position = prop.origin + rot * (v.position * scale);
                 let normal = (rot * v.normal).normalize_or_zero();
                 let key = surface_key(position, normal);
                 let expected = surface_directional_light(&map, &mut queries[0], Some(SUN), &light,
                     position, normal, ordinal);
                 let cached = directional_cache[&key];
-                assert_eq!(cached.cube, expected.cube);
-                assert_eq!(cached.sun, expected.sun);
-                assert_eq!(cached.to_sun, expected.to_sun);
-                assert_eq!(irradiance::pack(&cached), irradiance::pack(&expected));
+                // Compare emitted attributes with the original uncached serial
+                // path, including full-float color bits and half-float words.
+                assert_eq!(cached.color.to_array().map(f32::to_bits),
+                    expected.eval(normal).to_array().map(f32::to_bits));
+                assert_eq!(cached.packed, irradiance::pack(&expected));
                 let plain = surface_light(&map, &mut queries[0], Some(SUN), &light,
                     position, normal, ordinal);
                 assert_eq!(plain_cache[&key], plain);
-                actual.push((plain, irradiance::pack(&cached)));
+                actual.push((plain, cached.packed));
             }
             if let Some(previous) = previous_instance {
                 assert_ne!(actual, previous, "another placed instance must sample its own lighting");

@@ -214,8 +214,8 @@ impl Catalog {
         self.groups.values().find_map(|variants| variants.first())
     }
 
-    /// Respect the receiving material, including patched map materials. Cache
-    /// this per level so automatic fire does not repeatedly read the same VMT.
+    /// Respect decal exclusions and compiler-hidden receiving materials,
+    /// including patches. Cache per level to avoid repeated VMT reads on fire.
     pub(crate) fn choose_for_surface(
         &mut self,
         fs: &vfs::Vfs,
@@ -226,7 +226,9 @@ impl Catalog {
             // Model paths carry MDL surface properties, not a receiving VMT.
             // Preserve the existing model/door mark path in that case.
             surface.ends_with(".mdl") || vmt::Material::load(surface, &|p| fs.read_string(p))
-                .is_none_or(|mat| !mat.flag("$nodecal"))
+                // Invisible collision faces can lack $nodecal (Legacy's
+                // toolsnodraw is one). A planar mark on them floats in space.
+                .is_none_or(|mat| !mat.flag("$nodecal") && !mat.is_nodraw() && !mat.is_sky())
         });
         if !*allowed {
             return None;
@@ -282,6 +284,44 @@ mod tests {
             assert_eq!(catalog.choose_for_surface(&fs, surface, "fixture").unwrap().id, id);
         }
         assert!(catalog.choose_for_surface(&fs, "test/wall", "unknown").is_none());
+    }
+
+    #[test]
+    fn compiler_hidden_receivers_do_not_draw_floating_bullet_marks() {
+        let mut files = std::collections::BTreeMap::<String, std::sync::Arc<[u8]>>::new();
+        // Synthetic declarations exercise the existing material visibility
+        // predicates; no installed material text or artwork is embedded here.
+        for (name, parameter) in [
+            ("nodraw", "%compilenodraw"),
+            ("clip", "%compileclip"),
+            ("trigger", "%compiletrigger"),
+            ("sky", "%compilesky"),
+            ("sky2d", "%compile2dsky"),
+        ] {
+            let text = format!(r#"LightmappedGeneric {{ "{parameter}" "1" }}"#);
+            files.insert(format!("materials/test/{name}.vmt"), std::sync::Arc::from(text.into_bytes()));
+        }
+        files.insert("materials/test/patched.vmt".into(), std::sync::Arc::from(
+            &br#"Patch { "include" "materials/test/nodraw.vmt" "replace" { "$nodecal" "0" } }"#[..]));
+        files.insert("materials/test/visible.vmt".into(), std::sync::Arc::from(
+            &br#"LightmappedGeneric { "%compilenodraw" "0" "%compilesky" "0" }"#[..]));
+        let mut fs = vfs::Vfs::new();
+        fs.push_back("synthetic", vfs::Mount::Memory(files));
+        let mut catalog = Catalog::default();
+        catalog.translations.insert("c".into(), "impact.fixture".into());
+        catalog.groups.insert("impact.fixture".into(), vec![Decal {
+            id: content::ContentId::csgo(content::ContentKind::Material, "test/mark"),
+            mesh: default(), material: default(), weight: 1.,
+        }]);
+        for name in ["nodraw", "clip", "trigger", "sky", "sky2d", "patched"] {
+            // Repeat through the cached path too. Rejected marks must leave
+            // the cosmetic choice sequence untouched.
+            for _ in 0..2 {
+                assert!(catalog.choose_for_surface(&fs, &format!("test/{name}"), "C").is_none());
+            }
+        }
+        assert_eq!(catalog.serial, 0);
+        assert!(catalog.choose_for_surface(&fs, "test/visible", "C").is_some());
     }
 
     #[test]

@@ -9,6 +9,14 @@ A partial pass across categories is not completion. Keep the ordered queue
 active after builds, merges and staging. Do not stop because every category
 received some work; track unresolved player outcomes and finish them.
 
+October 21: #272 is merged and staged through the same desktop launcher. It
+corrects shot pitch/mix and listener-local attacker head cues, plus interrupted
+airborne easing. Quiet-walk input and weapon speed scaling match existing
+native measurements; saved Shift=crouch and Ctrl=walk are preserved. Original
+2015 waveform recovery succeeded privately; reader/decoder checks select 35
+weapon modes, with revolver fallback. The next combined delivery includes that
+pack and remaining fire/weapon/combat/bot work; it is still being validated.
+
 ## Active batch and accepted order
 
 1. **Easy playtesting first:** one double-click entry point and an in-game
