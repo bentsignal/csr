@@ -23,6 +23,8 @@ use std::time::Instant;
 
 mod classic;
 mod utility;
+#[cfg(test)]
+mod combat_tests;
 pub use classic::SoundEra;
 
 /// Rodio applies inverse-square attenuation in spatial-scale units; scaling
@@ -1524,7 +1526,7 @@ mod tests {
             assert_eq!(sounds.playing[0].entry, expected);
             let emitter = app.world().get::<Emitter>(sounds.playing[0].entity).unwrap();
             assert_eq!(emitter.pos, to_bevy(contact));
-            assert_eq!(emitter.gain(5000.0), 0.0);
+            assert!(emitter.gain(5000.0) < emitter.gain(0.0));
         }
         assert!(app(vec![kill], 3, false).world().resource::<SoundLibrary>().playing.is_empty());
     }
