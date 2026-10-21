@@ -25,8 +25,8 @@ pub(crate) fn install(app: &mut App) {
             .run_if(in_state(AppState::Match)))
         .add_systems(Update, draw.after(crate::frontend::update));
 }
-fn enter(mut panel: ResMut<Panel>, opts: Res<crate::Options>) {
-    panel.open = opts.0.playtest;
+fn enter(mut panel: ResMut<Panel>, opts: Res<crate::Options>, remote: Option<Res<crate::remote::RemoteClient>>) {
+    panel.open = opts.0.playtest && remote.is_none();
     panel.dirty = true;
 }
 /// Called only by the offline fixed-tick owner, never by a UI/render system.
@@ -114,8 +114,9 @@ fn draw(
     opts: Res<crate::Options>,
     art: Res<crate::ui_assets::UiAssets>, menu: Res<crate::menu::Menu>,
     world: Option<Res<crate::player::SimWorld>>,
+    remote: Option<Res<crate::remote::RemoteClient>>,
 ) {
-    let active = opts.0.playtest && *state.get() == AppState::Match;
+    let active = remote.is_none() && opts.0.playtest && *state.get() == AppState::Match;
     if !active {
         if let Some(root) = panel.root.take() { commands.entity(root).despawn(); }
         return;

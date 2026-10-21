@@ -1250,6 +1250,7 @@ fn offline_armory_tick_input_switches_and_retains_session_loadout() {
         assert!((p.movement.origin - origin).length() < 2.);
     }
     w.respawn(ct);
+    w.step(&[]); // Ordinary tick dresses the newly spawned team knife.
     let p = w.player(ct).unwrap();
     assert!(p.has("weapon_ak47"));
     assert!(p.has("weapon_knife_t"));
