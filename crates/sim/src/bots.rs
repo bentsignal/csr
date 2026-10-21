@@ -895,16 +895,21 @@ fn follow_path(
     }
     // A cached route may pause during combat. Time spent not following it
     // must not turn the first resumed command into a failed crossing.
-    if brain.last_navigation_tick.is_some_and(|tick| world.tick.saturating_sub(tick) > 1) {
+    let resumed = brain.last_navigation_tick.is_some_and(|tick| world.tick.saturating_sub(tick) > 1);
+    if resumed {
         brain.progress_time = time;
         brain.progress_pos = pos;
     }
     // Displacement can leave the cached route even while navigation runs
     // every tick. Its old portal is no longer an approach from this position;
-    // retrying it can blacklist a crossing we never attempted. Keep routes
-    // the normal look-ahead can still advance, including their boundary
-    // seams, and otherwise plan from the current area before steering.
-    if !brain.path.iter().skip(brain.path_index).take(4).any(|&id| in_area(id, 0.0)) {
+    // retrying it can blacklist a crossing we never attempted. Outside the
+    // normal look-ahead, continuous navigation needs grounded membership
+    // in another area to establish displacement: linked areas may have gaps,
+    // and airborne feet may leave their floor bounds. Preserve combat resume.
+    if !brain.path.iter().skip(brain.path_index).take(4).any(|&id| in_area(id, 0.0))
+        && (resumed || (bot.movement.on_ground
+            && mesh.nearest_area(pos).is_some_and(|a| in_area(a.id, 0.0))))
+    {
         brain.path.clear();
         brain.path_index = 0;
     }
@@ -1426,6 +1431,42 @@ mod tests {
                     assert!(wish.x > 0. && wish.y.abs() < 0.001,
                         "use the current room's east exit, not the old room's portal: {wish:?}");
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn continuous_navigation_keeps_a_route_across_gaps_and_airborne_motion() {
+        for rate in [64, 128] {
+            for (pos, grounded) in [
+                (Vec3::new(80., 0., 0.), true), // uncovered XY gap, even with ground contact
+                (Vec3::new(80., 0., 56.), false), // airborne across the same gap
+                (Vec3::new(-32., 96., 56.), false), // airborne above another approach
+                (Vec3::new(0., 0., 128.), false), // above the route's height tolerance
+            ] {
+                let (mesh, mut world, id, mut brain) = blocked_shortcut_fixture(true);
+                let mut areas = mesh.areas;
+                // Keep the authored 1 -> 2 link while separating its XY bounds.
+                areas.iter_mut().find(|a| a.id == 2).unwrap().nw.x = 96.;
+                let mesh = NavMesh::from_areas(areas);
+                assert_eq!(mesh.find_path(1, 4), Some(vec![1, 2, 4]));
+                world.set_tick_rate(rate);
+                let mut rng = Rng::from_parts(&[17]);
+                world.tick = 1;
+                follow_path(&mesh, &world, world.player(id).unwrap(), &mut brain,
+                    &mut TickInput::default(), &mut rng, world.time(), 4., Some(4), None);
+                world.tick += 1;
+                let bot = world.player_mut(id).unwrap();
+                bot.movement.origin = pos;
+                bot.movement.on_ground = grounded;
+                let mut input = TickInput::default();
+                follow_path(&mesh, &world, world.player(id).unwrap(), &mut brain,
+                    &mut input, &mut rng, world.time(), 4., Some(4), None);
+                assert_eq!(brain.path, [1, 2, 4], "keep linked traversal at {pos:?}, {rate} Hz");
+                assert_eq!(brain.path_index, 0);
+                assert_eq!(brain.route_searches, 0, "absence of route membership is not displacement");
+                assert!(brain.failed_transitions.is_empty());
+                assert!(input.forward_move != 0. || input.side_move != 0., "keep steering on the route");
             }
         }
     }
