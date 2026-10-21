@@ -3,7 +3,8 @@ use super::{FrozenWave, WaveSpec, WeaponSpec, verified_wave};
 use content::{ContentId, ContentKind, GameOrigin};
 use std::{collections::HashMap, path::Path};
 
-pub(super) const FILENAME: &str = "classic-weapon-audio-2015.csrpack";
+// Match Installed::install's manifest-ID filename, including drag/drop installs.
+pub(super) const FILENAME: &str = "classic_weapon_audio_2015.csrpack";
 const PACK_ID: &str = "classic_weapon_audio_2015";
 const ORIGIN: &str = "classic2015";
 
