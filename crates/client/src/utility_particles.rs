@@ -359,7 +359,11 @@ pub fn load(
             },
             extension: ParticleExtension {
                 additive_over: u32::from(additive_over),
-                soften_card_edges: u32::from(soften_card_edges),
+                // The broad horizontal base exposes cropped sheet boundaries
+                // much more clearly than the upright flames. Give only that
+                // layer a wider presentation feather; leave other effects off.
+                soften_card_edges: if !soften_card_edges { 0 } else if e.refs("renderers", &elements)
+                    .first().is_some_and(|r| r.number("orientation_type", 0.0) == 3.0) { 2 } else { 1 },
                 blend_frames: u32::from(blend_frames),
                 depth_fade_inverse_distance: particle_material::depth_fade_inverse_distance(
                     value("$depthblend"),
@@ -854,7 +858,9 @@ impl Emitter {
                     normals.push(normal.to_array());
                     uvs.push(uv);
                     next_frames.push([next_uv[0], next_uv[1], blend]);
-                    card_uvs.push(card_uv);
+                    // Keep the edge guard tied to the authored flame crop,
+                    // rather than the larger transparent atlas-padding quad.
+                    card_uvs.push(card_uv.map(|v| (v - 0.5) * l.card_scale + 0.5));
                     colors.push(color);
                 }
             }
