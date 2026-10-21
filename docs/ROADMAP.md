@@ -19,8 +19,10 @@
 - [x] Deliver recovered original 2015 sound pairs, prop-loading scratch/output
   reuse, hidden-surface decal exclusions and combat-displaced bot replanning
   (#273). Installed arsenal firing/reloading passed at 64/128 Hz.
-- [ ] Deliver the field-fire soft-intersection correction. Layer isolation and
-  flat/ramp/smoke controls passed; final build/CI/staging remains pending.
+- [x] Deliver the field-fire soft-intersection correction (#274). Layer isolation,
+  flat/ramp/smoke controls, workspace/Release/probe/sim and CI passed; staged.
+- [ ] Deliver continuous airborne actor poses across held shot/stance events;
+  source fix is integrated, pending checks and an ordinary match observation.
 - [ ] Finish unresolved player outcomes in the approved order; an increment or
   first pass does not finish its backlog category.
 
