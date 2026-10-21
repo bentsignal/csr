@@ -6,7 +6,8 @@ _global.csrHudLayout.scale = function() {
     var value = Number(csrEI.call("GameInterface.GetConvarNumber", "hud_scaling"));
     var compact = Number(csrEI.call("csr.CompactHudScale"));
     if (!(compact > 0) || compact > 1) { compact = 1; }
-    return (value > 0 && value <= 1 ? value : 1) * compact;
+    if (value <= 0 || value > 1) { value = 1; }
+    return value * compact;
 };
 _global.csrHudLayout.unit = function(value) {
     return value * this.scale() * Stage.height / Stage.originalRect.height;

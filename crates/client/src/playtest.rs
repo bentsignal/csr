@@ -111,7 +111,7 @@ fn button(commands: &mut Commands, parent: Entity, text: &str, action: Action, f
 }
 fn draw(
     mut commands: Commands, mut panel: ResMut<Panel>, state: Res<State<AppState>>,
-    opts: Res<crate::Options>, front: Res<crate::frontend::Frontend>,
+    opts: Res<crate::Options>,
     art: Res<crate::ui_assets::UiAssets>, menu: Res<crate::menu::Menu>,
     world: Option<Res<crate::player::SimWorld>>,
 ) {
@@ -123,7 +123,7 @@ fn draw(
     if !panel.dirty && panel.root.is_some() { return; }
     panel.dirty = false;
     if let Some(root) = panel.root.take() { commands.entity(root).despawn(); }
-    let root = commands.spawn((Persistent, UiTargetCamera(front.camera()), GlobalZIndex(25000), Node {
+    let root = commands.spawn((Persistent, GlobalZIndex(25000), Node {
         position_type: PositionType::Absolute,
         left: if panel.open { percent(8) } else { px(16) },
         top: if panel.open { percent(10) } else { px(16) },
@@ -170,4 +170,38 @@ fn draw(
         if panel.offset + 12 < entries.len() { button(&mut commands, row, "Next", Action::Next, art.regular.clone()); }
     }
     button(&mut commands, root, "Resume match", Action::Toggle, art.regular.clone());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn panel_click_queues_weapon_without_reloading_map_and_consumes_escape() {
+        let mut app = App::new();
+        app.insert_resource(crate::Options(crate::ClientOptions { playtest: true, ..default() }))
+            .insert_resource(Panel { open: true, ..default() })
+            .insert_resource(LocalPlayer::new(0, glam::Vec3::ZERO, 0.))
+            .init_resource::<crate::settings::Settings>()
+            .init_resource::<crate::menu::Menu>()
+            .init_resource::<crate::menu::LoadRequest>()
+            .init_resource::<ButtonInput<KeyCode>>()
+            .init_resource::<ButtonInput<MouseButton>>()
+            .add_systems(Update, input);
+        app.world_mut().spawn((Window::default(), CursorOptions::default(), PrimaryWindow));
+        let button = app.world_mut().spawn((Interaction::Pressed, Action::Weapon(515))).id();
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Left);
+        app.update();
+        let panel = app.world().resource::<Panel>();
+        assert!(!panel.open);
+        assert_eq!(panel.weapon, Some(515));
+        assert!(!panel.respawn, "changing a knife must preserve the current position");
+        assert!(app.world().resource::<crate::menu::LoadRequest>().0.lock().unwrap().is_none());
+        app.world_mut().despawn(button);
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().reset_all();
+        app.world_mut().resource_mut::<Panel>().open = true;
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::Escape);
+        app.update();
+        assert!(!app.world().resource::<Panel>().open);
+        assert!(!app.world().resource::<ButtonInput<KeyCode>>().just_pressed(KeyCode::Escape));
+    }
 }
