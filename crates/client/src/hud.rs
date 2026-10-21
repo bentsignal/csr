@@ -287,7 +287,7 @@ pub fn setup(mut commands: Commands) {
         Node {
             position_type: PositionType::Absolute,
             top: hu(layout::NOTICE_TOP),
-            right: hp(16.0),
+            right: hu(12.0),
             width: percent(60),
             ..default()
         },
