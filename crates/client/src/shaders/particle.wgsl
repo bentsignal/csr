@@ -136,13 +136,12 @@ fn fragment(in: ParticleOutput, @builtin(front_facing) is_front: bool,
 #endif
     if soften_card_edges != 0u {
         // Provisional fire-only edge guard for this bounded SpriteCard renderer.
-        // The horizontal base needs a broader feather at its authored crop:
-        // transparent atlas padding alone still leaves a one-texel hard edge
-        // where that crop ends. Upright fire keeps the narrow existing guard.
+        // Fire needs a broader feather at its authored crop: transparent atlas
+        // padding alone still leaves a hard edge where that crop ends. This
+        // also softens the lower cropped edge of the upright flame sheets.
         // This is a provisional presentation feather, not a native shader law.
         let edge = min(min(in.card_uv.x, 1.0 - in.card_uv.x), min(in.card_uv.y, 1.0 - in.card_uv.y));
-        let feather = select(0.025, 0.125, soften_card_edges == 2u);
-        input.material.base_color.a *= smoothstep(0.0, feather, edge);
+        input.material.base_color.a *= smoothstep(0.0, 0.125, edge);
     }
     var color = main_pass_post_lighting_processing(input, input.material.base_color);
     if additive_over != 0u {
