@@ -14,6 +14,8 @@ var<uniform> additive_over: u32;
 var<uniform> blend_frames: u32;
 @group(#{MATERIAL_BIND_GROUP}) @binding(102)
 var<uniform> depth_fade_inverse_distance: f32;
+@group(#{MATERIAL_BIND_GROUP}) @binding(103)
+var<uniform> soften_card_edges: u32;
 
 // Only the world player view opts into DepthPrepass. The held wick, sky and
 // menu views compile without this binding and retain their existing opacity.
@@ -46,6 +48,7 @@ struct ParticleVertex {
     @location(2) uv: vec2<f32>,
     @location(5) color: vec4<f32>,
     @location(8) next_frame: vec3<f32>,
+    @location(9) card_uv: vec2<f32>,
 }
 
 struct ParticleOutput {
@@ -61,6 +64,7 @@ struct ParticleOutput {
     @location(7) @interpolate(flat) visibility_range_dither: i32,
 #endif
     @location(8) next_frame: vec3<f32>,
+    @location(9) card_uv: vec2<f32>,
 }
 
 // Particles are unskinned dynamic cards with position, normal, UV and color.
@@ -76,6 +80,7 @@ fn vertex(in: ParticleVertex) -> ParticleOutput {
     out.uv = in.uv;
     out.color = in.color;
     out.next_frame = in.next_frame;
+    out.card_uv = in.card_uv;
 #ifdef VERTEX_OUTPUT_INSTANCE_INDEX
     out.instance_index = in.instance_index;
 #endif
@@ -129,6 +134,14 @@ fn fragment(in: ParticleOutput, @builtin(front_facing) is_front: bool,
     // explicit premultiplication below. Each composition applies fade once.
     input.material.base_color.a *= depth_fade;
 #endif
+    if soften_card_edges != 0u {
+        // Provisional fire-only edge guard for this bounded SpriteCard renderer.
+        // Fade the outer 2.5% of each card before blending, preventing an atlas
+        // border from exposing a hard rectangle as the camera moves. The atlas
+        // and its frame coordinates remain unchanged; this is not a native law.
+        let edge = min(min(in.card_uv.x, 1.0 - in.card_uv.x), min(in.card_uv.y, 1.0 - in.card_uv.y));
+        input.material.base_color.a *= smoothstep(0.0, 0.025, edge);
+    }
     var color = main_pass_post_lighting_processing(input, input.material.base_color);
     if additive_over != 0u {
         // Premultiplied mode uses ONE:INVSRCALPHA. Match the previous Add

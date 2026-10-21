@@ -32,6 +32,15 @@ The owner accepts grenade throws and knives as **good enough for now**. Move
 on; do not keep polishing them. Nuke windows and Train version pictures are
 believed fixed; reopen only for an actual regression, not a fresh map audit.
 
+## Delivered overnight
+
+PR #270 is merged. The desktop **CSGO Rewrite Playtest** opens a single match;
+F8 changes weapons/knives, solo/ten-player sessions and maps inside the game.
+It also includes classic shots, the lower local AK shot mix, compact HUD/feed,
+airborne easing, footstep attenuation and loading work. The original profile
+is preserved. The next combined candidate covers fire intersections, bots,
+material impacts and dropped guns; it is not yet delivered.
+
 ## Delivery policy (explicit owner correction, October 20 evening)
 
 Work in useful combined batches. Implement, run focused checks plus one combined

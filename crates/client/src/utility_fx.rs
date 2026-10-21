@@ -69,6 +69,7 @@ pub fn setup(
         &mut mats,
         &mut images,
         &["explosion_child_smoke07b"],
+        false,
     );
     let fire = crate::utility_particles::load(
         fs,
@@ -82,6 +83,7 @@ pub fn setup(
         &mut mats,
         &mut images,
         &[],
+        true,
     );
     let he = crate::utility_particles::load(
         fs,
@@ -94,6 +96,7 @@ pub fn setup(
         &mut mats,
         &mut images,
         &["explosion_child_core04b", "explosion_child_dust06a", "explosion_child_dust10a"],
+        false,
     );
     let wick = crate::utility_particles::load(
         fs,
@@ -102,6 +105,7 @@ pub fn setup(
         &mut mats,
         &mut images,
         &[],
+        false,
     );
     // Prewarm each material without a visible particle, so a first short HE
     // flash does not expire while its pipeline compiles.
@@ -112,6 +116,7 @@ pub fn setup(
             crate::particle_material::ATTRIBUTE_NEXT_FRAME,
             vec![[0.0_f32; 3]; 4],
         );
+        mesh.insert_attribute(crate::particle_material::ATTRIBUTE_CARD_UV, vec![[0.0_f32; 2]; 4]);
         let mesh = meshes.add(mesh);
         commands.spawn((
             Mesh3d(mesh),

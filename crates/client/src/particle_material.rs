@@ -15,6 +15,10 @@ pub type ParticleMaterial = ExtendedMaterial<StandardMaterial, ParticleExtension
 pub const ATTRIBUTE_NEXT_FRAME: MeshVertexAttribute =
     MeshVertexAttribute::new("Particle_NextFrame", 190_104_105, VertexFormat::Float32x3);
 
+/// Local card coordinates, independent of the selected texture-sheet rectangle.
+pub const ATTRIBUTE_CARD_UV: MeshVertexAttribute =
+    MeshVertexAttribute::new("Particle_CardUv", 190_104_106, VertexFormat::Float32x2);
+
 #[derive(Asset, TypePath, AsBindGroup, Debug, Clone)]
 pub struct ParticleExtension {
     #[uniform(100)]
@@ -24,6 +28,8 @@ pub struct ParticleExtension {
     /// Zero disables depth fade; otherwise inverse fade distance in Source units.
     #[uniform(102)]
     pub depth_fade_inverse_distance: f32,
+    #[uniform(103)]
+    pub soften_card_edges: u32,
 }
 
 /// First-pass soft intersection, not a measured native SpriteCard fade law.
@@ -72,6 +78,7 @@ impl MaterialExtension for ParticleExtension {
             Mesh::ATTRIBUTE_UV_0.at_shader_location(2),
             Mesh::ATTRIBUTE_COLOR.at_shader_location(5),
             ATTRIBUTE_NEXT_FRAME.at_shader_location(8),
+            ATTRIBUTE_CARD_UV.at_shader_location(9),
         ])?];
         Ok(())
     }

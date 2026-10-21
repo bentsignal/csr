@@ -1,5 +1,19 @@
 # Roadmap
 
+> **October 20 overnight:** [OWNER-PRIORITIES.md](OWNER-PRIORITIES.md) gives
+> the current ordered queue and proportional batch checks. Grenade throws and
+> knives are accepted for now; preserve them while improving the rest of play.
+
+## October 20 playtest increments
+
+- [x] One desktop entry and an in-game F8 armory for guns, classic knives,
+  solo/ten-player sessions and maps, without a restart for each weapon (#270).
+- [x] Retained classic gun shots, lower local AK masking, compact HUD/kill feed,
+  airborne easing, wall/floor footstep attenuation and trimmed loading work
+  (#270). Walking coefficients were preserved; final feel remains owner-tested.
+- [ ] Finish the combined fire-intersection, bot navigation, impact/decal and
+  dropped-weapon placement pass, then publish through the same launch entry.
+
 > **October 18 follow-up:** implementation approved: classic maps/playability,
 > then movement/viewmodels, hit-audio consistency, then grenades. Grenade feel
 > now targets original CS:GO and historical lineups; the prior CS2 throw-feel
