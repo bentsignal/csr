@@ -266,6 +266,40 @@ impl Emitter {
     }
 }
 
+/// Only remote steps and their gear rustle use this bounded acoustic pass.
+/// Queue them paused until Update has the current listener/collision snapshot,
+/// so their attack cannot briefly play at the unobstructed volume.
+#[derive(Component, Default)]
+pub struct FootstepOcclusion {
+    gain: f32,
+    next_check: f64,
+}
+
+fn footstep_occlusion(world: &collision::CollisionWorld, source: Vec3, listener: Vec3) -> f32 {
+    use collision::contents;
+    let source = crate::coords::to_source(source);
+    let listener = crate::coords::to_source(listener);
+    // Foley emits at the feet. Lift off the supporting surface, then sample
+    // slightly higher too: a low crate/step must not act like a sealed wall.
+    // Exclude playerclip, water and other invisible movement-only volumes.
+    let mask = contents::SOLID | contents::MOVEABLE | contents::WINDOW | contents::GRATE;
+    let low = world.trace_ray(source + glam::Vec3::Z * 4.0, listener, mask);
+    if !low.hit() { return 1.0; }
+    let high = world.trace_ray(source + glam::Vec3::Z * 32.0, listener, mask);
+    if !high.hit() { return 0.65; }
+    // Provisional transmission gains, not a calibrated Legacy acoustic model.
+    // Compare eye height to an upright source, not to its feet: ordinary
+    // same-floor footsteps already sit roughly 64 units below the listener.
+    let separate_floor = (listener.z - (source.z + 64.0)).abs() > 96.0;
+    let transmission = |hit: collision::Trace| -> f32 {
+        if hit.contents & (contents::WINDOW | contents::GRATE) != 0
+            && hit.contents & (contents::SOLID | contents::MOVEABLE) == 0 {
+            0.65
+        } else if separate_floor { 0.18 } else { 0.32 }
+    };
+    transmission(low).max(transmission(high))
+}
+
 /// Where and on whose behalf a sound plays.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Emit {
@@ -748,21 +782,23 @@ impl SoundLibrary {
                     weapon_falloff: entry.weapon_falloff,
                     foley_bounds: entry.foley_bounds,
                 };
-                let gain = emitter.gain(emitter.pos.distance(self.listener));
+                let occluded = matches!(entry.category, Category::Footsteps | Category::Suit);
+                let gain = if occluded { 0.0 } else { emitter.gain(emitter.pos.distance(self.listener)) };
                 initial_gain = gain * self.master_volume;
-                commands
+                let mut entity = commands
                     .spawn((
                         AudioPlayer(handle),
                         SoundGain(emitter.base),
                         emitter,
-                        PlaybackSettings::DESPAWN
+                        PlaybackSettings { paused: occluded, ..PlaybackSettings::DESPAWN }
                             .with_volume(Volume::Linear(gain * self.master_volume))
                             .with_speed(speed)
                             .with_spatial(true)
                             .with_spatial_scale(SpatialScale::new(PAN_ONLY_SCALE)),
                         Transform::from_translation(emitter.pos),
-                    ))
-                    .id()
+                    ));
+                if occluded { entity.insert(FootstepOcclusion::default()); }
+                entity.id()
             }
             None => {
                 // Measured gains top out at lvol 20 (1.07 of the AK shot).
@@ -912,8 +948,10 @@ pub fn update(
     time: Res<Time<Real>>,
     mut sounds: ResMut<SoundLibrary>,
     mut listener: ResMut<Listener>,
+    world: Option<Res<crate::player::SimWorld>>,
     ears: Query<&GlobalTransform, With<SpatialListener>>,
-    mut spatial: Query<(&Emitter, Option<&Fade>, &mut SpatialAudioSink)>,
+    mut spatial: Query<(&Emitter, Option<&Fade>, Option<&mut SpatialAudioSink>,
+        &mut PlaybackSettings, Option<&mut FootstepOcclusion>)>,
     mut faded: Query<(Entity, &SoundGain, &Fade, Option<&mut AudioSink>, Has<Emitter>)>,
     mut traces: Query<(Entity, &mut SoundTrace, Has<AudioSink>, Has<SpatialAudioSink>)>,
 ) {
@@ -931,9 +969,27 @@ pub fn update(
                 trace.request_clock, trace.requested_at.elapsed().as_secs_f64() * 1000.0);
         }
     }
-    for (emitter, fade, mut sink) in &mut spatial {
-        let gain = emitter.gain(emitter.pos.distance(listener.0)) * fade.map_or(1.0, |f| f.value(clock));
-        sink.set_volume(Volume::Linear(gain * master));
+    for (emitter, fade, sink, mut settings, occlusion) in &mut spatial {
+        if sink.is_none() && occlusion.is_none() { continue; }
+        let mut first_check = false;
+        let transmission = if let Some(mut occlusion) = occlusion {
+            first_check = occlusion.next_check == 0.0;
+            if clock >= occlusion.next_check {
+                occlusion.gain = world.as_ref().map_or(1.0, |world|
+                    footstep_occlusion(&world.0.collision, emitter.pos, listener.0));
+                occlusion.next_check = clock + 0.1;
+            }
+            occlusion.gain
+        } else { 1.0 };
+        let gain = emitter.gain(emitter.pos.distance(listener.0)) * transmission
+            * fade.map_or(1.0, |f| f.value(clock));
+        if let Some(mut sink) = sink {
+            sink.set_volume(Volume::Linear(gain * master));
+            if first_check { sink.play(); }
+        } else {
+            settings.volume = Volume::Linear(gain * master);
+        }
+        if first_check { settings.paused = false; }
     }
     for (entity, gain, fade, sink, is_spatial) in &mut faded {
         if fade.out && fade.value(clock) <= 0.0 {
@@ -996,6 +1052,104 @@ pub fn prune(mut commands: Commands, mut sounds: ResMut<SoundLibrary>,
 
 #[cfg(test)]
 mod tests {
+    fn acoustic_box(mins: glam::Vec3, maxs: glam::Vec3, contents: i32) -> collision::Convex {
+        use collision::Plane;
+        use glam::Vec3;
+        collision::Convex {
+            planes: vec![
+                Plane { normal: Vec3::X, dist: maxs.x }, Plane { normal: -Vec3::X, dist: -mins.x },
+                Plane { normal: Vec3::Y, dist: maxs.y }, Plane { normal: -Vec3::Y, dist: -mins.y },
+                Plane { normal: Vec3::Z, dist: maxs.z }, Plane { normal: -Vec3::Z, dist: -mins.z },
+            ], mins, maxs, contents, surface: 0,
+        }
+    }
+
+    #[test]
+    fn footsteps_distinguish_solid_floors_walls_and_open_vertical_paths() {
+        use collision::{CollisionWorld, contents};
+        use glam::Vec3;
+        let gain = |world: &CollisionWorld, feet, eye| super::footstep_occlusion(world, to_bevy(feet), to_bevy(eye));
+        let mut world = CollisionWorld::new();
+        let lower = Vec3::ZERO;
+        let upper = Vec3::Z * 256.0;
+        assert_eq!(gain(&world, upper, lower + Vec3::Z * 64.0), 1.0);
+        world.add_convex(acoustic_box(Vec3::new(-512.0, -512.0, 128.0),
+            Vec3::new(512.0, 512.0, 144.0), contents::SOLID));
+        world.finalize();
+        assert_eq!(gain(&world, upper, lower + Vec3::Z * 64.0), 0.18);
+        assert_eq!(gain(&world, lower, upper + Vec3::Z * 64.0), 0.18);
+        assert_eq!(gain(&world, lower, Vec3::new(100.0, 0.0, 64.0)), 1.0);
+        // Same-floor walls muffle steps; movement-only clips do not. A small
+        // obstacle and a grate transmit more than a full-height solid wall.
+        for (contents, top, expected) in [(contents::SOLID, 128.0, 0.32),
+            (contents::PLAYERCLIP, 128.0, 1.0), (contents::GRATE, 128.0, 0.65),
+            (contents::SOLID, 44.0, 0.65)] {
+            let mut world = CollisionWorld::new();
+            world.add_convex(acoustic_box(Vec3::new(48.0, -64.0, -16.0),
+                Vec3::new(56.0, 64.0, top), contents));
+            world.finalize();
+            assert_eq!(gain(&world, lower, Vec3::new(100.0, 0.0, 64.0)), expected);
+        }
+    }
+
+    #[test]
+    fn queued_steps_get_occlusion_before_playback_without_changing_combat_or_local_audio() {
+        use collision::contents;
+        use glam::Vec3 as SourceVec;
+        let mut collision = collision::CollisionWorld::new();
+        collision.add_convex(acoustic_box(SourceVec::new(-512.0, -512.0, 128.0),
+            SourceVec::new(512.0, 512.0, 144.0), contents::SOLID));
+        collision.finalize();
+        let mut app = App::new();
+        app.init_resource::<Time<Real>>().init_resource::<SoundLibrary>()
+            .init_resource::<Assets<AudioSource>>()
+            .insert_resource(Listener(to_bevy(SourceVec::Z * 64.0)))
+            .insert_resource(crate::player::SimWorld(sim::World::new(Arc::new(collision))));
+        app.world_mut().resource_mut::<SoundLibrary>().master_volume = 1.0;
+        for (name, category) in [("step", Category::Footsteps), ("suit", Category::Suit),
+            ("shot", Category::Weapon), ("body", Category::Foley), ("head_feedback", Category::Foley)] {
+            let mut entry = synthetic_entry(8, None);
+            entry.category = category;
+            entry.weapon_falloff = None;
+            app.world_mut().resource_mut::<SoundLibrary>().entries.insert(name.into(), entry);
+        }
+        app.add_systems(FixedUpdate, |mut commands: Commands, mut sounds: ResMut<SoundLibrary>,
+            mut sources: ResMut<Assets<AudioSource>>| {
+            for (owner, name) in [(1, "step"), (2, "suit"), (3, "shot"), (4, "body"),
+                (5, "head_feedback"), (6, "step")] {
+                sounds.play_with(&mut commands, &vfs::Vfs::new(), &mut sources, name,
+                    Emit { at: (owner < 5).then_some(SourceVec::Z * 256.0), owner: Some(owner), local: owner >= 5 });
+            }
+        }).add_systems(Update, update);
+        app.world_mut().run_schedule(FixedUpdate);
+        let entity = |app: &App, owner| app.world().resource::<SoundLibrary>().playing.iter()
+            .find(|voice| voice.owner == owner).unwrap().entity;
+        for owner in [1, 2] {
+            let settings = app.world().get::<PlaybackSettings>(entity(&app, owner)).unwrap();
+            assert!(settings.paused);
+            assert_eq!(settings.volume.to_linear(), 0.0);
+        }
+        app.update(); // No AudioPlugin/device: inspect actual queued settings.
+        for owner in [1, 2, 3, 4] {
+            let id = entity(&app, owner);
+            let emitter = app.world().get::<Emitter>(id).unwrap();
+            let settings = app.world().get::<PlaybackSettings>(id).unwrap();
+            assert!(!settings.paused);
+            let transmission = if owner <= 2 { 0.18 } else { 1.0 };
+            let expected = emitter.gain(192.0) * transmission;
+            assert!((settings.volume.to_linear() - expected).abs() < 1e-6);
+            assert_eq!(app.world().get::<FootstepOcclusion>(id).is_some(), owner <= 2);
+        }
+        for owner in [5, 6] {
+            let id = entity(&app, owner);
+            assert!(app.world().get::<Emitter>(id).is_none());
+            assert!(app.world().get::<FootstepOcclusion>(id).is_none());
+            let settings = app.world().get::<PlaybackSettings>(id).unwrap();
+            assert!(!settings.paused);
+            assert!(settings.volume.to_linear() > 0.0);
+        }
+    }
+
     #[test]
     fn sink_observation_requires_an_actual_sink_and_is_reported_once() {
         let mut trace = super::SoundTrace {
