@@ -21,8 +21,10 @@
   (#273). Installed arsenal firing/reloading passed at 64/128 Hz.
 - [x] Deliver the field-fire soft-intersection correction (#274). Layer isolation,
   flat/ramp/smoke controls, workspace/Release/probe/sim and CI passed; staged.
-- [ ] Deliver continuous airborne actor poses across held shot/stance events;
-  source fix is integrated, pending checks and an ordinary match observation.
+- [x] Deliver continuous airborne actor poses across held shot/stance events
+  (#275): CI, Release/probe/sim and ordinary ten-player rendering passed.
+- [ ] Recover continuously followed bot routes after grounded off-route
+  displacement, preserving valid gaps/airborne traversal; checks pending.
 - [ ] Finish unresolved player outcomes in the approved order; an increment or
   first pass does not finish its backlog category.
 

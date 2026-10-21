@@ -25,7 +25,10 @@ coverage. That field-fire correction is merged and staged with #274; workspace,
 Release, probe/sim and CI passed. The earlier padding/feather/underlay-omission
 experiments were reverted. The next bot pose candidate keeps the airborne
 clock moving across held shot/stance events, preserving discrete event timing
-and movement physics; integration/runtime checks remain pending. Continue the remaining player
+and movement physics. It is merged/staged with #275 after CI, Release and
+probe/sim; the ordinary ten-player bot render remained playable. Continuous
+off-route navigation recovery is the next candidate, with legitimate airborne
+and uncovered-gap traversal preserved; its new regressions await checks. Continue the remaining player
 outcomes; these increments do not end the queue.
 
 ## Active batch and accepted order
