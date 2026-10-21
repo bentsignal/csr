@@ -689,10 +689,11 @@ impl Emitter {
                         }
                     })
                     .unwrap_or(([0.0, 0.0, 1.0, 1.0], [0.0, 0.0, 1.0, 1.0], 0.0));
+                // Fire uses the same renderer orientation as other sprites.
+                // A random world-fixed flame plane turns edge-on as the eye
+                // moves and exposes intersecting sheets against the ground.
                 let (right, up) = if l.ground {
                     ground_basis(p.normal, p.yaw)
-                } else if self.fire {
-                    (Vec3::new(p.yaw.cos(), 0.0, p.yaw.sin()), Vec3::Y)
                 } else if l.upright {
                     upright_basis(eye - self.origin - center)
                 } else {
