@@ -19,8 +19,8 @@
 - [x] Deliver recovered original 2015 sound pairs, prop-loading scratch/output
   reuse, hidden-surface decal exclusions and combat-displaced bot replanning
   (#273). Installed arsenal firing/reloading passed at 64/128 Hz.
-- [ ] Remove the remaining fire card boundaries; failed visual experiments were
-  reverted, with targeted layer isolation prepared for the next render pass.
+- [ ] Deliver the field-fire soft-intersection correction. Layer isolation and
+  flat/ramp/smoke controls passed; final build/CI/staging remains pending.
 - [ ] Finish unresolved player outcomes in the approved order; an increment or
   first pass does not finish its backlog category.
 

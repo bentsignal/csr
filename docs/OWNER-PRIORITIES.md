@@ -18,9 +18,12 @@ native measurements; saved Shift=crouch and Ctrl=walk are preserved. Original
 prop-loading allocation/conversion cleanup, hidden-receiver decal exclusions
 and bot replanning after combat displacement. Installed arsenal firing/reload
 checks passed at 64/128 Hz, and bounded ten-player Nuke remained playable.
-Fire card boundaries remain unresolved: the padding/feather/underlay-omission
-experiments did not fix them and were reverted. Continue the targeted layer
-check and the remaining player outcomes; these increments do not end the queue.
+Fire layer isolation traced the remaining hard floor contacts to the blended
+center/fancy layers. A provisional wider field-fire depth band now improves
+the flat/ramp controls without changing smoke, disabled-depth layers or sim
+coverage; final build/CI/staging is pending. The earlier padding/feather/
+underlay-omission experiments were reverted. Continue the remaining player
+outcomes; these increments do not end the queue.
 
 ## Active batch and accepted order
 
