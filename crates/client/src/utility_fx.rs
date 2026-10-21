@@ -75,7 +75,9 @@ pub fn setup(
         fs,
         "particles/inferno_fx.pcf",
         &[
-            "molotov_groundfire_child_base",
+            // The flat base currently exposes its rectangular sprite crop on
+            // the floor. Keep the upright flame layers until the base's
+            // SpriteCard composition is supported; gameplay coverage is sim-owned.
             "molotov_groundfire_main_center",
             "molotov_groundfire_main_fancy",
             "molotov_child_flame01a",
