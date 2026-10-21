@@ -222,9 +222,17 @@ mod tests {
             weapons::WeaponClass::Pistol | weapons::WeaponClass::Smg | weapons::WeaponClass::Rifle
             | weapons::WeaponClass::Sniper | weapons::WeaponClass::Shotgun | weapons::WeaponClass::MachineGun)).collect();
         assert!(guns.len() >= 30);
+        let mut floor = collision::CollisionWorld::new();
+        let v = glam::Vec3::new;
+        for triangle in [[v(-8192., -8192., 0.), v(8192., -8192., 0.), v(8192., 8192., 0.)],
+            [v(-8192., -8192., 0.), v(8192., 8192., 0.), v(-8192., 8192., 0.)]] {
+            floor.add_triangle(triangle, collision::contents::SOLID, 0);
+        }
+        floor.finalize();
+        let floor = std::sync::Arc::new(floor);
         for rate in [64, 128] {
             for gun in &guns {
-                let mut world = sim::World::with_catalog(std::sync::Arc::new(collision::CollisionWorld::new()), data.catalog.clone());
+                let mut world = sim::World::with_catalog(floor.clone(), data.catalog.clone());
                 world.set_tick_rate(rate);
                 world.rules.grenade_practice = true;
                 let id = world.add_player("arsenal", sim::Team::CounterTerrorist);
@@ -241,6 +249,8 @@ mod tests {
                 assert!(fired, "{} at {} Hz", gun.class_name, rate);
                 let clip = world.player(id).unwrap().active_weapon().unwrap().clip;
                 assert!(clip < gun.clip_size, "{} must spend ammunition", gun.class_name);
+                // Release and allow slow bolt/shot recovery before one reload press.
+                for _ in 0..world.ticks(3.) { world.step(&[(id, sim::TickInput::default())]); }
                 world.step(&[(id, sim::TickInput { buttons: movement::buttons::RELOAD, ..default() })]);
                 for _ in 0..world.ticks(8.) { world.step(&[(id, sim::TickInput::default())]); }
                 let held = world.player(id).unwrap().active_weapon().unwrap();
