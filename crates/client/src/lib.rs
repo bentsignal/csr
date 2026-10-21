@@ -46,6 +46,7 @@ mod impact_decals;
 pub mod utility_fx;
 mod particle_data;
 mod particle_material;
+mod particle_depth;
 mod utility_particles;
 pub mod buymenu;
 pub mod items;
@@ -214,6 +215,7 @@ impl Plugin for CsgoPlugin {
             .add_plugins(UiMaterialPlugin::<radar_view::RadarMaterial>::default())
             .add_plugins(MaterialPlugin::<WorldMaterial>::default())
             .add_plugins(MaterialPlugin::<particle_material::ParticleMaterial>::default())
+            .add_plugins(particle_depth::ParticleDepthPlugin)
             .init_state::<AppState>()
             .init_resource::<session::Loader>()
             .init_resource::<remote_join::JoinRequest>()
@@ -781,6 +783,9 @@ fn spawn_level(
         PlayerCamera,
         audio::spatial_listener(),
         player::WorldPlayerCamera,
+        // Allocates separate sampled depth and grants main depth COPY_SRC.
+        bevy::core_pipeline::prepass::DepthPrepass,
+        particle_depth::WorldParticleDepth,
         bevy::render::view::NoIndirectDrawing,
     ));
     // Viewmodel camera: drawn last with its own depth buffer and FOV.

@@ -90,6 +90,7 @@ struct Brain {
     turn_velocity: glam::Vec2,
     escape_until: f32,
     escape_side: f32,
+    duck_jump: bool,
     last_shots: u64,
     reload_cover: Option<(u32, Vec3)>,
     throw: Option<(u32, Vec3, f32)>,
@@ -496,6 +497,7 @@ impl Bots {
                 brain.site_area = None;
                 brain.hold = None;
                 brain.turn_velocity = glam::Vec2::ZERO;
+                brain.duck_jump = false;
                 brain.target = None;
                 brain.yaw = bot.view_angles.y;
                 brain.pitch = 0.0;
@@ -780,16 +782,7 @@ impl Bots {
                 }
             }
             if world.flash_amount(bot.id)>0.4 { input.buttons &= !buttons::ATTACK; input.buttons|=buttons::WALK; }
-            // Jumping needs the key released in between (no auto-bhop), so
-            // tap it; tuck the legs in the air to clear ledges (duck-jump).
-            if input.buttons & buttons::JUMP != 0 {
-                if bot.last_input.buttons & buttons::JUMP != 0 {
-                    input.buttons &= !buttons::JUMP;
-                }
-                if !bot.movement.on_ground {
-                    input.buttons |= buttons::DUCK;
-                }
-            }
+            prepare_jump(bot, brain, &mut input);
             input.view_angles = Vec3::new(brain.pitch.clamp(-89.0, 89.0), brain.yaw, 0.0);
             if !self.shooting { input.buttons &= !(buttons::ATTACK | buttons::ATTACK2); }
             out.push((bot.id, input));
@@ -852,6 +845,23 @@ fn wander(world: &World, bot: &crate::Player, brain: &mut Brain, input: &mut Tic
     input.forward_move = 450.0;
 }
 
+fn prepare_jump(bot: &Player, brain: &mut Brain, input: &mut TickInput) {
+    if bot.movement.on_ground {
+        // Only a fresh grounded press starts a duck-jump. Falling off an
+        // edge must not turn a recovery request into an airborne crouch.
+        brain.duck_jump = input.buttons & buttons::JUMP != 0
+            && bot.last_input.buttons & buttons::JUMP == 0;
+        if !brain.duck_jump { input.buttons &= !buttons::JUMP; }
+    } else {
+        input.buttons &= !buttons::JUMP;
+        // Keep the feet tucked for the whole jump, even after rising above
+        // the portal removes its jump request. Repeated duck/unduck changes
+        // the airborne hull origin and makes both the pose and target rise
+        // oscillate. Landing clears this latch on the next grounded input.
+        if brain.duck_jump { input.buttons |= buttons::DUCK; }
+    }
+}
+
 /// Follows (or plans) a path. With `goal` the path leads to that area and,
 /// with `point`, on to that exact spot; without, to a random hot place.
 /// Returns true when the goal has been reached (the bot stands still).
@@ -869,6 +879,15 @@ fn follow_path(
     point: Option<Vec3>,
 ) -> bool {
     let pos = bot.movement.origin;
+    // Feet may be above the mesh during a jump or on a prop, but being
+    // underneath a ledge is not arrival on its upper floor. Match the small
+    // below-floor tolerance used by nearest_area's floor preference.
+    let inside = |id: u32| {
+        mesh.area(id).is_some_and(|a| {
+            let dz = pos.z - a.z_at(pos.x, pos.y);
+            a.contains_xy(pos, -2.0) && (-8.0..120.0).contains(&dz)
+        })
+    };
     let old_failed_count = brain.failed_transitions.len();
     brain.failed_transitions.retain(|edge| time < edge.retry_at);
     if brain.failed_transitions.len() != old_failed_count {
@@ -892,7 +911,7 @@ fn follow_path(
     if need_path {
         let start = mesh.nearest_area(pos).map(|a| a.id);
         if let (Some(g), Some(s)) = (goal, start) {
-            if s == g {
+            if s == g && inside(g) {
                 // In the goal area: walk to the exact point, if any.
                 if let Some(p) = point {
                     if (p - pos).truncate().length() > 16.0 {
@@ -939,12 +958,6 @@ fn follow_path(
     }
     // Advance when inside one of the next few areas (a bot may stand above
     // the mesh on a prop, or drop past a small area).
-    let inside = |id: u32| {
-        mesh.area(id).is_some_and(|a| {
-            let dz = pos.z - a.z_at(pos.x, pos.y);
-            a.contains_xy(pos, -2.0) && (-48.0..120.0).contains(&dz)
-        })
-    };
     for ahead in (1..=3).rev() {
         let k = brain.path_index + ahead;
         if k < brain.path.len() && inside(brain.path[k]) {
@@ -959,10 +972,20 @@ fn follow_path(
     }
     let cur = brain.path[brain.path_index];
     let next = brain.path[brain.path_index + 1];
-    let Some(target) = mesh.portal(cur, next, 20.0) else {
+    let Some(mut target) = mesh.portal(cur, next, 20.0) else {
         brain.path.clear();
         return false;
     };
+    // The shared portal itself can lie exactly on the area boundary. Aim
+    // inside the destination so a bot that stops at the seam still has a
+    // forward command and can satisfy the inset arrival test above.
+    if let Some(a) = mesh.area(next) {
+        let inset_x = ((a.se.x - a.nw.x) * 0.5).min(20.0);
+        let inset_y = ((a.se.y - a.nw.y) * 0.5).min(20.0);
+        target.x = target.x.clamp(a.nw.x + inset_x, a.se.x - inset_x);
+        target.y = target.y.clamp(a.nw.y + inset_y, a.se.y - inset_y);
+        target.z = a.z_at(target.x, target.y);
+    }
     if world.fire_at(target) && !world.fire_at(pos) && pos.distance(target)<180.0 {
         // If every route crosses a burning choke, hold outside it until it clears.
         input.forward_move=0.0;input.side_move=0.0;
@@ -1168,6 +1191,123 @@ mod tests {
             progress_pos: Vec3::ZERO, progress_time: 0.,
             ..Brain::fresh(world.player(id).unwrap(), 0) };
         (mesh, world, id, brain)
+    }
+
+    #[test]
+    fn duck_jump_stays_tucked_after_the_portal_stops_requesting_jump() {
+        for rate in [64, 128] {
+            let (mesh, mut world, id, mut brain) = stuck_path_fixture();
+            world.set_tick_rate(rate);
+            // A raised destination initially asks for a jump.
+            let mut areas = mesh.areas;
+            let a = &mut areas[1];
+            a.nw.z = 32.; a.se.z = 32.; a.ne_z = 32.; a.sw_z = 32.;
+            let mesh = NavMesh::from_areas(areas);
+            world.player_mut(id).unwrap().movement.on_ground = true;
+            let mut rng = Rng::from_parts(&[17]);
+            let mut input = TickInput::default();
+            follow_path(&mesh, &world, world.player(id).unwrap(), &mut brain,
+                &mut input, &mut rng, 0., 4., Some(2), None);
+            prepare_jump(world.player(id).unwrap(), &mut brain, &mut input);
+            assert_ne!(input.buttons & buttons::JUMP, 0);
+            world.player_mut(id).unwrap().last_input = input;
+            for tick in 1..=world.ticks(0.5) {
+                world.tick = tick;
+                let p = world.player_mut(id).unwrap();
+                p.movement.on_ground = false;
+                p.movement.origin.z = 56.;
+                let mut input = TickInput::default();
+                follow_path(&mesh, &world, world.player(id).unwrap(), &mut brain,
+                    &mut input, &mut rng, world.time(), 4., Some(2), None);
+                assert_eq!(input.buttons & buttons::JUMP, 0, "above the ledge needs no jump request");
+                prepare_jump(world.player(id).unwrap(), &mut brain, &mut input);
+                assert_eq!(input.buttons & buttons::JUMP, 0, "release the jump key in flight");
+                assert_ne!(input.buttons & buttons::DUCK, 0, "keep the airborne hull stable at {rate} Hz");
+                world.player_mut(id).unwrap().last_input = input;
+            }
+            world.player_mut(id).unwrap().movement.on_ground = true;
+            let mut input = TickInput::default();
+            prepare_jump(world.player(id).unwrap(), &mut brain, &mut input);
+            assert_eq!(input.buttons & buttons::DUCK, 0);
+            assert!(!brain.duck_jump);
+            // A later fall/recovery request must not inherit that jump.
+            world.player_mut(id).unwrap().movement.on_ground = false;
+            input.buttons = buttons::JUMP;
+            prepare_jump(world.player(id).unwrap(), &mut brain, &mut input);
+            assert_eq!(input.buttons & (buttons::JUMP | buttons::DUCK), 0);
+            // Explicit crouch navigation still applies during a fall.
+            input.buttons = buttons::DUCK;
+            prepare_jump(world.player(id).unwrap(), &mut brain, &mut input);
+            assert_ne!(input.buttons & buttons::DUCK, 0);
+        }
+    }
+
+    #[test]
+    fn a_stopped_bot_drives_through_the_portal_seam() {
+        for rate in [64, 128] {
+            for north in [false, true] {
+                let (mesh, mut world, id, mut brain) = stuck_path_fixture();
+                world.set_tick_rate(rate);
+                let mut areas = mesh.areas;
+                if north {
+                    for a in &mut areas {
+                        a.nw = Vec3::new(a.nw.y, a.nw.x, a.nw.z);
+                        a.se = Vec3::new(a.se.y, a.se.x, a.se.z);
+                    }
+                }
+                let mesh = NavMesh::from_areas(areas);
+                let axis = if north { Vec3::Y } else { Vec3::X };
+                let p = world.player_mut(id).unwrap();
+                p.movement.origin = axis * 64.;
+                p.movement.velocity = Vec3::ZERO;
+                p.movement.on_ground = true;
+                let mut input = TickInput::default();
+                let mut rng = Rng::from_parts(&[17]);
+                follow_path(&mesh, &world, world.player(id).unwrap(), &mut brain,
+                    &mut input, &mut rng, 0., 4., Some(2), None);
+                let (f, r, _) = movement::angle_vectors(Vec3::new(0., brain.yaw, 0.));
+                assert!((f * input.forward_move + r * input.side_move).dot(axis) > 449.);
+                assert_eq!(brain.path_index, 0, "the seam itself is not arrival");
+                world.player_mut(id).unwrap().movement.origin = axis * 84.;
+                world.tick += 1;
+                follow_path(&mesh, &world, world.player(id).unwrap(), &mut brain,
+                    &mut TickInput::default(), &mut rng, world.time(), 4., Some(2), None);
+                assert_eq!(brain.path_index, 1);
+                world.tick += 1;
+                assert!(follow_path(&mesh, &world, world.player(id).unwrap(), &mut brain,
+                    &mut TickInput::default(), &mut rng, world.time(), 4., Some(2), None));
+            }
+        }
+    }
+
+    #[test]
+    fn being_below_the_goal_floor_does_not_complete_its_crossing() {
+        for rate in [64, 128] {
+            let (mesh, mut world, id, mut brain) = stuck_path_fixture();
+            world.set_tick_rate(rate);
+            world.player_mut(id).unwrap().movement.origin = Vec3::new(96., 0., -32.);
+            let mut rng = Rng::from_parts(&[17]);
+            follow_path(&mesh, &world, world.player(id).unwrap(), &mut brain,
+                &mut TickInput::default(), &mut rng, 0., 4., Some(2), None);
+            assert_eq!(brain.path_index, 0, "feet below a ledge have not crossed it");
+            // Even if the closest area is the objective, replanning must not
+            // report arrival while under it or outside its XY bounds.
+            for pos in [Vec3::new(96., 0., -32.), Vec3::X * 300.] {
+                brain.path.clear();
+                world.player_mut(id).unwrap().movement.origin = pos;
+                world.tick += 1;
+                assert!(!follow_path(&mesh, &world, world.player(id).unwrap(), &mut brain,
+                    &mut TickInput::default(), &mut rng, world.time(), 4., Some(2), None));
+            }
+            // Preserve advancement while jumping above a valid floor.
+            brain.path = vec![1, 2]; brain.path_index = 0;
+            world.player_mut(id).unwrap().movement.origin = Vec3::new(96., 0., 56.);
+            world.player_mut(id).unwrap().movement.on_ground = false;
+            world.tick += 1;
+            follow_path(&mesh, &world, world.player(id).unwrap(), &mut brain,
+                &mut TickInput::default(), &mut rng, world.time(), 4., Some(2), None);
+            assert_eq!(brain.path_index, 1);
+        }
     }
 
     #[test]

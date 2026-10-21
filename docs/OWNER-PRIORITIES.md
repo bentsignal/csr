@@ -32,6 +32,19 @@ The owner accepts grenade throws and knives as **good enough for now**. Move
 on; do not keep polishing them. Nuke windows and Train version pictures are
 believed fixed; reopen only for an actual regression, not a fresh map audit.
 
+## Delivered overnight
+
+PR #270 is merged. The desktop **CSGO Rewrite Playtest** opens a single match;
+F8 changes weapons/knives, solo/ten-player sessions and maps inside the game.
+It also includes classic shots, the lower local AK shot mix, compact HUD/feed,
+airborne easing, footstep attenuation and loading work. The original profile
+is preserved. The next combined candidate covers fire intersections, bot jump/portal recovery,
+material decal exclusions, dropped-gun bounds and parallel prop-lighting queries.
+One installed Dust II PLAY comparison reduced world/prop preparation from 45.1s
+to 17.7s with identical geometry/material counts. Fire still has visible card
+borders; this is a first pass, not a completed VFX match. Release/CI/staging
+remain pending for this candidate.
+
 ## Delivery policy (explicit owner correction, October 20 evening)
 
 Work in useful combined batches. Implement, run focused checks plus one combined

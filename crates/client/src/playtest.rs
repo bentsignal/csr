@@ -77,6 +77,8 @@ fn input(
                     options.bot_difficulty = if count == 0 { Some(0) } else { None };
                 }
                 options.direct = true;
+                options.deathmatch = true;
+                options.grenade_practice = true;
                 *request.0.lock().unwrap() = Some(options.into());
                 panel.open = false;
             }
@@ -90,6 +92,7 @@ fn input(
         local.keyboard_attacks = 0;
         local.pending_slot = 0;
         local.pending_drop = false;
+        local.pending_buys.clear();
         local.pending_utility = 0;
         cursor.1.grab_mode = CursorGrabMode::None;
         cursor.1.visible = true;
@@ -128,15 +131,19 @@ fn draw(
     if let Some(root) = panel.root.take() { commands.entity(root).despawn(); }
     let root = commands.spawn((Persistent, GlobalZIndex(25000), Node {
         position_type: PositionType::Absolute,
-        left: if panel.open { percent(8) } else { px(16) },
-        top: if panel.open { percent(10) } else { px(16) },
+        left: if panel.open { percent(8) } else { percent(43) },
+        top: if panel.open { percent(10) } else { auto() },
+        bottom: if panel.open { auto() } else { px(12) },
         width: if panel.open { percent(84) } else { auto() },
-        max_width: px(1100), padding: UiRect::all(px(20)),
+        max_width: px(1100), padding: UiRect::all(px(if panel.open { 20 } else { 6 })),
         flex_direction: FlexDirection::Column, row_gap: px(14), ..default()
     }, BackgroundColor(Color::srgba(0.035, 0.055, 0.07, if panel.open { 0.97 } else { 0.75 })))).id();
     panel.root = Some(root);
     if !panel.open {
-        button(&mut commands, root, "F8  Playtest controls", Action::Toggle, art.regular.clone());
+        let hint = commands.spawn((Persistent, Text::new("F8  Playtest controls"), TextFont {
+            font: art.regular.clone().into(), font_size: FontSize::Px(14.), ..default()
+        }, TextColor(Color::WHITE))).id();
+        commands.entity(root).add_children(&[hint]);
         return;
     }
     let title = commands.spawn((Persistent, Text::new("PLAYTEST  |  F8 or Escape to resume"), TextFont {
@@ -207,4 +214,50 @@ mod tests {
         assert!(!app.world().resource::<Panel>().open);
         assert!(!app.world().resource::<ButtonInput<KeyCode>>().just_pressed(KeyCode::Escape));
     }
+    #[test]
+    #[ignore = "requires read-only CS:GO Legacy installed weapon definitions"]
+    fn installed_playtest_arsenal_fires_and_reloads_through_tick_input() {
+        let data = crate::GameData::load().expect("Legacy install");
+        let guns: Vec<_> = data.catalog.weapons.iter().filter(|d| matches!(d.class,
+            weapons::WeaponClass::Pistol | weapons::WeaponClass::Smg | weapons::WeaponClass::Rifle
+            | weapons::WeaponClass::Sniper | weapons::WeaponClass::Shotgun | weapons::WeaponClass::MachineGun)).collect();
+        assert!(guns.len() >= 30);
+        let mut floor = collision::CollisionWorld::new();
+        let v = glam::Vec3::new;
+        for triangle in [[v(-8192., -8192., 0.), v(8192., -8192., 0.), v(8192., 8192., 0.)],
+            [v(-8192., -8192., 0.), v(8192., 8192., 0.), v(-8192., 8192., 0.)]] {
+            floor.add_triangle(triangle, collision::contents::SOLID, 0);
+        }
+        floor.finalize();
+        let floor = std::sync::Arc::new(floor);
+        for rate in [64, 128] {
+            for gun in &guns {
+                let mut world = sim::World::with_catalog(floor.clone(), data.catalog.clone());
+                world.set_tick_rate(rate);
+                world.rules.grenade_practice = true;
+                let id = world.add_player("arsenal", sim::Team::CounterTerrorist);
+                world.step(&[(id, sim::TickInput { buy: sim::Purchase::Weapon(gun.def_index), ..default() })]);
+                assert_eq!(world.player(id).unwrap().active_weapon().unwrap().def.id, gun.id);
+                // Let ordinary deployment finish with the trigger released.
+                for _ in 0..world.ticks(3.) { world.step(&[(id, sim::TickInput::default())]); }
+                let mut fired = false;
+                for _ in 0..world.ticks(1.) {
+                    world.step(&[(id, sim::TickInput { buttons: movement::buttons::ATTACK, ..default() })]);
+                    fired |= world.events.iter().any(|e| matches!(e, sim::GameEvent::Fire { player, weapon, .. }
+                        if *player == id && weapon == &gun.class_name));
+                }
+                assert!(fired, "{} at {} Hz", gun.class_name, rate);
+                let clip = world.player(id).unwrap().active_weapon().unwrap().clip;
+                assert!(clip < gun.clip_size, "{} must spend ammunition", gun.class_name);
+                // Release and allow slow bolt/shot recovery before one reload press.
+                for _ in 0..world.ticks(3.) { world.step(&[(id, sim::TickInput::default())]); }
+                world.step(&[(id, sim::TickInput { buttons: movement::buttons::RELOAD, ..default() })]);
+                for _ in 0..world.ticks(8.) { world.step(&[(id, sim::TickInput::default())]); }
+                let held = world.player(id).unwrap().active_weapon().unwrap();
+                assert_eq!(held.clip, gun.clip_size, "{} reload at {} Hz", gun.class_name, rate);
+                assert!(held.reload_end.is_none());
+            }
+        }
+    }
+
 }

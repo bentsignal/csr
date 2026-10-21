@@ -134,6 +134,7 @@ pub fn load(
     materials: &mut Assets<ParticleMaterial>,
     images: &mut Assets<Image>,
     authored_positions: &[&str],
+    soften_card_edges: bool,
 ) -> Vec<Layer> {
     let Some(elements) = fs.read(path).and_then(|data| particle_data::pcf(&data)) else {
         warn!("Cannot read particle definitions {path}");
@@ -172,22 +173,36 @@ pub fn load(
             let Some(vtf) = vtf::Vtf::parse(&bytes).ok() else {
                 continue;
             };
-            let Some(rgba) = vtf.rgba8(0, 0, 0) else {
+            // Keep authored minification levels instead of sampling the full
+            // atlas at every distance. The upright fire atlas sets NOMIP;
+            // ground fire does not, so its supplied mip chain is usable.
+            let mip_count = if vtf.flags & vtf::flags::NOMIP != 0 {
+                1
+            } else {
+                vtf.mip_count
+            };
+            let Some(rgba) = (0..mip_count).try_fold(Vec::new(), |mut rgba, level| {
+                rgba.extend_from_slice(&vtf.rgba8(level, 0, 0)?);
+                Some(rgba)
+            }) else {
                 continue;
             };
             let sheets = particle_data::sheets(&bytes).unwrap_or_default();
             use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
-            let mut image = Image::new(
+            // Image::new validates a single level's length, while this buffer
+            // contains the selected mip levels from largest to smallest.
+            let mut image = Image::new_uninit(
                 Extent3d {
                     width: vtf.width as u32,
                     height: vtf.height as u32,
                     depth_or_array_layers: 1,
                 },
                 TextureDimension::D2,
-                rgba,
                 TextureFormat::Rgba8UnormSrgb,
                 RenderAssetUsages::RENDER_WORLD,
             );
+            image.data = Some(rgba);
+            image.texture_descriptor.mip_level_count = mip_count as u32;
             image.sampler = bevy::image::ImageSampler::linear();
             let image = images.add(image);
             textures.insert(texture_path, (image.clone(), sheets.clone()));
@@ -216,7 +231,12 @@ pub fn load(
             },
             extension: ParticleExtension {
                 additive_over: u32::from(additive_over),
+                soften_card_edges: u32::from(soften_card_edges),
                 blend_frames: u32::from(blend_frames),
+                depth_fade_inverse_distance: particle_material::depth_fade_inverse_distance(
+                    value("$depthblend"),
+                    value("$depthblendscale"),
+                ),
             },
         });
         let init = e.refs("initializers", &elements);
@@ -636,6 +656,7 @@ impl Emitter {
             let mut normals = Vec::new();
             let mut uvs = Vec::new();
             let mut next_frames = Vec::new();
+            let mut card_uvs = Vec::new();
             let mut colors = Vec::new();
             // Only sort layers that permit it, using their drawn positions
             // rather than their initial positions before velocity/gravity.
@@ -671,10 +692,11 @@ impl Emitter {
                         }
                     })
                     .unwrap_or(([0.0, 0.0, 1.0, 1.0], [0.0, 0.0, 1.0, 1.0], 0.0));
+                // Fire uses the same renderer orientation as other sprites.
+                // A random world-fixed flame plane turns edge-on as the eye
+                // moves and exposes intersecting sheets against the ground.
                 let (right, up) = if l.ground {
                     ground_basis(p.normal, p.yaw)
-                } else if self.fire {
-                    (Vec3::new(p.yaw.cos(), 0.0, p.yaw.sin()), Vec3::Y)
                 } else if l.upright {
                     upright_basis(eye - self.origin - center)
                 } else {
@@ -689,16 +711,17 @@ impl Emitter {
                 let normal = right.cross(up).normalize_or_zero();
                 let mut color = p.color;
                 color[3] = alpha;
-                for (position, uv, next_uv) in [
-                    (center - r - u, [uv[0], uv[3]], [next_uv[0], next_uv[3]]),
-                    (center + r - u, [uv[2], uv[3]], [next_uv[2], next_uv[3]]),
-                    (center + r + u, [uv[2], uv[1]], [next_uv[2], next_uv[1]]),
-                    (center - r + u, [uv[0], uv[1]], [next_uv[0], next_uv[1]]),
+                for (position, uv, next_uv, card_uv) in [
+                    (center - r - u, [uv[0], uv[3]], [next_uv[0], next_uv[3]], [0.0, 1.0]),
+                    (center + r - u, [uv[2], uv[3]], [next_uv[2], next_uv[3]], [1.0, 1.0]),
+                    (center + r + u, [uv[2], uv[1]], [next_uv[2], next_uv[1]], [1.0, 0.0]),
+                    (center - r + u, [uv[0], uv[1]], [next_uv[0], next_uv[1]], [0.0, 0.0]),
                 ] {
                     positions.push(position.to_array());
                     normals.push(normal.to_array());
                     uvs.push(uv);
                     next_frames.push([next_uv[0], next_uv[1], blend]);
+                    card_uvs.push(card_uv);
                     colors.push(color);
                 }
             }
@@ -709,12 +732,14 @@ impl Emitter {
             normals.resize(l.max * 4, [0.0, 1.0, 0.0]);
             uvs.resize(l.max * 4, [0.0; 2]);
             next_frames.resize(l.max * 4, [0.0; 3]);
+            card_uvs.resize(l.max * 4, [0.0; 2]);
             colors.resize(l.max * 4, [0.0; 4]);
             if let Some(mut mesh) = meshes.get_mut(&b.mesh) {
                 mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
                 mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
                 mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
                 mesh.insert_attribute(particle_material::ATTRIBUTE_NEXT_FRAME, next_frames);
+                mesh.insert_attribute(particle_material::ATTRIBUTE_CARD_UV, card_uvs);
                 mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
             }
         }
@@ -779,6 +804,7 @@ fn empty_mesh(capacity: usize) -> Mesh {
         particle_material::ATTRIBUTE_NEXT_FRAME,
         vec![[0.0_f32; 3]; capacity * 4],
     );
+    mesh.insert_attribute(particle_material::ATTRIBUTE_CARD_UV, vec![[0.0_f32; 2]; capacity * 4]);
     mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, vec![[0.0_f32; 4]; capacity * 4]);
     mesh.insert_indices(Indices::U32(
         (0..capacity as u32)

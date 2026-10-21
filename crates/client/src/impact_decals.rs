@@ -20,6 +20,7 @@ pub(crate) struct Decal {
 pub(crate) struct Catalog {
     translations: HashMap<String, String>,
     groups: HashMap<String, Vec<Decal>>,
+    surface_decals: HashMap<String, bool>,
     serial: u64,
 }
 
@@ -213,7 +214,27 @@ impl Catalog {
         self.groups.values().find_map(|variants| variants.first())
     }
 
-    pub(crate) fn choose(&mut self, code: &str) -> Option<Decal> {
+    /// Respect the receiving material, including patched map materials. Cache
+    /// this per level so automatic fire does not repeatedly read the same VMT.
+    pub(crate) fn choose_for_surface(
+        &mut self,
+        fs: &vfs::Vfs,
+        surface: &str,
+        code: &str,
+    ) -> Option<Decal> {
+        let allowed = self.surface_decals.entry(vmt::normalize_name(surface)).or_insert_with(|| {
+            // Model paths carry MDL surface properties, not a receiving VMT.
+            // Preserve the existing model/door mark path in that case.
+            surface.ends_with(".mdl") || vmt::Material::load(surface, &|p| fs.read_string(p))
+                .is_none_or(|mat| !mat.flag("$nodecal"))
+        });
+        if !*allowed {
+            return None;
+        }
+        self.choose(code)
+    }
+
+    fn choose(&mut self, code: &str) -> Option<Decal> {
         let key = code.to_ascii_lowercase();
         let group = self.translations.get(&key)?;
         let variants = self.groups.get(group)?;
@@ -237,6 +258,32 @@ impl Catalog {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn receiving_material_can_disable_decals_without_consuming_a_choice() {
+        let files: std::collections::BTreeMap<String, std::sync::Arc<[u8]>> = std::collections::BTreeMap::from([
+            ("materials/test/fence.vmt".into(), std::sync::Arc::from(&br#"LightmappedGeneric { "$nodecal" "1" }"#[..])),
+            ("materials/test/wall.vmt".into(), std::sync::Arc::from(&br#"LightmappedGeneric { "$nodecal" "0" }"#[..])),
+            ("materials/test/patched.vmt".into(), std::sync::Arc::from(&br#"Patch { "include" "materials/test/wall.vmt" "replace" { "$nodecal" "1" } }"#[..])),
+            ("materials/test/plain.vmt".into(), std::sync::Arc::from(&br#"LightmappedGeneric { "$surfaceprop" "fixture" }"#[..])),
+        ]);
+        let mut fs = vfs::Vfs::new();
+        fs.push_back("synthetic", vfs::Mount::Memory(files));
+        let mut catalog = Catalog::default();
+        let id = content::ContentId::csgo(content::ContentKind::Material, "test/mark");
+        catalog.translations.insert("fixture".into(), "impact.fixture".into());
+        catalog.groups.insert("impact.fixture".into(), vec![Decal {
+            id: id.clone(), mesh: default(), material: default(), weight: 1.,
+        }]);
+        for surface in ["test/fence", "test/patched"] {
+            assert!(catalog.choose_for_surface(&fs, surface, "fixture").is_none());
+        }
+        assert_eq!(catalog.serial, 0);
+        for surface in ["test/wall", "test/plain", "test/missing", "models/test/door.mdl"] {
+            assert_eq!(catalog.choose_for_surface(&fs, surface, "fixture").unwrap().id, id);
+        }
+        assert!(catalog.choose_for_surface(&fs, "test/wall", "unknown").is_none());
+    }
+
     #[test]
     fn subrect_dimensions_and_empty_no_decal_entries_are_respected() {
         let files: std::collections::BTreeMap<String, std::sync::Arc<[u8]>> = std::collections::BTreeMap::from([

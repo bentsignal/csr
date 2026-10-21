@@ -15,12 +15,41 @@ pub type ParticleMaterial = ExtendedMaterial<StandardMaterial, ParticleExtension
 pub const ATTRIBUTE_NEXT_FRAME: MeshVertexAttribute =
     MeshVertexAttribute::new("Particle_NextFrame", 190_104_105, VertexFormat::Float32x3);
 
+/// Local card coordinates, independent of the selected texture-sheet rectangle.
+pub const ATTRIBUTE_CARD_UV: MeshVertexAttribute =
+    MeshVertexAttribute::new("Particle_CardUv", 190_104_106, VertexFormat::Float32x2);
+
 #[derive(Asset, TypePath, AsBindGroup, Debug, Clone)]
 pub struct ParticleExtension {
     #[uniform(100)]
     pub additive_over: u32,
     #[uniform(101)]
     pub blend_frames: u32,
+    /// Zero disables depth fade; otherwise inverse fade distance in Source units.
+    #[uniform(102)]
+    pub depth_fade_inverse_distance: f32,
+    #[uniform(103)]
+    pub soften_card_edges: u32,
+}
+
+/// First-pass soft intersection, not a measured native SpriteCard fade law.
+/// Installed fire VMTs enable DEPTHBLEND but their DEPTHBLENDSCALE examples
+/// are commented out. Use a provisional one Source-unit view-depth band,
+/// kept narrow because ground cards sit only one unit above the floor. A
+/// positive authored scale multiplies its inverse distance (also provisional).
+/// Keep absent/disabled DEPTHBLEND off, including the fire child layer.
+pub fn depth_fade_inverse_distance(enabled: &str, scale: &str) -> f32 {
+    if !enabled
+        .parse::<f32>()
+        .is_ok_and(|v| v.is_finite() && v > 0.0)
+    {
+        return 0.0;
+    }
+    scale
+        .parse::<f32>()
+        .ok()
+        .filter(|v| v.is_finite() && *v > 0.0)
+        .unwrap_or(1.0)
 }
 
 impl MaterialExtension for ParticleExtension {
@@ -49,6 +78,7 @@ impl MaterialExtension for ParticleExtension {
             Mesh::ATTRIBUTE_UV_0.at_shader_location(2),
             Mesh::ATTRIBUTE_COLOR.at_shader_location(5),
             ATTRIBUTE_NEXT_FRAME.at_shader_location(8),
+            ATTRIBUTE_CARD_UV.at_shader_location(9),
         ])?];
         Ok(())
     }

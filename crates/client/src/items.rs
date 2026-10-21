@@ -93,6 +93,16 @@ fn despawn(commands: &mut Commands, p: &Placed) {
 
 /// Weapons lie on their side; the bomb and kits sit upright.
 pub(crate) fn ground_transform(model: &mdl::Model, pos: glam::Vec3, yaw: f32, on_side: bool) -> Mat4 {
+    ground_transform_with_suppressor(model, pos, yaw, on_side, true)
+}
+
+fn ground_transform_with_suppressor(
+    model: &mdl::Model,
+    pos: glam::Vec3,
+    yaw: f32,
+    on_side: bool,
+    suppressor_attached: bool,
+) -> Mat4 {
     let roll = if on_side { 90.0 } else { 0.0 };
     // World weapons include the character's reference skeleton. Undo its
     // authored hand rotation before laying the weapon's thin axis down.
@@ -110,7 +120,12 @@ pub(crate) fn ground_transform(model: &mdl::Model, pos: glam::Vec3, yaw: f32, on
         model
             .meshes
             .iter()
-            .flat_map(|m| m.vertices.iter().map(|v| rot * v.position)),
+            .enumerate()
+            // Placement must use the same bodyparts that are actually drawn.
+            // A detached suppressor must not shift the gun's floor contact or
+            // centre around invisible geometry.
+            .filter(|(index, _)| !skinning::suppressor_mesh_hidden(model, *index, suppressor_attached))
+            .flat_map(|(_, m)| m.vertices.iter().map(|v| rot * v.position)),
     );
     Mat4::from_rotation_translation(rotation_to_bevy(rot), to_bevy(pos + offset))
 }
@@ -169,6 +184,10 @@ pub fn sync(
             sim::GroundKind::DefuseKit => (ground.kit.as_ref(), false),
         };
         let Some(asset) = asset else { continue };
+        let suppressor_attached = match &item.kind {
+            sim::GroundKind::Weapon(weapon) => weapon.suppressor_attached,
+            sim::GroundKind::DefuseKit => true,
+        };
         if std::env::var_os("CSR_WEAPON_TRACE").is_some() {
             info!("ground item model: item={} class={} model={}", item.id, item.class_name(), asset.model.name);
         }
@@ -176,7 +195,7 @@ pub fn sync(
             &mut commands,
             asset,
             &mut materials,
-            ground_transform(&asset.model, item.pos, item.yaw, on_side),
+            ground_transform_with_suppressor(&asset.model, item.pos, item.yaw, on_side, suppressor_attached),
         );
         if let sim::GroundKind::Weapon(weapon) = &item.kind {
             for (index, entity) in instance.meshes.iter().enumerate() {
@@ -250,6 +269,49 @@ pub fn sync(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn detached_suppressor_does_not_move_visible_ground_weapon_off_its_pivot() {
+        fn mesh(body_part: u32, points: [glam::Vec3; 2]) -> mdl::Mesh {
+            mdl::Mesh {
+                hardware: Some(mdl::HardwareMesh { body_part, sub_model: 0, mesh: 0, lod: 0 }),
+                vertices: points.into_iter().map(|position| mdl::Vertex {
+                    position, normal: glam::Vec3::Z, uv: glam::Vec2::ZERO, tangent: None,
+                    bones: [0; 3], weights: [1., 0., 0.], bone_count: 1,
+                }).collect(),
+                ..default()
+            }
+        }
+        let model = mdl::Model {
+            body_parts: vec![("studio".into(), vec![], 0), ("silencer".into(), vec![], 0)],
+            meshes: vec![
+                mesh(0, [glam::Vec3::new(0., -2., 2.), glam::Vec3::new(20., 2., 6.)]),
+                mesh(1, [glam::Vec3::new(-50., -10., -20.), glam::Vec3::new(100., 10., 20.)]),
+            ],
+            ..default()
+        };
+        let pos = glam::Vec3::new(100., 200., 30.);
+        for on_side in [false, true] {
+            for yaw in [0., 35., 180.] {
+                for attached in [false, true] {
+                    let transform = ground_transform_with_suppressor(&model, pos, yaw, on_side, attached);
+                    let points: Vec<_> = model.meshes.iter().enumerate()
+                        .filter(|(index, _)| !skinning::suppressor_mesh_hidden(&model, *index, attached))
+                        .flat_map(|(_, mesh)| mesh.vertices.iter())
+                        .map(|v| transform.transform_point3(to_bevy(v.position)))
+                        .collect();
+                    let lo = points.iter().copied().fold(Vec3::splat(f32::INFINITY), Vec3::min);
+                    let hi = points.iter().copied().fold(Vec3::splat(f32::NEG_INFINITY), Vec3::max);
+                    assert!((lo.y - 30.25).abs() < 0.001, "visible gun misses floor");
+                    assert!(((lo.x + hi.x) * 0.5 - 100.).abs() < 0.001);
+                    assert!(((lo.z + hi.z) * 0.5 + 200.).abs() < 0.001);
+                }
+                let attached = ground_transform_with_suppressor(&model, pos, yaw, on_side, true);
+                assert_eq!(ground_transform(&model, pos, yaw, on_side), attached);
+                assert_ne!(ground_transform_with_suppressor(&model, pos, yaw, on_side, false), attached);
+            }
+        }
+    }
+
     #[test]
     #[ignore = "requires the user's installed CS:GO Legacy assets"]
     fn installed_world_weapons_rest_flat_on_the_surface() {

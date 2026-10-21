@@ -383,7 +383,8 @@ pub fn update(
                 }
                 let prop = props.prop_of(&level.0.vfs, level.0.collision.surface_name(surface));
                 if let Some(decal) = props.get(&prop).and_then(|p| p.game_material.as_deref())
-                    .and_then(|code| assets.decals.choose(code)) {
+                    .and_then(|code| assets.decals.choose_for_surface(
+                        &level.0.vfs, level.0.collision.surface_name(surface), code)) {
                     let normal = to_bevy(normal).normalize_or_zero();
                     let attachment = door.map(|impact| DoorImpactMark { map: level.0.id.clone(), impact, surface });
                     let pose = match &attachment {
