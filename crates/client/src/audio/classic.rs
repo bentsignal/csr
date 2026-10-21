@@ -1,4 +1,4 @@
-//! Derived waveform identity only; modern mixing metadata is retained.
+//! Retained classic shot selection; installed spatial mixing metadata is retained.
 //! Historical scripts/assets are never embedded in this module.
 use super::{Entry, decoded_audio};
 use content::{ContentId, ContentKind};
@@ -26,7 +26,7 @@ struct Selection {
 #[derive(Default)]
 pub(super) struct Profile {
     era: SoundEra,
-    selections: HashMap<ContentId, Selection>,
+    selections: HashMap<ContentId, Vec<Selection>>,
 }
 
 struct WaveSpec<'a> {
@@ -49,41 +49,142 @@ struct DistantSpec<'a> {
     wave: WaveSpec<'a>,
 }
 
-// Names/size/hash are derived observations from the player's retained files,
-// compared with the published 2015 directory's size/CRC and shot bindings.
-const STOCK: [WeaponSpec<'static>; 2] = [
-    WeaponSpec {
-        weapon: "ak47",
-        binding: "Weapon_AK47.Single",
-        alias: "csr.classic2015.ak47.single",
-        near_wave: WaveSpec {
-            path: "sound/weapons/ak47/ak47-1.wav",
-            size: 288436,
-            sha256: "a504312e586d54332bc42b533242bb7b57ba8704439138a624bf4edc18f71903",
-        },
-        distant: Some(DistantSpec {
-            binding: "weapon_ak47.singledistant",
-            alias: "csr.classic2015.ak47.distant",
-            wave: WaveSpec {
-                path: "sound/weapons/ak47/ak47-1-distant.wav",
-                size: 203206,
-                sha256: "260c3237643c74e4950ba2a96d1179228023f9e759235c43e4d1bc34f5ab95b9",
-            },
-        }),
-    },
-    WeaponSpec {
-        weapon: "m4a1_silencer",
-        binding: "Weapon_M4A1.Silenced",
-        alias: "csr.classic2015.m4a1_silencer.single",
-        near_wave: WaveSpec {
-            path: "sound/weapons/m4a1/m4a1-1.wav",
-            size: 44438,
-            sha256: "8548c3b0937bf07656c73021439b76a946a4a8bb339b208508af6e916f072195",
-        },
-        // Current suppressed M4 routing has no distant entry. The historical
-        // far file is fingerprinted in the audit, but its routing/mix is unmeasured.
-        distant: None,
-    },
+// Shot paths come from the published December 2015 sound declarations. Sizes
+// and SHA256 pin the retained files in Legacy app 4465480, not downloaded audio.
+// Some retained files differ from the 2015 directory CRC/size; those are playable
+// approximations of the declared classic identity, not exact historical bytes.
+// Keep the installed near/far bindings and mixer rather than transplanting a
+// historical operator graph into newer player-feedback routing.
+macro_rules! shot {
+    ($weapon:literal, $binding:literal, $mode:literal,
+        ($path:literal, $size:literal, $hash:literal)) => {
+        WeaponSpec {
+            weapon: $weapon, binding: $binding,
+            alias: concat!("csr.classic2015.", $weapon, ".", $mode),
+            near_wave: WaveSpec { path: $path, size: $size, sha256: $hash },
+            distant: None,
+        }
+    };
+    ($weapon:literal, $binding:literal, $mode:literal,
+        ($path:literal, $size:literal, $hash:literal),
+        ($far_binding:literal, $far_path:literal, $far_size:literal, $far_hash:literal)) => {
+        WeaponSpec {
+            distant: Some(DistantSpec {
+                binding: $far_binding,
+                alias: concat!("csr.classic2015.", $weapon, ".", $mode, ".distant"),
+                wave: WaveSpec { path: $far_path, size: $far_size, sha256: $far_hash },
+            }),
+            ..shot!($weapon, $binding, $mode, ($path, $size, $hash))
+        }
+    };
+}
+
+const STOCK: &[WeaponSpec<'static>] = &[
+    shot!("deagle", "Weapon_DEagle.Single", "single",
+        ("sound/weapons/deagle/deagle-1.wav", 394698, "c84c7a87cdeb04e106df58bf60137ee8eee70c91d3281c8c8c61618d9c99e5ef"),
+        ("weapon_deagle.singledistant", "sound/weapons/deagle/deagle-1-distant.wav", 247540, "fb4ddf1c90471a5b7a39ac6da3e63387e6419643de45babd539c922d15d271ff")),
+    shot!("elite", "Weapon_Elite.Single", "single",
+        ("sound/weapons/elite/elite-1.wav", 348536, "37266a50da5e1ac7a05cfd71c07fa829ff325ff62d334b6b8673fe598124cc0d"),
+        ("weapon_elite.singledistant", "sound/weapons/elite/elite-1-distant.wav", 220544, "cec759b3c54707bad9b5a9f6da4557cf6ddf0663023a4cf433ebb680b8d052af")),
+    shot!("fiveseven", "Weapon_FiveSeven.Single", "single",
+        ("sound/weapons/fiveseven/fiveseven-1.wav", 265728, "f4b9c20faa2d04b55376a627e9cd768fb4b7575c6652ab87f402f51eafdffed6"),
+        ("weapon_fiveseven.singledistant", "sound/weapons/fiveseven/fiveseven-1-distant.wav", 220818, "7572b4b884f1695fc53d9f180bdcf355b556e24ee0d26fb957a58940c9c5cfc6")),
+    shot!("glock", "Weapon_Glock.Single", "single",
+        ("sound/weapons/glock18/glock18-1.wav", 195596, "ec0b1f71d4ff2a56df7c676cfa21b9825eaa9e68071e4e68ffe4b9762e981495"),
+        ("weapon_glock.singledistant", "sound/weapons/glock18/glock18-1-distant.wav", 202972, "46f5909a39f11930199429969b5f14148d0590b0815d8817acd5935cd198c75f")),
+    shot!("ak47", "Weapon_AK47.Single", "single",
+        ("sound/weapons/ak47/ak47-1.wav", 288436, "a504312e586d54332bc42b533242bb7b57ba8704439138a624bf4edc18f71903"),
+        ("weapon_ak47.singledistant", "sound/weapons/ak47/ak47-1-distant.wav", 203206, "260c3237643c74e4950ba2a96d1179228023f9e759235c43e4d1bc34f5ab95b9")),
+    shot!("aug", "Weapon_AUG.Single", "single",
+        ("sound/weapons/aug/aug-1.wav", 407788, "b28184046c10ff5d717771a7e877efadc9f59bce4afc95c6b09fbf970cd346ca"),
+        ("weapon_aug.singledistant", "sound/weapons/aug/aug-1-distant.wav", 257936, "b70c9151cbde7013dc4ae0ad796df760899b1a00745077270bb2ad1133c1b26e")),
+    shot!("awp", "Weapon_AWP.Single", "single",
+        ("sound/weapons/awp/awp1.wav", 728752, "c93fb4714540f2895b1c89764b13238b78f5e53a7fa6e9478ee8da2102409032"),
+        ("weapon_awp.singledistant", "sound/weapons/awp/awp1-distant.wav", 203206, "13f376ef9821a9c73978cabbea9ebb1b1adbdfdb27f108c412f0949da1cec864")),
+    shot!("famas", "Weapon_FAMAS.Single", "single",
+        ("sound/weapons/famas/famas-1.wav", 296956, "f4900ec2a9da21d52add0a6796da8b61578aa24252cf2e72d28235e2bacb6284"),
+        ("weapon_famas.singledistant", "sound/weapons/famas/famas-1-distant.wav", 187724, "a066cf93c84631abbc8689a90de4ea36531d2b46935dad455683ae62052252bd")),
+    shot!("g3sg1", "Weapon_G3SG1.Single", "single",
+        ("sound/weapons/g3sg1/g3sg1-1.wav", 331540, "62ad61182bf31b7175bf03eaac88628e7a1c5fdaa132f3e696739b8e64231e9d"),
+        ("weapon_g3sg1.singledistant", "sound/weapons/g3sg1/g3sg1-1-distant.wav", 203206, "be2545cb1c42318da3ccd0f4c5a1d8f263fcbc442ffe586a6d4ed4b2d94da6b3")),
+    shot!("galilar", "Weapon_GalilAR.Single", "single",
+        ("sound/weapons/galilar/galil-1.wav", 350844, "7571bc91913f9c401665e2105bdbc1f1be0d13aac21a4602f710a660bd51c442"),
+        ("weapon_galilar.singledistant", "sound/weapons/galilar/galil-1-distant.wav", 203206, "3b73bbdb891488701cc7f83738352f68e15d1f28b8231b4d8b58d2679664b64c")),
+    shot!("m249", "Weapon_M249.Single", "single",
+        ("sound/weapons/m249/m249-1.wav", 327362, "6a8b9f22545710dfa62ee25e34f37284764b79475c7d4b922965ed872f11d1c5"),
+        ("weapon_m249.singledistant", "sound/weapons/m249/m249-1-distant.wav", 173070, "9ab6182f53d0bb80f69dda04ef31b269ce677277c76553a4805be0de95bb441d")),
+    shot!("m4a1", "Weapon_M4A1.Single", "single",
+        ("sound/weapons/m4a1/m4a1_unsil-1.wav", 211724, "9763983af9ef5951c541a14a6a9040d36ae2420026671c824369aaeb1226e793"),
+        ("weapon_m4a4.singledistant", "sound/weapons/m4a1/m4a1_unsil-1-distant.wav", 203206, "6127e9d080862b16aec0ceca6c0e6431ac54f4f0fdf38f1c7787da0be7671b50")),
+    shot!("mac10", "Weapon_MAC10.Single", "single",
+        ("sound/weapons/mac10/mac10-1.wav", 253390, "650c21ad4cd3a47eb17d09c4564f5cd289adc1d934d2eb78e12fc4868d7ec888"),
+        ("weapon_mac10.singledistant", "sound/weapons/mac10/mac10-1-distant.wav", 203642, "f908704dd628924472a0d031f3460cdb7ca54734ce30bfe7c7615a6406189738")),
+    shot!("p90", "Weapon_P90.Single", "single",
+        ("sound/weapons/p90/p90-1.wav", 248300, "0cbb602f0c4e686739061ea34b9ada773757bf0c3ce526251955243980ee087e"),
+        ("weapon_p90.singledistant", "sound/weapons/p90/p90-1-distant.wav", 347676, "3b09ddebd9d1a9b1a522c836ce92a6a807a63b2c2fe4f7092bfe4a8eaf1b4c4a")),
+    shot!("ump45", "Weapon_UMP45.Single", "single",
+        ("sound/weapons/ump45/ump45-1.wav", 216090, "e5e1d3eec592dec89c88f897436962328ac6f5d7df3881328b5e9b776e823f7e"),
+        ("weapon_ump45.singledistant", "sound/weapons/ump45/ump45-1-distant.wav", 426358, "d04a56725183eb44400a813d140f5ee907c728e3c3f4eaa893cda9bc24f0dcfe")),
+    shot!("xm1014", "Weapon_XM1014.Single", "single",
+        ("sound/weapons/xm1014/xm1014-1.wav", 565528, "c7ae55f1a8e916a5aa7e31ed30d3454198173726b66a0c6cd8e0c70dfffc9481"),
+        ("weapon_xm1014.singledistant", "sound/weapons/xm1014/xm1014-1-distant.wav", 209520, "abde82d8e3d2db501d9a5877dc15ffe0186a514ea0dc3a5ef45a07f08d8ac92d")),
+    shot!("bizon", "Weapon_bizon.Single", "single",
+        ("sound/weapons/bizon/bizon-1.wav", 248300, "c91682a2ff6110caf6827fb3503d8215cfa8c7073500ecec18c701daa4d3403f"),
+        ("weapon_bizon.singledistant", "sound/weapons/bizon/bizon-1-distant.wav", 203662, "c35795206604b4a06fc0ef48607178eeccf29170980a46ffd9a8db62038e5c29")),
+    shot!("mag7", "Weapon_Mag7.Single", "single",
+        ("sound/weapons/mag7/mag7-1.wav", 271872, "5e57ad339f0fbead233f2aa8ee215c313850b3c0fb827ce1b6ee7f7d4030a021"),
+        ("weapon_mag7.singledistant", "sound/weapons/mag7/mag7-1-distant.wav", 203206, "82101e5e1f55c55dbc3d6203aea1f65fa23232b1257b6ccbd42ff298bba6a898")),
+    shot!("negev", "Weapon_Negev.Single", "single",
+        ("sound/weapons/negev/negev-1.wav", 327870, "2f5bb19f4f9fe7532a26bb1fe6fcf991bf2f5172bf86db4a2621d76b64ec97de"),
+        ("weapon_negev.singledistant", "sound/weapons/negev/negev-1-distant.wav", 203204, "4f1f291ba6a2be4037e0495fe88a68e53439bc02dd08764fe912eedebc83e48b")),
+    shot!("sawedoff", "Weapon_Sawedoff.Single", "single",
+        ("sound/weapons/sawedoff/sawedoff-1.wav", 495416, "cad0dee904fae92ffa6d9bf1b719abcb1b78723c542c197292de38e11b7fbc24"),
+        ("weapon_sawedoff.singledistant", "sound/weapons/sawedoff/sawedoff-1-distant.wav", 295946, "d3ba917629786c623f9a2f543be3d061ea95610f94934b58c93b213b1993857e")),
+    shot!("tec9", "Weapon_tec9.Single", "single",
+        ("sound/weapons/tec9/tec9-1.wav", 270416, "a2dd44715b23d2d152fec60b203d930efc254d264836982b504b376e07692365"),
+        ("weapon_tec9.singledistant", "sound/weapons/tec9/tec9-1-distant.wav", 203206, "fd909ebda3a5a2d512d6701808161cd749df79353f064c70c6bb5390a6a511d6")),
+    shot!("taser", "Weapon_Taser.Single", "single",
+        ("sound/weapons/taser/taser_shoot.wav", 257448, "13125cdb85f84ab71ed3921fa55977288dfcafb8e36a414a83b1420468586748")),
+    shot!("hkp2000", "Weapon_hkp2000.Single", "single",
+        ("sound/weapons/hkp2000/hkp2000-1.wav", 371628, "cb2583cd776030758225310911cf1ab18f6540dfa2508a968469f1c8c03d7241"),
+        ("weapon_hkp2000.singledistant", "sound/weapons/hkp2000/hkp2000-1-distant.wav", 290358, "d21e30b500130bc0dce69e91083b63280a6d877d885d40e1dacba38b33e5f400")),
+    shot!("mp7", "Weapon_MP7.Single", "single",
+        ("sound/weapons/mp7/mp7-1.wav", 332074, "eaf15cfa8e59169ca9576e730965775eec1a7775277b19d286b165b013aa491c"),
+        ("weapon_mp7.singledistant", "sound/weapons/mp7/mp7-1-distant.wav", 203206, "fbbdfc95fdca54f4b8bf108c009b70955b56529c726d6189db5275f7e6e8ca1f")),
+    shot!("mp9", "Weapon_MP9.Single", "single",
+        ("sound/weapons/mp9/mp9-1.wav", 161420, "218880b4f192ccf29306beb0f4d3c68cf34e87d3232b17f033bbdf3defac9852"),
+        ("weapon_mp9.singledistant", "sound/weapons/mp9/mp9-1-distant.wav", 203206, "2ab5164dbf59674f6363ad4a5a0434318cee2020d778d62e0e51316fb1f60dcc")),
+    shot!("nova", "Weapon_Nova.Single", "single",
+        ("sound/weapons/nova/nova-1.wav", 505264, "d30659b4cb5aa1a6f72d292f9a4a568b59671ee9b96bac3afa63d4a600c7b6b6"),
+        ("weapon_nova.singledistant", "sound/weapons/nova/nova-1-distant.wav", 228812, "5d9087a4c6c03e83e708519e36eb9670d89187f8f52af0f72fba44d2154e79bd")),
+    shot!("p250", "Weapon_P250.Single", "single",
+        ("sound/weapons/p250/p250-1.wav", 206732, "01b10acbcb7d48e104a5c973599a623a2d8f3d93cb1c4f50d535c1176e2dd363"),
+        ("weapon_p250.singledistant", "sound/weapons/p250/p250-1-distant.wav", 203206, "bad8ddf7f4d0f7063a0cabd6996081e01c55a20e818c230177272988210e823f")),
+    shot!("scar20", "Weapon_scar20.Single", "single",
+        ("sound/weapons/scar20/scar20_unsil-1.wav", 302274, "89fc663556fe372bdafd97481537a5fc3803ae9de58f2e535d9cba71923a3b25"),
+        ("weapon_scar20.singledistant", "sound/weapons/scar20/scar20_unsil-1-distant.wav", 203206, "4b5b6c1b385c20fa4bbe82022deadf5b09540a2324e6e9d51d4d1f3d37d35f2a")),
+    shot!("sg556", "Weapon_SG556.Single", "single",
+        ("sound/weapons/sg556/sg556-1.wav", 397542, "e3dfef911aeb36b1816e23c23f4891c82fbaef80f76e8d0bfecabd5f770509b3"),
+        ("weapon_sg556.singledistant", "sound/weapons/sg556/sg556-1-distant.wav", 203206, "0dec8def6fd8fbc7c1ed608bede5f545369070bd103aff3acb188a28ea52add0")),
+    shot!("ssg08", "Weapon_SSG08.Single", "single",
+        ("sound/weapons/ssg08/ssg08-1.wav", 252128, "33547c45fb5ddfb7057fe6dc97c693bda9274181940ec7756361fea76ece88c8"),
+        ("weapon_ssg08.singledistant", "sound/weapons/ssg08/ssg08-1-distant.wav", 203206, "711541994cc93290732d7ec72abf11b6acce91337f087e807c62b5b08c4fe94b")),
+    shot!("m4a1_silencer", "Weapon_M4A1.SilencedSingle", "unsilenced",
+        ("sound/weapons/m4a1/m4a1-1-single.wav", 247626, "c05556215073c7a6a9243efe517efdf08362dd22ca89a357cb6dc379309026c3"),
+        ("weapon_m4a1.usdistant", "sound/weapons/m4a1/m4a1-1-distant.wav", 23122, "fe23d5c351f5b095437c4326a715693cd380c8e81b1f0f8fa2793a2b9970f80c")),
+    shot!("m4a1_silencer", "Weapon_M4A1.Silenced", "silenced",
+        ("sound/weapons/m4a1/m4a1-1.wav", 44438, "8548c3b0937bf07656c73021439b76a946a4a8bb339b208508af6e916f072195")),
+    shot!("usp_silencer", "Weapon_USP.Single", "unsilenced",
+        ("sound/weapons/usp/usp_unsil-1.wav", 196608, "3176347649f491669d715dd325eb40a6f69884245af7c3757cbf18d6d07e510f"),
+        ("weapon_usp.singledistant", "sound/weapons/usp/usp_unsil-1-distant.wav", 173596, "a4605b061f28a9101a0d3f265377d35dee290808135c2ae8b9e7f03884689cfb")),
+    shot!("usp_silencer", "Weapon_USP.SilencedShot", "silenced",
+        ("sound/weapons/usp/usp1.wav", 45830, "7ec5f84a2c36ea263b71571b7ee548833fd66dca8e81336032e0214084fa5c0a")),
+    shot!("cz75a", "Weapon_CZ75A.Single", "single",
+        ("sound/weapons/cz75a/cz75a-1.wav", 247542, "015a8969485640892238a8c29d978b4412483011a3cb48e71ac43295d3b7d77b"),
+        ("weapon_cz75a.singledistant", "sound/weapons/cz75a/cz75a-1-distant.wav", 191940, "9b5d41885f0031c73c626f978cd279e115cd2f3c65e56c95251b57c7c80820ad")),
+    shot!("revolver", "Weapon_Revolver.Single", "single",
+        ("sound/weapons/revolver/revolver-1_01.wav", 617520, "a6305095619ba8e9aae31c6cc9e64917b1bb7e40bd6dd59a5129e27524e3c31d"),
+        ("weapon_revolver.singledistant", "sound/weapons/revolver/revolver-1_distant.wav", 308820, "02a8b6c42b1b18529ed2c6f535da4263a649aad0f7c736f71f6fcd84753c6276")),
 ];
 
 fn verified_wave(fs: &vfs::Vfs, spec: &WaveSpec<'_>) -> Result<FrozenWave, &'static str> {
@@ -108,9 +209,9 @@ impl Profile {
             ..Default::default()
         };
         if era == SoundEra::Classic2015 {
-            for spec in &STOCK {
+            for spec in STOCK {
                 if let Err(reason) = profile.install(fs, entries, spec) {
-                    // Fixed identifiers/reasons, at most two diagnostics per load.
+                    // Fixed identifiers/reasons, at most one diagnostic per stock state.
                     bevy::log::warn!(
                         "Classic2015 {} unavailable: {}; using installed shot",
                         spec.weapon,
@@ -168,13 +269,10 @@ impl Profile {
         if let Some((alias, entry)) = distant {
             entries.insert(alias.to_string(), entry);
         }
-        self.selections.insert(
-            ContentId::csgo(ContentKind::Weapon, spec.weapon),
-            Selection {
-                binding: spec.binding,
-                alias: spec.alias,
-            },
-        );
+        self.selections
+            .entry(ContentId::csgo(ContentKind::Weapon, spec.weapon))
+            .or_default()
+            .push(Selection { binding: spec.binding, alias: spec.alias });
         Ok(())
     }
 
@@ -184,8 +282,9 @@ impl Profile {
 
     pub(super) fn select(&self, id: &ContentId, binding: &str) -> Option<&str> {
         self.selections
-            .get(id)
-            .filter(|entry| entry.binding.eq_ignore_ascii_case(binding))
+            .get(id)?
+            .iter()
+            .find(|entry| entry.binding.eq_ignore_ascii_case(binding))
             .map(|entry| entry.alias)
     }
 }
@@ -266,6 +365,35 @@ mod tests {
             ])),
         );
         fs
+    }
+
+    #[test]
+    fn both_suppressor_states_keep_their_own_verified_selection() {
+        let near = wav(1000);
+        let far = wav(-2000);
+        let near_hash = format!("{:x}", Sha256::digest(&near));
+        let far_hash = format!("{:x}", Sha256::digest(&far));
+        let fs = fs(near, far);
+        let mut entries = entries();
+        let mut suppressed = entries["test.single"].clone();
+        suppressed.distant = None;
+        entries.insert("test.suppressed".into(), suppressed);
+        let mut profile = Profile::default();
+        let mut plain = spec(&near_hash, &far_hash);
+        plain.weapon = "usp_silencer";
+        profile.install(&fs, &mut entries, &plain).unwrap();
+        let mut suppressed = spec(&near_hash, &far_hash);
+        suppressed.weapon = "usp_silencer";
+        suppressed.binding = "Test.Suppressed";
+        suppressed.alias = "csr.test.suppressed";
+        suppressed.distant = None;
+        profile.install(&fs, &mut entries, &suppressed).unwrap();
+        let id = ContentId::csgo(ContentKind::Weapon, "usp_silencer");
+        assert_eq!(profile.select(&id, "Test.Single"), Some("csr.test.near"));
+        assert_eq!(profile.select(&id, "Test.Suppressed"), Some("csr.test.suppressed"));
+        assert_eq!(entries["csr.test.near"].distant.as_deref(), Some("csr.test.distant"));
+        assert!(entries["csr.test.suppressed"].distant.is_none());
+        assert_eq!(profile.select(&id, "Custom.Suppressed"), None);
     }
 
     #[test]
