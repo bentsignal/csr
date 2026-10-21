@@ -172,22 +172,36 @@ pub fn load(
             let Some(vtf) = vtf::Vtf::parse(&bytes).ok() else {
                 continue;
             };
-            let Some(rgba) = vtf.rgba8(0, 0, 0) else {
+            // Keep authored minification levels instead of sampling the full
+            // atlas at every distance. The upright fire atlas sets NOMIP;
+            // ground fire does not, so its supplied mip chain is usable.
+            let mip_count = if vtf.flags & vtf::flags::NOMIP != 0 {
+                1
+            } else {
+                vtf.mip_count
+            };
+            let Some(rgba) = (0..mip_count).try_fold(Vec::new(), |mut rgba, level| {
+                rgba.extend_from_slice(&vtf.rgba8(level, 0, 0)?);
+                Some(rgba)
+            }) else {
                 continue;
             };
             let sheets = particle_data::sheets(&bytes).unwrap_or_default();
             use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
-            let mut image = Image::new(
+            // Image::new validates a single level's length, while this buffer
+            // contains the selected mip levels from largest to smallest.
+            let mut image = Image::new_uninit(
                 Extent3d {
                     width: vtf.width as u32,
                     height: vtf.height as u32,
                     depth_or_array_layers: 1,
                 },
                 TextureDimension::D2,
-                rgba,
                 TextureFormat::Rgba8UnormSrgb,
                 RenderAssetUsages::RENDER_WORLD,
             );
+            image.data = Some(rgba);
+            image.texture_descriptor.mip_level_count = mip_count as u32;
             image.sampler = bevy::image::ImageSampler::linear();
             let image = images.add(image);
             textures.insert(texture_path, (image.clone(), sheets.clone()));
