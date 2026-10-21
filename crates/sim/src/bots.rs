@@ -898,15 +898,15 @@ fn follow_path(
     if brain.last_navigation_tick.is_some_and(|tick| world.tick.saturating_sub(tick) > 1) {
         brain.progress_time = time;
         brain.progress_pos = pos;
-        // Combat strafing can leave the cached route. Its old portal is no
-        // longer an approach from this position; retrying it can steer into
-        // walls and eventually blacklist a crossing we never attempted.
-        // Keep routes the normal look-ahead can still advance, including
-        // their boundary seams, and otherwise plan from the current area.
-        if !brain.path.iter().skip(brain.path_index).take(4).any(|&id| in_area(id, 0.0)) {
-            brain.path.clear();
-            brain.path_index = 0;
-        }
+    }
+    // Displacement can leave the cached route even while navigation runs
+    // every tick. Its old portal is no longer an approach from this position;
+    // retrying it can blacklist a crossing we never attempted. Keep routes
+    // the normal look-ahead can still advance, including their boundary
+    // seams, and otherwise plan from the current area before steering.
+    if !brain.path.iter().skip(brain.path_index).take(4).any(|&id| in_area(id, 0.0)) {
+        brain.path.clear();
+        brain.path_index = 0;
     }
     brain.last_navigation_tick = Some(world.tick);
     if goal != brain.goal_area {
@@ -1427,6 +1427,44 @@ mod tests {
                         "use the current room's east exit, not the old room's portal: {wish:?}");
                 }
             }
+        }
+    }
+
+    #[test]
+    fn continuous_navigation_replans_before_blacklisting_a_displaced_crossing() {
+        for rate in [64, 128] {
+            let (mesh, mut world, id, mut brain) = blocked_shortcut_fixture(true);
+            world.set_tick_rate(rate);
+            let mut rng = Rng::from_parts(&[17]);
+            // Reach the recovery deadline with consecutive navigation calls.
+            // The blocked portal remains valid while still in its approach.
+            for tick in 1..=world.ticks(2.0) {
+                world.tick = tick;
+                follow_path(&mesh, &world, world.player(id).unwrap(), &mut brain,
+                    &mut TickInput::default(), &mut rng, world.time(), 4., Some(4), None);
+            }
+            assert_eq!(brain.path, [1, 2, 4]);
+            assert!(brain.failed_transitions.is_empty());
+            // Collision/knockback can move the bot into the other approach
+            // without pausing navigation. The old 1 -> 2 portal must not be
+            // steered toward or blamed when its recovery clock expires.
+            world.tick += 1;
+            world.player_mut(id).unwrap().movement.origin = Vec3::new(-32., 96., 0.);
+            let mut input = TickInput::default();
+            follow_path(&mesh, &world, world.player(id).unwrap(), &mut brain,
+                &mut input, &mut rng, world.time(), 4., Some(4), None);
+            assert_eq!(brain.path, [3, 4], "replan immediately at {rate} Hz");
+            assert_eq!(brain.path_index, 0);
+            assert_eq!(brain.route_searches, 1);
+            assert!(brain.failed_transitions.is_empty(), "displacement is not a failed crossing");
+            assert_eq!(brain.progress_time, world.time());
+            assert_eq!(input.buttons & buttons::JUMP, 0, "new approach has no stuck time");
+            assert!(input.forward_move != 0. || input.side_move != 0., "steer on the replacement route");
+            world.tick += 1;
+            follow_path(&mesh, &world, world.player(id).unwrap(), &mut brain,
+                &mut TickInput::default(), &mut rng, world.time(), 4., Some(4), None);
+            assert_eq!(brain.path, [3, 4]);
+            assert_eq!(brain.route_searches, 1, "reuse the replacement route");
         }
     }
 
