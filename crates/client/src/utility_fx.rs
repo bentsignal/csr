@@ -48,13 +48,27 @@ pub struct AssetsFx {
     explosions: Vec<crate::utility_particles::Emitter>,
     projectiles: HashMap<u32, Flying>,
     last_time: f32,
+    isolated_fire_layer: Option<usize>,
 }
+
+/// Finite cases for the existing screenshot fixture. Keep the full layer list
+/// below: removing layers would change particle RNG seeds through their indices.
+pub fn isolated_fire_layer(kind: &str) -> Option<usize> {
+    match kind {
+        "fire-center" => Some(1),
+        "fire-fancy" => Some(2),
+        "fire-child" => Some(3),
+        _ => None,
+    }
+}
+
 pub fn setup(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut mats: ResMut<Assets<crate::particle_material::ParticleMaterial>>,
     mut images: ResMut<Assets<Image>>,
     level: Res<crate::LoadedLevel>,
+    options: Res<crate::Options>,
 ) {
     let fs = &level.0.vfs;
     let smoke = crate::utility_particles::load(
@@ -135,6 +149,9 @@ pub fn setup(
         explosions: Vec::new(),
         projectiles: HashMap::new(),
         last_time: 0.0,
+        isolated_fire_layer: options.0.screenshot.as_ref()
+            .and_then(|_| std::env::var("CSR_TEST_UTILITY").ok())
+            .and_then(|kind| isolated_fire_layer(&kind)),
     });
     commands.spawn((
         Node {
@@ -224,6 +241,7 @@ pub fn update(
         he,
         fields,
         explosions,
+        isolated_fire_layer,
         ..
     } = &mut *fx;
     let gone: Vec<_> = fields
@@ -250,19 +268,26 @@ pub fn update(
     {
         if !fields.contains_key(&field.id) && fields.len() < 16 {
             let layers = if field.kind.fire() { &*fire } else { &*smoke };
-            fields.insert(
+            let emitter = crate::utility_particles::Emitter::spawn(
+                &mut commands,
+                &mut meshes,
+                layers,
+                field.pos,
+                field.born,
+                field.until,
                 field.id,
-                crate::utility_particles::Emitter::spawn(
-                    &mut commands,
-                    &mut meshes,
-                    layers,
-                    field.pos,
-                    field.born,
-                    field.until,
-                    field.id,
-                    field.kind.fire(),
-                ),
+                field.kind.fire(),
             );
+            if field.kind.fire() && field.id == 999999 {
+                if let Some(layer) = *isolated_fire_layer {
+                    for batch in &emitter.batches {
+                        if batch.layer != layer {
+                            commands.entity(batch.entity).insert(Visibility::Hidden);
+                        }
+                    }
+                }
+            }
+            fields.insert(field.id, emitter);
         }
     }
     let eye = to_bevy(local.render_eye);

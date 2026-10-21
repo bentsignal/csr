@@ -216,6 +216,9 @@ pub fn load(
         let blend_frames = value("$blendframes").parse::<f32>().unwrap_or(0.0) > 0.0
             && value("$dualsequence").parse::<f32>().unwrap_or(0.0) == 0.0
             && value("$maxlumframeblend1").parse::<f32>().unwrap_or(0.0) == 0.0;
+        let depth_fade = particle_material::depth_fade_inverse_distance(
+            value("$depthblend"), value("$depthblendscale"),
+        );
         let material = materials.add(ParticleMaterial {
             base: StandardMaterial {
                 base_color_texture: Some(image),
@@ -233,10 +236,11 @@ pub fn load(
                 additive_over: u32::from(additive_over),
                 soften_card_edges: u32::from(soften_card_edges),
                 blend_frames: u32::from(blend_frames),
-                depth_fade_inverse_distance: particle_material::depth_fade_inverse_distance(
-                    value("$depthblend"),
-                    value("$depthblendscale"),
-                ),
+                // A one-inch band left a nearly binary floor cut on the tilted
+                // center/fancy fire cards. Use a visible, provisional 16-inch
+                // view-depth band for field fire; other effects and explicit
+                // DEPTHBLEND=0 layers retain their existing behavior.
+                depth_fade_inverse_distance: if soften_card_edges { depth_fade / 16.0 } else { depth_fade },
             },
         });
         let init = e.refs("initializers", &elements);

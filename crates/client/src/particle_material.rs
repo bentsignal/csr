@@ -32,12 +32,11 @@ pub struct ParticleExtension {
     pub soften_card_edges: u32,
 }
 
-/// First-pass soft intersection, not a measured native SpriteCard fade law.
-/// Installed fire VMTs enable DEPTHBLEND but their DEPTHBLENDSCALE examples
-/// are commented out. Use a provisional one Source-unit view-depth band,
-/// kept narrow because ground cards sit only one unit above the floor. A
-/// positive authored scale multiplies its inverse distance (also provisional).
-/// Keep absent/disabled DEPTHBLEND off, including the fire child layer.
+/// Normalize the existing provisional soft-intersection settings. A positive
+/// authored scale multiplies inverse distance; absent scale starts at one.
+/// Field fire widens that band in its loader after rendered layer isolation;
+/// this helper preserves other utility and held-wick behavior. These are not
+/// measured native SpriteCard defaults. Explicit DEPTHBLEND=0 stays disabled.
 pub fn depth_fade_inverse_distance(enabled: &str, scale: &str) -> f32 {
     if !enabled
         .parse::<f32>()
