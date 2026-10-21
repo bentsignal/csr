@@ -231,6 +231,10 @@ pub fn load(
             extension: ParticleExtension {
                 additive_over: u32::from(additive_over),
                 blend_frames: u32::from(blend_frames),
+                depth_fade_inverse_distance: particle_material::depth_fade_inverse_distance(
+                    value("$depthblend"),
+                    value("$depthblendscale"),
+                ),
             },
         });
         let init = e.refs("initializers", &elements);
