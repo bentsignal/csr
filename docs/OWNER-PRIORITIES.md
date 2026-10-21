@@ -21,8 +21,11 @@ checks passed at 64/128 Hz, and bounded ten-player Nuke remained playable.
 Fire layer isolation traced the remaining hard floor contacts to the blended
 center/fancy layers. A provisional wider field-fire depth band now improves
 the flat/ramp controls without changing smoke, disabled-depth layers or sim
-coverage; final build/CI/staging is pending. The earlier padding/feather/
-underlay-omission experiments were reverted. Continue the remaining player
+coverage. That field-fire correction is merged and staged with #274; workspace,
+Release, probe/sim and CI passed. The earlier padding/feather/underlay-omission
+experiments were reverted. The next bot pose candidate keeps the airborne
+clock moving across held shot/stance events, preserving discrete event timing
+and movement physics; integration/runtime checks remain pending. Continue the remaining player
 outcomes; these increments do not end the queue.
 
 ## Active batch and accepted order
