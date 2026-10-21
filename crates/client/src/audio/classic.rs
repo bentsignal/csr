@@ -1,4 +1,5 @@
 //! Retained classic shot selection; installed spatial mixing metadata is retained.
+//! Classic shots keep their declared normal pitch instead of modern resampling.
 //! Historical scripts/assets are never embedded in this module.
 use super::{Entry, decoded_audio};
 use content::{ContentId, ContentKind};
@@ -55,6 +56,11 @@ struct DistantSpec<'a> {
 // approximations of the declared classic identity, not exact historical bytes.
 // Keep the installed near/far bindings and mixer rather than transplanting a
 // historical operator graph into newer player-feedback routing.
+// Every selected historical near/distant declaration uses PITCH_NORM (or 100).
+// Modern pitch changes belong to the modern waves: M4A4 uses 120, Dual Berettas
+// 110, distant FAMAS 105 and several pistols add jitter. Applying those to the
+// retained waves changes their identity/timing; the private reference clips
+// corroborate normal pitch for M4A4, Glock and P250.
 macro_rules! shot {
     ($weapon:literal, $binding:literal, $mode:literal,
         ($path:literal, $size:literal, $hash:literal)) => {
@@ -255,6 +261,7 @@ impl Profile {
             let audio = verified_wave(fs, &spec.wave)?;
             distant.waves = vec![spec.wave.path.to_string()];
             distant.frozen_wave = Some(audio);
+            distant.pitch = (100.0, 100.0);
             // Retain the measured current mixer/limits; era-specific DSP is unknown.
             distant.distant = None;
             distant.distant_layer = true;
@@ -264,6 +271,7 @@ impl Profile {
         };
         near.waves = vec![spec.near_wave.path.to_string()];
         near.frozen_wave = Some(near_audio);
+        near.pitch = (100.0, 100.0);
         near.distant = distant.as_ref().map(|(alias, _)| alias.to_string());
         entries.insert(spec.alias.to_string(), near);
         if let Some((alias, entry)) = distant {
@@ -565,6 +573,10 @@ mod tests {
         let distant_hash = format!("{:x}", Sha256::digest(&distant));
         let fs = fs(near.clone(), distant.clone());
         let mut entries = entries();
+        // Modern pitch is authored for different waveforms. Keep public entries
+        // intact while restoring normal pitch to both verified classic aliases.
+        entries.get_mut("test.single").unwrap().pitch = (120.0, 120.0);
+        entries.get_mut("test.distant").unwrap().pitch = (98.0, 101.0);
         let mut profile = Profile::default();
         profile
             .install(&fs, &mut entries, &spec(&near_hash, &distant_hash))
@@ -578,6 +590,10 @@ mod tests {
             ["sound/weapons/test/current_distant.wav"]
         );
         assert!(entries["test.single"].frozen_wave.is_none());
+        assert_eq!(entries["test.single"].pitch, (120.0, 120.0));
+        assert_eq!(entries["test.distant"].pitch, (98.0, 101.0));
+        assert_eq!(entries["csr.test.near"].pitch, (100.0, 100.0));
+        assert_eq!(entries["csr.test.distant"].pitch, (100.0, 100.0));
         assert_eq!(
             entries["csr.test.near"]
                 .frozen_wave
