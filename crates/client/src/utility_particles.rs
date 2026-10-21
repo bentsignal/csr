@@ -16,6 +16,7 @@ use std::collections::HashMap;
 pub struct Layer {
     pub material: Handle<ParticleMaterial>,
     sheets: HashMap<usize, Sheet>,
+    card_scale: f32,
     max: usize,
     burst: usize,
     rate: f32,
@@ -127,6 +128,119 @@ fn initial_position(mut sphere: Vec3, box_position: Option<[Vec3; 2]>, absolute_
     }
 }
 
+/// Repack only mipmapped field-fire sheets into aligned, transparent cells.
+/// Each retained mip is reduced inside its own cell; fully transparent outer
+/// texels make bilinear taps across cell boundaries harmless. Merely insetting
+/// UVs cannot undo neighboring-frame color already baked into an atlas mip.
+/// This is runtime data derived from the install, not a new particle law.
+fn isolate_fire_mips(
+    rgba: &[u8], width: usize, height: usize, authored_mips: usize,
+    sheets: &mut HashMap<usize, Sheet>,
+) -> Option<(Vec<u8>, usize, usize, usize, f32)> {
+    if rgba.len() != width.checked_mul(height)?.checked_mul(4)? {
+        return None;
+    }
+    let pixel_rect = |uv: [f32; 4]| -> Option<[usize; 4]> {
+        let mut rect = [0; 4];
+        for i in 0..4 {
+            let dimension = if i % 2 == 0 { width } else { height };
+            let pixel = uv[i] * dimension as f32 - 0.5;
+            // Support center-addressed sheet rectangles, without silently
+            // snapping other content's authored subpixel coordinates.
+            if !pixel.is_finite() || pixel < 0.0 || (pixel - pixel.round()).abs() > 0.001 {
+                return None;
+            }
+            rect[i] = pixel.round() as usize;
+            if rect[i] >= dimension { return None; }
+        }
+        (rect[0] <= rect[2] && rect[1] <= rect[3]).then_some(rect)
+    };
+    let mut rects = sheets.values().flat_map(|s| s.frames.iter())
+        .map(|uv| pixel_rect(*uv)).collect::<Option<Vec<_>>>()?;
+    rects.sort_unstable();
+    rects.dedup();
+    let extent = rects.iter().map(|r| (r[2] - r[0] + 1).max(r[3] - r[1] + 1)).max()?;
+    // The installed ground-fire sheet uses equal, even-sized square frames. A single
+    // padding scale can then preserve the authored content's world size even
+    // during frame interpolation. Leave other layouts on their existing path.
+    if extent < 2 || extent % 2 != 0
+        || rects.iter().any(|r| r[2] - r[0] + 1 != extent || r[3] - r[1] + 1 != extent)
+    {
+        return None;
+    }
+    let cell = extent.checked_add(2)?.checked_next_power_of_two()?;
+    let padding = (cell - extent) / 2;
+    // Retain a completely transparent outer texel at EVERY mip. Bilinear
+    // taps at cell boundaries can then reach only transparent neighbor texels.
+    let mip_count = authored_mips.min(padding.ilog2() as usize + 1);
+    let columns = (rects.len() as f64).sqrt().ceil() as usize;
+    let rows = rects.len().div_ceil(columns);
+    let out_width = columns.checked_mul(cell)?;
+    let out_height = rows.checked_mul(cell)?;
+    if out_width > 8192 || out_height > 8192 { return None; }
+    let mut level = vec![0; out_width.checked_mul(out_height)?.checked_mul(4)?];
+    let mut remap = HashMap::new();
+    for (i, rect) in rects.into_iter().enumerate() {
+        let w = rect[2] - rect[0] + 1;
+        let h = rect[3] - rect[1] + 1;
+        let x = (i % columns) * cell + (cell - w) / 2;
+        let y = (i / columns) * cell + (cell - h) / 2;
+        for row in 0..h {
+            let src = ((rect[1] + row) * width + rect[0]) * 4;
+            let dst = ((y + row) * out_width + x) * 4;
+            level[dst..dst + w * 4].copy_from_slice(&rgba[src..src + w * 4]);
+        }
+        remap.insert(rect, [
+            ((i % columns) as f32 * cell as f32 + 0.5) / out_width as f32,
+            ((i / columns) as f32 * cell as f32 + 0.5) / out_height as f32,
+            (((i % columns + 1) * cell) as f32 - 0.5) / out_width as f32,
+            (((i / columns + 1) * cell) as f32 - 0.5) / out_height as f32,
+        ]);
+    }
+    let linear: [f32; 256] = std::array::from_fn(|i| {
+        Color::srgb_u8(i as u8, 0, 0).to_linear().red
+    });
+    let mut result = level.clone();
+    let (mut w, mut h) = (out_width, out_height);
+    for _ in 1..mip_count {
+        let mut next = vec![0; (w / 2) * (h / 2) * 4];
+        for y in 0..h / 2 {
+            for x in 0..w / 2 {
+                let offsets = [
+                    (2 * y * w + 2 * x) * 4,
+                    (2 * y * w + 2 * x + 1) * 4,
+                    ((2 * y + 1) * w + 2 * x) * 4,
+                    ((2 * y + 1) * w + 2 * x + 1) * 4,
+                ];
+                for c in 0..4 {
+                    let value = if c == 3 {
+                        (offsets.iter().map(|o| level[o + c] as u32).sum::<u32>() + 2) / 4
+                    } else {
+                        let mean = offsets.iter().map(|o| linear[level[o + c] as usize]).sum::<f32>() * 0.25;
+                        // Nearest sRGB byte after averaging in linear light.
+                        let hi = linear.partition_point(|v| *v < mean).min(255);
+                        let lo = hi.saturating_sub(1);
+                        if mean - linear[lo] < linear[hi] - mean { lo as u32 } else { hi as u32 }
+                    };
+                    next[(y * (w / 2) + x) * 4 + c] = value as u8;
+                }
+            }
+        }
+        result.extend_from_slice(&next);
+        level = next;
+        w /= 2;
+        h /= 2;
+    }
+    // Mutation happens only after the entire replacement is available, so a
+    // rejected rectangle leaves the ordinary loader and all sheet IDs intact.
+    for sheet in sheets.values_mut() {
+        for uv in &mut sheet.frames {
+            *uv = remap[&pixel_rect(*uv)?];
+        }
+    }
+    Some((result, out_width, out_height, mip_count, (cell - 1) as f32 / (extent - 1) as f32))
+}
+
 pub fn load(
     fs: &vfs::Vfs,
     path: &str,
@@ -141,7 +255,7 @@ pub fn load(
         return Vec::new();
     };
     let mut layers = Vec::new();
-    let mut textures: HashMap<String, (Handle<Image>, HashMap<usize, Sheet>)> = HashMap::new();
+    let mut textures: HashMap<String, (Handle<Image>, HashMap<usize, Sheet>, f32)> = HashMap::new();
     for name in names {
         let Some(e) = elements
             .iter()
@@ -164,7 +278,7 @@ pub fn load(
         };
         let value = |name: &str| body.get(name).and_then(kv::Value::as_str).unwrap_or("");
         let texture_path = vmt::vtf_path(value("$basetexture"));
-        let (image, sheets) = if let Some(cached) = textures.get(&texture_path) {
+        let (image, sheets, card_scale) = if let Some(cached) = textures.get(&texture_path) {
             cached.clone()
         } else {
             let Some(bytes) = fs.read(&texture_path) else {
@@ -181,20 +295,34 @@ pub fn load(
             } else {
                 vtf.mip_count
             };
-            let Some(rgba) = (0..mip_count).try_fold(Vec::new(), |mut rgba, level| {
-                rgba.extend_from_slice(&vtf.rgba8(level, 0, 0)?);
-                Some(rgba)
+            let mut sheets = particle_data::sheets(&bytes).unwrap_or_default();
+            // Installed sheet bounds already address base-level texel centers.
+            // Their whole-atlas mips do not: ground fire's nearly transparent
+            // frame borders acquire neighboring flames under minification.
+            let isolated = if soften_card_edges && mip_count > 1 && !sheets.is_empty() {
+                vtf.rgba8(0, 0, 0).and_then(|rgba| {
+                    isolate_fire_mips(&rgba, vtf.width, vtf.height, mip_count, &mut sheets)
+                })
+            } else {
+                None
+            };
+            let Some((rgba, width, height, mip_count, card_scale)) = isolated.or_else(|| {
+                (0..mip_count)
+                    .try_fold(Vec::new(), |mut rgba, level| {
+                        rgba.extend_from_slice(&vtf.rgba8(level, 0, 0)?);
+                        Some(rgba)
+                    })
+                    .map(|rgba| (rgba, vtf.width, vtf.height, mip_count, 1.0))
             }) else {
                 continue;
             };
-            let sheets = particle_data::sheets(&bytes).unwrap_or_default();
             use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
             // Image::new validates a single level's length, while this buffer
             // contains the selected mip levels from largest to smallest.
             let mut image = Image::new_uninit(
                 Extent3d {
-                    width: vtf.width as u32,
-                    height: vtf.height as u32,
+                    width: width as u32,
+                    height: height as u32,
                     depth_or_array_layers: 1,
                 },
                 TextureDimension::D2,
@@ -205,8 +333,8 @@ pub fn load(
             image.texture_descriptor.mip_level_count = mip_count as u32;
             image.sampler = bevy::image::ImageSampler::linear();
             let image = images.add(image);
-            textures.insert(texture_path, (image.clone(), sheets.clone()));
-            (image, sheets)
+            textures.insert(texture_path, (image.clone(), sheets.clone(), card_scale));
+            (image, sheets, card_scale)
         };
         let additive =
             value("$addself").parse::<f32>().unwrap_or(0.0) > 0.0 || value("$additive") == "1";
@@ -264,6 +392,7 @@ pub fn load(
         layers.push(Layer {
             material,
             sheets,
+            card_scale,
             max: e.number("max_particles", 100.0).clamp(1.0, 400.0) as usize,
             burst: burst
                 .map_or(e.number("initial_particles", 0.0), |b| {
@@ -676,7 +805,11 @@ impl Emitter {
                 if alpha <= 0.001 {
                     continue;
                 }
-                let radius = p.radius
+                // Expand only the transparent guard geometry. Remapped UVs
+                // compensate exactly, leaving the original flame's size and
+                // center unchanged while its filtered fringe can fade out
+                // before hitting the card's silhouette.
+                let radius = p.radius * l.card_scale
                     * (l.scale[0] + (l.scale[1] - l.scale[0]) * (age / p.life).clamp(0.0, 1.0));
                 let (uv, next_uv, blend) = l
                     .sheets
@@ -854,6 +987,81 @@ impl Rng {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn isolated_fire_mips_never_filter_a_neighboring_frame() {
+        // Touching opaque red/blue synthetic frames deliberately make bleed
+        // unmistakable, including the last retained mip's bilinear footprint.
+        let rgba: Vec<u8> = (0..8).flat_map(|_| (0..16).flat_map(|x| {
+            if x < 8 { [255, 0, 0, 255] } else { [0, 0, 255, 255] }
+        })).collect();
+        let red = [0.5 / 16.0, 0.5 / 8.0, 7.5 / 16.0, 7.5 / 8.0];
+        let blue = [8.5 / 16.0, 0.5 / 8.0, 15.5 / 16.0, 7.5 / 8.0];
+        let sheet = Sheet {
+            frames: vec![red, blue, red], durations: vec![1., 2., 3.],
+            duration: 6., clamp: true,
+        };
+        let mut sheets = HashMap::from([(7, sheet)]);
+        let (data, mut w, mut h, mips, scale) = isolate_fire_mips(&rgba, 16, 8, 5, &mut sheets).unwrap();
+        let sheet = &sheets[&7];
+        assert_eq!((w, h, mips), (32, 16, 3));
+        assert!((scale * 7. - 15.).abs() < 1e-5);
+        for (pixel_center, expected) in [(4.5, -1.), (11.5, 1.)] {
+            let uv = sheet.frames[0];
+            let world = ((pixel_center / 32. - uv[0]) / (uv[2] - uv[0]) * 2. - 1.) * scale;
+            assert!((world - expected).abs() < 1e-5,
+                "transparent padding must preserve the original flame's world bounds");
+        }
+        assert_eq!(sheet.frames[0], sheet.frames[2]); // Aliased frames stay aliased.
+        assert_eq!(sheet.durations, [1., 2., 3.]);
+        assert_eq!(sheet.duration, 6.);
+        assert!(sheet.clamp);
+        let mut offset = 0;
+        for _ in 0..mips {
+            for (frame, forbidden) in [(sheet.frames[0], 2), (sheet.frames[1], 0)] {
+                for iy in 0..=16 {
+                    for ix in 0..=16 {
+                        let u = frame[0] + (frame[2] - frame[0]) * ix as f32 / 16.;
+                        let v = frame[1] + (frame[3] - frame[1]) * iy as f32 / 16.;
+                        let x = (u * w as f32 - 0.5).floor() as isize;
+                        let y = (v * h as f32 - 0.5).floor() as isize;
+                        // Inspect all four taps, stronger than checking only
+                        // their weighted result at a handful of pixel centers.
+                        for dy in 0..=1 {
+                            for dx in 0..=1 {
+                                let x = (x + dx).clamp(0, w as isize - 1) as usize;
+                                let y = (y + dy).clamp(0, h as isize - 1) as usize;
+                                assert_eq!(data[offset + (y * w + x) * 4 + forbidden], 0);
+                            }
+                        }
+                    }
+                }
+                for t in 0..=16 {
+                    let t = t as f32 / 16.;
+                    for (u, v) in [(0., t), (1., t), (t, 0.), (t, 1.)] {
+                        let x = ((frame[0] + (frame[2] - frame[0]) * u) * w as f32).floor() as usize;
+                        let y = ((frame[1] + (frame[3] - frame[1]) * v) * h as f32).floor() as usize;
+                        assert_eq!(data[offset + (y.min(h - 1) * w + x.min(w - 1)) * 4 + 3], 0,
+                            "every retained mip must reach zero opacity before the card ends");
+                    }
+                }
+            }
+            offset += w * h * 4;
+            w /= 2;
+            h /= 2;
+        }
+        assert_eq!(offset, data.len());
+    }
+
+    #[test]
+    fn unsupported_fire_rectangles_leave_original_sheet_unchanged() {
+        let uv = [0., 0., 1., 1.]; // Not center-addressed; do not guess a crop.
+        let mut sheets = HashMap::from([(0, Sheet {
+            frames: vec![uv], durations: vec![1.], duration: 1., clamp: false,
+        })]);
+        assert!(isolate_fire_mips(&[255; 16 * 8 * 4], 16, 8, 5, &mut sheets).is_none());
+        assert_eq!(sheets[&0].frames, [uv]);
+    }
 
     #[test]
     fn fire_floor_anchor_keeps_authored_layer_heights_instead_of_radius_lift() {
