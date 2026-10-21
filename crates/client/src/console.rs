@@ -114,8 +114,8 @@ pub(crate) fn install(app: &mut App) {
                 .before(crate::frontend::input),
         );
 }
-pub(crate) fn allows_input(console: Res<DeveloperConsole>) -> bool {
-    !console.blocks_input()
+pub(crate) fn allows_input(console: Res<DeveloperConsole>, panel: Option<Res<crate::playtest::Panel>>) -> bool {
+    !console.blocks_input() && panel.is_none_or(|p| !p.open)
 }
 fn setup(mut commands: Commands, assets: Res<crate::ui_assets::UiAssets>) {
     commands

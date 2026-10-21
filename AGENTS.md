@@ -101,7 +101,16 @@ Native Legacy observations and CI's userdata-preservation tests share
 `-Script <absolute helper> -NativeSlotGranted`; retain their process/prefs guards.
 Never overlap native runs with an unwrapped CI fidelity-session check.
 
-## Verify every change
+## Verify playable batches
+
+**Owner direction (October 20 evening):** prioritize useful playable volume.
+Use focused checks during implementation and run the required workspace/build/
+probe/sim checks once for the combined batch, not separately for every small
+change. Avoid exhaustive native matrices, repeated Release builds and new
+verification frameworks. Inspect actual play/audio/visuals where useful, then
+move on when good enough. Exact fidelity remains the final target; first passes
+need not be perfect. Preserve clean-room boundaries, sim authority and owner data.
+
 
 - `cargo test --workspace`
 - `cargo run --release -p launcher -- probe de_dust2` (expects `failures: 0`)

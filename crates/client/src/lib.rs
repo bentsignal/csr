@@ -25,6 +25,7 @@ mod pack_picker;
 mod pack_ui;
 pub mod foley;
 mod sound_probe;
+mod playtest;
 pub mod surfaces;
 pub mod tracers;
 pub mod inventory;
@@ -143,6 +144,8 @@ pub struct ClientOptions {
     pub deathmatch: bool,
     /// Offline utility sandbox: full grenade inventory on every respawn.
     pub grenade_practice: bool,
+    /// Offline in-game armory and scenario controls.
+    pub playtest: bool,
     pub direct: bool,
 }
 
@@ -162,6 +165,7 @@ impl Default for ClientOptions {
             terrorist: false,
             deathmatch: false,
             grenade_practice: false,
+            playtest: false,
             direct: false,
         }
     }
@@ -305,6 +309,7 @@ impl Plugin for CsgoPlugin {
         shadow_diagnostic::install(app);
         skinning_bounds::install(app);
         console::install(app);
+        playtest::install(app);
         kill_feed::install(app);
     }
 }

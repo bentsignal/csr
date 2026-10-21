@@ -45,13 +45,13 @@ fn default_knife(team: Team) -> &'static str {
 impl Loadout {
     /// Replaces the deathmatch primary and pistol in `guns` with the
     /// player's practice picks for `team`, where the rules allow them.
-    pub(crate) fn practice_weapons(&self, catalog: &Catalog, team: Team, guns: &mut Vec<WeaponState>) {
+    pub(crate) fn practice_weapons(&self, catalog: &Catalog, team: Team, guns: &mut Vec<WeaponState>, unrestricted: bool) {
         let base = if team == Team::CounterTerrorist { 2 } else { 0 };
         for slot in 0..2u8 {
             let Some(def) = self.practice[base + slot as usize]
                 .as_deref()
                 .and_then(|n| catalog.get(n))
-                .filter(|d| practice_allowed(d, team) && weapon::slot(d) == slot + 1)
+                .filter(|d| (unrestricted || practice_allowed(d, team)) && weapon::slot(d) == slot + 1)
             else {
                 continue;
             };

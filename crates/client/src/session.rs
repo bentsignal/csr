@@ -254,7 +254,6 @@ impl Loader {
         let serial = *serial;
         let classic = options.classic();
         let selection = options.clone();
-        let stores = crate::remote_join::local_stores();
         let game_dir = game_dir.to_path_buf();
         let (tx, rx) = mpsc::channel();
         let progress = Arc::new(LoadProgress::default());
@@ -329,7 +328,9 @@ impl Loader {
                         })
                     }
                     Selection::Remote(info) => {
-                        let (packs, archives) = match stores {
+                        // Store discovery touches Steam/player-data paths. Do it only
+                        // for a remote request, on this worker rather than the UI.
+                        let (packs, archives) = match crate::remote_join::local_stores() {
                             Ok(stores) => stores,
                             Err(error) => {
                                 let _ = tx.send(Err(error));

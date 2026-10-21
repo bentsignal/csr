@@ -6,12 +6,15 @@ const DROP: f32 = 0.75;
 // The first airborne sample is about 0.1 unit below rest and reaches the
 // plateau within the following 0.1-second capture interval. This bounded
 // transition is a fitted presentation component, not a native tick-law claim.
+// Keep its travel time and endpoints, easing the ramp so reaching/leaving
+// either held pose does not instantly switch vertical presentation velocity.
+// RATE advances the underlying ramp; it is not the eased peak velocity.
 const RATE: f32 = 10.0;
 
 #[derive(Default)]
 pub(super) struct AirLowering {
     at: Option<f32>,
-    offset: f32,
+    progress: f32,
 }
 
 impl AirLowering {
@@ -30,12 +33,16 @@ impl AirLowering {
         let Some(previous) = previous else { return 0. };
         let dt = now - previous;
         if !(0. ..=0.25).contains(&dt) {
-            self.offset = 0.;
+            self.progress = 0.;
             return 0.;
         }
-        let target = if airborne { -DROP } else { 0. };
-        self.offset += (target - self.offset).clamp(-RATE * dt, RATE * dt);
-        self.offset
+        let target = if airborne { 1. } else { 0. };
+        let step = RATE * dt / DROP;
+        self.progress += (target - self.progress).clamp(-step, step);
+        // Ease the existing bounded trajectory, without a spring, overshoot
+        // or another decay tail. Reversal retains the current progress.
+        let t = self.progress;
+        -DROP * t * t * (3. - 2. * t)
     }
 }
 
@@ -47,14 +54,30 @@ mod tests {
     fn observed_air_plateau_survives_the_apex_and_returns_without_overshoot() {
         let mut response = AirLowering::default();
         assert_eq!(response.sample(0., false), 0.);
+        let edge = 0.001;
+        let duration = DROP / RATE;
+        let first = response.sample(edge, true);
+        assert!(first < 0. && first > -RATE * edge * 0.2,
+            "takeoff must ease out of rest instead of starting at full speed");
+        let last = response.sample(duration - edge, true);
+        assert!(last > -DROP && last < -DROP + RATE * edge * 0.2,
+            "approaching the flight plateau must slow before stopping");
+        assert!((response.sample(duration, true) + DROP).abs() < 0.000001);
         for i in 1..=20 {
-            let offset = response.sample(i as f32 * 0.01, true);
+            let offset = response.sample(duration + i as f32 * 0.005, true);
             assert!((-DROP..=0.).contains(&offset));
         }
         assert_eq!(response.sample(0.21, true), -DROP);
         assert_eq!(response.sample(0.22, true), -DROP);
+        let first = response.sample(0.22 + edge, false);
+        assert!(first > -DROP && first < -DROP + RATE * edge * 0.2,
+            "landing must ease out of the flight plateau");
+        let last = response.sample(0.22 + duration - edge, false);
+        assert!(last < 0. && last > -RATE * edge * 0.2,
+            "returning to rest must slow before stopping");
+        assert!(response.sample(0.22 + duration, false).abs() < 0.000001);
         for i in 1..=20 {
-            let offset = response.sample(0.22 + i as f32 * 0.01, false);
+            let offset = response.sample(0.22 + duration + i as f32 * 0.005, false);
             assert!((-DROP..=0.).contains(&offset));
         }
         assert_eq!(response.sample(0.43, false), 0.);
@@ -72,8 +95,9 @@ mod tests {
             }
             response.sample(0.05, true)
         };
+        let reference = evaluate(0.05);
         for step in [1. / 30., 1. / 60., 1. / 144., 1. / 300.] {
-            assert!((evaluate(step) + 0.5).abs() < 0.00001);
+            assert!((evaluate(step) - reference).abs() < 0.00001);
         }
     }
 

@@ -5,10 +5,19 @@
 use crate::effects::Effects;
 use crate::localize::Localization;
 use crate::player::{LocalPlayer, SimWorld};
-use crate::hud_layout::{self as layout, legacy as hp, unit as hu, font as hf};
+use crate::hud_layout as layout;
 use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin};
 use bevy::prelude::*;
+use bevy::text::LineBreak;
 use sim::{Phase, Team};
+
+// Owner's compact-HUD correction. Keep art, text, marker offsets and their
+// corner insets in one space; crosshair settings remain independent.
+pub(crate) const COMPACT_SCALE: f32 = 0.8;
+pub(crate) const fn unit(value: f32) -> Val { layout::unit(value * COMPACT_SCALE) }
+pub(crate) const fn font(value: f32) -> FontSize { layout::font(value * COMPACT_SCALE) }
+pub(crate) const fn legacy(value: f32) -> Val { layout::legacy(value * COMPACT_SCALE) }
+use self::{font as hf, legacy as hp, unit as hu};
 
 /// Which piece of HUD text a node shows.
 #[derive(Component, Clone, Copy, PartialEq, Eq)]
@@ -114,7 +123,7 @@ fn text(commands: &mut Commands, kind: HudText, size: f32, color: Color, node: N
         .spawn((
             Text::new(""),
             TextFont {
-                font_size: layout::legacy_font(size),
+                font_size: layout::legacy_font(size * COMPACT_SCALE),
                 ..default()
             },
             TextColor(color),
@@ -278,11 +287,12 @@ pub fn setup(mut commands: Commands) {
         Node {
             position_type: PositionType::Absolute,
             top: hu(layout::NOTICE_TOP),
-            right: hp(16.0),
+            right: hu(12.0),
+            width: percent(60),
             ..default()
         },
     );
-    commands.entity(feed).insert((TextLayout::justify(Justify::Right), crate::kill_feed::Fallback));
+    commands.entity(feed).insert((TextLayout::new(Justify::Right, LineBreak::NoWrap), crate::kill_feed::Fallback));
     let center = text(&mut commands, HudText::Center, 32.0, Color::WHITE, centered_row(percent(24), Val::Auto));
     commands.entity(center).insert(TextLayout::justify(Justify::Center));
     let hint = text(&mut commands, HudText::Hint, 20.0, Color::WHITE, centered_row(Val::Auto, hp(150.0)));
@@ -341,7 +351,7 @@ pub fn setup(mut commands: Commands) {
                 width: percent(100),
                 flex_direction: FlexDirection::Column,
                 align_items: AlignItems::Center,
-                row_gap: px(4.0),
+                row_gap: hp(4.0),
                 ..default()
             },
             Visibility::Hidden,
@@ -351,7 +361,7 @@ pub fn setup(mut commands: Commands) {
             bar.spawn((
                 Text::new(""),
                 TextFont {
-                    font_size: FontSize::Px(18.0),
+                    font_size: hf(12.0),
                     ..default()
                 },
                 TextColor(Color::WHITE),
@@ -359,8 +369,8 @@ pub fn setup(mut commands: Commands) {
             ));
             bar.spawn((
                 Node {
-                    width: px(300.0),
-                    height: px(10.0),
+                    width: hp(300.0),
+                    height: hp(10.0),
                     ..default()
                 },
                 BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.6)),

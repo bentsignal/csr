@@ -34,6 +34,7 @@ pub(crate) struct Presentation {
     started: Option<std::time::Instant>,
     node: Option<Entity>,
     image: Handle<Image>,
+    notice_extent: Option<(u32, u32)>,
     viewport: (u32, u32),
     entries: Vec<sim::death::DeathKey>,
     revision: u64,
@@ -66,9 +67,8 @@ impl Presentation {
             return;
         }
 
-        // The full-width top crop is contiguous. Validate the entire fresh
-        // readback, as crop() does, then compare its borrowed prefix before
-        // allocating or mutably borrowing the asset (which notifies Bevy).
+        // Validate the full readback before finding notice ink in its top half.
+        // Transparent movie margins must not determine the feed's right edge.
         let Some(stride) = (frame.width as usize).checked_mul(4) else {
             return;
         };
@@ -78,12 +78,33 @@ impl Presentation {
         if frame.width == 0 || frame.height == 0 || frame.rgba.len() != expected {
             return;
         }
+        let mut bounds = crate::combat_hud::Rect {
+            x: frame.width, y: frame.height, width: 0, height: 0,
+        };
+        let (mut right, mut bottom) = (0, 0);
+        for (y, row) in frame.rgba[..stride * frame.height.div_ceil(2) as usize]
+            .chunks_exact(stride).enumerate()
+        {
+            for (x, pixel) in row.chunks_exact(4).enumerate() {
+                if pixel[3] == 0 { continue; }
+                bounds.x = bounds.x.min(x as u32);
+                bounds.y = bounds.y.min(y as u32);
+                right = right.max(x as u32 + 1);
+                bottom = bottom.max(y as u32 + 1);
+            }
+        }
+        if right == 0 {
+            self.notice_extent = None;
+            self.presented = true;
+            return;
+        }
+        bounds.width = right - bounds.x;
+        bounds.height = bottom - bounds.y;
         let extent = Extent3d {
-            width: frame.width,
-            height: frame.height.div_ceil(2),
+            width: bounds.width,
+            height: bounds.height,
             depth_or_array_layers: 1,
         };
-        let rgba = &frame.rgba[..stride * extent.height as usize];
         let Some(image) = images.get(&self.image) else {
             return;
         };
@@ -94,14 +115,23 @@ impl Presentation {
             && image.texture_descriptor.sample_count == 1
             && image.data_order == TextureDataOrder::default()
             && image.texture_view_descriptor.is_none()
-            && image.data.as_deref() == Some(rgba);
+            && image.data.as_deref().is_some_and(|data| {
+                let row_bytes = bounds.width as usize * 4;
+                data.len() == row_bytes * bounds.height as usize
+                    && data.chunks_exact(row_bytes).enumerate().all(|(y, row)| {
+                        let start = (bounds.y as usize + y) * stride + bounds.x as usize * 4;
+                        row == &frame.rgba[start..start + row_bytes]
+                    })
+            });
         if !identical {
+            let Some(rgba) = crate::combat_hud::crop(frame, bounds) else { return };
             let Some(mut image) = images.get_mut(&self.image) else {
                 return;
             };
             image.texture_descriptor.size = extent;
-            image.data = Some(rgba.to_vec());
+            image.data = Some(rgba);
         }
+        self.notice_extent = Some((bounds.width, bounds.height));
         // Equal pixels still belong to this accepted frame/revision. Preserve
         // first-admission tracing and fallback/visibility transitions on reuse.
         if !self.presented && std::env::var_os("CSR_KILL_FEED_TRACE").is_some() {
@@ -135,6 +165,8 @@ impl Engine for Bridge {
             return Some(Value::Undefined);
         }
         match method {
+            // Share the Bevy HUD correction with the authored bottom modules.
+            "CompactHudScale" => return Some(f64::from(crate::hud::COMPACT_SCALE).into()),
             "RootReady" => {
                 if self.notice_enabled {
                     calls.call(API, "load", vec!["huddeathnotification.swf".into()]);
@@ -272,7 +304,7 @@ fn update(
 ) {
     let _frame_scope = crate::input_latency::frame_scope("classic_hud");
     for (_, mut node) in &mut fallback {
-        node.top = crate::hud_layout::unit(crate::hud_layout::NOTICE_TOP);
+        node.top = crate::hud::unit(crate::hud_layout::NOTICE_TOP);
     }
     let notice_enabled = std::env::var_os("CSR_NO_CLASSIC_KILL_FEED").is_none();
     let matched = *state.get() == AppState::Match
@@ -296,7 +328,6 @@ fn update(
                 .map(crate::combat_hud::Snapshot::from_player)
         })
         .flatten();
-    let surface_height = crate::hud_layout::raster_pixel(size.1.div_ceil(2), window.scale_factor(), ui_scale.0);
     if feed.movie.is_none()
         && matched
         && !feed.failed.load(Ordering::Acquire)
@@ -321,10 +352,10 @@ fn update(
                 ImageNode::new(image.clone()),
                 Node {
                     position_type: PositionType::Absolute,
-                    left: px(0),
-                    top: px(0),
-                    width: percent(100),
-                    height: surface_height,
+                    right: crate::hud::unit(12.0),
+                    top: crate::hud::unit(crate::hud_layout::NOTICE_TOP),
+                    width: px(0),
+                    height: px(0),
                     ..default()
                 },
                 GlobalZIndex(90),
@@ -547,12 +578,19 @@ fn update(
         && ready
         && feed.presented
         && !feed.failed.load(Ordering::Acquire)
-        && rendered_count > 0;
+        && rendered_count > 0
+        && feed.notice_extent.is_some();
+    let (width, height) = feed.notice_extent.unwrap_or_default();
+    let display_scale = crate::hud::COMPACT_SCALE / (window.scale_factor() * ui_scale.0);
     for (mut surface, mut node) in &mut surfaces {
-        // An odd physical height must not stretch a ceil(height/2) raster into
-        // a fractional-height box. Preserve one authored pixel per screen pixel.
-        if node.height != surface_height {
-            node.height = surface_height;
+        // Scale only the tight notice crop, canceling desktop/UI scaling. Its
+        // visible right edge stays at the same height-relative inset at any
+        // aspect ratio; changing name widths only extends the feed to the left.
+        let width = px(width as f32 * display_scale);
+        let height = px(height as f32 * display_scale);
+        if node.width != width { node.width = width; }
+        if node.height != height {
+            node.height = height;
         }
         let value = if visible {
             Visibility::Inherited
@@ -579,9 +617,10 @@ fn update(
         for (mut text, mut node) in &mut fallback {
             text.0.clone_from(&plain);
             if rendered_count > 0 && !plain.is_empty() {
-                // Exceptional plain rows sit below the cropped authored HUD
-                // rather than covering a healthy notice at the same anchor.
-                node.top = crate::hud_layout::raster_pixel(size.1.div_ceil(2) + 16, window.scale_factor(), ui_scale.0);
+                // Exceptional plain rows follow the actual compact feed.
+                let authored_unit = size.1 as f32 * scaleform::HUD_SCALING as f32 / 720.0;
+                node.top = px(((crate::hud_layout::NOTICE_TOP + 12.0) * authored_unit
+                    + height as f32) * display_scale);
             }
         }
     }
@@ -741,6 +780,38 @@ mod tests {
             1
         );
         assert_eq!(admit_notice(&mut app, &mut feed, &frame, (9, 2), true), 0);
+    }
+
+    #[test]
+    fn notice_crop_discards_movie_margins_and_never_includes_bottom_hud() {
+        let (mut app, mut feed, mut frame) = notice_fixture();
+        frame.width = 6;
+        frame.height = 6;
+        frame.rgba = vec![0; 6 * 6 * 4];
+        for (x, y) in [(3, 1), (4, 2), (0, 5)] {
+            let start = (y * 6 + x) * 4;
+            frame.rgba[start..start + 4].copy_from_slice(&[12, 34, 56, 255]);
+        }
+        assert_eq!(admit_notice(&mut app, &mut feed, &frame, (6, 6), true), 1);
+        assert_eq!(feed.notice_extent, Some((2, 2)));
+        let expected = crate::combat_hud::crop(&frame, crate::combat_hud::Rect {
+            x: 3, y: 1, width: 2, height: 2,
+        }).unwrap();
+        assert_eq!(app.world().resource::<Assets<Image>>().get(&feed.image)
+            .unwrap().data.as_deref(), Some(expected.as_slice()));
+
+        // Moving the same row within a transparent movie margin must not
+        // upload new pixels or change the compact surface's size/right anchor.
+        frame.rgba.fill(0);
+        for (x, y) in [(1, 0), (2, 1)] {
+            let start = (y * 6 + x) * 4;
+            frame.rgba[start..start + 4].copy_from_slice(&[12, 34, 56, 255]);
+        }
+        assert_eq!(admit_notice(&mut app, &mut feed, &frame, (6, 6), true), 0);
+        assert_eq!(feed.notice_extent, Some((2, 2)));
+        frame.rgba.fill(0);
+        assert_eq!(admit_notice(&mut app, &mut feed, &frame, (6, 6), true), 0);
+        assert_eq!(feed.notice_extent, None, "blank frames cannot show stale notices");
     }
 
     #[test]

@@ -2,7 +2,8 @@
 use bevy::prelude::*;
 use bevy::text::LineBreak;
 use crate::{ui_assets::UiAssets, player::{LocalPlayer, SimWorld}};
-use crate::hud_layout::{self as layout, unit as hu, font as hf};
+use crate::hud_layout as layout;
+use crate::hud::{unit as hu, font as hf, legacy as hp};
 
 #[derive(Component)]
 pub struct ArmorIcon;
@@ -39,11 +40,11 @@ pub fn setup(mut commands: Commands, art: Res<UiAssets>, level: Res<crate::Loade
     }
     for (key, x) in [("health", 24.0), ("armor", 178.0)] {
         if let Some(image) = art.image(key) {
-            let entity = icon(&mut commands, image, Node { position_type: PositionType::Absolute, left: layout::legacy(x), bottom: layout::legacy(24.0), width: layout::legacy(27.0), height: layout::legacy(27.0), ..default() });
+            let entity = icon(&mut commands, image, Node { position_type: PositionType::Absolute, left: hp(x), bottom: hp(24.0), width: hp(27.0), height: hp(27.0), ..default() });
             commands.entity(entity).insert(crate::combat_hud::Fallback::Health);
             if key == "armor" { commands.entity(entity).insert(ArmorIcon); }
         }
-        commands.spawn((crate::combat_hud::Fallback::Health, Node { position_type: PositionType::Absolute, left: layout::legacy(x), bottom: layout::legacy(12.0), width: layout::legacy(118.0), height: layout::legacy(2.0), ..default() }, BackgroundColor(Color::srgba(0.9, 0.9, 0.88, 0.7))));
+        commands.spawn((crate::combat_hud::Fallback::Health, Node { position_type: PositionType::Absolute, left: hp(x), bottom: hp(12.0), width: hp(118.0), height: hp(2.0), ..default() }, BackgroundColor(Color::srgba(0.9, 0.9, 0.88, 0.7))));
     }
     if let Some(image) = art.image("cart") {
         let entity = icon(&mut commands, image, Node { position_type: PositionType::Absolute, width: hu(22.0), height: hu(22.0), ..default() });

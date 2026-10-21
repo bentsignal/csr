@@ -120,7 +120,7 @@ impl LocalPlayer {
             }
         }
     }
-    fn capture_held_mouse(&mut self, mouse: &ButtonInput<MouseButton>, settings: &crate::settings::Settings) {
+    pub(crate) fn capture_held_mouse(&mut self, mouse: &ButtonInput<MouseButton>, settings: &crate::settings::Settings) {
         for (index, button) in crate::settings::MOUSE_BUTTONS.iter().enumerate() {
             if mouse.pressed(*button) { self.capture_mouse |= 1 << index; }
         }
@@ -519,14 +519,17 @@ pub fn tick(
     block: Res<InputBlockFrames>,
     mut poses: ResMut<crate::interpolation::RenderPoses>,
     mut probe: ResMut<crate::sound_probe::SoundProbe>,
+    mut playtest: Option<ResMut<crate::playtest::Panel>>,
     remote: Option<Res<crate::remote::RemoteClient>>,
 ) {
     let _frame_scope = crate::input_latency::frame_scope("simulation");
-    if remote.is_some() || front.open() {return;}
+    if remote.is_some() || front.open() || playtest.as_ref().is_some_and(|p| p.open) {return;}
+    if let Some(panel) = playtest.as_deref_mut() { crate::playtest::configure(panel, &mut world.0, local.id); }
     let mut input = sample_tick_input(&mut local, &Controls {
         keys: &real_keys, mouse: &mouse, settings: &settings, enabled: enabled.0,
         blocked: block.0 != 0, captured: captured(&cursor), buy_menu: menu.open,
     });
+    if let Some(index) = playtest.as_deref_mut().and_then(|p| p.weapon.take()) { input.buy = Purchase::Weapon(index); }
     // Smoke tests can hold the trigger to exercise the fire path.
     if !enabled.0 && std::env::var_os("CSR_AUTOFIRE").is_some() {
         input.buttons |= buttons::ATTACK;

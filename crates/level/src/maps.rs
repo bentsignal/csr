@@ -78,6 +78,18 @@ pub fn list(game_dir: &Path, fs: &vfs::Vfs) -> Vec<MapEntry> {
 }
 
 pub fn list_with(game_dir: &Path, fs: &vfs::Vfs, store: &workshop::Store) -> Vec<MapEntry> {
+    let mut out: Vec<MapEntry> = installed_names(game_dir, fs).into_iter().map(installed_entry).collect();
+    for (old, status) in store.list() {
+        out.push(archive_entry(old, status));
+    }
+    out.sort_by(|a, b| a.name.cmp(&b.name));
+    out
+}
+
+// Loading one map must not probe every unrelated Workshop directory. Keep
+// install discovery shared with the picker, but query archive status only for
+// the requested identity. Names still come from discovered files, never ID.name.
+fn installed_names(game_dir: &Path, fs: &vfs::Vfs) -> Vec<String> {
     let mut names: Vec<String> = std::fs::read_dir(game_dir.join("maps"))
         .into_iter()
         .flatten()
@@ -93,33 +105,33 @@ pub fn list_with(game_dir: &Path, fs: &vfs::Vfs, store: &workshop::Store) -> Vec
     names.retain(|n| !n.contains('/') && playable(n) && workshop::find(n).is_none());
     names.sort();
     names.dedup();
-    let mut out: Vec<MapEntry> = names
-        .into_iter()
-        .map(|name| MapEntry {
-            id: content::ContentId::csgo(content::ContentKind::Map, &name),
-            title: title(&name),
-            base: name.clone(),
-            name,
-            old: None,
-            status: MapStatus::Ready,
-        })
-        .collect();
-    for (old, status) in store.list() {
-        out.push(MapEntry {
-            id: old.content_id(),
-            name: old.name.to_string(),
-            title: old.title.to_string(),
-            base: old.base.to_string(),
-            old: Some(old),
-            status: match status {
-                workshop::Status::Installed => MapStatus::Ready,
-                workshop::Status::InSteam(_) => MapStatus::InSteam,
-                workshop::Status::Download => MapStatus::Download,
-            },
-        });
+    names
+}
+
+fn installed_entry(name: String) -> MapEntry {
+    MapEntry {
+        id: content::ContentId::csgo(content::ContentKind::Map, &name),
+        title: title(&name),
+        base: name.clone(),
+        name,
+        old: None,
+        status: MapStatus::Ready,
     }
-    out.sort_by(|a, b| a.name.cmp(&b.name));
-    out
+}
+
+fn archive_entry(old: &'static workshop::OldMap, status: workshop::Status) -> MapEntry {
+    MapEntry {
+        id: old.content_id(),
+        name: old.name.to_string(),
+        title: old.title.to_string(),
+        base: old.base.to_string(),
+        old: Some(old),
+        status: match status {
+            workshop::Status::Installed => MapStatus::Ready,
+            workshop::Status::InSteam(_) => MapStatus::InSteam,
+            workshop::Status::Download => MapStatus::Download,
+        },
+    }
 }
 
 /// Resolve identity through discovered install files and the fixed archive
@@ -128,7 +140,13 @@ pub(crate) fn definition(id: &content::ContentId, game_dir: &Path, fs: &vfs::Vfs
     if id.origin != content::GameOrigin::Csgo || id.kind != content::ContentKind::Map {
         return Err(format!("{id} is not a CS:GO map definition"));
     }
-    let mut matches = list_with(game_dir, fs, store).into_iter().filter(|entry| {
+    let installed = installed_names(game_dir, fs).into_iter()
+        .filter(|name| content::ContentId::csgo(content::ContentKind::Map, name) == *id)
+        .map(installed_entry);
+    let archives = workshop::OLD_MAPS.iter()
+        .filter(|old| old.content_id() == *id)
+        .map(|old| archive_entry(old, store.status(old)));
+    let mut matches = installed.chain(archives).filter(|entry| {
         entry.id == *id && packs::valid_bsp_name(&entry.name)
             && (entry.old.is_some() || install_source(fs, &entry.name).is_some())
     });
@@ -209,7 +227,14 @@ mod tests {
             std::fs::write(game.join("maps").join(n), "").unwrap();
         }
         let store = workshop::Store::with_libraries(&root.join("data"), Vec::new());
-        let maps = list_with(&game, &vfs::Vfs::new(), &store);
+        let mut fs = vfs::Vfs::new();
+        fs.push_back(format!("dir:{}", game.display()), vfs::Mount::Dir(game.clone()));
+        let maps = list_with(&game, &fs, &store);
+        // The targeted load resolver must retain the picker's definitions and
+        // statuses while avoiding status probes for unrelated archives.
+        for entry in &maps {
+            assert_eq!(definition(&entry.id, &game, &fs, &store).unwrap(), *entry);
+        }
         let names: Vec<&str> = maps.iter().map(|m| m.name.as_str()).collect();
         let at = |n: &str| names.iter().position(|x| *x == n).unwrap();
         assert!(!names.contains(&"ar_shoots"));
