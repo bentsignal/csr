@@ -1232,3 +1232,28 @@ fn damage_keeps_contact_protection_after_depletion_and_later_player_changes() {
         }
     }
 }
+
+#[test]
+fn offline_armory_tick_input_switches_and_retains_session_loadout() {
+    let mut w = world();
+    let ct = w.add_player("tester", Team::CounterTerrorist);
+    assert_eq!(w.buy(ct, Purchase::Weapon(7)), Err(BuyError::NotAllowedNow));
+    w.rules.grenade_practice = true;
+    let money = w.player(ct).unwrap().money;
+    let origin = w.player(ct).unwrap().movement.origin;
+    for index in [7, 16, 7, 59] {
+        w.step(&[(ct, TickInput { buy: Purchase::Weapon(index), ..TickInput::default() })]);
+        let p = w.player(ct).unwrap();
+        assert_eq!(p.active_weapon().unwrap().def.def_index, index);
+        assert_eq!(p.weapons.iter().filter(|g| weapon::slot(&g.def) == 3).count(), 1);
+        assert_eq!(p.money, money);
+        assert!((p.movement.origin - origin).length() < 2.);
+    }
+    w.respawn(ct);
+    let p = w.player(ct).unwrap();
+    assert!(p.has("weapon_ak47"));
+    assert!(p.has("weapon_knife_t"));
+    assert!(!p.has("weapon_knife"));
+    w.rules.grenade_practice = false;
+    assert_eq!(w.buy(ct, Purchase::Weapon(7)), Err(BuyError::NotAllowedNow));
+}

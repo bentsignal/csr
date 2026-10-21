@@ -1,48 +1,48 @@
 # Current owner priorities
 
-Status: **resumed October 20: work through the owner-approved queue until the
-owner interrupts for a test**. Parallel source preparation is authorized; root
-serializes builds, native observations and integration. Do not stop after one
-increment or ask for repeated small tests. Stop before later expansion for an
-owner discussion. VISION defines the product; maintain priorities in chat.
+Status: **resumed October 20 evening for continuous overnight work until the
+owner interrupts**. Root owns integration/builds/CI/staging; parallel source
+work is authorized. VISION defines the final target. The owner explicitly
+requires faster playable progress and proportional verification.
 
 ## Active batch and accepted order
 
-The [October 20 playtest and direction](PLAYTEST-2026-10-20.md) supersede the
-previous batch order:
+1. **Easy playtesting first:** one double-click entry point and an in-game
+   playtest panel. Switch weapons/early knives, solo/combat and maps inside
+   the same process; reuse the current match when possible. No numbered folder
+   of separate shortcuts, repeated restarts or separate knife launches.
+2. **Quick movement/presentation pass:** fix airborne weapon jolts/pauses and
+   quiet-walk speed where wrong. Jump/landing gameplay itself feels good;
+   preserve it. Do not spend hours researching small finishing touches.
+3. **Classic weapon sounds and hit feedback:** use the owner's old-gun video
+   as a private reference for the whole arsenal, suppressed/unsuppressed modes,
+   and fix AK head-feedback audibility while preserving nearby body/M4 cues.
+4. **HUD:** reduce the oversized overall HUD and kill feed; correctly anchor
+   the visible original kill feed at the top right.
+5. **Positional audio:** improve wall/floor footstep attenuation and vertical
+   separation, especially Nuke.
+6. **Molotov visuals:** remove obvious surface triangles and flicker.
+7. **Loading/menu responsiveness:** speed slow match loading and transitions.
+8. **Weapons:** a practical pass across every gun's firing/handling; preserve
+   accepted AWP and existing recoil/zoom results.
+9. **Combat effects:** material impacts/decals and dropped-weapon behavior.
+10. **Bots:** improve awkward movement/airborne animation/navigation recovery.
 
-1. Clean player-facing map descriptions: useful names/era/details, no engineering
-   caveats or fidelity-validation commentary.
-2. Core original-CS:GO grenade behavior and presentation together: smoke
-   activation after landing/settling, consistent throw behavior across types,
-   Molotov contact/air expiration and visible surface triangles/flicker.
-3. Hit-sound consistency across weapons: fix AK attacker headshot feedback;
-   preserve heard M4 feedback, nearby positional body hits and distant attacker
-   headshot cues.
-4. Knife/hand animations: attack-to-inspect, repeated inspect/cancel, butterfly
-   draw variants/spinning and karambit transitions across the early knife set.
-5. Movement and weapon motion: remaining quiet-walk/crouch confirmation and
-   smooth jump/landing presentation, preserving accepted grounded motion.
-6. Coherent original HUD.
-7. Positional audio, especially wall/floor footstep occlusion.
-8. Loading and menu responsiveness; preserve accepted general FPS gains.
-9. Remaining reported map defects and regressions, preserving accepted maps.
+The owner accepts grenade throws and knives as **good enough for now**. Move
+on; do not keep polishing them. Nuke windows and Train version pictures are
+believed fixed; reopen only for an actual regression, not a fresh map audit.
 
-Inventory/settings and later expansion remain recorded but are not automatic
-follow-on scope: discuss with the owner before moving beyond this playable-base
-queue. Earlier weapon handling, bots and combat-effect items remain in the
-historical backlog; do not invent a new order or silently erase them.
+## Delivery policy (explicit owner correction, October 20 evening)
 
-The owner accepts Smoke trajectories as good enough and no longer requires
-historical lineup reproduction. Preserve the measured corrections; activation
-in midair is a separate confirmed bug. Older Overpass mostly passes. Knife
-practice access is available, but original-menu equip/persistence and the
-reported animation defects remain unfinished. Do not requeue accepted AWP,
-controls, grounded motion or broad map/performance passes.
-
-Continue concrete implementation with proportional existing checks. No new
-verification framework or backlog GUI. Do not claim a feature complete from
-source-only reviews, synthetic fixtures or a few improved screenshots.
+Work in useful combined batches. Implement, run focused checks plus one combined
+build/test pass, inspect ordinary play where relevant, then move on. Do not
+repeat full Release builds for every small knob, launch exhaustive native
+matrices, proliferate diagnostic helpers/reports or turn uncertainty into a
+research project. Reasonable first passes are welcome; perfection comes later.
+Keep clean-room/content/player-data protections and sim authority. Record real
+limitations honestly without engineering caveats in player-facing descriptions.
+Continue after a merged increment until interrupted or this approved queue is
+finished; then discuss further scope rather than inventing expansion.
 
 ## Current direction: October 18
 

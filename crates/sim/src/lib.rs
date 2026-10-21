@@ -805,7 +805,7 @@ impl World {
         } else {
             let mut guns = self.loadout(team);
             if let Some(p) = self.player(id) {
-                p.loadout.practice_weapons(&self.catalog, team, &mut guns);
+                p.loadout.practice_weapons(&self.catalog, team, &mut guns, self.rules.grenade_practice);
                 if self.mode == GameMode::Deathmatch && self.rules.grenade_practice && !p.is_bot {
                     for name in ["weapon_hegrenade", "weapon_flashbang", "weapon_smokegrenade",
                         "weapon_molotov", "weapon_incgrenade", "weapon_decoy"] {
@@ -1180,6 +1180,18 @@ impl World {
     pub fn buy_cost(&self, id: PlayerId, item: Purchase) -> Result<i32, BuyError> {
         let time = self.time();
         let p = self.player(id).ok_or(BuyError::Unknown)?;
+        // The authoritative offline practice rules opt into a free armory.
+        // Reuse Purchase in TickInput; clients cannot grant outside this mode.
+        if self.mode == GameMode::Deathmatch && self.rules.grenade_practice && !p.is_bot && p.alive {
+            if let Purchase::Weapon(index) = item {
+                let def = self.catalog.weapons.iter().find(|w| w.def_index == index).ok_or(BuyError::Unknown)?;
+                return if matches!(def.class, weapons::WeaponClass::Knife | weapons::WeaponClass::Pistol
+                    | weapons::WeaponClass::Smg | weapons::WeaponClass::Rifle | weapons::WeaponClass::Sniper
+                    | weapons::WeaponClass::Shotgun | weapons::WeaponClass::MachineGun | weapons::WeaponClass::Grenade) {
+                    Ok(0)
+                } else { Err(BuyError::Unknown) };
+            }
+        }
         if !p.alive || (self.mode != GameMode::Special && (!self.competitive() || !self.round.can_buy(&self.rules, time))) {
             return Err(BuyError::NotAllowedNow);
         }
@@ -1247,14 +1259,27 @@ impl World {
             Purchase::Weapon(index) => {
                 let def = self.catalog.weapons.iter().find(|w| w.def_index == index).cloned().ok_or(BuyError::Unknown)?;
                 let slot = weapon::slot(&def);
-                if slot <= 2 {
+                let practice = self.mode == GameMode::Deathmatch && self.rules.grenade_practice && !self.players[i].is_bot;
+                if practice {
+                    let p = &mut self.players[i];
+                    // Replace, rather than accumulate guns or knives on each click.
+                    p.weapons.retain(|w| if slot <= 3 { weapon::slot(&w.def) != slot }
+                        else { w.def.id != def.id });
+                    p.active = p.active.min(p.weapons.len().saturating_sub(1));
+                    p.last_active = p.last_active.min(p.weapons.len().saturating_sub(1));
+                    if slot == 3 { p.loadout.knife = Some(def.class_name.clone()); }
+                    if slot <= 2 {
+                        let base = if p.team == Team::CounterTerrorist { 2 } else { 0 };
+                        p.loadout.practice[base + slot as usize - 1] = Some(def.class_name.clone());
+                    }
+                } else if slot <= 2 {
                     if let Some(old) = self.players[i].weapon_in_slot(slot) {
                         self.drop_weapon(i, old, 16.0);
                     }
                 }
                 let p = &mut self.players[i];
                 let at = p.give(WeaponState::new(Arc::new(def)));
-                if slot == 1 || (slot == 2 && p.weapon_in_slot(1).is_none()) {
+                if practice || slot == 1 || (slot == 2 && p.weapon_in_slot(1).is_none()) {
                     p.select(at, time);
                 }
             }
