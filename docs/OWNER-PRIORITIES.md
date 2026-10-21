@@ -1,9 +1,13 @@
 # Current owner priorities
 
-Status: **resumed October 20 evening for continuous overnight work until the
-owner interrupts**. Root owns integration/builds/CI/staging; parallel source
+Status: **resumed October 21 for continuous work until every approved item is
+finished or the owner explicitly stops it**. Root owns integration/builds/CI/staging; parallel source
 work is authorized. VISION defines the final target. The owner explicitly
 requires faster playable progress and proportional verification.
+
+A partial pass across categories is not completion. Keep the ordered queue
+active after builds, merges and staging. Do not stop because every category
+received some work; track unresolved player outcomes and finish them.
 
 ## Active batch and accepted order
 
@@ -38,12 +42,13 @@ PR #270 is merged. The desktop **CSGO Rewrite Playtest** opens a single match;
 F8 changes weapons/knives, solo/ten-player sessions and maps inside the game.
 It also includes classic shots, the lower local AK shot mix, compact HUD/feed,
 airborne easing, footstep attenuation and loading work. The original profile
-is preserved. The next combined candidate covers fire intersections, bot jump/portal recovery,
-material decal exclusions, dropped-gun bounds and parallel prop-lighting queries.
-One installed Dust II PLAY comparison reduced world/prop preparation from 45.1s
-to 17.7s with identical geometry/material counts. Fire still has visible card
-borders; this is a first pass, not a completed VFX match. Release/CI/staging
-remain pending for this candidate.
+is preserved. PR #271 also merged and is staged through the same launcher:
+fire intersections, bot jump/portal recovery, material decal exclusions,
+dropped-gun bounds and parallel prop-lighting queries. One installed Dust II
+PLAY comparison reduced world/prop preparation from 45.1s to 17.7s with identical
+geometry/material counts. These increments do not complete the queue: walking,
+remaining airborne pauses, hit-feedback audibility, fire card edges, fuller
+weapon handling/combat presentation and bot behavior remain active as relevant.
 
 ## Delivery policy (explicit owner correction, October 20 evening)
 
