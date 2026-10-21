@@ -1432,7 +1432,7 @@ mod tests {
     }
 
     #[test]
-    fn combat_events_keep_head_feedback_spatial_and_separate_from_fatal_cues() {
+    fn attacker_head_feedback_reaches_listener_without_affecting_positional_body_hits() {
         use sim::{GameEvent, weapon::{HitGroup, HitProtection}};
         #[derive(Resource)]
         struct Hits(Vec<GameEvent>);
@@ -1476,7 +1476,9 @@ mod tests {
             app.update();
             app
         }
-        let contact = glam::Vec3::new(1600.0, 0.0, 64.0);
+        // Beyond both ordinary damage and Feedback stack cutoffs. A map's
+        // geometry/range and the attacker's gun must not mute confirmation.
+        let contact = glam::Vec3::new(5000.0, 0.0, 64.0);
         let hit = |group, protection| GameEvent::Damage { attacker: 1, victim: 2, health: 20,
             group, pos: contact, protection };
         // Capture a death independently of any later player lookup, then use
@@ -1500,14 +1502,12 @@ mod tests {
                 assert_eq!(sounds.playing.len(), if fatal { 2 } else { 1 });
                 let voice = sounds.playing.iter().find(|voice| voice.entry == feedback).unwrap();
                 assert_eq!(voice.owner, 2, "Feedback remains owned by the struck player");
-                let emitter = app.world().get::<Emitter>(voice.entity).unwrap();
-                assert_eq!(emitter.pos, to_bevy(contact));
-                assert_eq!(emitter.foley_bounds, Some((120.0, 4000.0)));
-                assert!(emitter.gain(1600.0) > 0.0, "Long headshot range survives ordinary foley cutoff");
-                assert_eq!(emitter.gain(4000.0), 0.0);
+                assert!(app.world().get::<Emitter>(voice.entity).is_none());
+                assert_eq!(app.world().get::<SoundGain>(voice.entity).unwrap().0, 0.7);
                 if fatal {
                     let voice = sounds.playing.iter().find(|voice| voice.entry == "player.damageheadshot").unwrap();
-                    assert_eq!(app.world().get::<Emitter>(voice.entity).unwrap().pos, to_bevy(contact));
+                    assert!(app.world().get::<Emitter>(voice.entity).is_none());
+                    assert_eq!(app.world().get::<SoundGain>(voice.entity).unwrap().0, 1.0);
                 }
             }
         }
@@ -1522,6 +1522,9 @@ mod tests {
             let sounds = app.world().resource::<SoundLibrary>();
             assert_eq!(sounds.playing.len(), 1);
             assert_eq!(sounds.playing[0].entry, expected);
+            let emitter = app.world().get::<Emitter>(sounds.playing[0].entity).unwrap();
+            assert_eq!(emitter.pos, to_bevy(contact));
+            assert_eq!(emitter.gain(5000.0), 0.0);
         }
         assert!(app(vec![kill], 3, false).world().resource::<SoundLibrary>().playing.is_empty());
     }
