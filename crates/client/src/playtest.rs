@@ -9,6 +9,7 @@ pub(crate) struct Panel {
     pub(crate) open: bool,
     pub(crate) weapon: Option<u32>,
     bots: Option<u32>,
+    selected_bots: Option<u32>,
     respawn: bool,
     page: Page,
     offset: usize,
@@ -66,11 +67,15 @@ fn input(
             Action::Previous => panel.offset = panel.offset.saturating_sub(12),
             Action::Next => panel.offset += 12,
             Action::Weapon(index) => { panel.weapon = Some(*index); panel.open = false; }
-            Action::Bots(count) => { panel.bots = Some(*count); panel.respawn = true; panel.open = false; }
+            Action::Bots(count) => { panel.selected_bots = Some(*count); panel.bots = Some(*count); panel.respawn = true; panel.open = false; }
             Action::Respawn => { panel.respawn = true; panel.open = false; }
             Action::Map(map) => {
                 let mut options = opts.0.clone();
                 options.map = map.clone();
+                if let Some(count) = panel.selected_bots {
+                    options.bots = count.div_ceil(2);
+                    options.bot_difficulty = if count == 0 { Some(0) } else { None };
+                }
                 options.direct = true;
                 *request.0.lock().unwrap() = Some(options.into());
                 panel.open = false;
@@ -96,9 +101,6 @@ fn input(
         }
     }
 }
-fn label(name: &str) -> String {
-    name.trim_start_matches("weapon_").replace('_', " ")
-}
 fn button(commands: &mut Commands, parent: Entity, text: &str, action: Action, font: Handle<Font>) {
     let id = commands.spawn((Persistent, Button, action, Node {
         min_height: px(38), padding: UiRect::axes(px(14), px(8)),
@@ -112,7 +114,7 @@ fn button(commands: &mut Commands, parent: Entity, text: &str, action: Action, f
 fn draw(
     mut commands: Commands, mut panel: ResMut<Panel>, state: Res<State<AppState>>,
     opts: Res<crate::Options>,
-    art: Res<crate::ui_assets::UiAssets>, menu: Res<crate::menu::Menu>,
+    art: Res<crate::ui_assets::UiAssets>, loc: Res<crate::localize::Localization>, menu: Res<crate::menu::Menu>,
     world: Option<Res<crate::player::SimWorld>>,
     remote: Option<Res<crate::remote::RemoteClient>>,
 ) {
@@ -153,7 +155,7 @@ fn draw(
             use weapons::WeaponClass::*;
             if panel.page == Page::Knives { d.class == Knife && crate::classic_cosmetics::item_available(&d.class_name, 0) }
             else { matches!(d.class, Pistol|Smg|Rifle|Sniper|Shotgun|MachineGun|Grenade) }
-        }).map(|d| (label(&d.class_name), Action::Weapon(d.def_index))).collect()).unwrap_or_default(),
+        }).map(|d| (loc.weapon_name(d), Action::Weapon(d.def_index))).collect()).unwrap_or_default(),
         Page::Maps => menu.maps.iter().map(|name| (
             workshop::find(name).map(|m| m.title.to_owned()).unwrap_or_else(|| name.clone()), Action::Map(name.clone())
         )).collect(),
