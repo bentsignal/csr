@@ -766,7 +766,8 @@ impl SoundLibrary {
             }
             None => {
                 // Measured gains top out at lvol 20 (1.07 of the AK shot).
-                let gain = (volume * entry.category.near(emit.local)).min(1.07);
+                let gain = (if emit.local { self.classic.local_gain(&key) } else { None })
+                    .unwrap_or_else(|| volume * entry.category.near(emit.local)).min(1.07);
                 initial_gain = gain * self.master_volume;
                 commands
                     .spawn((

@@ -287,6 +287,20 @@ impl Profile {
             .find(|entry| entry.binding.eq_ignore_ascii_case(binding))
             .map(|entry| entry.alias)
     }
+
+    /// Bounded local AK balance from its published 2015 declaration: volume
+    /// 0.7 with volume_accumulate input3 = 0.55 replacing the mixer input.
+    /// Same-wave native PCM supports lowering the modern 0.9 local response;
+    /// this declared response is a playable approximation, not a calibrated
+    /// speaker-output match. Do not multiply another FirstWeapons mixer gain.
+    /// World shots, distant layers and player feedback retain installed mixing.
+    pub(super) fn local_gain(&self, entry: &str) -> Option<f32> {
+        let alias = self.select(
+            &ContentId::csgo(ContentKind::Weapon, "ak47"),
+            "Weapon_AK47.Single",
+        )?;
+        (entry == alias).then_some(0.7 * 0.55)
+    }
 }
 
 #[cfg(test)]
@@ -394,6 +408,56 @@ mod tests {
         assert_eq!(entries["csr.test.near"].distant.as_deref(), Some("csr.test.distant"));
         assert!(entries["csr.test.suppressed"].distant.is_none());
         assert_eq!(profile.select(&id, "Custom.Suppressed"), None);
+    }
+
+    #[test]
+    fn classic_ak_local_balance_does_not_change_world_or_public_entry_gains() {
+        use bevy::{audio::AudioSource, ecs::world::CommandQueue, prelude::*};
+        use super::super::{Emit, Emitter, SoundGain, SoundLibrary};
+        let near = wav(1000);
+        let far = wav(-2000);
+        let near_hash = format!("{:x}", Sha256::digest(&near));
+        let far_hash = format!("{:x}", Sha256::digest(&far));
+        let fs = fs(near, far);
+        let mut entries = entries();
+        // Keep the public shot playable without adding another VFS fixture.
+        let public = entries.get_mut("test.single").unwrap();
+        public.frozen_wave = Some(verified_wave(&fs, &spec(&near_hash, &far_hash).near_wave).unwrap());
+        let mut ak = entries["test.single"].clone();
+        ak.frozen_wave = None;
+        entries.insert("weapon_ak47.single".into(), ak);
+        let mut profile = Profile::default();
+        let mut spec = spec(&near_hash, &far_hash);
+        spec.binding = "Weapon_AK47.Single";
+        profile.install(&fs, &mut entries, &spec).unwrap();
+        let mut library = SoundLibrary { entries, classic: profile, ..Default::default() };
+        let mut world = World::new();
+        let mut queue = CommandQueue::default();
+        let mut sources = Assets::<AudioSource>::default();
+        {
+            let mut commands = Commands::new(&mut queue, &world);
+            for (entry, emit) in [
+                ("csr.test.near", Emit { owner: Some(1), local: true, at: None }),
+                ("csr.test.near", Emit { owner: Some(2), local: false, at: None }),
+                ("test.single", Emit { owner: Some(3), local: true, at: None }),
+                ("csr.test.near", Emit { owner: Some(4), local: false, at: Some(glam::Vec3::X * 100.0) }),
+            ] {
+                library.play_with(&mut commands, &fs, &mut sources, entry, emit);
+            }
+        }
+        queue.apply(&mut world);
+        let voice = |owner| library.playing.iter()
+            .find(|p| p.owner == owner && p.entry != "csr.test.distant").unwrap().entity;
+        assert!((world.get::<SoundGain>(voice(1)).unwrap().0 - 0.385).abs() < 1e-6);
+        for owner in [2, 3] {
+            assert_eq!(world.get::<SoundGain>(voice(owner)).unwrap().0, 0.9);
+        }
+        let emitter = world.get::<Emitter>(voice(4)).unwrap();
+        assert_eq!(emitter.base, 0.9 * super::super::Category::Weapon.field());
+        assert!(emitter.gunfire.is_some());
+        assert_eq!(library.entries["weapon_ak47.single"].volume, (0.9, 0.9));
+        assert_eq!(library.entries["csr.test.distant"].volume, (0.2, 0.2));
+        assert_eq!(Profile::default().local_gain("csr.test.near"), None);
     }
 
     #[test]
