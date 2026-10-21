@@ -1291,3 +1291,99 @@ includes Decoy, with its own constant-VZ/moving rows retained separately.
 Fire alternate-air modes remain unqualified. No release timing, spawn trace,
 collision/gravity, lifecycle, audio or serialization changes are admitted, nor
 full-flight/historical-lineup parity.
+
+
+## Molotov alternate jump throws (October 20)
+
+Fourteen independent owned Legacy 1.38.8.1 sessions qualify Molotov secondary
+and combined airborne launch components. Root personally reviewed original
+held-object, player-before/after and three projectile panels in every case.
+Private hashes, manual transcriptions and component fits are retained in
+`overpass-20261019/native-molotov-air-buttons-oct20-r1`. All fourteen sessions
+closed and restored twelve exact preference snapshots.
+
+Held `weapon_molotov` uses `v_eq_molotov`, `w_eq_molotov` and dropped model248;
+the returned `C_MolotovProjectile` has model248, matching owner/thrower and NULL
+ground in each precontact sample. Actual pitch matches the request, yaw and
+punches are zero, standing eye offset is64.062561 and duck is false. Pin is
+pulled with strength0 for secondary and0.5 for combined. Network velocity is
+used; generic absolute velocity is not substituted.
+
+| Actual pitch/movement | Secondary VX | Combined VX |
+|---|---:|---:|
+|0, stationary|199.423584|432.084351|
+|-30, stationary|162.429962|351.931519|
+|+45, stationary holdout|155.124008|336.101959|
+|0, steady forward245|505.673584|738.334351|
+
+Three VX values agree per case. Own level/-30 fits recover202.500011 and
+438.749942 with weighted upward bias approximately10 degrees; +45 holdout
+residuals are below0.000016. Forward player VX is245 before/after release,
+independently supporting horizontal inheritance1.25 in each mode.
+
+With gravity0 positively read back, actual player VZ is constant before/after,
+and each projectile VZ is constant over three samples:
+
+|Mode|Actual support/player VZ|Projectile VZ|
+|---|---|---:|
+|Secondary|World,0|35.163757|
+|Secondary|NULL,223.868378|314.999237|
+|Secondary|NULL,130.118378|197.811737|
+|Combined|World,0|76.188133|
+|Combined|NULL,223.868378|356.023621|
+|Combined|NULL,123.868378|231.023621|
+
+Each mode's own baseline and both airborne plateaus independently recover
+vertical inheritance1.25. The secondary late plateau differs from prior
+kinds and is retained literally. Normal-gravity received VZ is not treated
+as construction velocity or fitted using unknown flight age.
+
+The exact schema/item/MDL gate now admits the six alternate-air components.
+Existing TickInput64/128Hz component-fallback and ground/primary-preservation
+fixtures include Molotov, alongside its own constant-VZ/moving observations.
+Timing, spawn traces, gravity/collision, expiry, fire fields, presentation,
+audio and serialization remain unchanged. This is launch-component evidence,
+not full-flight or historical-lineup parity.
+
+
+## Incendiary alternate jump throws (October 20)
+
+A separate fourteen-case Legacy1.38.8.1 series independently qualifies
+Incendiary's secondary and combined airborne components. Nine completed
+cases precede the owner's pause; five missing cases were captured freshly
+on resume. The interrupted +45 case is excluded. Raw originals/hashes and
+root's personal pixel readings remain private in
+`native-incgrenade-air-buttons-oct20-r1` and `-r2`; component admission joins
+only the completed cases. Every completed session restored twelve preferences;
+the interrupted session was separately restored and byte/existence compared.
+
+Held `weapon_incgrenade` uses `v_eq_incendiarygrenade`,
+`w_eq_incendiarygrenade` and dropped model249. Each returned
+`C_MolotovProjectile` is model249 with matching owner/thrower and NULL ground.
+Angles, pin/strength, standing eye/duck and zero-punch checks match Molotov's
+controls, but the numeric measurements are Incendiary's own.
+
+Its three equal network VX readings per case are secondary
+199.423584/162.429962/155.124008 at actual0/-30/+45, and combined
+432.084351/351.931519/336.101959. Independent fits recover202.500011/438.749942
+with bias approximately10; +45 holdouts differ by less than0.000016.
+Own steady-forward245 pairs give505.673584/738.334351, hence1.25 inheritance.
+Normal-gravity received VZ is not used to reconstruct launch age.
+
+|Mode|Actual gravity0 support/player VZ|Three equal projectile VZ readings|
+|---|---|---:|
+|Secondary|World,0|35.163757|
+|Secondary|NULL,223.868378|314.999237|
+|Secondary|NULL,130.118378|197.811737|
+|Combined|World,0|76.188133|
+|Combined|NULL,223.868378|356.023621|
+|Combined|NULL,130.118378|238.836121|
+
+Player VZ agrees before/after each release. Each mode's two airborne plateaus
+against its own ground baseline independently gives vertical inheritance1.25.
+The exact schema/item/MDL-gated Incendiary gains six optional alternate-air
+fields. Shared semantic digest v27 binds both fire profiles. Existing
+TickInput64/128Hz component-fallback and ground/primary preservation coverage
+includes both, with their distinct constant-VZ rows. No timing, spawn trace,
+physics/contact, expiry/fire-field, audio, presentation or wire change is made;
+full-flight/lineup parity and fire visual artifacts remain separate work.
