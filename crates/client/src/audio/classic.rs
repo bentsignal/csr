@@ -30,6 +30,7 @@ struct Selection {
 pub(super) struct Profile {
     era: SoundEra,
     selections: HashMap<ContentId, Vec<Selection>>,
+    historical_pairs: usize,
 }
 
 struct WaveSpec<'a> {
@@ -278,6 +279,11 @@ impl Profile {
                     );
                 }
             }
+            bevy::log::info!(
+                "Classic2015 shots: {} historical pairs, {} retained pairs",
+                profile.historical_pairs,
+                profile.selections.values().map(Vec::len).sum::<usize>() - profile.historical_pairs,
+            );
         }
         profile
     }
@@ -316,14 +322,14 @@ impl Profile {
         }
         // Validate the complete pair before publishing anything. Never mix a
         // classic near shot with a modern distant waveform after a partial failure.
-        let (near_audio, far_audio) = match historical.and_then(|pack| pack.pair(spec).ok()) {
-            Some(pair) => pair,
+        let (near_audio, far_audio, from_historical) = match historical.and_then(|pack| pack.pair(spec).ok()) {
+            Some((near, far)) => (near, far, true),
             None => {
                 let near = verified_wave(fs, &spec.near_wave)?;
                 let far = spec.distant.as_ref()
                     .map(|far| verified_wave(fs, &far.wave))
                     .transpose()?;
-                (near, far)
+                (near, far, false)
             }
         };
         let distant = if let Some(far) = &spec.distant {
@@ -369,6 +375,7 @@ impl Profile {
             .entry(ContentId::csgo(ContentKind::Weapon, spec.weapon))
             .or_default()
             .push(Selection { binding: spec.binding, alias: spec.alias });
+        self.historical_pairs += usize::from(from_historical);
         Ok(())
     }
 
@@ -535,6 +542,30 @@ mod tests {
         assert_eq!(profile.select(&ContentId::csgo(ContentKind::Weapon, "ak47"), "Test.Single"), Some("csr.test.near"));
         assert_eq!(entries["csr.test.near"].pitch, (100.0, 100.0));
         assert_eq!(entries["csr.test.distant"].pitch, (100.0, 100.0));
+        assert_eq!(profile.historical_pairs, 1);
+    }
+
+    #[test]
+    #[ignore = "requires the private verified 2015 audio pack in CSR_DATA_DIR/packs and Legacy installed data"]
+    fn installed_private_historical_pack_decodes_and_drives_the_classic_profile() {
+        let path = packs::Installed::current().dir().join(historical::FILENAME);
+        let pack = historical::Historical::open(&path).expect("private historical pack");
+        let (_, fs) = level::mount_game(None).unwrap();
+        let mut library = super::super::SoundLibrary::load_with_era(&fs, SoundEra::InstalledLegacy);
+        let mut profile = Profile::default();
+        for spec in STOCK {
+            profile.install_with_historical(&fs, &mut library.entries, spec, Some(&pack)).unwrap();
+            if spec.weapon != "revolver" {
+                let (expected, far) = pack.pair(spec).unwrap();
+                assert_eq!(library.entries[spec.alias].frozen_wave.as_ref().unwrap().bytes, expected.bytes);
+                if let Some(distant) = &spec.distant {
+                    assert_eq!(library.entries[distant.alias].frozen_wave.as_ref().unwrap().bytes, far.unwrap().bytes);
+                }
+            }
+        }
+        assert_eq!(profile.historical_pairs, STOCK.len() - 1);
+        assert_eq!(profile.selections.values().map(Vec::len).sum::<usize>(), STOCK.len());
+        println!("Historical pack decoded and selected for {} weapon modes; revolver retained", profile.historical_pairs);
     }
 
     #[test]
