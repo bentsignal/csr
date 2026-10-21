@@ -23,8 +23,9 @@
   flat/ramp/smoke controls, workspace/Release/probe/sim and CI passed; staged.
 - [x] Deliver continuous airborne actor poses across held shot/stance events
   (#275): CI, Release/probe/sim and ordinary ten-player rendering passed.
-- [ ] Recover continuously followed bot routes after grounded off-route
-  displacement, preserving valid gaps/airborne traversal; checks pending.
+- [x] Recover continuously followed bot routes after grounded off-route
+  displacement (#276), preserving valid gaps/airborne traversal. CI/regressions,
+  Release/probe/sim and ordinary match/F8-panel rendering passed.
 - [ ] Finish unresolved player outcomes in the approved order; an increment or
   first pass does not finish its backlog category.
 
