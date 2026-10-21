@@ -44,6 +44,16 @@ The installed-data regression checks that all gun/arm joints move together,
 landing returns continuously, death hides the meshes, and render updates leave
 the authoritative simulation and aim state unchanged.
 
+Interrupted transitions now retain their displayed velocity as well as position.
+Retracing the earlier smoothstep reversed velocity instantly when a short hop
+landed during lowering, or another takeoff interrupted the return. A bounded
+cubic retargets that same component; uninterrupted drop/return still use the
+existing smoothstep, full travel time and plateau. This corrects presentation
+continuity without establishing a new native landing response or altering
+jump/landing physics. Source regressions cover interrupted edges, finite bounds
+and equivalent render subdivisions; runtime verification belongs to the combined
+playtest batch.
+
 ## Shared render timeline
 
 Movement-driven lowering and forward settling use the camera/body render

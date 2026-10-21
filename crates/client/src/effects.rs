@@ -21,33 +21,34 @@ fn damage_sound(group: sim::weapon::HitGroup, protection: sim::weapon::HitProtec
 }
 
 /// Attacker feedback is distinct from the victim's ordinary damage/death cue.
-/// Legacy 1.38.8.1 emits the 0 dB Feedback entry on nonlethal head hits and
-/// additionally emits the ordinary headshot entry on a fatal head hit, even
-/// through a helmet. Keep the victim as source owner and retain spatial range.
-/// Other listeners keep their existing damage routing; this observation only
-/// establishes the firing player's perspective.
+/// Keep the observed Feedback/fatal-headshot entry selection, but deliver the
+/// shooter's confirmation at the listener. The owner explicitly requires head
+/// feedback across the map; ordinary foley attenuation can bury or cut it off.
+/// Body hits and other listeners retain their positional damage sounds. The
+/// struck player still owns these voices for channel/instance accounting.
 pub(crate) fn play_combat_cue(
     event: &GameEvent, local: &LocalPlayer, commands: &mut Commands,
     sounds: &mut SoundLibrary, sources: &mut Assets<AudioSource>, fs: &vfs::Vfs,
 ) {
     let shooter = |attacker, victim| !local.noclip && attacker == local.view_target() && attacker != victim;
-    let (sound, victim, pos) = match event {
+    let (sound, victim, pos, feedback) = match event {
         GameEvent::Damage { attacker, victim, group, pos, protection, .. } => {
-            let sound = if *group == sim::weapon::HitGroup::Head && shooter(*attacker, *victim) {
+            let feedback = *group == sim::weapon::HitGroup::Head && shooter(*attacker, *victim);
+            let sound = if feedback {
                 if *protection == sim::weapon::HitProtection::Helmet {
                     "Player.DamageHelmetFeedback"
                 } else {
                     "Player.DamageHeadShotFeedback"
                 }
             } else { damage_sound(*group, *protection) };
-            (sound, *victim, *pos)
+            (sound, *victim, *pos, feedback)
         }
         GameEvent::Kill { attacker, victim, headshot: true, death, .. } if shooter(*attacker, *victim) => {
-            ("Player.DamageHeadShot", *victim, death.hit.map_or(death.pose.origin, |hit| hit.position))
+            ("Player.DamageHeadShot", *victim, death.hit.map_or(death.pose.origin, |hit| hit.position), true)
         }
         _ => return,
     };
-    let own = victim == local.view_target() && !local.noclip;
+    let own = feedback || (victim == local.view_target() && !local.noclip);
     sounds.play_with(commands, fs, sources, sound,
         Emit { at: (!own).then_some(pos), owner: Some(victim), local: own });
 }

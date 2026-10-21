@@ -11,9 +11,11 @@
 - [x] Retained classic gun shots, lower local AK masking, compact HUD/kill feed,
   airborne easing, wall/floor footstep attenuation and trimmed loading work
   (#270). Walking coefficients were preserved; final feel remains owner-tested.
-- [ ] Publish the combined fire-intersection, bot navigation, impact/decal,
-  dropped-weapon placement and prop-loading pass through the same launch entry.
-  Source and focused PLAY checks pass; fire card borders remain a known limit.
+- [x] Publish the combined fire-intersection, bot navigation, impact/decal,
+  dropped-weapon placement and prop-loading increment through the same launch
+  entry (#271). Fire card borders and broader behavior remain unfinished.
+- [ ] Finish unresolved player outcomes in the approved order; an increment or
+  first pass does not finish its backlog category.
 
 > **October 18 follow-up:** implementation approved: classic maps/playability,
 > then movement/viewmodels, hit-audio consistency, then grenades. Grenade feel
