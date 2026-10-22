@@ -152,7 +152,7 @@ mod tests {
 
     #[test]
     fn removed_cover_no_longer_clamps_the_rendered_muzzle() {
-        use bevy::gizmos::{config::{DefaultGizmoConfigGroup, GizmoConfigStore}, gizmos::GizmoStorage};
+        use bevy::{ecs::system::RunSystemOnce, gizmos::{AppGizmoBuilder, config::DefaultGizmoConfigGroup}};
         use collision::{CollisionWorld, Convex, Plane};
         use std::sync::Arc;
 
@@ -180,17 +180,13 @@ mod tests {
         let eye = glam::Vec3::new(0., 0., 64.);
         let muzzle = to_bevy(eye + glam::Vec3::X * 32.);
         let end = eye + glam::Vec3::X * 96.;
-        let mut config = GizmoConfigStore::default();
-        config.register::<DefaultGizmoConfigGroup>();
         let mut app = App::new();
         app.insert_resource(SimWorld(world))
             .insert_resource(LocalPlayer::new(1, eye, 0.))
             .insert_resource(Muzzles { first: Some((1, muzzle)), ..default() })
-            .insert_resource(config)
-            .init_resource::<GizmoStorage<DefaultGizmoConfigGroup, ()>>()
+            .init_gizmo_group::<DefaultGizmoConfigGroup>()
             .init_resource::<Time>()
-            .init_resource::<Tracers>()
-            .add_systems(Update, draw);
+            .init_resource::<Tracers>();
         for removed in [false, true, false] {
             {
                 let mut world = app.world_mut().resource_mut::<SimWorld>();
@@ -205,12 +201,12 @@ mod tests {
             trails.live.clear();
             trails.pending.push((1, eye, end));
             drop(trails);
-            app.update();
+            app.world_mut().run_system_once(draw).unwrap();
             let trails = app.world().resource::<Tracers>();
             assert!(trails.pending.is_empty());
             assert_eq!(trails.live.len(), 1);
             let start = to_source(trails.live[0].start);
-            assert!((start.x - if removed { 32. } else { 7.46875 }).abs() < 0.1,
+            assert!((start.x - if removed { 32. } else { 7.5 }).abs() < 0.1,
                 "the actual draw must release the muzzle after cover breaks, and clip it after restore: {start:?}");
             assert_eq!(trails.live[0].end, to_bevy(end));
             assert!(frozen.trace_ray(eye, to_source(muzzle), collision::contents::MASK_SHOT).hit());
