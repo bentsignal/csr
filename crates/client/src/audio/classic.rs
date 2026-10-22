@@ -572,14 +572,23 @@ mod tests {
                     && (!binding.starts_with("weapon_mag7.") || mag_ready))
                     .then(|| pack.as_ref().and_then(|pack| pack.wave(path).ok())).flatten();
                 let actual = library.entries[binding].frozen_wave.as_ref();
+                let classic_active = expected.is_some();
                 match expected {
                     Some(wave) => assert_eq!(actual.expect("classic handling activation").bytes, wave.bytes),
                     None => assert!(actual.is_none(), "installed handling must remain available"),
                 }
                 let mut definition = library.entries[binding].clone();
                 definition.frozen_wave = None;
-                assert_eq!(format!("{definition:?}"), format!("{:?}", installed.entries[binding]),
-                    "handling metadata must remain installed: {binding}");
+                let mut expected_definition = installed.entries[binding].clone();
+                if classic_active {
+                    let volume = if binding == "weapon_nova.pumpduringshot" { 0.3 } else { 1.0 };
+                    expected_definition.volume = (volume, volume);
+                    expected_definition.pitch = (100.0, 100.0);
+                    expected_definition.channel = 3;
+                    expected_definition.limit = None;
+                }
+                assert_eq!(format!("{definition:?}"), format!("{expected_definition:?}"),
+                    "handling metadata must follow the admitted wave era: {binding}");
             }
         }
     }
