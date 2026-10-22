@@ -175,11 +175,9 @@ pub(crate) fn update(world: &mut World) {
                         world
                             .resource_mut::<crate::session::Loader>()
                             .bind_host_generation(serial, info);
+                        world.resource_mut::<crate::session::Loader>().importing = Some(serial);
                         *world.resource::<crate::PendingLevel>().0.lock().unwrap() = Some(loaded);
                         world.insert_resource(client);
-                        world
-                            .resource_mut::<NextState<crate::session::AppState>>()
-                            .set(crate::session::AppState::Match);
                     }
                     Err(error) => {
                         fail(world, crate::remote_join::error_message(&error));

@@ -102,6 +102,7 @@ fn cancel_preparation(world: &mut World) {
 }
 
 pub(crate) fn home(world: &mut World) {
+    crate::scene_import::cancel(world);
     if let Some(request) = world.get_resource::<crate::hosting::HostRequest>() {
         request.0.lock().unwrap().take();
     }

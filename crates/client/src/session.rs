@@ -29,10 +29,17 @@ pub(crate) fn own_entity<T: Component>(
     added: On<Add, T>,
     state: Res<State<AppState>>,
     persistent: Query<(), With<Persistent>>,
+    importing: Option<Res<crate::scene_import::ApplyingImport>>,
+    loader: Option<Res<Loader>>,
     mut commands: Commands,
 ) {
-    if *state.get() == AppState::Match && !persistent.contains(added.entity) {
+    if persistent.contains(added.entity) { return; }
+    if *state.get() == AppState::Match {
         commands.entity(added.entity).insert(MatchEntity);
+    } else if let Some(importing) = importing.filter(|importing|
+        *state.get() == AppState::Loading
+            && loader.as_ref().is_some_and(|loader| loader.generation() == Some(importing.0))) {
+        commands.entity(added.entity).insert((MatchEntity, crate::scene_import::ImportedEntity(importing.0)));
     }
 }
 
@@ -181,6 +188,7 @@ pub(crate) struct Loader {
     job: Option<Job>,
     retired: Option<Job>,
     ready: Option<ReadyLoad>,
+    pub(crate) importing: Option<u64>,
     pub status: String,
     title: String,
 }
@@ -237,6 +245,7 @@ impl Loader {
     }
 
     fn start(&mut self, game_dir: &std::path::Path) {
+        if self.importing.is_some() && self.importing == self.generation() { return; }
         if self.ready.as_ref().is_some_and(|ready| self.generation() == Some(ready.serial)) { return; }
         self.ready = None;
         if self.job.is_some() {
@@ -395,6 +404,7 @@ impl Loader {
     }
 
     fn cancel_current(&mut self) {
+        self.importing = None;
         self.ready = None;
         if let Some(job) = &self.job {
             job.progress.cancelled.store(true, Ordering::Relaxed);
@@ -500,6 +510,7 @@ pub(crate) fn poll_load(
     front: Option<Res<crate::frontend::Frontend>>,
     app_frame: Option<Res<bevy::diagnostic::FrameCount>>,
 ) {
+    if loader.importing.is_some() && loader.importing == loader.generation() { return; }
     if let Some(ready) = &loader.ready {
         let wanted = loader.wanted.as_ref().filter(|(serial, _)| *serial == ready.serial)
             .map(|(_, selection)| selection.clone());
@@ -532,8 +543,8 @@ pub(crate) fn poll_load(
             }
             info!("loaded {}: {:?}", loaded.level.name, loaded.level.timings);
             *pending.0.lock().unwrap() = Some(loaded);
+            loader.importing = Some(serial);
             if let Selection::Offline(wanted) = wanted { options.0 = wanted.options; }
-            next.set(AppState::Match);
             return;
         }
     }
@@ -730,6 +741,25 @@ mod tests {
             .init_resource::<crate::hosting::Hosting>()
             .add_systems(Update, poll_load);
         app
+    }
+
+    #[test]
+    fn main_thread_import_keeps_its_generation_without_a_duplicate_worker_or_false_failure() {
+        let mut app = loading_app(AppState::Loading);
+        {
+            let mut loader = app.world_mut().resource_mut::<Loader>();
+            loader.wanted = Some((7, Selection::Offline(ClientOptions::default().into())));
+            loader.importing = Some(7);
+            loader.status = "Preparing props".into();
+            loader.start(std::path::Path::new("unused"));
+            assert!(loader.job.is_none());
+        }
+        app.update();
+        assert_eq!(app.world().resource::<Loader>().importing, Some(7));
+        assert_eq!(app.world().resource::<Loader>().status, "Preparing props");
+        assert!(!matches!(app.world().resource::<NextState<AppState>>(), NextState::Pending(AppState::Menu)));
+        app.world_mut().resource_mut::<Loader>().invalidate();
+        assert!(app.world().resource::<Loader>().importing.is_none());
     }
 
     #[test]
