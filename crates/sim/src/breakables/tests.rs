@@ -102,6 +102,75 @@ fn fixture_with_outputs(rate: u32, metadata: &str, door: bool, prop_data: Option
 }
 
 fn attack() -> TickInput { TickInput { buttons: buttons::ATTACK, ..Default::default() } }
+
+#[test]
+fn dropped_gun_loses_broken_support_falls_restores_and_is_picked_up_64_128() {
+    for rate in [64, 128] {
+        let (mut world, breaker) = fixture(rate, "health 1", false);
+        let dropper = world.add_player("dropper", Team::CounterTerrorist);
+        let mut gun = world.players[0].weapons[0].clone();
+        gun.clip = 7;
+        gun.reserve = 13;
+        gun.cosmetic_owner = Some(dropper);
+        gun.cosmetic = Some(crate::weapon::Cosmetic { serial: 7, paint: 38, seed: 3,
+            wear: 0.2, stattrak: Some(4), souvenir: None, stickers: [None; 4] });
+        let drop = world.player_mut(dropper).unwrap();
+        drop.movement = movement::PlayerMove::spawn_at(Vec3::new(0., -22.4, 97. + collision::DIST_EPSILON));
+        drop.view_angles = Vec3::new(0., 90., 0.);
+        drop.weapons = vec![gun.clone()];
+        drop.active = 0;
+        // Ordinary drop input projects ahead onto the authored breakable top.
+        world.step(&[(dropper, TickInput { drop: true, view_angles: Vec3::new(0., 90., 0.), ..Default::default() })]);
+        assert_eq!(world.items.len(), 1);
+        let placed = world.items[0].clone();
+        assert!(placed.settled && (placed.pos.z - 97. - collision::DIST_EPSILON).abs() < 0.001);
+        assert!(world.events.iter().any(|event| matches!(event,
+            GameEvent::Dropped { pos, .. } if *pos == placed.pos)), "support checking preserves initial placement");
+        world.player_mut(dropper).unwrap().movement = movement::PlayerMove::spawn_at(Vec3::new(300., 300., 1.));
+        let mut restored = fixture(rate, "health 1", false).0;
+        restored.restore(world.decode(&world.encode_state()).unwrap());
+        let mut predicted = world.clone();
+        let input = [(breaker, attack())];
+        world.step(&input); restored.step(&input); predicted.step_prediction(&input);
+        assert!(world.breakables[0].broken());
+        assert!(!world.items[0].settled && world.items[0].vertical_velocity < 0.);
+        assert!(world.items[0].pos.z < placed.pos.z, "break tick must start the fall");
+        assert_eq!(world.state(), restored.state());
+        assert_eq!(world.state(), predicted.state());
+        // Reconcile during flight, carrying velocity rather than restarting it.
+        restored.restore(world.decode(&world.encode_state()).unwrap());
+        for _ in 0..rate {
+            world.step(&[]); restored.step(&[]); predicted.step_prediction(&[]);
+            assert_eq!(world.state(), restored.state());
+            assert_eq!(world.state(), predicted.state());
+            assert!(predicted.events.is_empty());
+        }
+        let landed = &world.items[0];
+        assert!(landed.settled && landed.vertical_velocity == 0.);
+        assert!((landed.pos.z - 1. - collision::DIST_EPSILON).abs() < 0.001);
+        assert_eq!(landed.pos.truncate(), placed.pos.truncate());
+        assert_eq!((landed.id, landed.yaw, landed.dropped_by, landed.pickup_after),
+            (placed.id, placed.yaw, placed.dropped_by, placed.pickup_after));
+        let crate::GroundKind::Weapon(landed_gun) = &landed.kind else { panic!("gun changed kind") };
+        assert_eq!((&landed_gun.def.id, landed_gun.clip, landed_gun.reserve, landed_gun.cosmetic, landed_gun.cosmetic_owner),
+            (&gun.def.id, gun.clip, gun.reserve, gun.cosmetic, gun.cosmetic_owner));
+        let pos = landed.pos;
+        restored.restore(world.decode(&world.encode_state()).unwrap());
+        world.step(&[]); restored.step(&[]);
+        assert_eq!(world.items[0].pos, pos, "resting anchors must not drift");
+        assert_eq!(world.state(), restored.state());
+        // The nearby breaker already had this gun; making its slot available
+        // now permits the ordinary reach/occlusion pickup, with payload intact.
+        world.player_mut(breaker).unwrap().weapons.clear();
+        world.step(&[]);
+        assert!(world.items.is_empty());
+        let picked = world.player(breaker).unwrap().active_weapon().unwrap();
+        assert_eq!((&picked.def.id, picked.clip, picked.reserve, picked.cosmetic, picked.cosmetic_owner),
+            (&gun.def.id, gun.clip, gun.reserve, gun.cosmetic, gun.cosmetic_owner));
+        assert!(world.events.iter().any(|event| matches!(event, GameEvent::Pickup { player, .. } if *player == breaker)));
+    }
+}
+
 fn blocked(world: &World) -> bool {
     world.collision.trace_box(Vec3::new(-64., 0., 1.), Vec3::new(64., 0., 1.),
         Vec3::new(-16., -16., 0.), Vec3::new(16., 16., 72.), contents::MASK_PLAYERSOLID).hit()

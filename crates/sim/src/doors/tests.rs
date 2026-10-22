@@ -40,6 +40,26 @@ fn use_input(yaw: f32) -> TickInput {
     TickInput { buttons: buttons::USE, view_angles: Vec3::new(0., yaw, 0.), ..Default::default() }
 }
 
+#[test]
+fn moving_door_releases_supported_kit_at_64_and_128_ticks() {
+    for rate in [64, 128] {
+        let (mut world, id) = fixture(rate, "");
+        let pos = Vec3::new(0., 24., 97. + collision::DIST_EPSILON);
+        world.new_item(crate::GroundKind::DefuseKit, pos, 37., id, 0.);
+        world.step(&[]);
+        assert!(world.items[0].settled);
+        assert_eq!(world.items[0].pos, pos);
+        for _ in 0..rate { world.step(&[(id, use_input(0.))]); }
+        let item = &world.items[0];
+        assert_ne!(world.doors[0].angle, 0.);
+        assert!(item.settled && item.vertical_velocity == 0.);
+        assert!((item.pos.z - 1. - collision::DIST_EPSILON).abs() < 0.001);
+        assert_eq!(item.pos.truncate(), pos.truncate());
+        assert_eq!(item.yaw, 37.);
+        assert!(matches!(item.kind, crate::GroundKind::DefuseKit));
+    }
+}
+
 fn blocked(world: &World) -> bool {
     let from = Vec3::new(-80., 24., 1.);
     let to = Vec3::new(80., 24., 1.);

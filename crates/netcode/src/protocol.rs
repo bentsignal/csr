@@ -2,13 +2,14 @@
 use serde::{Deserialize, Serialize};
 use sim::{GameEvent, PlayerId, Snapshot, Team, TickInput};
 
+// v30 adds authoritative ground-item vertical velocity and settled state.
 // v29 retains protection at each damage event instead of reading later armor.
 // v28 adds bounded door-local cosmetic bullet contacts to the v27 events.
 // v27 combines authoritative door poses/cues, brush-breakable health/removal,
 // and replicated BSP ladder contact for prediction and foley.
 // Older peers must reject the session before attempting snapshot decoding.
-pub const VERSION: u32 = 29;
-pub const PROTOCOL_ID: u64 = 0x4353_5257_0000_001d;
+pub const VERSION: u32 = 30;
+pub const PROTOCOL_ID: u64 = 0x4353_5257_0000_001e;
 pub const CONTROL: u8 = 0;
 pub const INPUT: u8 = 1;
 pub const SNAPSHOT: u8 = 2;
@@ -489,7 +490,8 @@ pub(crate) fn validate_state(
         crate::session::validate_input(input)?;
     }
     for item in &world.items {
-        if !item.pos.is_finite() || !item.yaw.is_finite() || !item.pickup_after.is_finite() {
+        if !item.pos.is_finite() || !item.yaw.is_finite() || !item.pickup_after.is_finite()
+            || !item.vertical_velocity.is_finite() || (item.settled && item.vertical_velocity != 0.0) {
             return Err("invalid dropped item state".into());
         }
         if let sim::GroundKind::Weapon(weapon) = &item.kind {
@@ -785,7 +787,8 @@ mod tests {
                     invalid.snapshot.state.players[0].weapons.clear();
                     invalid.snapshot.state.items.push(sim::GroundItem { id: 1,
                         kind: sim::GroundKind::Weapon(gun.clone()), pos: glam::Vec3::ZERO,
-                        yaw: 0., dropped_by: world.players[0].id, pickup_after: 0. });
+                        yaw: 0., dropped_by: world.players[0].id, pickup_after: 0.,
+                        vertical_velocity: 0., settled: false });
                 }
             }
             assert!(validate_state(&invalid, Some(&welcome), 0, 0).is_err(), "inactive case {case}");
@@ -990,6 +993,15 @@ mod tests {
         };
         assert!(validate_state(&state, Some(&welcome), 0, 0).is_ok());
         let mut climbing = state.clone();
+        climbing.snapshot.state.items.push(sim::GroundItem { id: 1,
+            kind: sim::GroundKind::DefuseKit, pos: glam::Vec3::Z * 50., yaw: 0.,
+            dropped_by: id, pickup_after: 0., vertical_velocity: -40., settled: false });
+        for (velocity, settled) in [(f32::NAN, false), (f32::INFINITY, false), (-40., true)] {
+            let mut invalid = climbing.clone();
+            invalid.snapshot.state.items[0].vertical_velocity = velocity;
+            invalid.snapshot.state.items[0].settled = settled;
+            assert!(validate_state(&invalid, Some(&welcome), 0, 0).is_err());
+        }
         climbing.snapshot.state.players[0].movement.on_ground = false;
         climbing.snapshot.state.players[0].movement.ladder_normal = Some(-glam::Vec3::X);
         climbing.snapshot.state.doors.push(sim::doors::State {
@@ -997,7 +1009,7 @@ mod tests {
         });
         assert!(validate_state(&climbing, Some(&welcome), 0, 0).is_ok());
         let decoded: StateUpdate = world.decode(&encode(&climbing).unwrap()).unwrap();
-        assert_eq!(decoded, climbing, "v26 must retain both door and ladder fields");
+        assert_eq!(decoded, climbing, "snapshot must retain item fall, door and ladder fields");
         for case in 0..3 {
             let mut invalid = climbing.clone();
             let door = &mut invalid.snapshot.state.doors[0];

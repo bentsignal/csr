@@ -106,6 +106,7 @@ impl World {
         self.doors = s.doors;
         self.breakables = s.breakables;
         self.rebuild_door_collision();
+        self.ground_support_collision = None;
         self.next_id = s.next_id;
         self.next_item = s.next_item;
         self.rewind = None;

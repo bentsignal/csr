@@ -76,6 +76,9 @@ struct Placed {
     instance: SkinnedInstance,
     materials: Vec<Handle<WorldMaterial>>,
     pos: glam::Vec3,
+    yaw: f32,
+    suppressor_attached: bool,
+    lighting_dirty: bool,
 }
 
 #[derive(Resource, Default)]
@@ -220,10 +223,8 @@ pub fn sync(
         }
     }
     for item in &world.items {
-        if placed.items.contains_key(&item.id) {
-            continue;
-        }
-        if let sim::GroundKind::Weapon(weapon) = &item.kind {
+        if !placed.items.contains_key(&item.id)
+            && let sim::GroundKind::Weapon(weapon) = &item.kind {
             ground.prepare_weapon(&weapon.def, &level.0.vfs, &mut meshes,
                 &mut materials, &mut images, &mut bindposes);
         }
@@ -239,6 +240,29 @@ pub fn sync(
             sim::GroundKind::Weapon(weapon) => weapon.suppressor_attached,
             sim::GroundKind::DefuseKit => true,
         };
+        if let Some(p) = placed.items.get_mut(&item.id) {
+            if p.pos != item.pos || p.yaw != item.yaw || p.suppressor_attached != suppressor_attached {
+                let pose = mdl::skeleton::model_space(&asset.model.bones,
+                    &mdl::skeleton::rest_pose(&asset.model.bones));
+                let transform = ground_transform_with_suppressor(&asset.model,
+                    item.pos, item.yaw, on_side, suppressor_attached);
+                for (joint, transform) in p.instance.joints.iter()
+                    .zip(skinning::pose_transforms(transform, &pose)) {
+                    commands.entity(*joint).insert(transform);
+                }
+                if p.suppressor_attached != suppressor_attached {
+                    for (index, entity) in p.instance.meshes.iter().enumerate() {
+                        let hidden = skinning::suppressor_mesh_hidden(&asset.model, index, suppressor_attached);
+                        commands.entity(*entity).insert(if hidden { Visibility::Hidden } else { Visibility::Inherited });
+                    }
+                }
+                p.lighting_dirty |= p.pos != item.pos;
+                p.pos = item.pos;
+                p.yaw = item.yaw;
+                p.suppressor_attached = suppressor_attached;
+            }
+            continue;
+        }
         if std::env::var_os("CSR_WEAPON_TRACE").is_some() {
             info!("ground item model: item={} class={} model={}", item.id, item.class_name(), asset.model.name);
         }
@@ -263,6 +287,9 @@ pub fn sync(
                 instance,
                 materials: Vec::new(),
                 pos: item.pos,
+                yaw: item.yaw,
+                suppressor_attached,
+                lighting_dirty: true,
             },
         );
     }
@@ -286,23 +313,25 @@ pub fn sync(
                     instance,
                     materials: Vec::new(),
                     pos,
+                    yaw: 0.0,
+                    suppressor_attached: true,
+                    lighting_dirty: true,
                 },
             ));
         }
     }
 
-    // Light new instances once their materials exist.
+    // Light new instances once their materials exist, and refresh moved drops.
     let GroundInstances { items, bomb } = &mut *placed;
     for p in items.values_mut().chain(bomb.iter_mut().map(|b| &mut b.1)) {
-        if !p.materials.is_empty() {
+        if !p.lighting_dirty {
             continue;
         }
-        p.materials = p
-            .instance
-            .meshes
-            .iter()
-            .filter_map(|e| mat_query.get(*e).ok().map(|m| m.0.clone()))
-            .collect();
+        if p.materials.is_empty() {
+            p.materials = p.instance.meshes.iter()
+                .filter_map(|e| mat_query.get(*e).ok().map(|m| m.0.clone()))
+                .collect();
+        }
         if p.materials.is_empty() {
             continue;
         }
@@ -314,6 +343,7 @@ pub fn sync(
                 m.params.sun_color = sun_color;
             }
         }
+        p.lighting_dirty = false;
     }
 }
 
@@ -424,6 +454,7 @@ mod tests {
             id, kind: sim::GroundKind::Weapon(sim::weapon::WeaponState::new(
                 Arc::new(world.catalog.get(class).unwrap().clone()))),
             pos: glam::Vec3::ZERO, yaw: 0., dropped_by: 0, pickup_after: 0.,
+            vertical_velocity: 0., settled: false,
         }
     }
 
@@ -519,6 +550,54 @@ mod tests {
         assert!(!app.world().resource::<GroundInstances>().items.contains_key(&5));
         assert!(app.world().resource::<GroundModels>().prepared_paths[MISSING_DROP].is_none());
         assert_eq!(app.world().resource::<Assets<SkinnedMeshInverseBindposes>>().len(), 3);
+    }
+
+    #[test]
+    fn same_id_moved_drop_updates_pose_and_lighting_without_replacing_owners() {
+        // Empty model_dropped selects the real synthetic held fallback mesh.
+        let mut app = fixture_app("authored drop", &["weapon_famas"]);
+        app.update(); app.update();
+        let placed = &app.world().resource::<GroundInstances>().items[&0];
+        let joints = placed.instance.joints.clone();
+        let meshes = placed.instance.meshes.clone();
+        let material = placed.materials[0].clone();
+        let count = app.world().resource::<Assets<WorldMaterial>>().len();
+        let tint = Vec4::new(0.1, 0.2, 0.3, 0.4);
+        {
+            let mut materials = app.world_mut().resource_mut::<Assets<WorldMaterial>>();
+            let mut m = materials.get_mut(&material).unwrap();
+            m.params.ambient_cube = [Vec4::splat(-1.); 6];
+            m.params.color = tint;
+        }
+        app.world_mut().get_mut::<crate::skin_finish::SkinPart>(meshes[0]).unwrap().applied = Some((1, 2, 3));
+        let item = {
+            let mut world = app.world_mut().resource_mut::<SimWorld>();
+            let item = &mut world.0.items[0];
+            item.pos = glam::Vec3::new(23., 45., 67.);
+            item.yaw = 123.;
+            let sim::GroundKind::Weapon(weapon) = &mut item.kind else { panic!() };
+            weapon.suppressor_attached = false;
+            item.clone()
+        };
+        app.update();
+        let placed = &app.world().resource::<GroundInstances>().items[&0];
+        assert_eq!(placed.instance.joints, joints);
+        assert_eq!(placed.instance.meshes, meshes);
+        assert_eq!(placed.materials, vec![material.clone()]);
+        assert_eq!(app.world().resource::<Assets<WorldMaterial>>().len(), count);
+        assert_eq!(app.world().resource::<SimWorld>().0.items[0], item, "rendering cannot advance gameplay");
+        let model = &app.world().resource::<CharacterModels>().weapons["weapon_famas"].model;
+        let pose = mdl::skeleton::model_space(&model.bones, &mdl::skeleton::rest_pose(&model.bones));
+        let transform = ground_transform_with_suppressor(model, item.pos, item.yaw, true, false);
+        for (joint, expected) in joints.iter().zip(skinning::pose_transforms(transform, &pose)) {
+            assert_eq!(*app.world().get::<Transform>(*joint).unwrap(), expected);
+        }
+        let expected = lighting_at(&app.world().resource::<LoadedLevel>().0, None, item.pos + glam::Vec3::Z * 8.);
+        let materials = app.world().resource::<Assets<WorldMaterial>>();
+        let m = materials.get(&material).unwrap();
+        assert_eq!((m.params.ambient_cube, m.params.sun_dir, m.params.sun_color), expected);
+        assert_eq!(m.params.color, tint);
+        assert_eq!(app.world().get::<crate::skin_finish::SkinPart>(meshes[0]).unwrap().applied, Some((1, 2, 3)));
     }
 
     #[test]
