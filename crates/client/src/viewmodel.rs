@@ -1692,6 +1692,27 @@ fn load_model(fs: &vfs::Vfs, path: &str) -> Option<mdl::Model> {
     mdl::Model::load(&fs.read(path)?, &fs.read(&format!("{base}.vvd"))?, &fs.read(&format!("{base}.dx90.vtx"))?).ok()
 }
 
+/// The caller supplies held assets built from this same level's VFS. Canonical
+/// imports retain Model::load's geometry unchanged; hands_paintable entries can
+/// replace them with filtered/icon geometry, so exclude those names entirely.
+fn held_cosmetic_world_model<'a>(
+    catalog: &weapons::Catalog,
+    held: &'a HashMap<String, SkinnedAsset>,
+    glove_models: &[(String, String, String)],
+    name: &str,
+    path: &str,
+) -> Option<&'a mdl::Model> {
+    let mut definitions = catalog.weapons.iter()
+        .filter(|def| def.class_name == name && !def.world_model.is_empty());
+    if definitions.next()?.world_model != path
+        || definitions.any(|def| def.world_model != path)
+        || glove_models.iter().any(|(glove, _, _)| glove == name)
+    {
+        return None;
+    }
+    held.get(name).map(|asset| asset.model.as_ref())
+}
+
 /// Borrow a successful decode by exact path for this load's cosmetic mappings.
 /// Failed reads stay retryable; mapped meshes and GPU assets remain separate.
 fn cosmetic_world_model<'a>(
@@ -1709,6 +1730,72 @@ fn cosmetic_world_model<'a>(
 #[cfg(test)]
 mod cosmetic_loading_tests {
     use super::*;
+
+    #[test]
+    fn held_cosmetic_input_requires_exact_unmodified_source_and_maps_independently() {
+        let mut catalog = weapons::Catalog::from_items_game(r#""items_game" { "items" {
+            "1" { "name" "weapon_fixture" "baseitem" "1" "model_world" "world.mdl" }
+        } }"#).unwrap();
+        let source = mdl::Model {
+            textures: vec!["body".into()],
+            meshes: vec![mdl::Mesh {
+                vertices: [glam::Vec3::ZERO, glam::Vec3::X, glam::Vec3::Y, glam::Vec3::Z]
+                    .into_iter().enumerate().map(|(i, position)| mdl::Vertex {
+                        position, normal: glam::Vec3::Z, uv: glam::Vec2::new(i as f32, 0.),
+                        weights: [1., 0., 0.], bone_count: 1, ..Default::default()
+                    }).collect(),
+                indices: vec![0, 1, 2, 0, 2, 3], ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let held = HashMap::from([("weapon_fixture".into(), SkinnedAsset {
+            model: Arc::new(source.clone()), parts: Vec::new(),
+            inverse_bindposes: Default::default(), culling: Vec::new(),
+        })]);
+        let mut local = HashMap::new();
+        let exact = held_cosmetic_world_model(&catalog, &held, &[], "weapon_fixture", "world.mdl");
+        let input = exact.or_else(|| cosmetic_world_model(&mut local, "world.mdl", |_| panic!("must borrow held input"))).unwrap();
+        assert!(std::ptr::eq(input, held["weapon_fixture"].model.as_ref()));
+
+        let serial = crate::cosmetic_geometry::world_decal(&source, &source, &source).unwrap();
+        let mut sticker = crate::cosmetic_geometry::world_decal(&source, &source, input).unwrap();
+        assert_eq!(sticker.textures, serial.textures);
+        assert_eq!(sticker.meshes[0].indices, serial.meshes[0].indices);
+        for (actual, expected) in sticker.meshes[0].vertices.iter().zip(&serial.meshes[0].vertices) {
+            assert_eq!((actual.position, actual.normal, actual.uv, actual.bones, actual.weights),
+                (expected.position, expected.normal, expected.uv, expected.bones, expected.weights));
+        }
+        sticker.textures[0] = "changed sticker".into();
+        sticker.meshes[0].vertices[0].position = glam::Vec3::splat(100.);
+        let counter = crate::cosmetic_geometry::world_decal(&source, &source, input).unwrap();
+        assert_eq!(counter.textures, serial.textures);
+        assert_eq!(counter.meshes[0].vertices[0].position, serial.meshes[0].vertices[0].position);
+        assert_eq!(held["weapon_fixture"].model.meshes[0].vertices[0].position, glam::Vec3::ZERO);
+        assert!(local.is_empty());
+
+        // A different path, absent class/asset, filtered/icon override or
+        // ambiguous canonical definition must use the existing local loader.
+        let gloves = vec![("weapon_fixture".into(), "icon.mdl".into(), "glove.mdl".into())];
+        let missing = HashMap::new();
+        let unavailable = [
+            held_cosmetic_world_model(&catalog, &held, &[], "weapon_fixture", "World.mdl"),
+            held_cosmetic_world_model(&catalog, &held, &[], "other", "world.mdl"),
+            held_cosmetic_world_model(&catalog, &missing, &[], "weapon_fixture", "world.mdl"),
+        ];
+        assert!(unavailable.iter().all(Option::is_none));
+        let overridden = held_cosmetic_world_model(&catalog, &held, &gloves, "weapon_fixture", "world.mdl");
+        assert!(overridden.is_none());
+        let fallback = overridden.or_else(|| cosmetic_world_model(&mut local, "world.mdl", |path| {
+            assert_eq!(path, "world.mdl"); Some(source.clone())
+        })).unwrap();
+        assert!(!std::ptr::eq(fallback, held["weapon_fixture"].model.as_ref()));
+        let mapped = crate::cosmetic_geometry::world_decal(&source, &source, fallback).unwrap();
+        assert_eq!(mapped.meshes[0].vertices[0].position, serial.meshes[0].vertices[0].position);
+        let mut duplicate = catalog.weapons[0].clone();
+        duplicate.world_model = "different.mdl".into();
+        catalog.weapons.push(duplicate);
+        assert!(held_cosmetic_world_model(&catalog, &held, &[], "weapon_fixture", "world.mdl").is_none());
+    }
 
     #[test]
     fn cosmetic_mappings_reuse_successes_without_retaining_failures_or_mutations() {
@@ -1760,6 +1847,7 @@ fn knife_attack_activity(activity: &str) -> bool {
 pub fn load(
     level: &level::Level,
     catalog:&crate::cosmetics::Catalog,
+    held_weapons: &HashMap<String, SkinnedAsset>,
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<WorldMaterial>,
     images: &mut Assets<Image>,
@@ -1891,14 +1979,15 @@ pub fn load(
             if !out.decorations.contains_key(&path){if let Some(model)=load_model(fs,&path){out.decorations.insert(path,build(model));}}
         }
     }
-    // Sticker and StatTrak mappings only borrow world geometry. Retain decoded
-    // inputs until both passes finish, without sharing their built assets.
+    // Borrow exact canonical held inputs from this level first. Other successful
+    // decodes stay local to these two passes; all mapped assets are built anew.
     let mut world_models = HashMap::new();
     {
         for (name,info) in &catalog.models{
             if info.stickers.is_empty(){continue;}
             let Some(view)=out.weapons.get(name).map(|v|v.asset.model.clone())else{continue};
-            let Some(world)=cosmetic_world_model(&mut world_models,&info.world,|path|load_model(fs,path))else{continue};
+            let held=held_cosmetic_world_model(&level.catalog,held_weapons,&glove_models,name,&info.world);
+            let Some(world)=held.or_else(||cosmetic_world_model(&mut world_models,&info.world,|path|load_model(fs,path)))else{continue};
             for path in &info.stickers {
                 if let Some(decal)=out.decorations.get(path).map(|a|a.model.clone()){
                     if let Some(model)=crate::cosmetic_geometry::world_decal(&decal,&view,world){out.decorations.insert(format!("world:{path}"),build(model));}
@@ -1912,7 +2001,8 @@ pub fn load(
         if !view.asset.model.bones.iter().any(|b|b.name=="v_weapon.stattrack"){continue;}
         let path=if crate::cosmetics::is_rare_knife(name){"models/weapons/stattrack_cut.mdl"}else{"models/weapons/stattrack.mdl"};
         let (Some(counter),Some(info))=(out.decorations.get(path),catalog.models.get(name))else{continue};
-        let Some(world)=cosmetic_world_model(&mut world_models,&info.world,|path|load_model(fs,path))else{continue};
+        let held=held_cosmetic_world_model(&level.catalog,held_weapons,&glove_models,name,&info.world);
+        let Some(world)=held.or_else(||cosmetic_world_model(&mut world_models,&info.world,|path|load_model(fs,path)))else{continue};
         let mut counter=(*counter.model).clone();
         let pose:Vec<_>=view.asset.model.bones.iter().map(|b|b.pose_to_bone.inverse()).collect();
         let merged=skinning::bone_merge(&counter.bones,&view.asset.model.bones,&pose);

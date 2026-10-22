@@ -605,6 +605,7 @@ fn spawn_level(
     let view_models = viewmodel::load(
         &level,
         &cosmetics,
+        &character_models.weapons,
         &mut meshes,
         &mut materials,
         &mut images,

@@ -555,7 +555,7 @@ mod tests {
         let ani = (!full.anim_block_file.is_empty()).then(|| level.vfs.read(&full.anim_block_file)).flatten();
         full.decode_animation(draw.anims[0] as usize, ani.as_deref()).expect("fixture Draw must decode");
         assert_eq!(level.catalog.weapons[0].view_model, def.view_model);
-        let views = crate::viewmodel::load(&level, &Default::default(),
+        let views = crate::viewmodel::load(&level, &Default::default(), &HashMap::new(),
             &mut Assets::<Mesh>::default(), &mut Assets::<crate::material::WorldMaterial>::default(),
             &mut Assets::<Image>::default(), &mut crate::textures::TextureCache::default(),
             &crate::world_mesh::SharedHandles { lightmap: Default::default() },
