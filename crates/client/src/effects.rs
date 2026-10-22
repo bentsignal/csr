@@ -167,10 +167,12 @@ pub fn process(
             GameEvent::Fire { player, weapon, origin, suppressed } => {
                 shot_modes.insert(player, (weapon.clone(), suppressed));
                 effects.attack(player, weapon.clone(), "ACT_VM_PRIMARYATTACK", now);
-                // The installed AWP firing sequence contains authored bolt
-                // sounds, not a second gunshot. Schedule those declarations
-                // from the same confirmed shot that starts its viewmodel.
-                if weapon == "weapon_awp" {
+                // These installed attack sequences declare separate bolt/pump
+                // sounds, not another gunshot. Classic shot replacement does
+                // not deliver those handling events. Use the same confirmed
+                // shot, clip timing and interruption rules as the AWP.
+                if matches!(weapon.as_str(), "weapon_awp" | "weapon_ssg08"
+                    | "weapon_nova" | "weapon_sawedoff" | "weapon_mag7") {
                     if let Some((duration, events)) = views.activity_sounds(&weapon, "ACT_VM_PRIMARYATTACK") {
                         foley.primary_attack(player, &weapon, world.0.time(), duration, &events);
                     }
@@ -411,6 +413,51 @@ pub fn draw(effects: Res<Effects>, time: Res<Time>, mut gizmos: Gizmos) {
 #[cfg(test)]
 mod attack_tests {
     use super::*;
+    // UNRUN by source-only child. Read installed app 4465480 declarations;
+    // this checks event/sample routing, not historical PCM or audible parity.
+    #[test]
+    fn installed_manual_action_shots_declare_separate_handling_without_duplicate_gunfire() {
+        let Some(game) = vfs::find_csgo_dir() else { return; };
+        let mut fs = vfs::Vfs::new();
+        fs.mount_game_dir(&game).unwrap();
+        let script = kv::parse(&fs.read_string("scripts/game_sounds_weapons.txt").unwrap()).unwrap();
+        for (model, expected) in [
+            ("v_snip_ssg08", vec![
+                (0.38, "Weapon_SSG08.BoltBack", "weapons/ssg08/ssg08_boltback.wav"),
+                (0.58, "Weapon_SSG08.BoltForward", "weapons/ssg08/ssg08_boltforward.wav"),
+            ]),
+            ("v_shot_nova", vec![
+                (0.4166667, "Weapon_Nova.PumpDuringShot", "weapons/nova/nova_pump.wav"),
+            ]),
+            ("v_shot_sawedoff", vec![
+                (0.04166667, "Weapon_Sawedoff.PumpDuringShot", "weapons/sawedoff/sawedoff_pump.wav"),
+            ]),
+            ("v_shot_mag7", vec![
+                (0.04166667, "Weapon_MAG7.PumpBack", "weapons/mag7/mag7_pump_back.wav"),
+                (0.25, "Weapon_MAG7.PumpForward", "weapons/mag7/mag7_pump_forward.wav"),
+            ]),
+        ] {
+            let bytes = fs.read(&format!("models/weapons/{model}.mdl")).unwrap();
+            let model = mdl::Model::load_header(&bytes).unwrap();
+            let attack = model.sequences.iter().find(|s| s.activity == "ACT_VM_PRIMARYATTACK").unwrap();
+            let actual: Vec<_> = attack.events.iter().filter_map(|e|
+                Some((e.cycle, e.client_sound()?))).collect();
+            assert_eq!(actual.len(), expected.len());
+            for ((cycle, entry), (expected_cycle, expected_entry, sample)) in actual.iter().zip(&expected) {
+                assert!((cycle - expected_cycle).abs() < 0.00001);
+                assert_eq!(entry, expected_entry);
+                let wave = script.block(entry).unwrap().str("wave").unwrap();
+                assert_eq!(wave.trim_start_matches('~'), *sample);
+                assert!(!fs.read(&format!("sound/{sample}")).unwrap().is_empty());
+            }
+            // Production schedules these cycles using the decoded clip,
+            // rather than a guessed bolt delay or the firing cooldown.
+            let ani = (!model.anim_block_file.is_empty()).then(|| fs.read(&model.anim_block_file)).flatten();
+            let clip = model.decode_animation(attack.anims[0] as usize, ani.as_deref()).unwrap();
+            assert!(clip.duration().is_finite() && clip.duration() > 0.0);
+        }
+    }
+
     #[test]
     fn damage_audio_uses_immutable_contact_protection() {
         use sim::weapon::{HitGroup, HitProtection};

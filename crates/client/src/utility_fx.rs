@@ -300,7 +300,9 @@ pub fn update(
             eye,
             if emitter.fire { fire } else { smoke },
             &mut meshes,
-            &level.0.collision,
+            // New flame contacts must use the live door/breakable overlay,
+            // matching gameplay rather than the map's initial geometry.
+            &w.collision,
         );
     }
     for (kind, pos) in effects.utility_detonations.drain(..) {
