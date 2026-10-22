@@ -556,6 +556,9 @@ mod tests {
         let path = packs::Installed::current().dir().join(historical::FILENAME);
         let pack = path.is_file().then(|| historical::Historical::open(&path).expect("private pack"));
         let (_, fs) = level::mount_game(None).unwrap();
+        let mag_ready = pack.as_ref().is_some_and(|pack|
+            pack.wave("sound/weapons/mag7/mag7_pump_back.wav").is_ok()
+                && pack.wave("sound/weapons/mag7/mag7_pump_forward.wav").is_ok());
         for era in [SoundEra::Classic2015, SoundEra::InstalledLegacy] {
             let library = super::super::SoundLibrary::load_with_era(&fs, era);
             for (binding, path) in [
@@ -563,7 +566,8 @@ mod tests {
                 ("weapon_mag7.pumpback", "sound/weapons/mag7/mag7_pump_back.wav"),
                 ("weapon_mag7.pumpforward", "sound/weapons/mag7/mag7_pump_forward.wav"),
             ] {
-                let expected = (era == SoundEra::Classic2015)
+                let expected = (era == SoundEra::Classic2015
+                    && (!binding.starts_with("weapon_mag7.") || mag_ready))
                     .then(|| pack.as_ref().and_then(|pack| pack.wave(path).ok())).flatten();
                 let actual = library.entries[binding].frozen_wave.as_ref();
                 match expected {
