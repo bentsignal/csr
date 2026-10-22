@@ -11,9 +11,10 @@ pub(crate) type ImpactDecalMaterial = ExtendedMaterial<StandardMaterial, ImpactD
 /// Existing cosmetic stand-off, shared with attached marks so the depth slab
 /// follows their actual plane. Units remain Source inches.
 pub(crate) const MARK_OFFSET: f32 = 0.12;
-// Trace contacts already stand outside the receiver by DIST_EPSILON. Allow one
-// more trace epsilon for reconstruction/roundoff, not a native fade distance.
-const MAX_PLANE_DISTANCE: f32 = MARK_OFFSET + 2.0 * collision::DIST_EPSILON;
+// Collision contacts need not coincide with the visible face: the installed
+// Nuke wall control differs by one unit. Retain that contact/mesh allowance,
+// the existing stand-off and trace roundoff. This is a clip slab, not a fade.
+const MAX_PLANE_DISTANCE: f32 = 1.0 + MARK_OFFSET + 2.0 * collision::DIST_EPSILON;
 
 #[derive(Asset, TypePath, AsBindGroup, Debug, Clone)]
 pub(crate) struct ImpactDecalExtension {
@@ -84,6 +85,9 @@ mod tests {
             };
             assert!(accepts(Some(contact)));
             assert!(accepts(Some(contact + rotation * Vec3::X * 20.)));
+            // A real receiver can sit behind the collision contact. The old
+            // trace-epsilon-only slab erased these ordinary Nuke wall marks.
+            assert!(accepts(Some(contact - normal)));
             assert!(!accepts(Some(contact - normal * 2.)));
             assert!(!accepts(Some(contact + normal * 2.)));
             assert!(!accepts(None));
