@@ -293,13 +293,18 @@ fn footstep_occlusion(world: &collision::CollisionWorld, source: Vec3, listener:
     // Compare eye height to an upright source, not to its feet: ordinary
     // same-floor footsteps already sit roughly 64 units below the listener.
     let separate_floor = (listener.z - (source.z + 64.0)).abs() > 96.0;
-    let transmission = |hit: collision::Trace| -> f32 {
-        if hit.contents & (contents::WINDOW | contents::GRATE) != 0
-            && hit.contents & (contents::SOLID | contents::MOVEABLE) == 0 {
+    let transmission = |start: glam::Vec3, hit: collision::Trace| -> f32 {
+        let porous = hit.contents & (contents::WINDOW | contents::GRATE) != 0
+            && hit.contents & (contents::SOLID | contents::MOVEABLE) == 0;
+        // A nearby grate/window must not conceal a solid wall or floor later
+        // on the same ray. Query structural contents separately only when the
+        // first hit is porous; keep the existing open/low-obstacle paths.
+        if porous && !world.trace_ray(start, listener, contents::SOLID | contents::MOVEABLE).hit() {
             0.65
         } else if separate_floor { 0.18 } else { 0.32 }
     };
-    transmission(low).max(transmission(high))
+    transmission(source + glam::Vec3::Z * 4.0, low)
+        .max(transmission(source + glam::Vec3::Z * 32.0, high))
 }
 
 /// Where and on whose behalf a sound plays.
@@ -1091,6 +1096,33 @@ mod tests {
                 Vec3::new(56.0, 64.0, top), contents));
             world.finalize();
             assert_eq!(gain(&world, lower, Vec3::new(100.0, 0.0, 64.0)), expected);
+        }
+    }
+
+    #[test]
+    fn porous_surfaces_do_not_hide_solid_walls_or_floors() {
+        use collision::{CollisionWorld, contents};
+        use glam::Vec3;
+        let gain = |world: &CollisionWorld, feet, eye|
+            super::footstep_occlusion(world, to_bevy(feet), to_bevy(eye));
+        for porous in [contents::GRATE, contents::WINDOW] {
+            let mut wall = CollisionWorld::new();
+            wall.add_convex(acoustic_box(Vec3::new(24., -64., -16.),
+                Vec3::new(28., 64., 128.), porous));
+            wall.add_convex(acoustic_box(Vec3::new(48., -64., -16.),
+                Vec3::new(56., 64., 128.), contents::SOLID));
+            wall.finalize();
+            assert_eq!(gain(&wall, Vec3::ZERO, Vec3::new(100., 0., 64.)), 0.32);
+            assert_eq!(gain(&wall, Vec3::new(100., 0., 0.), Vec3::Z * 64.), 0.32);
+
+            let mut floor = CollisionWorld::new();
+            floor.add_convex(acoustic_box(Vec3::new(-512., -512., 220.),
+                Vec3::new(512., 512., 224.), porous));
+            floor.add_convex(acoustic_box(Vec3::new(-512., -512., 128.),
+                Vec3::new(512., 512., 144.), contents::SOLID));
+            floor.finalize();
+            assert_eq!(gain(&floor, Vec3::Z * 256., Vec3::Z * 64.), 0.18);
+            assert_eq!(gain(&floor, Vec3::ZERO, Vec3::Z * 320.), 0.18);
         }
     }
 
