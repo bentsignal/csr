@@ -56,6 +56,15 @@ struct LadderRoute {
     id: u32,
     attached: bool,
     exiting: bool,
+    top_mount: Option<LadderTopMount>,
+}
+
+#[derive(Clone, Debug)]
+struct LadderTopMount {
+    launch: Vec3,
+    cap: Vec3,
+    jumping: bool,
+    previewed: bool,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -1124,8 +1133,11 @@ fn wander(world: &World, bot: &crate::Player, brain: &mut Brain, input: &mut Tic
 fn prepare_jump(bot: &Player, brain: &mut Brain, input: &mut TickInput) {
     if brain.ladder_navigation {
         brain.duck_jump = false;
-        // Only an attached bottom dismount may request a fresh jump-away.
-        if bot.movement.ladder_normal.is_none() { input.buttons &= !buttons::JUMP; }
+        // A detached top mount is admitted by collision and the ordinary
+        // movement solver. Keep its held press to avoid catching the back face.
+        let mounting = brain.ladder_route.as_ref()
+            .and_then(|r| r.top_mount.as_ref()).is_some_and(|m| m.jumping);
+        if bot.movement.ladder_normal.is_none() && !mounting { input.buttons &= !buttons::JUMP; }
         return;
     }
     if bot.movement.on_ground {
@@ -1391,6 +1403,93 @@ fn ladder_contact(world: &World, bot: &Player, ladder: &nav::Ladder) -> (Option<
     (actual, matches)
 }
 
+/// Only a raised cap belonging to the selected front/back face pair qualifies.
+/// The launch stays on the departure NAV floor, outside human ladder reach.
+fn ladder_top_mount(world: &World, bot: &Player, ladder: &nav::Ladder,
+    source: &nav::Area, face: collision::Trace, mount: Vec3) -> Option<LadderTopMount>
+{
+    if source.flags & nav::attr::NO_JUMP != 0 || bot.movement.ducked
+        || bot.movement.ladder_normal.is_some() || world.collision.dynamic.is_some()
+        || world.config.gravity <= 0.0 || world.config.jump_impulse <= 0.0 { return None; }
+    let pos = bot.movement.origin;
+    let (mins, maxs) = bot.movement.hull();
+    let normal = ladder.normal();
+    let rise = world.config.jump_impulse.powi(2) / (2.0 * world.config.gravity);
+    if !rise.is_finite() { return None; }
+    let inside = face.end - normal * (collision::DIST_EPSILON * 2.0);
+    let cap = world.collision.trace_ray(Vec3::new(inside.x, inside.y, pos.z + rise),
+        inside - Vec3::Z * collision::DIST_EPSILON, collision::contents::LADDER);
+    if !cap.hit() || cap.start_solid || cap.all_solid || cap.normal.dot(Vec3::Z) < 0.99
+        || cap.end.z <= pos.z + collision::DIST_EPSILON { return None; }
+    // A nearby raised ladder must not substitute for this authored face.
+    let upper_face = ladder_face(world, bot, ladder, cap.end - Vec3::Z * (collision::DIST_EPSILON * 3.0))?;
+    if (upper_face.plane_dist - face.plane_dist).abs() > collision::DIST_EPSILON { return None; }
+    let reach = ladder.width + (maxs - mins).length();
+    let back = world.collision.trace_ray(inside - normal * reach, inside + normal * reach,
+        collision::contents::LADDER);
+    if !back.hit() || back.start_solid || back.all_solid || back.normal.dot(-normal) < 0.99 { return None; }
+    let obstruction = world.collision.trace_box(pos, Vec3::new(mount.x, mount.y, pos.z),
+        mins, maxs, collision::contents::MASK_PLAYERSOLID);
+    // Hull traces publish the expanded plane, so compare normals and the
+    // corresponding hull clearance, rather than a ray's unexpanded distance.
+    let support = ((maxs - mins) * 0.5).dot(back.normal.abs())
+        - ((mins + maxs) * 0.5).dot(back.normal);
+    if !obstruction.hit() || obstruction.start_solid || obstruction.all_solid
+        || obstruction.contents & collision::contents::LADDER == 0
+        || obstruction.normal.dot(back.normal) < 0.99
+        || ((obstruction.end - back.end).dot(back.normal) - support).abs()
+            > collision::DIST_EPSILON * 2.0 { return None; }
+    let mut launch = back.end + back.normal * (support + collision::LADDER_REACH + collision::DIST_EPSILON);
+    launch.z = source.z_at(launch.x, launch.y) + collision::DIST_EPSILON;
+    if !source.contains_xy(launch, 0.0) { return None; }
+    let clear = |a, b| !world.collision.trace_box(a, b, mins, maxs,
+        collision::contents::MASK_PLAYERSOLID).hit();
+    let support_trace = world.collision.trace_box(launch, launch - Vec3::Z * 2.0,
+        mins, maxs, collision::contents::MASK_PLAYERSOLID);
+    let high = Vec3::new(launch.x, launch.y, launch.z + rise);
+    let across = Vec3::new(mount.x, mount.y, high.z);
+    if !support_trace.hit() || support_trace.start_solid || support_trace.all_solid
+        || support_trace.normal.z < movement::MIN_GROUND_NORMAL
+        || !clear(pos, launch) || !clear(launch, high) || !clear(high, across) { return None; }
+    Some(LadderTopMount { launch, cap: cap.end, jumping: false, previewed: false })
+}
+
+fn ladder_cap_supported(world: &World, pm: &movement::PlayerMove, mount: &LadderTopMount) -> bool {
+    let (mins, maxs) = pm.hull();
+    let tr = world.collision.trace_box(pm.origin, pm.origin - Vec3::Z * 2.0,
+        mins, maxs, collision::contents::MASK_PLAYERSOLID);
+    pm.on_ground && !tr.start_solid && !tr.all_solid && tr.hit()
+        && tr.contents & collision::contents::LADDER != 0 && tr.normal.z > 0.99
+        && (tr.end.z - mount.cap.z).abs() <= collision::DIST_EPSILON * 2.0
+}
+
+fn ladder_cap_direction(pm: &movement::PlayerMove, mount: &LadderTopMount, normal: Vec3) -> Vec3 {
+    // First rise clear of the real cap, then move over it. Holding jump is
+    // the existing human rule for passing a back face without attaching.
+    if pm.origin.z > mount.cap.z + collision::DIST_EPSILON { normal } else { Vec3::ZERO }
+}
+
+/// One local jump admission, using the unchanged human hull/sweep/acceleration
+/// solver on a copy. This is neither a movement override nor a route search.
+fn ladder_cap_jump_clear(world: &World, bot: &Player, mount: &LadderTopMount, normal: Vec3) -> bool {
+    let flight = 2.0 * world.config.jump_impulse / world.config.gravity;
+    // The existing crossing failure deadline also bounds preview work.
+    if !flight.is_finite() || flight <= 0.0 || flight > 2.0 { return false; }
+    let mut pm = bot.movement;
+    let (_, yaw) = look_angles(Vec3::ZERO, normal);
+    let max_speed = bot.active_weapon().map_or(250.0, |w| w.max_speed());
+    for tick in 0..=(flight / world.dt()).ceil() as u32 + 2 {
+        let direction = ladder_cap_direction(&pm, mount, normal);
+        movement::player_move(&mut pm, &movement::MoveInput {
+            view_angles: Vec3::new(0.0, yaw, 0.0), forward_move: direction.length() * 450.0,
+            side_move: 0.0, buttons: buttons::JUMP, weapon_max_speed: max_speed,
+        }, &world.config, world.collision.as_ref(), world.dt());
+        if pm.ladder_normal.is_some() { return false; }
+        if pm.on_ground { return tick > 0 && ladder_cap_supported(world, &pm, mount); }
+    }
+    false
+}
+
 /// A local input policy, not an off-mesh movement system. NAV selects a mount;
 /// the authoritative collision query must confirm its face and authored ribbon.
 /// Actual cap/side departure, not an elapsed climb duration, starts dismounting.
@@ -1414,7 +1513,7 @@ fn follow_ladder(mesh: &NavMesh, world: &World, bot: &Player, brain: &mut Brain,
     // This also keeps a parallel nearby ladder from impersonating this mount.
     let (actual, on_mount) = ladder_contact(world, bot, ladder);
     if brain.ladder_route.as_ref().is_none_or(|r| r.from != from || r.to != to || r.id != ladder.id) {
-        brain.ladder_route = Some(LadderRoute { from, to, id: ladder.id, attached: false, exiting: false });
+        brain.ladder_route = Some(LadderRoute { from, to, id: ladder.id, attached: false, exiting: false, top_mount: None });
     }
     let route = brain.ladder_route.as_mut().unwrap();
     // Geometric reach alone is not accepted attachment. A descending bot
@@ -1426,7 +1525,8 @@ fn follow_ladder(mesh: &NavMesh, world: &World, bot: &Player, brain: &mut Brain,
         route.exiting = true;
     }
     let entry = if up { ladder.bottom } else { ladder.top };
-    let mount = ladder_face(world, bot, ladder, entry).map(|face| {
+    let entry_face = ladder_face(world, bot, ladder, entry);
+    let mount = entry_face.map(|face| {
         let clearance = extent.dot(face.normal.abs()) - ((mins + maxs) * 0.5).dot(face.normal)
             + collision::DIST_EPSILON
             // At the top, move fully past floor support while remaining in
@@ -1438,13 +1538,56 @@ fn follow_ladder(mesh: &NavMesh, world: &World, bot: &Player, brain: &mut Brain,
         // of contact at high tick rates; the movement sweep owns clearance.
         if up { face.end } else { face.end + face.normal * clearance }
     });
-    let target = if route.exiting {
+    let mut blocked_top = false;
+    if !up && !route.attached && !route.exiting && route.top_mount.is_none() && bot.movement.on_ground {
+        if let Some(mount) = mount {
+            blocked_top = world.collision.trace_box(pos, Vec3::new(mount.x, mount.y, pos.z),
+                mins, maxs, collision::contents::MASK_PLAYERSOLID).hit();
+            if blocked_top && actual.is_none() {
+                route.top_mount = entry_face.zip(mesh.area(from))
+                    .and_then(|(face, source)| ladder_top_mount(world, bot, ladder, source, face, mount));
+            }
+        }
+    }
+    if route.top_mount.as_ref().is_some_and(|m| m.jumping && ladder_cap_supported(world, &bot.movement, m)) {
+        route.top_mount = None;
+        blocked_top = false;
+    }
+    let target = if let Some(top) = &route.top_mount {
+        if top.jumping { top.cap } else { top.launch }
+    } else if route.exiting {
         destination.center()
     } else if route.attached {
         line
     } else { mount.unwrap_or(entry) };
     let mut direction = target - pos;
-    if on_mount && !route.exiting {
+    if let Some(top) = &mut route.top_mount {
+        if top.jumping {
+            direction = ladder_cap_direction(&bot.movement, top, normal);
+            input.buttons |= buttons::JUMP;
+        } else if (pos - top.launch).truncate().length() <= collision::LADDER_REACH {
+            // Settle before previewing a stationary jump; ordinary friction
+            // owns the stop. No launch velocity or position is assigned here.
+            direction = Vec3::ZERO;
+            if bot.movement.on_ground && bot.movement.velocity.truncate().length() < 1.0
+                && bot.last_input.buttons & buttons::JUMP == 0
+                && (input.weapon_slot == 0 || bot.weapon_in_slot(input.weapon_slot).is_none() || bot.active_weapon()
+                    .is_some_and(|w| input.weapon_slot == crate::weapon::slot(&w.def)))
+                && !top.previewed
+            {
+                // Preview once for this mount attempt. A rejected trajectory
+                // uses normal bounded recovery rather than repeating a full
+                // jump simulation on every waiting bot tick.
+                top.previewed = true;
+                if ladder_cap_jump_clear(world, bot, top, normal) {
+                    top.jumping = true;
+                    input.buttons |= buttons::JUMP;
+                }
+            }
+        }
+    } else if blocked_top {
+        direction = Vec3::ZERO;
+    } else if on_mount && !route.exiting {
         // Level input into the actual face climbs; backward input descends.
         // Center laterally while climbing instead of strafing off its edge.
         direction = normal * (if up || !route.attached { -1.0 } else { 1.0 })
@@ -1461,7 +1604,8 @@ fn follow_ladder(mesh: &NavMesh, world: &World, bot: &Player, brain: &mut Brain,
     let (_, yaw) = look_angles(pos, pos + direction);
     brain.yaw = approach(brain.yaw, yaw, turn_rate);
     brain.pitch = approach(brain.pitch, 0.0, turn_rate);
-    let speed = if !route.attached { (direction.truncate().length() * 6.0).min(450.0) } else { 450.0 };
+    let speed = if route.top_mount.as_ref().is_some_and(|m| m.jumping) || route.attached { 450.0 }
+        else { (direction.truncate().length() * 6.0).min(450.0) };
     move_towards(input, brain.yaw, direction, speed);
     let delta = pos - brain.progress_pos;
     let progressed = if on_mount && !route.exiting {
@@ -1671,21 +1815,25 @@ mod tests {
         (world, bots, id)
     }
 
-    // All ladder regressions are intentionally UNRUN in this source-only slot.
+    // Raised-cap descent additions are UNRUN in this source-only slot.
     #[test]
     fn parsed_nav_think_and_world_movement_climb_and_dismount_at_both_rates() {
         for rate in [64, 128] {
-            for (up, cap) in [(true, 256.), (true, 280.), (false, 256.)] {
+            for (up, cap) in [(true, 256.), (true, 280.), (false, 256.), (false, 286.)] {
                 let (mut world, mut bots, id) = ladder_route_fixture(rate, up, true, cap);
                 let mut attached = false;
                 let mut detached = false;
                 let mut max_height = 0f32;
+                let mut top_jump = false;
+                let mut cap_landing = false;
                 let mut approach = Vec::new();
                 for _ in 0..rate * 8 {
                     let before = world.player(id).unwrap().movement;
                     let inputs = bots.think(&world);
                     assert_eq!(world.player(id).unwrap().movement, before, "think emits input only");
                     assert_eq!(inputs[0].1.buttons & buttons::ATTACK, 0);
+                    top_jump |= !up && before.on_ground && before.ladder_normal.is_none()
+                        && inputs[0].1.buttons & buttons::JUMP != 0;
                     if !up && before.origin.z > 200. && world.tick % 4 == 0 {
                         let mount = ladder_contact(&world, world.player(id).unwrap(), bots.nav.as_ref().unwrap().ladder(7).unwrap());
                         approach.push((world.tick, before.origin, before.velocity, before.ladder_normal,
@@ -1695,6 +1843,7 @@ mod tests {
                     world.step_prediction(&inputs);
                     let pm = &world.player(id).unwrap().movement;
                     max_height = max_height.max(pm.origin.z);
+                    cap_landing |= !up && pm.on_ground && pm.origin.x < 18. && pm.origin.z >= cap - 1.;
                     attached |= pm.ladder_normal == Some(-Vec3::X);
                     detached |= attached && pm.ladder_normal.is_none();
                     let arrived = if up { pm.origin.x > 32. && pm.origin.z > 248. }
@@ -1706,7 +1855,52 @@ mod tests {
                 assert!(pm.on_ground && pm.ladder_normal.is_none());
                 assert!(if up { pm.origin.x > 32. && pm.origin.z > 248. } else { pm.origin.x < -40. && pm.origin.z < 8. }, "{pm:?}");
                 if up { assert!(max_height > cap, "actual cap, not NAV top, ends climbing"); }
+                if !up && cap > 256. {
+                    assert!(top_jump && cap_landing, "ordinary jump must land on the actual raised cap");
+                } else if !up {
+                    assert!(!top_jump, "a clear top approach needs no mounting jump");
+                }
                 assert!(bots.brains[&id].failed_transitions.is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn raised_ladder_top_with_no_jump_clearance_or_wrong_face_fails_boundedly() {
+        for rate in [64, 128] {
+            for wrong_face in [false, true] {
+                let (mut world, mut bots, id) = ladder_route_fixture(rate, false, true, 286.);
+                let mut collision = collision::CollisionWorld::new();
+                collision.add_convex(ladder_box(Vec3::new(-512., -512., -16.), Vec3::new(512., 512., 0.), collision::contents::SOLID));
+                collision.add_convex(ladder_box(Vec3::new(0., -128., 240.), Vec3::new(512., 128., 256.), collision::contents::SOLID));
+                if wrong_face {
+                    // This tall brush is outside the selected NAV ribbon's
+                    // face-probe reach. Its nearby back face cannot authorize
+                    // a mount just because its cap has the expected height.
+                    collision.add_convex(ladder_box(Vec3::new(-80., -24., 0.), Vec3::new(-79., 24., 286.),
+                        collision::contents::LADDER | collision::contents::GRATE));
+                } else {
+                    collision.add_convex(ladder_box(Vec3::new(0., -24., 0.), Vec3::new(1., 24., 286.),
+                        collision::contents::LADDER | collision::contents::GRATE));
+                    // Standing fits, but no ordinary jump over the cap does.
+                    collision.add_convex(ladder_box(Vec3::new(-64., -64., 330.), Vec3::new(160., 64., 346.), collision::contents::SOLID));
+                }
+                collision.finalize(); world.collision = Arc::new(collision);
+                let mut failed = false;
+                for _ in 0..rate * 4 {
+                    let before = world.player(id).unwrap().movement;
+                    let inputs = bots.think(&world);
+                    assert_eq!(world.player(id).unwrap().movement, before);
+                    assert_eq!(inputs[0].1.buttons & buttons::JUMP, 0, "unqualified geometry must not mount");
+                    world.step_prediction(&inputs);
+                    if bots.brains[&id].failed_transitions.iter().any(|e| e.from == 2 && e.to == 1) {
+                        failed = true;
+                        break;
+                    }
+                }
+                assert!(failed, "{rate} Hz wrong_face={wrong_face}: existing deadline must exclude the edge");
+                assert!(world.player(id).unwrap().movement.on_ground);
+                assert!(world.player(id).unwrap().movement.ladder_normal.is_none());
             }
         }
     }

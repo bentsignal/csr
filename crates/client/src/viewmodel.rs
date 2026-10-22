@@ -1818,10 +1818,18 @@ pub fn load(
         } else { None };
         out.weapons.insert(def.class_name.clone(), WeaponView { asset: build(model), clips, scope_center, scope_rear, grenade_hold });
     }
+    // Sleeves only borrow these decoded models; keep the originals for the
+    // separate default-arm assets built after the cosmetic assets below.
+    let arms_t = load_model(fs, T_ARMS);
+    let arms_ct = load_model(fs, CT_ARMS);
     for (name,path,_) in crate::cosmetic_catalog::model_items(fs) {
-        if let Some(model)=load_model(fs,&path){for (side,arms) in [("Terrorist",T_ARMS),("CounterTerrorist",CT_ARMS)]{
-            if let Some(arms)=load_model(fs,arms){out.gloves.insert(format!("{name}:{side}"),build(crate::cosmetic_geometry::sleeves(model.clone(),&arms)));}
-        }}
+        if let Some(model) = load_model(fs, &path) {
+            for (side, arms) in [("Terrorist", arms_t.as_ref()), ("CounterTerrorist", arms_ct.as_ref())] {
+                if let Some(arms) = arms {
+                    out.gloves.insert(format!("{name}:{side}"), build(crate::cosmetic_geometry::sleeves(model.clone(), arms)));
+                }
+            }
+        }
     }
     {
         for path in catalog.models.values().flat_map(|m|m.stickers.iter().cloned()).chain(["models/weapons/stattrack.mdl".into(),"models/weapons/stattrack_cut.mdl".into()]){
@@ -1860,8 +1868,8 @@ pub fn load(
             out.decorations.insert(format!("world:{name}:{path}"),build(model));
         }
     }
-    out.arms_t = load_model(fs, T_ARMS).map(&mut build);
-    out.arms_ct = load_model(fs, CT_ARMS).map(&mut build);
+    out.arms_t = arms_t.map(&mut build);
+    out.arms_ct = arms_ct.map(&mut build);
     out
 }
 
