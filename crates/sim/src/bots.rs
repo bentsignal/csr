@@ -1571,7 +1571,7 @@ fn follow_ladder(mesh: &NavMesh, world: &World, bot: &Player, brain: &mut Brain,
             direction = Vec3::ZERO;
             if bot.movement.on_ground && bot.movement.velocity.truncate().length() < 1.0
                 && bot.last_input.buttons & buttons::JUMP == 0
-                && (input.weapon_slot == 0 || bot.active_weapon()
+                && (input.weapon_slot == 0 || bot.weapon_in_slot(input.weapon_slot).is_none() || bot.active_weapon()
                     .is_some_and(|w| input.weapon_slot == crate::weapon::slot(&w.def)))
                 && !top.previewed
             {
