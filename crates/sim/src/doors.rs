@@ -106,7 +106,7 @@ impl World {
     /// Door selection uses the current input's aim, bounded against the eye,
     /// independently of the display camera. USE is edge-triggered: holding it
     /// never oscillates an open leaf or repeatedly restarts its sound.
-    fn used_door(&self, player: &crate::Player, input: &TickInput) -> Option<usize> {
+    pub(crate) fn used_door(&self, player: &crate::Player, input: &TickInput) -> Option<usize> {
         if !player.alive || player.team == crate::Team::Spectator || input.buttons & buttons::USE == 0
             || player.last_input.buttons & buttons::USE != 0 { return None; }
         let (mut from, mut direction) = (player.eye(), movement::angle_vectors(input.view_angles).0);

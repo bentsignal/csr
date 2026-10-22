@@ -86,6 +86,7 @@ struct Queued {
     player: sim::PlayerId,
     weapon: String,
     entry: String,
+    deploy: bool,
     reload: bool,
     suppressor: Option<sim::weapon::SuppressorTransition>,
     grenade_pull: Option<u64>,
@@ -132,6 +133,9 @@ pub struct Foley {
     /// which leave the queue in the same update. No audio device is required.
     #[cfg(test)]
     pub(crate) scheduled: Vec<(sim::PlayerId, String, String, f32)>,
+    /// Witness at the actual due-event dispatch, after interruption filtering.
+    #[cfg(test)]
+    pub(crate) dispatched: Vec<(sim::PlayerId, String, String, f32)>,
     #[cfg(test)]
     pub(crate) inspected: Vec<(String, f32)>,
 }
@@ -170,7 +174,28 @@ impl Foley {
         for (cycle, entry) in events {
             #[cfg(test)]
             self.scheduled.push((player, weapon.to_string(), entry.clone(), now + cycle * duration));
-            self.queue.push(Queued { at: now + cycle * duration, player, weapon: weapon.to_string(), entry: entry.clone(), reload, suppressor: None, grenade_pull: None, primary_attack: false });
+            self.queue.push(Queued { at: now + cycle * duration, player, weapon: weapon.to_string(), entry: entry.clone(), deploy: false, reload, suppressor: None, grenade_pull: None, primary_attack: false });
+        }
+    }
+
+    fn deploy(&mut self, player: sim::PlayerId, weapon: &str,
+        now: f32, duration: f32, events: &[(f32, String)]) {
+        let first = self.queue.len();
+        self.schedule(player, weapon, now, duration, events, false);
+        for q in &mut self.queue[first..] { q.deploy = true; }
+    }
+
+    fn interrupt_deploys(&mut self, events: &[sim::GameEvent]) {
+        // These newly routed manual-action clips share pump/bolt cues with
+        // Draw. A confirmed shot interrupts that playback, not matching sound
+        // names: completed Draws, reloads and repeated authored events survive.
+        // Leave the accepted AWP/knife/utility paths unchanged.
+        for event in events {
+            if let sim::GameEvent::Fire { player, weapon, .. } = event {
+                if matches!(weapon.as_str(), "weapon_ssg08" | "weapon_nova" | "weapon_sawedoff" | "weapon_mag7") {
+                    self.queue.retain(|q| !(q.player == *player && q.weapon == *weapon && q.deploy));
+                }
+            }
         }
     }
 
@@ -269,6 +294,8 @@ pub fn update(
     let now = world.0.time();
     let elapsed = foley.advance(world.0.tick, world.0.tick_rate);
     foley.retain_lives(&world.0.players);
+    // Reliable remote events can arrive without an advancing snapshot tick.
+    foley.interrupt_deploys(&world.0.events);
     let Some(elapsed) = elapsed else { return; };
     let fs = &level.0.vfs;
     let foley = &mut *foley;
@@ -300,7 +327,7 @@ pub fn update(
                     views.activity_sounds(&weapon, p.active_weapon().map_or("ACT_VM_DRAW", |w| w.draw_activity()))
                 };
                 if let Some((duration, events)) = draw {
-                    foley.schedule(p.id, &weapon, now, duration, &events, false);
+                    foley.deploy(p.id, &weapon, now, duration, &events);
                 }
             }
         }
@@ -323,7 +350,7 @@ pub fn update(
                     // seconds of screw sounds as one burst.
                     if at >= now - elapsed.tick_seconds {
                         foley.queue.push(Queued { at, player: p.id, weapon: weapon.clone(),
-                            entry: entry.clone(), reload: false, suppressor: Some(transition), grenade_pull: None, primary_attack: false });
+                            entry: entry.clone(), deploy: false, reload: false, suppressor: Some(transition), grenade_pull: None, primary_attack: false });
                     }
                 }
             }
@@ -341,7 +368,7 @@ pub fn update(
             if let Some((duration, events)) = views.activity_sounds(&weapon, "ACT_VM_PULLPIN") {
                 for (cycle, entry) in events.iter() {
                     foley.queue.push(Queued { at: pull.unwrap() as f32 * world.0.dt() + cycle * duration,
-                        player: p.id, weapon: weapon.clone(), entry: entry.clone(), reload: false,
+                        player: p.id, weapon: weapon.clone(), entry: entry.clone(), deploy: false, reload: false,
                         suppressor: None, grenade_pull: pull, primary_attack: false });
                 }
             }
@@ -420,6 +447,13 @@ pub fn update(
         }
     }
 
+    // FixedUpdate precedes effects::process in Update. Cancel interrupted Draw
+    // tails before catch-up ticks dispatch them under one audio clock. Use this
+    // step's Fire events, not the accumulated pending batch: an earlier shot
+    // must not interrupt a later re-deploy within the same render frame.
+    // RemoteClient likewise publishes its newly received reliable events here.
+    foley.interrupt_deploys(&world.0.events);
+
     // Animation-event sounds whose time has come, if the weapon is still out.
     let due: Vec<Queued> = {
         let (due, keep) = foley.queue.drain(..).partition(|q| q.at <= now);
@@ -440,6 +474,8 @@ pub fn update(
             }
         }
         let emit = emit_for(p, &local, p.movement.origin + glam::Vec3::Z * 48.0);
+        #[cfg(test)]
+        foley.dispatched.push((q.player, q.weapon.clone(), q.entry.clone(), q.at));
         sounds.play_with(&mut commands, fs, &mut sources, &q.entry, emit);
     }
 }
@@ -468,6 +504,183 @@ pub fn land(commands: &mut Commands, sounds: &mut SoundLibrary, sources: &mut As
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // UNRUN: source-only handoff. Read only the installed models/schema and
+    // sounds needed by this fixture, with an empty synthetic map and no GPU or
+    // audio device. ViewModels::load performs the production clip/event decode.
+    fn installed_handling_app(name: &str, rate: u32) -> (App, sim::PlayerId) {
+        use std::{collections::BTreeMap, sync::Arc};
+        let game = vfs::find_csgo_dir().expect("installed CS:GO Legacy");
+        let mut installed = vfs::Vfs::new();
+        installed.mount_game_dir(&game).unwrap();
+        let schema = installed.read("scripts/items/items_game.txt").unwrap();
+        let catalog = weapons::Catalog::from_items_game(&kv::decode_text(&schema)).unwrap();
+        let def = catalog.get(name).unwrap().clone();
+        let script = installed.read("scripts/game_sounds_weapons.txt").unwrap();
+        let declarations = kv::parse(&kv::decode_text(&script)).unwrap();
+        let model_bytes = installed.read(&def.view_model).unwrap();
+        let model = mdl::Model::load_header(&model_bytes).unwrap();
+        let mut files = BTreeMap::<String, Arc<[u8]>>::new();
+        files.insert("scripts/items/items_game.txt".into(), schema.into());
+        files.insert("scripts/game_sounds_weapons.txt".into(), script.into());
+        files.insert(def.view_model.replace('\\', "/").to_ascii_lowercase(), model_bytes.into());
+        let base = def.view_model.trim_end_matches(".mdl");
+        for path in [format!("{base}.vvd"), format!("{base}.dx90.vtx")]
+            .into_iter().chain((!model.anim_block_file.is_empty()).then(|| model.anim_block_file.clone())) {
+            files.insert(path.replace('\\', "/").to_ascii_lowercase(), installed.read(&path).unwrap().into());
+        }
+        for event in model.sequences.iter().flat_map(|seq| &seq.events) {
+            if let Some(wave) = event.client_sound().and_then(|entry|
+                declarations.block(entry)).and_then(|entry| entry.str("wave")) {
+                let path = format!("sound/{}", wave.trim_start_matches(['~', ')', '^', '*']));
+                files.insert(path.replace('\\', "/").to_ascii_lowercase(), installed.read(&path).unwrap().into());
+            }
+        }
+        let mut bsp = vec![0u8; 1036];
+        bsp[..4].copy_from_slice(b"VBSP");
+        bsp[4..8].copy_from_slice(&20i32.to_le_bytes());
+        files.insert("maps/handling_fixture.bsp".into(), bsp.into());
+        let mut fs = vfs::Vfs::new();
+        fs.push_back("installed handling fixture", vfs::Mount::Memory(files));
+        let mut level = level::Level::load_from_vfs(
+            content::ContentId::csgo(content::ContentKind::Map, "handling_fixture"),
+            "handling_fixture", game, fs).unwrap();
+        Arc::get_mut(&mut level.catalog).unwrap().weapons.retain(|def| def.class_name == name);
+        assert_eq!(level.catalog.weapons.len(), 1, "fixture must retain {name}");
+        let full = mdl::Model::load(&level.vfs.read(&def.view_model).unwrap(),
+            &level.vfs.read(&format!("{base}.vvd")).unwrap(),
+            &level.vfs.read(&format!("{base}.dx90.vtx")).unwrap())
+            .expect("fixture must mount a complete production weapon model");
+        let draw = full.sequences.iter().find(|seq| seq.activity == "ACT_VM_DRAW").unwrap();
+        let ani = (!full.anim_block_file.is_empty()).then(|| level.vfs.read(&full.anim_block_file)).flatten();
+        full.decode_animation(draw.anims[0] as usize, ani.as_deref()).expect("fixture Draw must decode");
+        assert_eq!(level.catalog.weapons[0].view_model, def.view_model);
+        let views = crate::viewmodel::load(&level, &Default::default(),
+            &mut Assets::<Mesh>::default(), &mut Assets::<crate::material::WorldMaterial>::default(),
+            &mut Assets::<Image>::default(), &mut crate::textures::TextureCache::default(),
+            &crate::world_mesh::SharedHandles { lightmap: Default::default() },
+            &mut Assets::<bevy::mesh::skinning::SkinnedMeshInverseBindposes>::default(), 1.);
+        let sounds = SoundLibrary::load_with_era(&level.vfs, crate::audio::SoundEra::InstalledLegacy);
+        let mut world = sim::World::with_catalog(level.collision.clone(), level.catalog.clone());
+        world.set_tick_rate(rate);
+        world.set_mode(sim::GameMode::Deathmatch, sim::RulesConfig::default());
+        let id = world.add_player("handling dispatch", sim::Team::CounterTerrorist);
+        let player = world.player_mut(id).unwrap();
+        player.weapons = vec![sim::weapon::WeaponState::new(Arc::new(def))];
+        player.active = 0;
+        let mut app = App::new();
+        app.insert_resource(SimWorld(world)).insert_resource(LocalPlayer::new(id, glam::Vec3::ZERO, 0.))
+            .insert_resource(LoadedLevel(level)).insert_resource(views).insert_resource(sounds)
+            .init_resource::<Assets<AudioSource>>().init_resource::<Foley>()
+            .init_resource::<ViewModelState>().init_resource::<SurfaceProps>().init_resource::<Time>()
+            .init_resource::<crate::effects::PendingEvents>().init_resource::<crate::effects::Effects>()
+            .init_resource::<crate::tracers::Tracers>().init_resource::<crate::settings::Settings>()
+            .init_resource::<crate::buymenu::BuyMenu>()
+            .add_systems(FixedUpdate, update).add_systems(Update, crate::effects::process);
+        (app, id)
+    }
+
+    fn handling_step(app: &mut App, id: sim::PlayerId, buttons: u32) {
+        let events = {
+            let mut world = app.world_mut().resource_mut::<SimWorld>();
+            world.0.step(&[(id, sim::TickInput { buttons, ..Default::default() })]);
+            world.0.events.clone()
+        };
+        app.world_mut().resource_mut::<crate::effects::PendingEvents>().0.extend(events);
+        app.world_mut().run_schedule(FixedUpdate);
+    }
+
+    #[test]
+    #[ignore = "requires installed CS:GO Legacy; source-only regression is UNRUN"]
+    fn installed_manual_action_dispatch_interrupts_draw_before_fixed_catchup() {
+        for rate in [64, 128] {
+            for name in ["weapon_nova", "weapon_mag7"] {
+                for catchup in [false, true] {
+                    let (mut app, id) = installed_handling_app(name, rate);
+                    let views = app.world().resource::<ViewModels>();
+                    let (draw_duration, draw) = views.activity_sounds(name, "ACT_VM_DRAW").unwrap();
+                    let (attack_duration, attack) = views.activity_sounds(name, "ACT_VM_PRIMARYATTACK").unwrap();
+                    assert!(draw.iter().any(|(cycle, _)| *cycle > 0.));
+                    assert!(!attack.is_empty());
+                    // Exercise both a presented Draw onset and a first shot
+                    // before foley has even observed the initial deployment.
+                    if !catchup { app.world_mut().run_schedule(FixedUpdate); }
+                    handling_step(&mut app, id, movement::buttons::ATTACK);
+                    assert_eq!(app.world().resource::<SimWorld>().0.player(id).unwrap().shots, 1);
+                    if catchup {
+                        while app.world().resource::<SimWorld>().0.time() < draw_duration {
+                            handling_step(&mut app, id, 0);
+                        }
+                    }
+                    let shot_scheduled = app.world().resource::<SimWorld>().0.time();
+                    app.update(); // actual effects::process drains the confirmed Fire
+                    while app.world().resource::<SimWorld>().0.time() < shot_scheduled + attack_duration + 0.1 {
+                        handling_step(&mut app, id, 0);
+                        app.update();
+                    }
+                    let expected: Vec<_> = draw.iter().filter(|(cycle, _)| !catchup && *cycle == 0.)
+                        .map(|(_, entry)| (id, name.to_string(), entry.clone(), 0.))
+                        .chain(attack.iter().map(|(cycle, entry)|
+                            (id, name.to_string(), entry.clone(), shot_scheduled + cycle * attack_duration))).collect();
+                    assert_eq!(app.world().resource::<Foley>().dispatched, expected,
+                        "{name} {rate}Hz catchup={catchup}: only the interrupted Draw tail may disappear");
+                    // Repeated scheduling/dispatch timestamps cannot replay events.
+                    app.world_mut().run_schedule(FixedUpdate);
+                    app.update();
+                    assert_eq!(app.world().resource::<Foley>().dispatched, expected);
+                    assert!(!app.world().resource::<Assets<AudioSource>>().is_empty(),
+                        "installed handling cues must reach real audio-source admission without a device");
+                    assert!(app.world_mut().query::<&bevy::audio::AudioPlayer>()
+                        .iter(app.world()).next().is_some(), "actual dispatch must admit an AudioPlayer");
+                }
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "requires installed CS:GO Legacy; source-only regression is UNRUN"]
+    fn installed_uninterrupted_draw_dispatches_all_authored_events() {
+        for name in ["weapon_nova", "weapon_mag7"] {
+            let (mut app, id) = installed_handling_app(name, 128);
+            let (duration, events) = app.world().resource::<ViewModels>()
+                .activity_sounds(name, "ACT_VM_DRAW").unwrap();
+            app.world_mut().run_schedule(FixedUpdate);
+            while app.world().resource::<SimWorld>().0.time() < duration + 0.1 {
+                handling_step(&mut app, id, 0);
+                app.update();
+            }
+            assert_eq!(app.world().resource::<Foley>().dispatched, events.iter()
+                .map(|(cycle, entry)| (id, name.to_string(), entry.clone(), cycle * duration)).collect::<Vec<_>>());
+        }
+    }
+
+    #[test]
+    fn manual_action_interruption_preserves_repeated_attack_reload_and_other_owner_cues() {
+        let mut foley = Foley::default();
+        // Same entry at distinct authored cycles is deliberate. Cancellation
+        // follows the interrupted playback, never a waveform/name/time window.
+        let repeated = [(0.3, "pump".into()), (0.6, "pump".into())];
+        foley.deploy(1, "weapon_mag7", 0., 1., &repeated);
+        foley.deploy(2, "weapon_mag7", 0., 1., &repeated);
+        foley.deploy(1, "weapon_awp", 0., 1., &repeated);
+        foley.schedule(1, "weapon_mag7", 0., 1., &repeated, true);
+        foley.primary_attack(1, "weapon_mag7", 0., 1., &repeated);
+        foley.interrupt_deploys(&[]);
+        assert_eq!(foley.queue.len(), 10);
+        foley.interrupt_deploys(&[sim::GameEvent::Fire { player: 1,
+            weapon: "weapon_mag7".into(), origin: glam::Vec3::ZERO, suppressed: false }]);
+        assert_eq!(foley.queue.len(), 8);
+        assert!(!foley.queue.iter().any(|q| q.player == 1 && q.weapon == "weapon_mag7" && q.deploy));
+        for cues in [
+            foley.queue.iter().filter(|q| q.player == 2).collect::<Vec<_>>(),
+            foley.queue.iter().filter(|q| q.weapon == "weapon_awp").collect(),
+            foley.queue.iter().filter(|q| q.reload).collect(),
+            foley.queue.iter().filter(|q| q.primary_attack).collect(),
+        ] {
+            assert_eq!(cues.iter().map(|q| (q.at, q.entry.as_str())).collect::<Vec<_>>(),
+                vec![(0.3, "pump"), (0.6, "pump")]);
+        }
+    }
 
     // Reference to the previous per-tick loop: protects the measured offline
     // onset, threshold transitions, alternating feet and cadence together.
