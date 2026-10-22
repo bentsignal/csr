@@ -1709,6 +1709,13 @@ fn update_combat_strafe(brain: &mut Brain, rng: &mut Rng, time: f32) {
 fn supported_combat_strafe(world: &World, bot: &Player, delta: Vec3, speed: f32) -> bool {
     if !can_walk(world, bot, delta) { return false; }
     let (mins, maxs) = bot.movement.hull();
+    // This fallback runs after ordinary navigation's teammate separation.
+    // Sweep the same hull against living players before choosing a free side.
+    if world.players.iter().filter(|other| other.alive && other.id != bot.id).any(|other| {
+        let (lo, hi) = other.bounds();
+        crate::ray_box(bot.movement.origin, delta.normalize_or_zero(), lo - maxs, hi - mins)
+            .is_some_and(|distance| distance <= delta.length())
+    }) { return false; }
     let steps = (delta.length() / (speed * world.dt())).ceil() as u32;
     let mut height = bot.movement.origin.z;
     for step in 0..=steps {
@@ -2963,8 +2970,16 @@ mod tests {
     #[test]
     fn aligned_friendly_lane_strafes_safely_and_resumes_ordinary_fire_at_both_rates() {
         for rate in [64, 128] {
-            for (wall, floor_min, expected_y) in [(false, -512., -1.), (true, -512., 1.), (false, -16., 1.)] {
+            for (wall, floor_min, expected_y, side_ally) in [(false, -512., -1., false),
+                (true, -512., 1., false), (false, -16., 1., false), (false, -512., 1., true)] {
                 let (mut world, mut bots, id, ally, enemy) = friendly_lane_fixture(rate, wall, false, floor_min, 512.);
+                let side_ally = side_ally.then(|| {
+                    let actor = world.add_player("occupied strafe side", Team::Terrorist);
+                    let player = world.player_mut(actor).unwrap();
+                    player.movement = movement::PlayerMove::spawn_at(Vec3::new(0., -48., 0.03125));
+                    player.movement.on_ground = true;
+                    actor
+                });
                 let start = world.player(id).unwrap().movement;
                 let ally_health = world.player(ally).unwrap().health;
                 let mut moved = false;
@@ -2997,6 +3012,11 @@ mod tests {
                         movement::STAND_MINS, movement::STAND_MAXS, collision::contents::MASK_PLAYERSOLID).start_solid);
                     moved |= (bot.movement.origin.y - start.origin.y) * expected_y > 1.;
                     assert_eq!(world.player(ally).unwrap().health, ally_health);
+                    if let Some(actor) = side_ally {
+                        assert_eq!(world.player(actor).unwrap().health, 100);
+                        let other = world.player(actor).unwrap().movement.origin;
+                        assert!((bot.movement.origin - other).truncate().length() >= 32.);
+                    }
                     if bot.shots > shots { fired = true; break; }
                 }
                 assert!(moved && fired, "{rate} Hz wall={wall} floor_min={floor_min}: clear the lane and fire");
