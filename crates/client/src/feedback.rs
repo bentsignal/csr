@@ -7,6 +7,9 @@ use crate::{
 use bevy::prelude::*;
 use std::collections::HashSet;
 
+#[path = "impact_puffs.rs"]
+mod impact_puffs;
+
 const MAX_FEEDBACK_FX: usize = 512;
 
 #[derive(Resource)]
@@ -17,6 +20,7 @@ pub struct FeedbackAssets {
     hole: Handle<StandardMaterial>,
     dust: Handle<StandardMaterial>,
     decals: crate::impact_decals::Catalog,
+    puffs: impact_puffs::Catalog,
 }
 #[derive(Component)]
 pub struct ImpactFx {
@@ -153,6 +157,7 @@ pub fn setup(
             ..default()
         }),
         decals: crate::impact_decals::Catalog::load(&level.0.vfs, &mut meshes, &mut images, &mut materials),
+        puffs: impact_puffs::Catalog::load(&level.0.vfs, &mut materials, &mut images),
     };
     // Queue these pipeline/material variants during startup so the first
     // short-lived hit puff is not lost to asynchronous shader compilation.
@@ -181,6 +186,16 @@ pub fn setup(
                 .with_scale(Vec3::splat(0.00001)),
             ImpactFx { born: now, life: 2., velocity: Vec3::ZERO, billboard: false },
         ));
+    }
+    if let Some(material) = assets.puffs.prewarm_material() {
+        // Vertex color adds a pipeline variant to the existing textured Blend
+        // path. Warm it with zero coverage before the first short impact.
+        let mut mesh = Mesh::from(Rectangle::new(0.001, 0.001));
+        mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, vec![[0.0_f32; 4]; 4]);
+        commands.spawn((Mesh3d(meshes.add(mesh)), MeshMaterial3d(material),
+            Transform::from_translation(pos),
+            ImpactFx { born: now, life: 2., velocity: Vec3::ZERO, billboard: false },
+            bevy::light::NotShadowCaster, bevy::light::NotShadowReceiver));
     }
     commands.insert_resource(assets);
     commands.init_resource::<Hurt>();
@@ -351,7 +366,8 @@ pub fn update(
     local: Res<LocalPlayer>,
     level: Res<crate::LoadedLevel>,
     time: Res<Time>,
-    mut particles: Query<(Entity, &mut Transform, &mut ImpactFx, Option<&DoorImpactMark>)>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut particles: Query<(Entity, &mut Transform, &mut ImpactFx, Option<&DoorImpactMark>, Option<&mut impact_puffs::Puff>)>,
     mut edges: Query<(&HurtEdge, &mut Node, &mut BackgroundColor)>,
 ) {
     let _frame_scope = crate::input_latency::frame_scope("feedback");
@@ -362,7 +378,8 @@ pub fn update(
     let mut retired = HashSet::new();
     let reset = reset_feedback(&mut effects.feedback);
     if reset {
-        for (e, _, _, _) in &particles {
+        for (e, _, _, _, puff) in &mut particles {
+            if let Some(puff) = puff { puff.release_mesh(&mut meshes); }
             commands.entity(e).despawn();
         }
         hurt.time = None;
@@ -396,7 +413,7 @@ pub fn update(
                     if normal.length_squared() > 0.5 && pos.is_finite()
                         && pose.is_some()
                         && reserve_impact_slot(&mut commands, &mut budget, &mut retired,
-                            particles.iter().filter(|_| !reset).map(|(e, _, fx, _)| (e, fx.born))) {
+                            particles.iter().filter(|_| !reset).map(|(e, _, fx, _, _)| (e, fx.born))) {
                         if std::env::var_os("CSR_WEAPON_TRACE").is_some() {
                             info!("impact artwork: {:?} at {:?}; surface={prop}, game_material={:?}", decal.id, pos, props.get(&prop).and_then(|p| p.game_material.as_deref()));
                         }
@@ -410,6 +427,18 @@ pub fn update(
                             mark.insert(crate::breakables::BreakableMesh(vec![index]));
                         }
                     }
+                }
+                let authored_puff = if budget > 0 {
+                    props.get(&prop).and_then(|p| p.game_material.as_deref())
+                        .and_then(|code| assets.puffs.spawn(&mut commands, &mut meshes,
+                            code, pos, normal, eye))
+                } else { None };
+                if let Some((entity, life)) = authored_puff {
+                    budget -= 1;
+                    commands.entity(entity).insert(ImpactFx {
+                        born: now, life, velocity: Vec3::ZERO, billboard: false,
+                    });
+                    continue;
                 }
                 for i in 0..3 {
                     if budget == 0 { break; }
@@ -463,10 +492,18 @@ pub fn update(
         }
     }
     if !reset {
-        for (e, mut transform, mut fx, attachment) in &mut particles {
-            if retired.contains(&e) { continue; }
+        for (e, mut transform, mut fx, attachment, puff) in &mut particles {
+            if retired.contains(&e) {
+                if let Some(puff) = puff { puff.release_mesh(&mut meshes); }
+                continue;
+            }
             if now - fx.born > fx.life {
+                if let Some(puff) = puff { puff.release_mesh(&mut meshes); }
                 commands.entity(e).despawn();
+                continue;
+            }
+            if let Some(puff) = puff {
+                *transform = puff.pose(now - fx.born, fx.life, eye);
                 continue;
             }
             if let Some(mark) = attachment {
@@ -712,6 +749,7 @@ mod mob_blood_tests {
             hole: default(),
             dust: default(),
             decals: default(),
+            puffs: default(),
         };
         let collision = collision::CollisionWorld::new();
         let mut queue = bevy::ecs::world::CommandQueue::default();
