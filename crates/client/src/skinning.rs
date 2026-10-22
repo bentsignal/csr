@@ -408,7 +408,7 @@ mod material_preparation_tests {
                 }
                 let actual = materials.get(handle).unwrap();
                 let gpu_bytes = |material: &WorldMaterial| {
-                    let mut buffer = bevy::render::render_resource::encase::UniformBuffer::new(Vec::new());
+                    let mut buffer = bevy::render::render_resource::encase::UniformBuffer::new(Vec::<u8>::new());
                     buffer.write(&material.params).unwrap();
                     buffer.into_inner()
                 };
