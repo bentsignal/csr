@@ -1473,11 +1473,12 @@ fn ladder_top_mount(world: &World, bot: &Player, ladder: &nav::Ladder,
         collision::contents::MASK_PLAYERSOLID).hit();
     let support_trace = world.collision.trace_box(launch, launch - Vec3::Z * 2.0,
         mins, maxs, collision::contents::MASK_PLAYERSOLID);
-    let high = Vec3::new(launch.x, launch.y, launch.z + rise);
-    let across = Vec3::new(mount.x, mount.y, high.z);
     if !support_trace.hit() || support_trace.start_solid || support_trace.all_solid
         || support_trace.normal.z < movement::MIN_GROUND_NORMAL
-        || !clear(pos, launch) || !clear(launch, high) || !clear(high, across) { return None; }
+        || !clear(pos, launch) { return None; }
+    // The human-solver preview admits the jump from the settled launch.
+    // A ceiling can shorten its arc while still allowing a real cap landing;
+    // unused air volume at the unrestricted apex need not be clear.
     Some(LadderTopMount { launch, cap: cap.end, jumping: false, previewed: false })
 }
 
@@ -1925,6 +1926,68 @@ mod tests {
         }
     }
 
+    // UNRUN: source-only follow-through; root owns combined execution.
+    #[test]
+    fn raised_ladder_top_lands_on_cap_after_ceiling_contact_at_both_rates() {
+        for rate in [64, 128] {
+            let cap = 286.;
+            let ceiling = 376.;
+            let (mut world, mut bots, id) = ladder_route_fixture(rate, false, true, cap);
+            let collision = Arc::get_mut(&mut world.collision).unwrap();
+            collision.add_convex(ladder_box(Vec3::new(-64., -64., ceiling),
+                Vec3::new(160., 64., ceiling + 16.), collision::contents::SOLID));
+            collision.finalize();
+            let mut top_jump = false;
+            let mut ceiling_contact = false;
+            let mut cap_landing = false;
+            let mut attached = false;
+            let mut detached = false;
+            for _ in 0..rate * 8 {
+                let before = world.player(id).unwrap().movement;
+                let inputs = bots.think(&world);
+                assert_eq!(world.player(id).unwrap().movement, before, "think emits input only");
+                assert_eq!(inputs[0].1.buttons & (buttons::DUCK | buttons::ATTACK), 0);
+                if before.on_ground && before.ladder_normal.is_none()
+                    && inputs[0].1.buttons & buttons::JUMP != 0
+                {
+                    let (mins, maxs) = before.hull();
+                    let high = before.origin + Vec3::Z
+                        * (world.config.jump_impulse.powi(2) / (2. * world.config.gravity));
+                    let tr = world.collision.trace_box(before.origin, high, mins, maxs,
+                        collision::contents::MASK_PLAYERSOLID);
+                    assert!(tr.hit() && !tr.start_solid && !tr.all_solid && tr.normal == -Vec3::Z,
+                        "the former full-apex gate must reject this launch");
+                    top_jump = true;
+                }
+                world.step_prediction(&inputs);
+                let pm = &world.player(id).unwrap().movement;
+                let (mins, maxs) = pm.hull();
+                assert!(pm.origin.z + maxs.z <= ceiling, "standing hull must respect the ceiling");
+                ceiling_contact |= before.velocity.z > 0. && pm.velocity.z <= 0.
+                    && (pm.origin.z + maxs.z - ceiling).abs() <= collision::DIST_EPSILON * 2.;
+                if pm.on_ground {
+                    let support = world.collision.trace_box(pm.origin, pm.origin - Vec3::Z * 2.,
+                        mins, maxs, collision::contents::MASK_PLAYERSOLID);
+                    cap_landing |= support.hit() && !support.start_solid && !support.all_solid
+                        && support.contents & collision::contents::LADDER != 0 && support.normal.z > 0.99
+                        && (support.end.z - cap).abs() <= collision::DIST_EPSILON * 2.;
+                }
+                attached |= pm.ladder_normal == Some(-Vec3::X)
+                    && ladder_contact(&world, world.player(id).unwrap(),
+                        bots.nav.as_ref().unwrap().ladder(7).unwrap()).1;
+                detached |= attached && pm.ladder_normal.is_none();
+                if pm.on_ground && pm.ladder_normal.is_none() && pm.origin.x < -40. && pm.origin.z < 8. { break; }
+            }
+            let pm = &world.player(id).unwrap().movement;
+            assert!(top_jump && ceiling_contact && cap_landing,
+                "{rate} Hz: require an ordinary ceiling-clipped jump and actual cap support: {pm:?}");
+            assert!(attached && detached, "{rate} Hz: must traverse the selected ladder: {pm:?}");
+            assert!(pm.on_ground && pm.ladder_normal.is_none() && pm.origin.x < -40. && pm.origin.z < 8.,
+                "{rate} Hz: descent must complete: {pm:?}");
+            assert!(bots.brains[&id].failed_transitions.is_empty());
+        }
+    }
+
     #[test]
     fn raised_ladder_top_with_no_jump_clearance_or_wrong_face_fails_boundedly() {
         for rate in [64, 128] {
@@ -1947,11 +2010,14 @@ mod tests {
                 }
                 collision.finalize(); world.collision = Arc::new(collision);
                 let mut failed = false;
+                let mut preview_rejected = false;
                 for _ in 0..rate * 4 {
                     let before = world.player(id).unwrap().movement;
                     let inputs = bots.think(&world);
                     assert_eq!(world.player(id).unwrap().movement, before);
                     assert_eq!(inputs[0].1.buttons & buttons::JUMP, 0, "unqualified geometry must not mount");
+                    preview_rejected |= bots.brains[&id].ladder_route.as_ref()
+                        .and_then(|route| route.top_mount.as_ref()).is_some_and(|top| top.previewed && !top.jumping);
                     world.step_prediction(&inputs);
                     if bots.brains[&id].failed_transitions.iter().any(|e| e.from == 2 && e.to == 1) {
                         failed = true;
@@ -1959,6 +2025,7 @@ mod tests {
                     }
                 }
                 assert!(failed, "{rate} Hz wrong_face={wrong_face}: existing deadline must exclude the edge");
+                if !wrong_face { assert!(preview_rejected, "too-low headroom must reach and fail the real jump preview"); }
                 assert!(world.player(id).unwrap().movement.on_ground);
                 assert!(world.player(id).unwrap().movement.ladder_normal.is_none());
             }
