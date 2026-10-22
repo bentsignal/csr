@@ -614,7 +614,11 @@ impl Bots {
                         input.buttons |= buttons::ATTACK2;
                         input.buttons &= !buttons::ATTACK;
                     }
-                    if w.reload_end.is_some() || (w.clip < (w.def.clip_size / 4).max(1) && time - brain.last_seen > 0.4) {
+                    // Current visibility refreshes last_seen every tick. An
+                    // empty automatic can otherwise hold ATTACK mid-burst
+                    // forever, preventing idle reload and the move to cover.
+                    let empty_reload = bot.movement.on_ground && w.clip == 0 && w.can_reload();
+                    if w.reload_end.is_some() || empty_reload || (w.clip < (w.def.clip_size / 4).max(1) && time - brain.last_seen > 0.4) {
                         if w.can_reload() { input.buttons |= buttons::RELOAD; }
                         input.buttons &= !buttons::ATTACK;
                         if let Some(mesh) = nav.as_deref() {
@@ -1707,6 +1711,88 @@ mod tests {
         assert!(world.bots.team.roles.contains_key(&survivor));
         assert!(world.bots.team.reserve.contains_key(&survivor));
         assert_eq!(world.bots.skill, skill);
+    }
+
+    #[test]
+    fn grounded_empty_combat_burst_reloads_and_moves_to_cover() {
+        for rate in [64, 128] {
+            for (grounded, clip, reserve, should_reload) in [
+                (true, 0, 60, true),
+                (true, 1, 60, false),
+                (true, 0, 0, false),
+                (false, 0, 60, false),
+            ] {
+                let mut collision = collision::CollisionWorld::new();
+                let surf = collision.surface_id("wall");
+                // The target is visible east of the bot; the northern
+                // hiding spot is behind this wall from the target's eye.
+                let a = Vec3::new(50., 40., 0.);
+                let b = Vec3::new(50., 300., 0.);
+                let c = Vec3::new(50., 300., 200.);
+                let d = Vec3::new(50., 40., 200.);
+                collision.add_triangle([a, b, c], collision::contents::SOLID, surf);
+                collision.add_triangle([a, c, d], collision::contents::SOLID, surf);
+                collision.finalize();
+                let catalog = weapons::Catalog::from_items_game(r#"items_game { items {
+                    "7" { "name" "weapon_ak47" "baseitem" "1" "attributes" {
+                        "primary clip size" "30" "is full auto" "1"
+                    } }
+                } }"#).unwrap();
+                let mut world = World::with_catalog(Arc::new(collision), Arc::new(catalog));
+                world.set_tick_rate(rate);
+                world.tick = world.ticks(2.);
+                let id = world.add_bot("empty burst", Team::Terrorist);
+                let enemy = world.add_player("visible target", Team::CounterTerrorist);
+                world.player_mut(enemy).unwrap().movement.origin = Vec3::X * 100.;
+                let mut weapon = crate::WeaponState::new(Arc::new(world.catalog.get("weapon_ak47").unwrap().clone()));
+                weapon.clip = clip;
+                weapon.reserve = reserve;
+                let bot = world.player_mut(id).unwrap();
+                bot.weapons = vec![weapon];
+                bot.active = 0;
+                bot.movement.origin = Vec3::ZERO;
+                bot.movement.on_ground = grounded;
+                bot.last_input.buttons = buttons::ATTACK;
+                let target_pos = world.player(enemy).unwrap().eye() - Vec3::Z * 14.;
+                let (pitch, yaw) = look_angles(world.player(id).unwrap().eye(), target_pos);
+                let mut brain = Brain::fresh(world.player(id).unwrap(), 0);
+                brain.target = Some(enemy);
+                brain.pitch = pitch;
+                brain.yaw = yaw;
+                brain.progress_time = world.time();
+                brain.burst_left = 2; // Magazine emptied before the authored burst ended.
+                let area = |id, min_y, max_y| nav::Area {
+                    id, flags: 0,
+                    nw: Vec3::new(-64., min_y, 0.), se: Vec3::new(32., max_y, 0.),
+                    ne_z: 0., sw_z: 0., connections: Default::default(),
+                    place: 0, hiding_spots: vec![],
+                };
+                let mut start = area(1, -64., 64.);
+                start.connections[0].push(2);
+                let mut cover = area(2, 64., 192.);
+                cover.hiding_spots.push(Vec3::new(0., 128., 0.));
+                let mut bots = Bots::with_skill(1.);
+                bots.nav = Some(Arc::new(NavMesh::from_areas(vec![start, cover])));
+                bots.brains.insert(id, brain);
+                let input = bots.think(&world).into_iter().find(|(actor, _)| *actor == id).unwrap().1;
+                let brain = &bots.brains[&id];
+                assert!(brain.visible);
+                assert_eq!(brain.last_seen, world.time());
+                assert_eq!(input.buttons & buttons::RELOAD != 0, should_reload);
+                assert_eq!(brain.reload_cover.is_some(), should_reload);
+                if should_reload {
+                    assert_eq!(input.buttons & buttons::ATTACK, 0);
+                    let (forward, right, _) = movement::angle_vectors(input.view_angles);
+                    let wish = forward * input.forward_move + right * input.side_move;
+                    assert!(wish.y > 400., "empty burst must hand movement to the cover route");
+                    assert_eq!(brain.path, [1, 2]);
+                } else {
+                    assert!(brain.path.is_empty());
+                    assert_eq!(input.forward_move, 0.);
+                    assert_eq!(input.side_move, 0.);
+                }
+            }
+        }
     }
 
     #[test] fn unseen_targets_remain_at_last_seen_position_and_cannot_be_fired_at() {
