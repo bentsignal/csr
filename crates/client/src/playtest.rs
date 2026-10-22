@@ -371,6 +371,7 @@ mod tests {
                         .insert_resource(crate::player::SimWorld(reloaded));
                     app.world_mut().resource_mut::<Panel>().enter_match(true, false);
                     configure_app(&mut app);
+                    app.update(); // Render the new match's panel before its next click.
                     assert_bot_settings(&app, count as usize, &expected, terrorist);
                 }
             }
