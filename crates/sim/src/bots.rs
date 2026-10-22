@@ -1384,7 +1384,7 @@ fn ladder_contact(world: &World, bot: &Player, ladder: &nav::Ladder) -> (Option<
     let matches = actual.is_some_and(|n| n.dot(normal) > 0.7 && face.is_some_and(|face| {
         let gap = (pos + (mins + maxs) * 0.5 - face.end).dot(n) - extent.dot(n.abs());
         // Match CollisionWorld::ladder_normal's two-unit attachment reach.
-        n.dot(face.normal) > 0.99 && gap.abs() <= 2.0 + collision::DIST_EPSILON
+        n.dot(face.normal) > 0.99 && gap.abs() <= collision::LADDER_REACH + collision::DIST_EPSILON
     }))
         && (pos - line).dot(lateral).abs() <= ladder.width * 0.5 + extent.dot(lateral.abs())
         && pos.z + maxs.z >= ladder.bottom.z && pos.z <= ladder.top.z + maxs.z;
@@ -1420,7 +1420,7 @@ fn follow_ladder(mesh: &NavMesh, world: &World, bot: &Player, brain: &mut Brain,
     // Geometric reach alone is not accepted attachment. A descending bot
     // must first move into the face; fresh outward motion intentionally does
     // not catch a ladder in the human movement solver.
-    if on_mount && bot.movement.ladder_normal.is_some() { route.attached = true; }
+    if on_mount && bot.movement.ladder_normal.is_some_and(|held| held.dot(normal) > 0.7) { route.attached = true; }
     if route.attached && ((up && actual.is_none() && pos.z >= ladder.top.z)
         || (!up && pos.z <= destination.z_at(pos.x, pos.y) + world.config.step_size)) {
         route.exiting = true;
@@ -1428,7 +1428,11 @@ fn follow_ladder(mesh: &NavMesh, world: &World, bot: &Player, brain: &mut Brain,
     let entry = if up { ladder.bottom } else { ladder.top };
     let mount = ladder_face(world, bot, ladder, entry).map(|face| {
         let clearance = extent.dot(face.normal.abs()) - ((mins + maxs) * 0.5).dot(face.normal)
-            + collision::DIST_EPSILON;
+            + collision::DIST_EPSILON
+            // At the top, move fully past floor support while remaining in
+            // the existing attachment band. Stopping exactly on hull clearance
+            // can leave a fraction of the hull supported indefinitely.
+            + if up { 0.0 } else { collision::LADDER_REACH };
         face.end + face.normal * clearance
     });
     let target = if route.exiting {

@@ -20,6 +20,7 @@ pub use bsp::contents;
 mod prop_lighting;
 pub use prop_lighting::PropLightingQuery;
 mod ladders;
+pub use ladders::REACH as LADDER_REACH;
 pub mod doors;
 pub mod breakables;
 
