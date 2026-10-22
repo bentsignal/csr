@@ -276,12 +276,11 @@ pub fn impact_sound(surface: &str) -> &'static str {
     }
 }
 
-// Reuse the same destruction visibility ownership as bullet marks. The
-// collision definitions remain map-scoped even when their runtime solids leave.
+// Use the exact runtime trace owner, so a nearby or destroyed breakable
+// cannot claim a mark on an unrelated surviving surface.
 fn own_blood_mark(commands: &mut Commands, entity: Entity,
-    collision: &collision::CollisionWorld, hit: &collision::Trace) {
-    if let Some(index) = collision.breakables.iter()
-        .position(|def| def.contains_surface(hit.end, hit.normal)) {
+    owner: Option<collision::HitOwner>) {
+    if let Some(index) = owner.and_then(collision::HitOwner::breakable) {
         commands.entity(entity).insert(crate::breakables::BreakableMesh(vec![index]));
     }
 }
@@ -324,7 +323,7 @@ fn blood_hit(
             0.22 + i as f32 * 0.025,
         );
     }
-    let tr = collision.trace_ray(
+    let (tr, owner) = collision.trace_owned_ray(
         pos + direction * 3.0,
         pos + direction * 180.0,
         collision::contents::MASK_SOLID,
@@ -342,10 +341,10 @@ fn blood_hit(
             now,
             25.0,
         ) {
-            own_blood_mark(commands, entity, collision, &tr);
+            own_blood_mark(commands, entity, owner);
         }
     }
-    let floor = collision.trace_ray(
+    let (floor, owner) = collision.trace_owned_ray(
         pos,
         pos - glam::Vec3::Z * 100.0,
         collision::contents::MASK_SOLID,
@@ -363,7 +362,7 @@ fn blood_hit(
             now,
             25.0,
         ) {
-            own_blood_mark(commands, entity, collision, &floor);
+            own_blood_mark(commands, entity, owner);
         }
     }
 }
