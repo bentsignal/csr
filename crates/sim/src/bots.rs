@@ -72,6 +72,8 @@ struct Brain {
     progress_pos: Vec3,
     progress_time: f32,
     last_navigation_tick: Option<u64>,
+    /// Exact breakable and crossing last attacked for navigation, not a timer.
+    route_obstruction: Option<(usize, u32, u32)>,
     failed_transitions: Vec<FailedTransition>,
     /// An unreachable query under the current temporary edge exclusions.
     failed_route: Option<(u32, u32)>,
@@ -507,7 +509,22 @@ impl Bots {
                     }
                 }
             }
+            // Clearing the actual blocker is real route progress. Give the
+            // newly opened crossing its normal traversal window exactly once;
+            // merely damaging an uncleared object never renews recovery.
+            if let Some((index, from, to)) = brain.route_obstruction.take() {
+                if brain.path.get(brain.path_index) == Some(&from)
+                    && brain.path.get(brain.path_index + 1) == Some(&to) {
+                    if world.breakables.get(index).is_some_and(|state| state.broken()) {
+                        brain.progress_time = time;
+                        brain.progress_pos = bot.movement.origin;
+                    } else {
+                        brain.route_obstruction = Some((index, from, to));
+                    }
+                }
+            }
             if frozen {
+                brain.route_obstruction = None;
                 // New round: drop the old path and objectives.
                 brain.path.clear();
                 brain.failed_transitions.clear();
@@ -878,6 +895,7 @@ impl Bots {
             input.view_angles = Vec3::new(brain.pitch.clamp(-89.0, 89.0), brain.yaw, 0.0);
             if let Some((index, _)) = route_breakable {
                 if clear_route_attack(world, bot, &input, index) {
+                    brain.route_obstruction = Some((index, brain.path[brain.path_index], brain.path[brain.path_index + 1]));
                     input.buttons |= buttons::ATTACK;
                 }
             }
