@@ -30,13 +30,16 @@ impl Historical {
             archive: 20 << 20,
             entry: 2 << 20,
             expanded: 24 << 20,
-            entries: 68,
+            entries: 71,
             manifest: 64 << 10,
-        }).and_then(|pack| Self::from_pack(pack, WAVES));
+        }).and_then(|pack| {
+            let specs: Vec<_> = WAVES.iter().chain(super::handling::waves()).copied().collect();
+            Self::from_pack(pack, &specs)
+        });
         match result {
             Ok(pack) => Some(pack),
             Err(_) => {
-                bevy::log::warn!("Classic2015 private sound pack invalid; using retained shots");
+                bevy::log::warn!("Classic2015 private sound pack invalid; using retained shots and installed handling");
                 None
             }
         }
@@ -73,7 +76,7 @@ impl Historical {
         Ok(Self { fs, fingerprints })
     }
 
-    fn wave(&self, path: &str) -> Result<FrozenWave, &'static str> {
+    pub(super) fn wave(&self, path: &str) -> Result<FrozenWave, &'static str> {
         let (size, sha256) = self.fingerprints.get(path)
             .ok_or("historical resource missing")?;
         verified_wave(&self.fs, &WaveSpec { path, size: *size, sha256 })

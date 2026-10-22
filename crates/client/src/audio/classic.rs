@@ -1,7 +1,8 @@
-//! Optional private historical shots, with verified retained-file fallback.
+//! Optional private historical weapon waves, with installed-file fallback.
 //! Classic shots keep their declared normal pitch instead of modern resampling.
 //! Historical scripts/assets are never embedded in this module.
 mod historical;
+mod handling;
 
 use super::{Entry, decoded_audio};
 use content::{ContentId, ContentKind};
@@ -33,6 +34,7 @@ pub(super) struct Profile {
     historical_pairs: usize,
 }
 
+#[derive(Clone, Copy)]
 struct WaveSpec<'a> {
     path: &'a str,
     size: usize,
@@ -278,6 +280,9 @@ impl Profile {
                         reason
                     );
                 }
+            }
+            if let Some(historical) = &historical {
+                handling::install(fs, entries, historical);
             }
             bevy::log::info!(
                 "Classic2015 shots: {} historical pairs, {} retained pairs",
