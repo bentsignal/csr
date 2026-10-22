@@ -30,7 +30,7 @@ impl Historical {
             archive: 20 << 20,
             entry: 2 << 20,
             expanded: 24 << 20,
-            entries: 71,
+            entries: 76, // 67 shots + 3 pumps + 5 M4 handling waves + manifest
             manifest: 64 << 10,
         }).and_then(|pack| {
             let specs: Vec<_> = WAVES.iter().chain(super::handling::waves()).copied().collect();
