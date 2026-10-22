@@ -1030,7 +1030,8 @@ fn clear_route_attack(world: &World, bot: &Player, input: &TickInput, index: usi
             || trace.start_solid || trace.all_solid || (!w.is_melee() && world.collision.is_sky(trace.surface))
             || world.players.iter().filter(|p| p.id != bot.id && p.alive).any(|p| {
                 let (mins, maxs) = p.bounds();
-                crate::ray_box(eye, direction, mins, maxs).is_some_and(|d| d <= trace.fraction * range)
+                (eye.cmpge(mins).all() && eye.cmple(maxs).all())
+                    || crate::ray_box(eye, direction, mins, maxs).is_some_and(|d| d <= trace.fraction * range)
             })
             || world.collision.dynamic.as_ref().is_some_and(|d| d.hit_target(eye, trace.end).is_some())
         { return false; }

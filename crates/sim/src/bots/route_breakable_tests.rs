@@ -118,7 +118,7 @@ fn think_primary_trigger_clears_and_traverses_the_actual_route() {
             assert!(attacks > 0);
             assert!(world.breakables[0].broken(), "ordinary damage clears at {rate} Hz, melee={melee}");
             assert!(!route_blocked(&world));
-            assert!(world.player(id).unwrap().movement.origin.x > 80., "ordinary movement crosses the cleared vent");
+            assert!(world.player(id).unwrap().movement.origin.x > 80., "ordinary movement crosses the cleared vent: rate={rate} melee={melee} auto={automatic} movement={:?} path={:?} index={} failed={:?}", world.player(id).unwrap().movement, bots.brains[&id].path, bots.brains[&id].path_index, bots.brains[&id].failed_transitions);
             assert!(bots.brains[&id].failed_transitions.is_empty(), "do not replace successful traversal with a replan");
         }
     }
@@ -296,7 +296,7 @@ fn remembered_combat_and_active_bomb_work_keep_priority_over_the_vent() {
         world.player_mut(id).unwrap().movement.origin.x = -19.;
         let enemy = world.add_player("remembered enemy behind vent", Team::Terrorist);
         world.player_mut(enemy).unwrap().movement.origin = Vec3::new(200., 0., 1.);
-        let mut brain = Brain::fresh(world.player(id).unwrap(), 0);
+        let mut brain = Brain::fresh(world.player(id).unwrap(), world.round.round);
         brain.target = Some(enemy);
         brain.target_pos = world.player(enemy).unwrap().eye();
         brain.last_seen = world.time();
