@@ -97,8 +97,12 @@ impl Catalog {
                 let radius = range(op(&init, "Radius Random")?, "radius_min", "radius_max")?;
                 let life = range(op(&init, "Lifetime Random")?, "lifetime_min", "lifetime_max")?;
                 let alpha = range(op(&init, "Alpha Random")?, "alpha_min", "alpha_max")?;
-                let offset_op = op(&init, "Position Modify Offset Random")?;
-                let offset = vectors(offset_op, "offset min", "offset max")?;
+                // Glass has no offset initializer: keep its emitter origin.
+                let offset = if let Some(offset_op) = op(&init, "Position Modify Offset Random") {
+                    if offset_op.number("offset proportional to radius 0/1", 0.) != 1.
+                        || offset_op.number("offset in local space 0/1", 0.) != 1. { return None; }
+                    vectors(offset_op, "offset min", "offset max")?
+                } else { [Vec3::ZERO; 2] };
                 let position = op(&init, "Position Within Sphere Random")?;
                 let velocity = vectors(position, "speed_in_local_coordinate_system_min", "speed_in_local_coordinate_system_max")?;
                 let scale = range(op(&ops, "Radius Scale")?, "radius_start_scale", "radius_end_scale")?;
@@ -107,8 +111,6 @@ impl Catalog {
                     || !alpha.iter().all(|v| (0. ..=255.).contains(v))
                     || !scale.iter().all(|v| (0. ..=4.).contains(v))
                     || position.number("distance_max", 0.) != 0.
-                    || offset_op.number("offset proportional to radius 0/1", 0.) != 1.
-                    || offset_op.number("offset in local space 0/1", 0.) != 1.
                     || offset.iter().any(|v| v.length() > 1.)
                     || velocity.iter().any(|v| v.length() > 100.)
                     || op(&ops, "Movement Basic")?.vector("gravity", [0.; 3]) != [0.; 3]
@@ -169,6 +171,9 @@ impl Catalog {
         let mut rng = Rng(self.serial);
         let radius = rng.range(profile.radius);
         let life = rng.range(profile.life);
+        if std::env::var_os("CSR_WEAPON_TRACE").is_some() {
+            info!("impact puff: {} at {pos:?}; radius={radius} life={life}", profile.id);
+        }
         let alpha = rng.range(profile.alpha) / 255.;
         let mut color = Color::srgb_u8(profile.color[0][0], profile.color[0][1], profile.color[0][2])
             .mix(&Color::srgb_u8(profile.color[1][0], profile.color[1][1], profile.color[1][2]), rng.unit())
