@@ -719,6 +719,9 @@ pub fn tick(
     }
     let id = local.id;
     let producer_tick = world.0.tick;
+    if let Some(panel) = playtest.as_deref() {
+        crate::playtest::append_bot_inputs(panel, &world.0, id, &mut inputs);
+    }
     world.0.step(&inputs);
     probe.observe_step(&world.0, id, producer_tick);
     poses.capture(&world.0);
