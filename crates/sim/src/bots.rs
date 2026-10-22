@@ -806,7 +806,7 @@ impl Bots {
             // along the actual movement command, then let ordinary player use
             // selection admit the final smoothed aim below. Do not borrow aim
             // from combat, bomb work, utility or an unfinished weapon action.
-            let route_door = if !brain.visible && brain.throw.is_none()
+            let route_action = !brain.visible && brain.throw.is_none()
                 && bot.plant_start.is_none()
                 && !world.bomb.is_some_and(|b| b.defuser.is_some_and(|(id, _)| id == bot.id))
                 && input.buttons & (buttons::USE | buttons::ATTACK | buttons::ATTACK2 | buttons::RELOAD) == 0
@@ -814,14 +814,27 @@ impl Bots {
                 && bot.active_weapon().is_none_or(|w| {
                     w.reload_end.is_none() && w.burst.is_none() && w.suppressor_transition.is_none()
                         && w.grenade_throw.is_none() && time >= w.next_attack && time >= w.next_secondary_attack
-                })
-            {
+                });
+            let route_door = if route_action {
                 closed_route_door(world, bot, wish)
+            } else { None };
+            let route_breakable = if route_action && route_door.is_none() && self.shooting
+                && brain.target.is_none() && !finishing && world.flash_amount(bot.id) < 0.2
+                && brain.last_navigation_tick == Some(world.tick)
+                && brain.path_index + 1 < brain.path.len()
+            {
+                blocking_route_breakable(world, bot, wish)
             } else { None };
             if route_door.is_some() {
                 let (pitch, yaw) = look_angles(eye, eye + wish);
                 brain.pitch = approach(brain.pitch, pitch, turn_rate);
                 brain.yaw = approach(brain.yaw, yaw, turn_rate);
+            }
+            if let Some((_, point)) = route_breakable {
+                let (pitch, yaw) = look_angles(eye, point);
+                let punch = bot.active_weapon().filter(|w| !w.is_melee()).map_or([0.; 2], |w| w.aim_punch());
+                brain.pitch = approach(brain.pitch, pitch - punch[0] * crate::weapon::RECOIL_SCALE, turn_rate);
+                brain.yaw = approach(brain.yaw, yaw - punch[1] * crate::weapon::RECOIL_SCALE, turn_rate);
             }
             brain.pitch = smooth_angle(old_angles.x, brain.pitch, &mut brain.turn_velocity.x, dt, 300.0);
             brain.yaw = smooth_angle(old_angles.y, brain.yaw, &mut brain.turn_velocity.y, dt, 420.0);
@@ -863,6 +876,11 @@ impl Bots {
             if world.flash_amount(bot.id)>0.4 { input.buttons &= !buttons::ATTACK; input.buttons|=buttons::WALK; }
             prepare_jump(bot, brain, &mut input);
             input.view_angles = Vec3::new(brain.pitch.clamp(-89.0, 89.0), brain.yaw, 0.0);
+            if let Some((index, _)) = route_breakable {
+                if clear_route_attack(world, bot, &input, index) {
+                    input.buttons |= buttons::ATTACK;
+                }
+            }
             if !self.shooting { input.buttons &= !(buttons::ATTACK | buttons::ATTACK2); }
             if let Some(index) = route_door {
                 let use_input = TickInput { buttons: input.buttons | buttons::USE, ..input };
@@ -936,6 +954,114 @@ fn closed_route_door(world: &World, bot: &Player, wish: Vec3) -> Option<usize> {
         .filter(|(def, _)| def.group == group)
         .all(|(def, state)| !def.locked && state.angle == 0.0 && state.target == 0.0)
         .then_some(index)
+}
+
+/// A deliberately local obstruction response, not a search for nearby glass.
+/// Only an eye-height shot owner overlapping the next commanded player hull
+/// qualifies. Static geometry and other runtime blockers must leave that move
+/// clear. Recovery's existing jump/replan deadlines keep owning failed routes;
+/// attacking never renews progress or edits health/collision here.
+fn blocking_route_breakable(world: &World, bot: &Player, wish: Vec3) -> Option<(usize, Vec3)> {
+    let w = bot.active_weapon()?;
+    // A follow-up burst/pellet could continue beyond a newly cleared vent.
+    // Leave those weapons to ordinary recovery rather than queue blind fire.
+    if w.burst_mode || (!w.is_melee() && w.def.bullets.max(1) != 1) { return None; }
+    let range = if w.is_melee() { crate::MELEE_RANGE } else if w.uses_ammo() && w.clip > 0
+        && !matches!(w.def.class, weapons::WeaponClass::Grenade | weapons::WeaponClass::Equipment)
+    { w.def.range.max(1.0) } else { return None; };
+    let direction = wish.try_normalize()?;
+    let (trace, owner) = world.collision.trace_owned_ray(bot.eye(), bot.eye() + direction * range,
+        collision::contents::MASK_SHOT);
+    if !trace.hit() || trace.start_solid || trace.all_solid { return None; }
+    let collision::HitOwner::Breakable(index) = owner? else { return None; };
+    let def = &world.collision.breakables[index];
+    if world.breakables[index].broken() || def.trigger_only || def.material == 7
+        || world.breakables[index].health <= 0.0 { return None; }
+    let (mins, maxs) = bot.movement.hull();
+    let next = bot.movement.origin + wish * world.dt();
+    let blocks = |solids: &[collision::Convex], pos| solids.iter()
+        .filter(|solid| solid.contents & collision::contents::MASK_PLAYERSOLID != 0)
+        .any(|solid| collision::doors::obstructed(std::slice::from_ref(solid), pos, mins, maxs));
+    if !blocks(&def.solids, next) || blocks(&def.solids, bot.movement.origin)
+        || world.collision.static_world().trace_box(bot.movement.origin, next, mins, maxs,
+            collision::contents::MASK_PLAYERSOLID).hit()
+        || world.collision.doors.iter().zip(&world.doors).any(|(def, state)| blocks(&def.solids(state.angle), next))
+        || world.collision.breakables.iter().zip(&world.breakables).enumerate()
+            .any(|(other, (def, state))| other != index && !state.broken() && blocks(&def.solids, next))
+        || world.collision.breakable_dependencies.iter().any(|dep|
+            !dep.killed_by.iter().any(|&index| world.breakables[index].broken()) && blocks(&dep.solids, next))
+    { return None; }
+    Some((index, trace.end))
+}
+
+/// Admission only: reproduce the active attack's post-movement, post-think
+/// rays (including recoil/seeded spread), then send a normal primary trigger.
+/// World::fire/melee_attack still resolve every hit and apply all damage.
+fn clear_route_attack(world: &World, bot: &Player, input: &TickInput, index: usize) -> bool {
+    let Some(active) = bot.active_weapon() else { return false; };
+    let time = world.time();
+    if active.reload_end.is_some() || active.burst.is_some() || active.burst_mode
+        || active.suppressor_transition.is_some() || active.grenade_throw.is_some()
+        || time < active.next_attack || time < active.next_secondary_attack
+        || (!active.is_melee() && (!active.uses_ammo() || active.clip <= 0 || active.def.bullets.max(1) != 1))
+        || (!active.is_melee() && !active.def.full_auto && bot.last_input.buttons & buttons::ATTACK != 0)
+        // Do not predict a slot change/cycle, a purchase, or a swimming move.
+        || (input.weapon_slot != 0 && (input.weapon_slot != crate::weapon::slot(&active.def)
+            || input.weapon_slot != bot.last_input.weapon_slot))
+        || input.buy != Purchase::None || input.drop || input.utility != 0
+        || world.collision.dynamic.as_ref().is_some_and(|d|
+            d.point_contents(bot.movement.origin + Vec3::Z * 32., collision::contents::WATER) != 0)
+    { return false; }
+    let mut movement = bot.movement;
+    movement::player_move(&mut movement, &movement::MoveInput {
+        view_angles: input.view_angles, forward_move: input.forward_move, side_move: input.side_move,
+        buttons: input.buttons, weapon_max_speed: active.max_speed(),
+    }, &world.config, world.collision.as_ref(), world.dt());
+    let eye = movement.eye_position();
+    let mut w = active.clone();
+    w.advance_recoil_motion(world.tick);
+    crate::weapon::think(&mut w, time, world.dt(), movement.ducked, true);
+    let def = &world.collision.breakables[index];
+    let range = if w.is_melee() { crate::MELEE_RANGE } else { w.def.range.max(1.0) };
+    let admitted = |direction: Vec3| {
+        let (trace, owner) = world.collision.trace_owned_ray(eye, eye + direction * range,
+            collision::contents::MASK_SHOT);
+        if owner != Some(collision::HitOwner::Breakable(index)) || !trace.hit()
+            || trace.start_solid || trace.all_solid || (!w.is_melee() && world.collision.is_sky(trace.surface))
+            || world.players.iter().filter(|p| p.id != bot.id && p.alive).any(|p| {
+                let (mins, maxs) = p.bounds();
+                crate::ray_box(eye, direction, mins, maxs).is_some_and(|d| d <= trace.fraction * range)
+            })
+            || world.collision.dynamic.as_ref().is_some_and(|d| d.hit_target(eye, trace.end).is_some())
+        { return false; }
+        // Exactly the primary club/bullet amounts and authored damage gates
+        // used by melee_attack/fire -> damage_breakable. Zero damage must not
+        // consume ammo or keep slashing an invulnerable navigation obstacle.
+        let amount = if w.is_melee() {
+            (if w.last_melee_attack.is_none_or(|t| time - t > 0.9) { 40.0 } else { 25.0 }) * def.club_scale
+        } else {
+            w.def.damage * w.def.range_modifier.powf(trace.fraction * range / 500.0) * def.bullet_scale
+        };
+        amount.is_finite() && amount > 0.0 && amount >= def.minimum_damage
+    };
+    if w.is_melee() {
+        return admitted(movement::angle_vectors(input.view_angles).0);
+    }
+    let punch = w.aim_punch();
+    let (forward, right, up) = movement::angle_vectors(input.view_angles
+        + Vec3::new(punch[0], punch[1], 0.0) * crate::weapon::RECOIL_SCALE);
+    let inaccuracy = crate::weapon::inaccuracy(&w, crate::weapon::AccuracyContext {
+        speed: movement.speed_2d(), on_ground: movement.on_ground, ducked: movement.ducked,
+    }) * 0.001;
+    let spread = w.alt_stat("spread", w.def.accuracy.spread) * 0.001;
+    let mut rng = Rng::from_parts(&[bot.id as u64, bot.shots]);
+    let r1 = rng.next_f32();
+    let a1 = rng.range(0.0, std::f32::consts::TAU);
+    let r2 = rng.next_f32();
+    let a2 = rng.range(0.0, std::f32::consts::TAU);
+    let ox = a1.cos() * r1 * inaccuracy + a2.cos() * r2 * spread;
+    let oy = a1.sin() * r1 * inaccuracy + a2.sin() * r2 * spread;
+    admitted((forward + right * ox + up * oy).normalize())
 }
 
 fn wander(world: &World, bot: &crate::Player, brain: &mut Brain, input: &mut TickInput, rng: &mut Rng, turn_rate: f32) {
@@ -1273,6 +1399,10 @@ fn tactical_spot(mesh: &NavMesh, world: &World, bot: &Player, anchor: Vec3, enem
     }
     None
 }
+
+#[cfg(test)]
+#[path = "bots/route_breakable_tests.rs"]
+mod route_breakable_tests;
 
 #[cfg(test)]
 mod tests {
