@@ -156,7 +156,7 @@ pub fn lighting_at(level: &level::Level, sun: Option<Sun>, chest: glam::Vec3) ->
 }
 
 /// Runtime models use the simulation's current door/breakable overlay. The
-/// wrapper above retains the authored initial collision for static setup.
+/// wrapper above retains map-only collision for static setup.
 pub(crate) fn lighting_at_collision(
     level: &level::Level,
     collision: &collision::CollisionWorld,
