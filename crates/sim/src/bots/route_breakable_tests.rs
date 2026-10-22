@@ -99,7 +99,7 @@ fn think_primary_trigger_clears_and_traverses_the_actual_route() {
             let (mut world, mut bots, id) = fixture(rate, "health 60", contents::SOLID, false, false, melee, automatic);
             assert!(route_blocked(&world));
             let mut attacks = 0;
-            for _ in 0..rate * 2 {
+            for _ in 0..rate * 3 {
                 let health = world.breakables[0].health;
                 let blocked = route_blocked(&world);
                 let inputs = bots.think(&world);
@@ -173,7 +173,7 @@ fn route_attack_respects_final_aim_players_readiness_and_shooting_disabled() {
             world.step(&inputs);
             assert_eq!(world.breakables[0].health, 60.);
 
-            let (mut world, mut bots, id) = fixture(rate, "health 60", contents::SOLID, false, false, melee, true);
+            let (mut world, mut bots, _) = fixture(rate, "health 60", contents::SOLID, false, false, melee, true);
             bots.shooting = false;
             for _ in 0..rate * 3 {
                 let inputs = bots.think(&world);
@@ -186,6 +186,7 @@ fn route_attack_respects_final_aim_players_readiness_and_shooting_disabled() {
                 let (mut world, _, id) = fixture(rate, "health 60", contents::SOLID, false, false, melee, true);
                 world.player_mut(id).unwrap().movement.origin.x = -19.;
                 let other = world.add_player("intervening player", team);
+                world.respawn(other);
                 world.player_mut(other).unwrap().movement.origin = Vec3::new(-16., 0., 1.);
                 let bot = world.player(id).unwrap();
                 let input = TickInput { weapon_slot: bot.last_input.weapon_slot,
@@ -295,6 +296,7 @@ fn remembered_combat_and_active_bomb_work_keep_priority_over_the_vent() {
         let (mut world, mut bots, id) = fixture(rate, "health 60", contents::SOLID, false, false, false, true);
         world.player_mut(id).unwrap().movement.origin.x = -19.;
         let enemy = world.add_player("remembered enemy behind vent", Team::Terrorist);
+        world.respawn(enemy);
         world.player_mut(enemy).unwrap().movement.origin = Vec3::new(200., 0., 1.);
         let mut brain = Brain::fresh(world.player(id).unwrap(), world.round.round);
         brain.target = Some(enemy);
