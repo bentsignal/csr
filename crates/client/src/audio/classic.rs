@@ -499,7 +499,11 @@ mod tests {
         let resources: Vec<_> = inputs.iter().map(|(path, _)| packs::ResourceDef {
             id: ContentId::new(
                 GameOrigin::from_prefix(origin), ContentKind::Sound,
-                if wrong_id { "wrong" } else { path.strip_prefix("sound/").unwrap() },
+                &if wrong_id {
+                    format!("wrong/{}", path.strip_prefix("sound/").unwrap())
+                } else {
+                    path.strip_prefix("sound/").unwrap().to_string()
+                },
             ).to_string(),
             path: path.to_string(),
         }).collect();

@@ -146,8 +146,9 @@ const GROUPS: &[&[Spec<'static>]] = &[
 // and manual-action MDL events (including USP-S/CZ75 shared pistol entries).
 // Same pinned June 2015 script/index as above; all selected original resources
 // are verified against retained archives 048/054. Derived identities only.
-// Keep each recovered firearm set atomic. Unknown later bindings and randomized
-// shell insertions retain installed declarations. No event aliases are inferred.
+// Keep each recovered firearm set atomic. Unknown later bindings retain installed
+// declarations; the two randomized shell insertions are handled separately below.
+// No event aliases are inferred.
 // MAC-10 retains the exact BoltBack/BoltForward binding names: the two scripts
 // explicitly name opposite paths, each guarded here by its own installed hash.
 // All entries use PITCH_NORM/SNDLVL_65dB, no operator stacks or entry limits.
@@ -859,8 +860,74 @@ const RETAINED_ARSENAL: &[RetainedSpec<'static>] = &[
     },
 ];
 
+// Two exact later randomized declarations with original single-wave bindings.
+// Keep this seam separate from the single-wave guard above: no aliases or
+// inferred random policy. Match every ordered installed pool path and full-file
+// fingerprint before freezing the original single wave. Both bindings publish
+// atomically; old/partial packs or any changed pool retain installed metadata.
+// Same June 2015 script provenance above, retained archive 048; literal volume
+// 1.0, CHAN_ITEM, PITCH_NORM, SNDLVL_65dB, no operator stack/limit/fade override.
+#[derive(Clone, Copy)]
+struct ShellInsertSpec<'a> {
+    binding: &'static str,
+    historical: WaveSpec<'a>,
+    installed: &'a [WaveSpec<'a>],
+    volume: f32,
+    channel: u8,
+}
+
+const SHELL_INSERTS: &[ShellInsertSpec<'static>] = &[
+    ShellInsertSpec {
+        binding: "weapon_sawedoff.insertshell", volume: 1.0, channel: 3,
+        historical: WaveSpec {
+            path: "sound/weapons/sawedoff/sawedoff_insertshell.wav", size: 26744,
+            sha256: "36ae3049f5468f116ea326b31370a8f873e5d6a1d93c2a012ea503b18f6d5dbd",
+        },
+        installed: &[
+            WaveSpec {
+                path: "sound/weapons/sawedoff/sawedoff_insertshell_01.wav", size: 40882,
+                sha256: "3c240c3178dee7638cdb246c9dde99dfa91ee47e566b26b4f1ef4d743f083db2",
+            },
+            WaveSpec {
+                path: "sound/weapons/sawedoff/sawedoff_insertshell_02.wav", size: 29580,
+                sha256: "3b3fe3550e28ab1ff8f319fd492fe85cbf2ef7b86bdfe7147ffabf6f29fd1b1e",
+            },
+            WaveSpec {
+                path: "sound/weapons/sawedoff/sawedoff_insertshell_03.wav", size: 30786,
+                sha256: "8d1d081ed80faa02cdccd11cf0f13168f4b1d02cdc01309cc667a2c38883a0c8",
+            },
+            WaveSpec {
+                path: "sound/weapons/nova/nova_insertshell_04.wav", size: 32888,
+                sha256: "0cc6fae34e46dd1e720a30bf534a2764ecd686cc9f640b3f714219310144a89d",
+            },
+        ],
+    },
+    ShellInsertSpec {
+        binding: "weapon_xm1014.insertshell", volume: 1.0, channel: 3,
+        historical: WaveSpec {
+            path: "sound/weapons/xm1014/xm1014_insertshell.wav", size: 26744,
+            sha256: "36ae3049f5468f116ea326b31370a8f873e5d6a1d93c2a012ea503b18f6d5dbd",
+        },
+        installed: &[
+            WaveSpec {
+                path: "sound/weapons/xm1014/xm1014_insertshell_01.wav", size: 60340,
+                sha256: "c622ff3c4846671a59bdfef7e7ba57c7c89b85ab9edfb41c18f5bf62167755ac",
+            },
+            WaveSpec {
+                path: "sound/weapons/xm1014/xm1014_insertshell_02.wav", size: 67642,
+                sha256: "ecda3405eb74960602af5f4dc6dfa1f337e121fbd76939d8baa5b02df24ab145",
+            },
+            WaveSpec {
+                path: "sound/weapons/xm1014/xm1014_insertshell_03.wav", size: 52654,
+                sha256: "97480ffbb09c9ef3c445816a42848e3495afa99158a2a52e797fd85255b52e5e",
+            },
+        ],
+    },
+];
+
 pub(super) fn waves() -> impl Iterator<Item = &'static WaveSpec<'static>> {
     GROUPS.iter().chain(ARSENAL_GROUPS).flat_map(|group| group.iter().map(|spec| &spec.historical))
+        .chain(SHELL_INSERTS.iter().map(|spec| &spec.historical))
 }
 
 #[cfg(test)]
@@ -1225,7 +1292,22 @@ mod tests {
                 }
                 assert_eq!(format!("{actual:?}"), format!("{expected:?}"), "{}: {era:?}", spec.binding);
             }
-            for binding in ["weapon_mp5.draw", "weapon_revolver.draw", "weapon_sawedoff.insertshell", "weapon_xm1014.insertshell"] {
+            for spec in SHELL_INSERTS {
+                let active = era == SoundEra::Classic2015 && pack.as_ref().is_some_and(|pack|
+                    SHELL_INSERTS.iter().all(|spec| pack.wave(spec.historical.path).is_ok()));
+                let mut actual = library.entries[spec.binding].clone();
+                let mut expected = installed.entries[spec.binding].clone();
+                if active {
+                    let wave = pack.as_ref().unwrap().wave(spec.historical.path).unwrap();
+                    assert_eq!(actual.frozen_wave.take().expect(spec.binding).bytes, wave.bytes);
+                    expected.volume = (spec.volume, spec.volume);
+                    expected.pitch = (100., 100.);
+                    expected.channel = spec.channel;
+                    expected.limit = None;
+                }
+                assert_eq!(format!("{actual:?}"), format!("{expected:?}"), "{}: {era:?}", spec.binding);
+            }
+            for binding in ["weapon_mp5.draw", "weapon_revolver.draw"] {
                 assert_eq!(format!("{:?}", library.entries.get(binding)), format!("{:?}", installed.entries.get(binding)));
             }
             println!("{era:?}: {recovered} recovered arsenal bindings; identical-byte metadata active={active}");
@@ -1233,11 +1315,180 @@ mod tests {
     }
 
     #[test]
+    fn shell_insert_pools_require_every_installed_variant_and_both_originals() {
+        let originals = [wav(7000), wav(-8000)];
+        let original_hashes: Vec<_> = originals.iter().map(|b| format!("{:x}", Sha256::digest(b))).collect();
+        let current: Vec<_> = (0..7).map(|i| wav(1000 + i)).collect();
+        let hashes: Vec<_> = current.iter().map(|b| format!("{:x}", Sha256::digest(b))).collect();
+        let mut offset = 0;
+        let pools: Vec<Vec<_>> = SHELL_INSERTS.iter().map(|spec| {
+            let pool = spec.installed.iter().enumerate().map(|(i, wave)| WaveSpec {
+                path: wave.path, size: current[offset + i].len(), sha256: hashes[offset + i].as_str(),
+            }).collect();
+            offset += spec.installed.len();
+            pool
+        }).collect();
+        let specs: Vec<_> = SHELL_INSERTS.iter().enumerate().map(|(i, spec)| ShellInsertSpec {
+            historical: WaveSpec {
+                path: if i == 0 { "sound/old_near.wav" } else { "sound/old_distant.wav" },
+                size: originals[i].len(), sha256: &original_hashes[i],
+            },
+            installed: &pools[i],
+            ..*spec
+        }).collect();
+        let mut cases = vec![("valid", 0), ("partial pack", 0), ("absent pack", 0),
+            ("wrong origin", 0), ("wrong ContentId", 0)];
+        for i in 0..7 {
+            cases.extend([("changed installed bytes", i), ("missing installed bytes", i), ("changed path", i)]);
+        }
+        for i in 0..2 {
+            cases.extend([("corrupt original", i), ("missing binding", i), ("reordered pool", i),
+                ("extra variant", i), ("missing variant", i), ("duplicate variant", i),
+                ("distant", i), ("wrong category", i), ("already frozen", i)]);
+        }
+        for (case, target) in cases {
+            let mut payloads = originals.clone();
+            if case == "corrupt original" { payloads[target] = wav(6999); }
+            let historical = (case != "absent pack").then(|| Historical::from_pack(
+                private_pack(&payloads[0], (case != "partial pack").then_some(payloads[1].as_slice()),
+                    if case == "wrong origin" { "other" } else { "classic2015" }, case == "wrong ContentId"),
+                &[specs[0].historical, specs[1].historical],
+            ).ok()).flatten();
+            let mut bytes = BTreeMap::new();
+            for (i, wave) in pools.iter().flatten().enumerate() {
+                if case == "missing installed bytes" && i == target { continue; }
+                bytes.insert(wave.path.into(), Arc::from(if case == "changed installed bytes" && i == target {
+                    wav(999)
+                } else { current[i].clone() }));
+            }
+            let mut fs = vfs::Vfs::new();
+            fs.push_back("installed", vfs::Mount::Memory(bytes));
+            // Neighboring pump/insert/unknown entries must survive all cases.
+            let mut entries = entries(&[specs[0].binding, specs[1].binding,
+                "weapon_sawedoff.pump", "weapon_nova.insertshell", "weapon_mp5.draw"]);
+            for spec in &specs {
+                entries.get_mut(spec.binding).unwrap().waves = spec.installed.iter().map(|wave| wave.path.into()).collect();
+                // The existing single-wave guard must continue to reject pools.
+                assert!(verified_installed(&fs, &entries, spec.binding, &spec.installed[0]).is_err());
+            }
+            if case == "changed path" {
+                let (pool, variant) = if target < 4 { (0, target) } else { (1, target - 4) };
+                entries.get_mut(specs[pool].binding).unwrap().waves[variant] = "sound/custom.wav".into();
+            } else if case == "missing binding" {
+                entries.remove(specs[target].binding);
+            } else if target < 2 {
+                let entry = entries.get_mut(specs[target].binding).unwrap();
+                match case {
+                    "reordered pool" => entry.waves.swap(0, 1),
+                    "extra variant" => entry.waves.push("sound/custom.wav".into()),
+                    "missing variant" => { entry.waves.pop(); }
+                    "duplicate variant" => entry.waves[1] = entry.waves[0].clone(),
+                    "distant" => entry.distant = Some("custom.distant".into()),
+                    "wrong category" => entry.category = super::super::super::Category::Weapon,
+                    "already frozen" => entry.frozen_wave = Some(FrozenWave { bytes: Arc::from(wav(222)), channels: 1 }),
+                    _ => {}
+                }
+            }
+            let before = entries.clone();
+            if let Some(pack) = &historical { install_shell_inserts(&fs, &mut entries, pack, &specs); }
+            for (binding, mut actual) in entries {
+                let mut expected = before[&binding].clone();
+                if case == "valid" {
+                    if let Some(i) = specs.iter().position(|spec| spec.binding == binding) {
+                        let wave = actual.frozen_wave.take().expect("original single wave");
+                        assert_eq!(wave.bytes.as_ref(), originals[i]);
+                        assert_eq!(wave.channels, 1);
+                        expected.volume = (1.0, 1.0);
+                        expected.pitch = (100.0, 100.0);
+                        expected.channel = 3;
+                        expected.limit = None;
+                    }
+                }
+                assert_eq!(format!("{actual:?}"), format!("{expected:?}"), "{case} {target}: {binding}");
+            }
+        }
+    }
+
+    #[test]
+    fn shell_insert_specs_are_exact_and_separate_from_single_wave_groups() {
+        assert_eq!(SHELL_INSERTS.len(), 2);
+        for (spec, (binding, count, path)) in SHELL_INSERTS.iter().zip([
+            ("weapon_sawedoff.insertshell", 4, "sound/weapons/sawedoff/sawedoff_insertshell.wav"),
+            ("weapon_xm1014.insertshell", 3, "sound/weapons/xm1014/xm1014_insertshell.wav"),
+        ]) {
+            assert_eq!(spec.binding, binding);
+            assert_eq!(spec.installed.len(), count);
+            assert_eq!(spec.historical.path, path);
+            assert_eq!((spec.volume, spec.channel), (1.0, 3));
+            assert!(waves().any(|wave| wave.path == path));
+            for wave in std::iter::once(&spec.historical).chain(spec.installed) {
+                assert!(wave.path.starts_with("sound/weapons/"));
+                assert_eq!(wave.sha256.len(), 64);
+                assert!(wave.size < (2 << 20));
+            }
+        }
+        assert_eq!(SHELL_INSERTS[0].installed[3].path, "sound/weapons/nova/nova_insertshell_04.wav");
+    }
+
+    #[test]
+    #[ignore = "requires CSR_CLASSIC_SHELL_PACK_175 and CSR_CLASSIC_SHELL_PACK_177 private fixtures and installed Legacy"]
+    fn installed_shell_inserts_old175_new177_and_absent_pack_fixtures() {
+        use super::super::SoundEra;
+        use super::super::super::SoundLibrary;
+        let (_, fs) = level::mount_game(None).unwrap();
+        let installed = SoundLibrary::load_with_era(&fs, SoundEra::InstalledLegacy);
+        let absent = std::env::temp_dir().join(format!("csr-shell-inserts-absent-{}", std::process::id()))
+            .join(super::super::historical::FILENAME);
+        assert!(!absent.exists());
+        let fixtures = [
+            ("old175", std::path::PathBuf::from(std::env::var_os("CSR_CLASSIC_SHELL_PACK_175").expect("old175 fixture path")), 175),
+            ("new177", std::path::PathBuf::from(std::env::var_os("CSR_CLASSIC_SHELL_PACK_177").expect("new177 fixture path")), 177),
+            ("absent", absent, 0),
+        ];
+        for (case, path, count) in fixtures {
+            if count != 0 {
+                assert_eq!(packs::Pack::open(&path).unwrap().manifest().resources.len(), count);
+            }
+            let pack = Historical::open(&path);
+            assert_eq!(pack.is_some(), count != 0, "{case}");
+            if let Some(pack) = &pack {
+                for spec in SHELL_INSERTS { assert_eq!(pack.wave(spec.historical.path).is_ok(), count == 177, "{case}"); }
+            }
+            for era in [SoundEra::Classic2015, SoundEra::InstalledLegacy] {
+                // Use explicit fixture snapshots without changing active packs,
+                // process environment or owner userdata. Mirrors Profile::load's gate.
+                let mut entries = installed.entries.clone();
+                if era == SoundEra::Classic2015 {
+                    if let Some(pack) = &pack { install(&fs, &mut entries, pack); }
+                }
+                for spec in SHELL_INSERTS {
+                    let mut actual = entries[spec.binding].clone();
+                    let mut expected = installed.entries[spec.binding].clone();
+                    assert_eq!(actual.waves.len(), spec.installed.len());
+                    if era == SoundEra::Classic2015 && count == 177 {
+                        let wave = pack.as_ref().unwrap().wave(spec.historical.path).unwrap();
+                        assert_eq!(actual.frozen_wave.take().expect("classic shell insert").bytes, wave.bytes);
+                        expected.volume = (1.0, 1.0);
+                        expected.pitch = (100.0, 100.0);
+                        expected.channel = 3;
+                        expected.limit = None;
+                    }
+                    assert_eq!(format!("{actual:?}"), format!("{expected:?}"), "{case}: {era:?}: {}", spec.binding);
+                }
+            }
+        }
+    }
+
+    #[test]
     fn installed_mode_leaves_all_handling_metadata_untouched() {
         let bindings: Vec<_> = GROUPS.iter().chain(ARSENAL_GROUPS).flat_map(|group| group.iter().map(|spec| spec.binding))
-            .chain(RETAINED_RIFLES.iter().chain(RETAINED_ARSENAL).map(|spec| spec.binding)).collect();
+            .chain(RETAINED_RIFLES.iter().chain(RETAINED_ARSENAL).map(|spec| spec.binding))
+            .chain(SHELL_INSERTS.iter().map(|spec| spec.binding)).collect();
         let mut entries = entries(&bindings);
         entries.get_mut("weapon_mag7.pumpback").unwrap().pitch = (150.0, 150.0);
+        for spec in SHELL_INSERTS {
+            entries.get_mut(spec.binding).unwrap().waves = spec.installed.iter().map(|wave| wave.path.into()).collect();
+        }
         let before = entries.clone();
         super::super::Profile::load(&vfs::Vfs::new(), &mut entries, super::super::SoundEra::InstalledLegacy);
         for (binding, entry) in entries {
@@ -1291,6 +1542,7 @@ pub(super) fn install(
 ) {
     install_groups(fs, entries, historical, GROUPS);
     install_groups(fs, entries, historical, ARSENAL_GROUPS);
+    install_shell_inserts(fs, entries, historical, SHELL_INSERTS);
     // The caller admits handling only in Classic2015 with a valid private
     // pack. Older packs also permit independently verified identical-byte
     // metadata restoration; missing recovered resources retain their entire group.
@@ -1330,6 +1582,39 @@ fn install_groups(
                     // failed groups never alter installed entries.
                     restore(entry, spec.volume, spec.channel, wave);
                 }
+            }
+        }
+    }
+}
+
+// Only the explicitly enumerated shell insert pools use this path. The generic
+// single-wave declaration guard remains strict for every other handling cue.
+fn install_shell_inserts(
+    fs: &vfs::Vfs,
+    entries: &mut HashMap<String, Entry>,
+    historical: &Historical,
+    specs: &[ShellInsertSpec<'_>],
+) {
+    let verified: Result<Vec<_>, &'static str> = specs.iter().map(|spec| {
+        let entry = entries.get(spec.binding).ok_or("installed shell insert entry missing")?;
+        if entry.waves.len() != spec.installed.len()
+            || entry.waves.iter().zip(spec.installed).any(|(path, wave)| path != wave.path)
+            || entry.distant.is_some() || entry.frozen_wave.is_some()
+            || entry.category != super::super::Category::Foley
+        {
+            return Err("installed shell insert pool differs");
+        }
+        for wave in spec.installed {
+            verified_wave(fs, wave)?;
+        }
+        historical.wave(spec.historical.path)
+    }).collect();
+    if let Ok(waves) = verified {
+        for (spec, wave) in specs.iter().zip(waves) {
+            if let Some(entry) = entries.get_mut(spec.binding) {
+                // Frozen audio supplies the original single wave to existing
+                // foley dispatch; retain the installed paths for diagnostics.
+                restore(entry, spec.volume, spec.channel, wave);
             }
         }
     }
