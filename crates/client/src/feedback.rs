@@ -940,7 +940,8 @@ mod mob_blood_tests {
             attacker, victim, health: 24, group: sim::weapon::HitGroup::Chest, pos,
             protection: sim::weapon::HitProtection::Flesh,
         });
-        let mut app = blood_app(level, world, effects, LocalPlayer::new(attacker, pos, 0.));
+        let mut app = blood_app(level, world, effects,
+            LocalPlayer::new(attacker, pos + glam::Vec3::Z * 16., 0.));
         app.update();
         let mut query = app.world_mut().query::<(Entity, &Transform, &ImpactFx, Option<&DoorImpactMark>)>();
         let fx: Vec<_> = query.iter(app.world()).collect();
