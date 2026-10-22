@@ -1,4 +1,4 @@
-//! Bounded private pump-wave restoration; authored events and mixing stay intact.
+//! Bounded private pump waves and declaration metadata; authored events stay intact.
 use super::{Entry, FrozenWave, WaveSpec, historical::Historical, verified_wave};
 use std::collections::HashMap;
 
@@ -7,14 +7,23 @@ struct Spec<'a> {
     binding: &'static str,
     historical: WaveSpec<'a>,
     installed: WaveSpec<'a>,
+    volume: f32,
 }
 
 // Same exact event-to-path bindings in the shipped June 2015 and installed
 // Legacy declarations. PCM payloads differ, not merely RIFF headers. Only
 // these recovered pump waves are opted in; no scripts or assets are embedded.
 // Keep MAG-7 back/forward atomic so a partial pack cannot mix their eras.
+// Literal June 2015 declarations: all four use PITCH_NORM, CHAN_ITEM and
+// SNDLVL_65dB, with no operator stacks, entry limit or explicit fade override.
+// Depot 731 manifest 4730361390205743786, game_sounds_weapons.txt SHA1
+// 8ecba5f796256eabca6068086f70bd0157e759fb (derived values only).
+// Preserve the renderer's existing foley curve/mixer rather than guessing a
+// historical mixing law. Only the verified group's volume/pitch/channel/limit
+// change; installed/old-pack fallback keeps all installed metadata.
 const NOVA: Spec<'static> = Spec {
     binding: "weapon_nova.pumpduringshot",
+    volume: 0.3,
     historical: WaveSpec {
         path: "sound/weapons/nova/nova_pump.wav",
         size: 39236,
@@ -33,10 +42,11 @@ const GROUPS: &[&[Spec<'static>]] = &[
     // PumpDuringShot. Both declarations name this same verified wave in 2015
     // and Legacy. Validate independently: an unknown alias must not disable
     // the other recognized binding (unlike MAG-7's atomic two-wave action).
-    &[Spec { binding: "weapon_nova.pump", ..NOVA }],
+    &[Spec { binding: "weapon_nova.pump", volume: 1.0, ..NOVA }],
     &[
         Spec {
             binding: "weapon_mag7.pumpback",
+            volume: 1.0,
             historical: WaveSpec {
                 path: "sound/weapons/mag7/mag7_pump_back.wav",
                 size: 22858,
@@ -50,6 +60,7 @@ const GROUPS: &[&[Spec<'static>]] = &[
         },
         Spec {
             binding: "weapon_mag7.pumpforward",
+            volume: 1.0,
             historical: WaveSpec {
                 path: "sound/weapons/mag7/mag7_pump_forward.wav",
                 size: 16422,
@@ -80,7 +91,10 @@ mod tests {
             let doc = kv::parse(&format!(r#""{binding}" {{
                 "wave" "weapons/test/current.wav" "channel" "CHAN_ITEM"
                 "volume" "0.5, 1.0" "pitch" "97, 105" "soundlevel" "SNDLVL_65dB"
-                "operator_stacks" {{ "update_stack" {{ "import_stack" "CS_update_foley" }} }}
+                "operator_stacks" {{
+                    "start_stack" {{ "import_stack" "CS_limit_start" }}
+                    "update_stack" {{ "import_stack" "CS_update_foley" }}
+                }}
             }}"#)).unwrap();
             let entry = super::super::super::parse_entry(doc.block(binding).unwrap()).unwrap();
             (binding.to_string(), entry)
@@ -88,7 +102,7 @@ mod tests {
     }
 
     #[test]
-    fn nova_aliases_validate_independently_and_only_replace_bytes() {
+    fn nova_aliases_restore_metadata_only_with_their_verified_wave() {
         let old = wav(7000);
         let current = wav(1000);
         let old_hash = format!("{:x}", Sha256::digest(&old));
@@ -97,8 +111,12 @@ mod tests {
             binding: "weapon_nova.pumpduringshot",
             historical: WaveSpec { path: "sound/old_distant.wav", size: old.len(), sha256: &old_hash },
             installed: WaveSpec { path: "sound/weapons/test/current.wav", size: current.len(), sha256: &current_hash },
+            ..NOVA
         };
-        let alias = Spec { binding: "weapon_nova.pump", ..primary };
+        let alias = Spec {
+            historical: primary.historical, installed: primary.installed,
+            ..GROUPS[1][0]
+        };
         // Missing/changed aliases must not disable the primary; likewise a
         // missing primary cannot disable a separately recognized draw/reload.
         for case in ["valid", "missing alias", "changed alias", "missing primary", "changed bytes", "corrupt old", "old pack"] {
@@ -132,7 +150,15 @@ mod tests {
                     assert_eq!(wave.bytes.as_ref(), old);
                     assert_eq!(wave.channels, 1);
                 }
-                assert_eq!(format!("{entry:?}"), format!("{:?}", before[&binding]), "metadata: {case}");
+                let mut expected_entry = before[&binding].clone();
+                if expected {
+                    let volume = if binding == primary.binding { 0.3 } else { 1.0 };
+                    expected_entry.volume = (volume, volume);
+                    expected_entry.pitch = (100.0, 100.0);
+                    expected_entry.channel = 3; // CHAN_ITEM
+                    expected_entry.limit = None;
+                }
+                assert_eq!(format!("{entry:?}"), format!("{expected_entry:?}"), "metadata: {case}: {binding}");
             }
         }
     }
@@ -149,10 +175,12 @@ mod tests {
             binding: "weapon_mag7.pumpback",
             historical: WaveSpec { path: "sound/old_near.wav", size: old_back.len(), sha256: &back_hash },
             installed: WaveSpec { path: "sound/weapons/test/current.wav", size: current.len(), sha256: &current_hash },
+            ..GROUPS[2][0]
         }, Spec {
             binding: "weapon_mag7.pumpforward",
             historical: WaveSpec { path: "sound/old_distant.wav", size: old_forward.len(), sha256: &forward_hash },
             installed: WaveSpec { path: "sound/weapons/test/current.wav", size: current.len(), sha256: &current_hash },
+            ..GROUPS[2][1]
         }];
         for case in ["valid", "missing partner", "corrupt partner", "changed binding"] {
             let far = if case == "corrupt partner" { wav(-7999) } else { old_forward.clone() };
@@ -165,13 +193,37 @@ mod tests {
                 (specs[0].installed.path.into(), Arc::from(current.clone())),
             ])));
             let mut entries = entries(&[specs[0].binding, specs[1].binding]);
+            entries.get_mut(specs[0].binding).unwrap().pitch = (150.0, 150.0);
+            for spec in &specs { entries.get_mut(spec.binding).unwrap().channel = 6; }
             if case == "changed binding" { entries.get_mut(specs[1].binding).unwrap().waves.clear(); }
+            let before = entries.clone();
             install_groups(&fs, &mut entries, &historical, &[&specs]);
             for (spec, expected) in specs.iter().zip([&old_back, &old_forward]) {
-                let wave = entries[spec.binding].frozen_wave.as_ref();
+                let mut entry = entries[spec.binding].clone();
+                let wave = entry.frozen_wave.take();
                 assert_eq!(wave.is_some(), case == "valid", "{case}");
                 if let Some(wave) = wave { assert_eq!(wave.bytes.as_ref(), expected.as_slice()); }
+                let mut expected_entry = before[spec.binding].clone();
+                if case == "valid" {
+                    expected_entry.volume = (1.0, 1.0);
+                    expected_entry.pitch = (100.0, 100.0);
+                    expected_entry.channel = 3;
+                    expected_entry.limit = None;
+                }
+                assert_eq!(format!("{entry:?}"), format!("{expected_entry:?}"), "metadata: {case}: {}", spec.binding);
             }
+        }
+    }
+
+    #[test]
+    fn installed_mode_leaves_all_pump_metadata_untouched() {
+        let bindings: Vec<_> = GROUPS.iter().flat_map(|group| group.iter().map(|spec| spec.binding)).collect();
+        let mut entries = entries(&bindings);
+        entries.get_mut("weapon_mag7.pumpback").unwrap().pitch = (150.0, 150.0);
+        let before = entries.clone();
+        super::super::Profile::load(&vfs::Vfs::new(), &mut entries, super::super::SoundEra::InstalledLegacy);
+        for (binding, entry) in entries {
+            assert_eq!(format!("{entry:?}"), format!("{:?}", before[&binding]), "{binding}");
         }
     }
 }
@@ -181,7 +233,7 @@ fn verified_group(
     entries: &HashMap<String, Entry>,
     historical: &Historical,
     specs: &[Spec<'_>],
-) -> Result<Vec<(&'static str, FrozenWave)>, &'static str> {
+) -> Result<Vec<FrozenWave>, &'static str> {
     specs.iter().map(|spec| {
         let entry = entries.get(spec.binding).ok_or("installed handling entry missing")?;
         if entry.waves.len() != 1 || entry.waves[0] != spec.installed.path
@@ -193,8 +245,7 @@ fn verified_group(
         // Refuse changed installs/selected-pack overrides instead of applying
         // a historical wave to an unrecognized installed sound declaration.
         verified_wave(fs, &spec.installed)?;
-        let wave = historical.wave(spec.historical.path)?;
-        Ok((spec.binding, wave))
+        historical.wave(spec.historical.path)
     }).collect()
 }
 
@@ -217,11 +268,15 @@ fn install_groups(
         // shot-only pack, absent/invalid resource or changed declaration leaves
         // all installed handling in this group untouched.
         if let Ok(waves) = verified_group(fs, entries, historical, group) {
-            for (binding, wave) in waves {
-                if let Some(entry) = entries.get_mut(binding) {
+            for (spec, wave) in group.iter().zip(waves) {
+                if let Some(entry) = entries.get_mut(spec.binding) {
                     // Existing foley dispatch uses these bindings directly.
-                    // Freeze bytes only: preserve pitch, gain, channel, limits,
-                    // fades, distance and the MDL scheduler's authored timing.
+                    // Publish historical metadata only with the verified wave;
+                    // failed groups never alter installed entries.
+                    entry.volume = (spec.volume, spec.volume);
+                    entry.pitch = (100.0, 100.0);
+                    entry.channel = 3; // CHAN_ITEM
+                    entry.limit = None;
                     entry.frozen_wave = Some(wave);
                 }
             }
