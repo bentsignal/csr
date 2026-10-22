@@ -1692,6 +1692,60 @@ fn load_model(fs: &vfs::Vfs, path: &str) -> Option<mdl::Model> {
     mdl::Model::load(&fs.read(path)?, &fs.read(&format!("{base}.vvd"))?, &fs.read(&format!("{base}.dx90.vtx"))?).ok()
 }
 
+/// Borrow a successful decode by exact path for this load's cosmetic mappings.
+/// Failed reads stay retryable; mapped meshes and GPU assets remain separate.
+fn cosmetic_world_model<'a>(
+    models: &'a mut HashMap<String, mdl::Model>,
+    path: &str,
+    decode: impl FnOnce(&str) -> Option<mdl::Model>,
+) -> Option<&'a mdl::Model> {
+    use std::collections::hash_map::Entry;
+    match models.entry(path.to_owned()) {
+        Entry::Occupied(entry) => Some(entry.into_mut()),
+        Entry::Vacant(entry) => Some(entry.insert(decode(path)?)),
+    }
+}
+
+#[cfg(test)]
+mod cosmetic_loading_tests {
+    use super::*;
+
+    #[test]
+    fn cosmetic_mappings_reuse_successes_without_retaining_failures_or_mutations() {
+        let mut models = HashMap::new();
+        let mut attempts = Vec::new();
+        let mut retry = false;
+        let mut decode = |path: &str| {
+            attempts.push(path.to_owned());
+            if path == "retry.mdl" && !retry {
+                retry = true;
+                return None;
+            }
+            Some(mdl::Model { name: path.into(), textures: vec!["original".into()], ..Default::default() })
+        };
+
+        let sticker_input = cosmetic_world_model(&mut models, "world.mdl", &mut decode).unwrap();
+        let raw = sticker_input.raw.clone();
+        let mut mapped_sticker = sticker_input.clone();
+        mapped_sticker.textures[0] = "sticker".into();
+        let counter_input = cosmetic_world_model(&mut models, "world.mdl", &mut decode).unwrap();
+        assert!(Arc::ptr_eq(&raw, &counter_input.raw));
+        assert_eq!(counter_input.textures, ["original"]);
+
+        // Keep exact-path identity even though the VFS normalizes lookups.
+        assert_eq!(cosmetic_world_model(&mut models, "World.mdl", &mut decode).unwrap().name, "World.mdl");
+        assert!(cosmetic_world_model(&mut models, "retry.mdl", &mut decode).is_none());
+        assert!(!models.contains_key("retry.mdl"));
+        assert!(cosmetic_world_model(&mut models, "retry.mdl", &mut decode).is_some());
+        assert!(cosmetic_world_model(&mut models, "retry.mdl", &mut decode).is_some());
+
+        // A later match must decode against its own mounted content.
+        let mut next_load = HashMap::new();
+        assert!(cosmetic_world_model(&mut next_load, "world.mdl", &mut decode).is_some());
+        assert_eq!(attempts, ["world.mdl", "World.mdl", "retry.mdl", "retry.mdl", "world.mdl"]);
+    }
+}
+
 fn inspect_sequence(seq: &mdl::anim::Sequence) -> bool {
     seq.name == "inspect" || seq.name.strip_prefix("lookat")
         .is_some_and(|suffix| !suffix.is_empty() && suffix.bytes().all(|b| b.is_ascii_digit()))
@@ -1822,8 +1876,9 @@ pub fn load(
     // separate default-arm assets built after the cosmetic assets below.
     let arms_t = load_model(fs, T_ARMS);
     let arms_ct = load_model(fs, CT_ARMS);
-    for (name,path,_) in crate::cosmetic_catalog::model_items(fs) {
-        if let Some(model) = load_model(fs, &path) {
+    let glove_models = crate::cosmetic_catalog::model_items(fs);
+    for (name,path,_) in &glove_models {
+        if let Some(model) = load_model(fs, path) {
             for (side, arms) in [("Terrorist", arms_t.as_ref()), ("CounterTerrorist", arms_ct.as_ref())] {
                 if let Some(arms) = arms {
                     out.gloves.insert(format!("{name}:{side}"), build(crate::cosmetic_geometry::sleeves(model.clone(), arms)));
@@ -1836,25 +1891,28 @@ pub fn load(
             if !out.decorations.contains_key(&path){if let Some(model)=load_model(fs,&path){out.decorations.insert(path,build(model));}}
         }
     }
+    // Sticker and StatTrak mappings only borrow world geometry. Retain decoded
+    // inputs until both passes finish, without sharing their built assets.
+    let mut world_models = HashMap::new();
     {
         for (name,info) in &catalog.models{
             if info.stickers.is_empty(){continue;}
             let Some(view)=out.weapons.get(name).map(|v|v.asset.model.clone())else{continue};
-            let Some(world)=load_model(fs,&info.world)else{continue};
+            let Some(world)=cosmetic_world_model(&mut world_models,&info.world,|path|load_model(fs,path))else{continue};
             for path in &info.stickers {
                 if let Some(decal)=out.decorations.get(path).map(|a|a.model.clone()){
-                    if let Some(model)=crate::cosmetic_geometry::world_decal(&decal,&view,&world){out.decorations.insert(format!("world:{path}"),build(model));}
+                    if let Some(model)=crate::cosmetic_geometry::world_decal(&decal,&view,world){out.decorations.insert(format!("world:{path}"),build(model));}
                     else{warn!("Could not map world sticker {}",path);}
                 }
             }
         }
     }
-    for (name,_,path) in crate::cosmetic_catalog::model_items(fs){if let Some(model)=load_model(fs,&path){out.decorations.insert(format!("glove:{name}"),build(model));}}
+    for (name,_,path) in &glove_models{if let Some(model)=load_model(fs,path){out.decorations.insert(format!("glove:{name}"),build(model));}}
     for (name,view) in &out.weapons {
         if !view.asset.model.bones.iter().any(|b|b.name=="v_weapon.stattrack"){continue;}
         let path=if crate::cosmetics::is_rare_knife(name){"models/weapons/stattrack_cut.mdl"}else{"models/weapons/stattrack.mdl"};
         let (Some(counter),Some(info))=(out.decorations.get(path),catalog.models.get(name))else{continue};
-        let Some(world)=load_model(fs,&info.world)else{continue};
+        let Some(world)=cosmetic_world_model(&mut world_models,&info.world,|path|load_model(fs,path))else{continue};
         let mut counter=(*counter.model).clone();
         let pose:Vec<_>=view.asset.model.bones.iter().map(|b|b.pose_to_bone.inverse()).collect();
         let merged=skinning::bone_merge(&counter.bones,&view.asset.model.bones,&pose);
@@ -1864,7 +1922,7 @@ pub fn load(
             vertex.position=transform.transform_point3(vertex.position);
             vertex.normal=transform.transform_vector3(vertex.normal).normalize_or_zero();
         }}
-        if let Some(model)=crate::cosmetic_geometry::world_decal(&counter,&view.asset.model,&world){
+        if let Some(model)=crate::cosmetic_geometry::world_decal(&counter,&view.asset.model,world){
             out.decorations.insert(format!("world:{name}:{path}"),build(model));
         }
     }

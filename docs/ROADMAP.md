@@ -44,6 +44,12 @@
   and repeated team-arm decoding (#277, #282, #288). Preserve F8 difficulty
   and bot counts across map changes; add offline Pause/Resume bots (#284,
   #287).
+- [x] Use live door/breakable collision for muzzle clipping and runtime model
+  lighting, refresh stationary item/body lighting when that geometry changes,
+  and keep unsupported drops at their release position (#289, #290).
+- [x] Keep local/remote locomotion interpolating between successive shots while
+  holding the shot receipt until its frame; restore original Sawed-Off and
+  XM1014 shell-insert recordings from the private classic pack (#291).
 - [ ] Finish unresolved player outcomes in the approved order; an increment or
   first pass does not finish its backlog category.
 
