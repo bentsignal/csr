@@ -1182,6 +1182,57 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires private classic audio pack cases and installed CS:GO Legacy"]
+    fn installed_private_arsenal_groups_activate_or_keep_installed_handling() {
+        use super::super::SoundEra;
+        use super::super::super::SoundLibrary;
+        let path = packs::Installed::current().dir().join(super::super::historical::FILENAME);
+        let pack = path.is_file().then(|| Historical::open(&path).expect("private pack"));
+        let (_, fs) = level::mount_game(None).unwrap();
+        let installed = SoundLibrary::load_with_era(&fs, SoundEra::InstalledLegacy);
+        for era in [SoundEra::Classic2015, SoundEra::InstalledLegacy] {
+            let library = SoundLibrary::load_with_era(&fs, era);
+            let mut recovered = 0;
+            for group in ARSENAL_GROUPS {
+                let active = era == SoundEra::Classic2015 && pack.as_ref().is_some_and(|pack|
+                    group.iter().all(|spec| pack.wave(spec.historical.path).is_ok()));
+                for spec in *group {
+                    let mut actual = library.entries[spec.binding].clone();
+                    let mut expected = installed.entries[spec.binding].clone();
+                    if active {
+                        let wave = pack.as_ref().unwrap().wave(spec.historical.path).unwrap();
+                        assert_eq!(actual.frozen_wave.take().expect(spec.binding).bytes, wave.bytes);
+                        expected.volume = (spec.volume, spec.volume);
+                        expected.pitch = (100., 100.);
+                        expected.channel = spec.channel;
+                        expected.limit = None;
+                        recovered += 1;
+                    }
+                    assert_eq!(format!("{actual:?}"), format!("{expected:?}"), "{}: {era:?}", spec.binding);
+                }
+            }
+            let active = era == SoundEra::Classic2015 && pack.is_some();
+            for spec in RETAINED_ARSENAL {
+                let mut actual = library.entries[spec.binding].clone();
+                let mut expected = installed.entries[spec.binding].clone();
+                if active {
+                    let wave = verified_wave(&fs, &spec.wave).expect(spec.binding);
+                    assert_eq!(actual.frozen_wave.take().expect(spec.binding).bytes, wave.bytes);
+                    expected.volume = (spec.volume, spec.volume);
+                    expected.pitch = (100., 100.);
+                    expected.channel = spec.channel;
+                    expected.limit = None;
+                }
+                assert_eq!(format!("{actual:?}"), format!("{expected:?}"), "{}: {era:?}", spec.binding);
+            }
+            for binding in ["weapon_mp5.draw", "weapon_revolver.draw", "weapon_sawedoff.insertshell", "weapon_xm1014.insertshell"] {
+                assert_eq!(format!("{:?}", library.entries.get(binding)), format!("{:?}", installed.entries.get(binding)));
+            }
+            println!("{era:?}: {recovered} recovered arsenal bindings; identical-byte metadata active={active}");
+        }
+    }
+
+    #[test]
     fn installed_mode_leaves_all_handling_metadata_untouched() {
         let bindings: Vec<_> = GROUPS.iter().chain(ARSENAL_GROUPS).flat_map(|group| group.iter().map(|spec| spec.binding))
             .chain(RETAINED_RIFLES.iter().chain(RETAINED_ARSENAL).map(|spec| spec.binding)).collect();
