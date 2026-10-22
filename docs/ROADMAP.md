@@ -26,8 +26,30 @@
 - [x] Recover continuously followed bot routes after grounded off-route
   displacement (#276), preserving valid gaps/airborne traversal. CI/regressions,
   Release/probe/sim and ordinary match/F8-panel rendering passed.
+- [x] Restore original arsenal handling recordings and declarations, including
+  shotgun pumps and rifle/pistol/SMG/machine-gun reload cues (#279, #282,
+  #286, #287). Historical audio remains a private content pack; unsupported
+  bindings retain installed audio.
+- [x] Apply current wall/floor geometry to remote footsteps; load authored
+  concrete, metal, glass, dirt and sand impact puffs; retire hidden-surface
+  decals and keep blood marks attached to moving doors (#277, #278, #279,
+  #283, #285).
+- [x] Let dropped items fall when their support disappears and update the same
+  replicated item's render pose (#285). Full toss/bounce/angular behavior
+  remains unfinished.
+- [x] Recover bot weapon use after empty magazines or exhausted ammunition;
+  clear route doors/breakables and traverse authored ladders, including
+  collision-qualified raised-cap mounts (#278, #280, #281, #288).
+- [x] Avoid repeated prop material preparation, unused dropped-model imports
+  and repeated team-arm decoding (#277, #282, #288). Preserve F8 difficulty
+  and bot counts across map changes; add offline Pause/Resume bots (#284,
+  #287).
 - [ ] Finish unresolved player outcomes in the approved order; an increment or
   first pass does not finish its backlog category.
+
+The increments after #276 are merged and locally checked but have not replaced
+the owner's desktop playtest. Continue implementation; prepare a new owner
+testing pass only when requested.
 
 > **October 18 follow-up:** implementation approved: classic maps/playability,
 > then movement/viewmodels, hit-audio consistency, then grenades. Grenade feel
