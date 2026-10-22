@@ -547,10 +547,14 @@ mod tests {
             "handling_fixture", game, fs).unwrap();
         Arc::get_mut(&mut level.catalog).unwrap().weapons.retain(|def| def.class_name == name);
         assert_eq!(level.catalog.weapons.len(), 1, "fixture must retain {name}");
-        mdl::Model::load(&level.vfs.read(&def.view_model).unwrap(),
+        let full = mdl::Model::load(&level.vfs.read(&def.view_model).unwrap(),
             &level.vfs.read(&format!("{base}.vvd")).unwrap(),
             &level.vfs.read(&format!("{base}.dx90.vtx")).unwrap())
             .expect("fixture must mount a complete production weapon model");
+        let draw = full.sequences.iter().find(|seq| seq.activity == "ACT_VM_DRAW").unwrap();
+        let ani = (!full.anim_block_file.is_empty()).then(|| level.vfs.read(&full.anim_block_file)).flatten();
+        full.decode_animation(draw.anims[0] as usize, ani.as_deref()).expect("fixture Draw must decode");
+        assert_eq!(level.catalog.weapons[0].view_model, def.view_model);
         let views = crate::viewmodel::load(&level, &Default::default(),
             &mut Assets::<Mesh>::default(), &mut Assets::<crate::material::WorldMaterial>::default(),
             &mut Assets::<Image>::default(), &mut crate::textures::TextureCache::default(),
