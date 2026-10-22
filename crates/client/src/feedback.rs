@@ -223,7 +223,7 @@ pub fn setup(
     if impact_edge_control_enabled(std::env::var("CSR_TEST_IMPACT_EDGE").as_deref().ok(),
         options.0.screenshot.is_some(), remote.is_some()) {
         spawn_impact_edge_control(&mut commands, &mut assets.decals, &mut meshes,
-            &mut materials, &decal_materials, now);
+            &mut materials, &decal_materials, Some((assets.quad.clone(), assets.surface_blood.clone())), now);
     }
     commands.insert_resource(assets);
     commands.init_resource::<Hurt>();
@@ -246,6 +246,7 @@ fn impact_edge_control_enabled(flag: Option<&str>, screenshot: bool, remote: boo
 
 /// Screenshot-only paired edge control. Source camera: 0 0 16384, pitch/yaw 0 0.
 /// Left: clipped material; right: identical mounted art with the old quad material.
+/// Concrete uses the lower row; optional blood checks Blend in the upper row.
 /// Receiver right edges bisect each mark; the larger background is 32 units back.
 /// Only fixture scale changes for readability; production art dimensions stay intact.
 fn spawn_impact_edge_control(
@@ -254,6 +255,7 @@ fn spawn_impact_edge_control(
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
     decal_materials: &Assets<ImpactDecalMaterial>,
+    blood: Option<(Handle<Mesh>, Handle<ImpactDecalMaterial>)>,
     now: f32,
 ) {
     let Some(decal) = catalog.edge_control() else { return; };
@@ -264,7 +266,14 @@ fn spawn_impact_edge_control(
     let extent = positions.iter().fold(0.0_f32, |size, p| size.max(p[0].abs()).max(p[1].abs())) * 2.;
     if !extent.is_finite() || extent <= 0. { return; }
     let scale = 96. / extent;
-    let unclipped = materials.add(material.base.clone());
+    let mut rows = vec![(decal.mesh.clone(), decal.material.clone(), material.base.clone(),
+        decal.id.clone(), scale, 16384.)];
+    if let Some((mesh, handle)) = blood {
+        if let Some(material) = decal_materials.get(&handle) {
+            rows.push((mesh, handle, material.base.clone(),
+                content::ContentId::csgo(content::ContentKind::Material, "decals_blood1"), 96., 16528.));
+        }
+    }
     let background = materials.add(StandardMaterial {
         base_color: Color::linear_rgb(0.35, 0.5, 0.65), unlit: true, ..default()
     });
@@ -275,26 +284,29 @@ fn spawn_impact_edge_control(
     let receiver_mesh = meshes.add(Rectangle::new(48., 112.));
     let normal = -Vec3::X;
     let rotation = Quat::from_rotation_arc(Vec3::Z, normal);
-    // Startup contributes at most six existing FX. Both fixture marks use
+    // Startup contributes at most six existing FX. All fixture marks use
     // the same admission/lifetime bound as ordinary impacts, with no child FX.
     let mut budget = MAX_FEEDBACK_FX.saturating_sub(6);
     let mut retired = HashSet::new();
-    for (side, clipped) in [(-80., true), (80., false)] {
-        if !reserve_impact_slot(commands, &mut budget, &mut retired, std::iter::empty()) { break; }
-        let center = Vec3::new(256., 16384., side);
-        commands.spawn((Mesh3d(background_mesh.clone()), MeshMaterial3d(background.clone()),
-            Transform::from_translation(center + Vec3::X * 32.).with_rotation(rotation)));
-        commands.spawn((Mesh3d(receiver_mesh.clone()), MeshMaterial3d(receiver.clone()),
-            Transform::from_translation(center + rotation * Vec3::new(-24., 0., 0.)).with_rotation(rotation)));
-        let mut mark = commands.spawn((Mesh3d(decal.mesh.clone()),
-            Transform::from_translation(center + normal * MARK_OFFSET)
-                .with_rotation(rotation).with_scale(Vec3::splat(scale)),
-            ImpactArtwork(decal.id.clone()),
-            ImpactFx { born: now, life: 30., velocity: Vec3::ZERO, billboard: false }));
-        if clipped {
-            mark.insert(MeshMaterial3d(decal.material.clone()));
-        } else {
-            mark.insert(MeshMaterial3d(unclipped.clone()));
+    for (mesh, clipped_material, base, id, scale, height) in rows {
+        let unclipped = materials.add(base);
+        for (side, clipped) in [(-80., true), (80., false)] {
+            if !reserve_impact_slot(commands, &mut budget, &mut retired, std::iter::empty()) { break; }
+            let center = Vec3::new(256., height, side);
+            commands.spawn((Mesh3d(background_mesh.clone()), MeshMaterial3d(background.clone()),
+                Transform::from_translation(center + Vec3::X * 32.).with_rotation(rotation)));
+            commands.spawn((Mesh3d(receiver_mesh.clone()), MeshMaterial3d(receiver.clone()),
+                Transform::from_translation(center + rotation * Vec3::new(-24., 0., 0.)).with_rotation(rotation)));
+            let mut mark = commands.spawn((Mesh3d(mesh.clone()),
+                Transform::from_translation(center + normal * MARK_OFFSET)
+                    .with_rotation(rotation).with_scale(Vec3::splat(scale)),
+                ImpactArtwork(id.clone()),
+                ImpactFx { born: now, life: 30., velocity: Vec3::ZERO, billboard: false }));
+            if clipped {
+                mark.insert(MeshMaterial3d(clipped_material.clone()));
+            } else {
+                mark.insert(MeshMaterial3d(unclipped.clone()));
+            }
         }
     }
 }
@@ -761,7 +773,7 @@ mod decal_tests {
         app.update();
         let mut queue = bevy::ecs::world::CommandQueue::default();
         spawn_impact_edge_control(&mut Commands::new(&mut queue, app.world()),
-            &mut catalog, &mut meshes, &mut materials, &clipped, 1.);
+            &mut catalog, &mut meshes, &mut materials, &clipped, None, 1.);
         queue.apply(app.world_mut());
         app.world_mut().flush();
         let mut marks = app.world_mut().query::<(&ImpactFx, &ImpactArtwork, &Transform, &MatchEntity)>();
