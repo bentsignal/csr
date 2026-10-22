@@ -152,10 +152,21 @@ fn despawn_instance(commands: &mut Commands, i: &SkinnedInstance) {
 
 /// Ambient cube + sun visibility at a point, in material form.
 pub fn lighting_at(level: &level::Level, sun: Option<Sun>, chest: glam::Vec3) -> ([Vec4; 6], Vec4, Vec4) {
+    lighting_at_collision(level, &level.collision, sun, chest)
+}
+
+/// Runtime models use the simulation's current door/breakable overlay. The
+/// wrapper above retains map-only collision for static setup.
+pub(crate) fn lighting_at_collision(
+    level: &level::Level,
+    collision: &collision::CollisionWorld,
+    sun: Option<Sun>,
+    chest: glam::Vec3,
+) -> ([Vec4; 6], Vec4, Vec4) {
     let samples=[chest,chest+glam::Vec3::Z*22.0,chest-glam::Vec3::Z*20.0];
     let mut cube=[[0.0;3];6];let mut count=0.0;
     for pos in samples {
-        if !level.collision.trace_ray(chest,pos,contents::MASK_SOLID).hit() {
+        if !collision.trace_ray(chest,pos,contents::MASK_SOLID).hit() {
             if let Some(sample)=level.bsp.ambient_cube(pos) {
                 if sample.iter().flatten().any(|v|*v>0.0001) {
                     for face in 0..6 {for channel in 0..3 {cube[face][channel]+=sample[face][channel];}}
@@ -183,9 +194,9 @@ pub fn lighting_at(level: &level::Level, sun: Option<Sun>, chest: glam::Vec3) ->
     match sun {
         Some(s) => {
             let lit=samples.iter().filter(|pos| {
-                if level.collision.trace_ray(chest,**pos,contents::MASK_SOLID).hit() {return false}
-                let tr=level.collision.trace_ray(**pos,**pos+s.to_sun*16384.0,contents::MASK_SOLID);
-                !tr.hit()||level.collision.is_sky(tr.surface)
+                if collision.trace_ray(chest,**pos,contents::MASK_SOLID).hit() {return false}
+                let tr=collision.trace_ray(**pos,**pos+s.to_sun*16384.0,contents::MASK_SOLID);
+                !tr.hit()||collision.is_sky(tr.surface)
             }).count() as f32/3.0;
             (
                 bevy_cube,
@@ -228,7 +239,7 @@ pub fn sync(
         (death, pose)
     }).collect();
     death_bodies::update(&mut commands, &mut chars.1, deaths,
-        world.0.round.round, sim_now, &mut models, &mut materials, &level.0,
+        world.0.round.round, sim_now, &mut models, &mut materials, &level.0, &world.0.collision,
         &mat_query, &mut transforms, &mut visibility);
 
     // Drop characters whose players left.
@@ -370,7 +381,7 @@ pub fn sync(
         if c.light_timer <= 0.0 {
             c.light_timer = 0.15;
             let chest = render.origin + glam::Vec3::Z * if p.movement.ducked {28.0}else{40.0};
-            c.light_target=Some(lighting_at(&level.0, sun, chest));
+            c.light_target=Some(lighting_at_collision(&level.0, &world.0.collision, sun, chest));
         }
         if let Some((target,dir,color))=c.light_target {
             let (mut cube,mut sun_dir,mut sun_color)=c.light_current.unwrap_or((target,dir,color));
@@ -393,5 +404,87 @@ pub fn sync(
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod lighting_tests {
+    use super::*;
+
+    pub(crate) fn sun() -> Sun {
+        Sun { to_sun: glam::Vec3::Z, color: glam::Vec3::new(0.7, 0.8, 0.9), ambient: glam::Vec3::ZERO }
+    }
+
+    // Synthetic horizontal breakable between the chest and upper sample.
+    // The initial level retains the intact overlay while restore rebuilds the
+    // simulation overlay, just as a remote correction or round reset does.
+    pub(crate) fn install_cover(level: &mut level::Level) {
+        use collision::{CollisionWorld, Convex, Plane};
+        let mins = glam::Vec3::new(-64., -64., 16.);
+        let maxs = glam::Vec3::new(64., 64., 18.);
+        let solid = Convex {
+            mins, maxs, contents: contents::SOLID, surface: 0,
+            planes: vec![
+                Plane { normal: glam::Vec3::X, dist: maxs.x },
+                Plane { normal: -glam::Vec3::X, dist: -mins.x },
+                Plane { normal: glam::Vec3::Y, dist: maxs.y },
+                Plane { normal: -glam::Vec3::Y, dist: -mins.y },
+                Plane { normal: glam::Vec3::Z, dist: maxs.z },
+                Plane { normal: -glam::Vec3::Z, dist: -mins.z },
+            ],
+        };
+        let mut base = CollisionWorld::new();
+        base.breakables = vec![collision::breakables::Breakable {
+            entity: 0, model: 1, origin: glam::Vec3::ZERO, health: 10., material: 0,
+            prop_data: String::new(), bullet_scale: 1., club_scale: 1., minimum_damage: 0.,
+            trigger_only: false, solids: vec![solid.clone()], studio: None,
+        }].into();
+        base.finalize();
+        level.collision = CollisionWorld::with_runtime_solids(Arc::new(base), vec![solid], vec![Some(0)]);
+        level.bsp.leafs = vec![bsp::Leaf {
+            contents: 0, cluster: -1, area: 0, mins: [-64; 3], maxs: [64; 3],
+            first_leaf_face: 0, num_leaf_faces: 0, first_leaf_brush: 0, num_leaf_brushes: 0,
+        }];
+        level.bsp.leaf_ambient_index = vec![(2, 0)];
+        level.bsp.leaf_ambient = vec![
+            bsp::AmbientSample { cube: [[0.2; 3]; 6], pos: [128, 128, 0] },
+            bsp::AmbientSample { cube: [[0.8; 3]; 6], pos: [128, 128, 255] },
+        ];
+    }
+
+    pub(crate) fn restore_cover(world: &mut sim::World, destroyed: bool) {
+        let mut state = world.state();
+        state.breakables[0] = sim::breakables::State { health: if destroyed { 0. } else { 10. }, destroyed };
+        world.restore(state);
+    }
+
+    #[test]
+    fn live_cover_restore_changes_sample_reachability_and_sun_but_keeps_static_wrapper() {
+        let mut bytes = vec![0u8; 1036];
+        bytes[..4].copy_from_slice(b"VBSP");
+        bytes[4..8].copy_from_slice(&20i32.to_le_bytes());
+        let mut fs = vfs::Vfs::new();
+        fs.push_back("lighting fixture", vfs::Mount::Memory(std::collections::BTreeMap::from([
+            ("maps/lighting_fixture.bsp".into(), Arc::<[u8]>::from(bytes)),
+        ])));
+        let mut level = level::Level::load_from_vfs(
+            content::ContentId::csgo(content::ContentKind::Map, "lighting_fixture"),
+            "lighting_fixture", Default::default(), fs,
+        ).unwrap();
+        install_cover(&mut level);
+        let mut world = sim::World::with_catalog(level.collision.clone(), level.catalog.clone());
+        let chest = glam::Vec3::Z * 8.;
+        let initial = lighting_at(&level, Some(sun()), chest);
+        assert_eq!(initial, lighting_at_collision(&level, &world.collision, Some(sun()), chest));
+        assert_eq!(initial.1.w, 0.);
+        restore_cover(&mut world, true);
+        let open = lighting_at_collision(&level, &world.collision, Some(sun()), chest);
+        assert_eq!(open.1.w, 1.);
+        assert_ne!(open.0, initial.0, "the upper ambient sample must become reachable too");
+        assert_eq!(open.1.truncate(), initial.1.truncate());
+        assert_eq!(open.2, initial.2);
+        assert_eq!(lighting_at(&level, Some(sun()), chest), initial);
+        restore_cover(&mut world, false);
+        assert_eq!(lighting_at_collision(&level, &world.collision, Some(sun()), chest), initial);
     }
 }

@@ -2338,7 +2338,7 @@ pub fn update(
     state.light_timer -= dt;
     if state.light_timer <= 0.0 {
         state.light_timer = 0.15;
-        let (cube, sun_dir, sun_color) = crate::characters::lighting_at(&level.0, characters.sun, eye);
+        let (cube, sun_dir, sun_color) = crate::characters::lighting_at_collision(&level.0, &world.0.collision, characters.sun, eye);
         if let Some((_, _, _, mats)) = &state.weapon {
             for h in mats {
                 let changed = materials.get(h).is_some_and(|m|

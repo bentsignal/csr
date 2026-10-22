@@ -2,7 +2,7 @@
 //! drawn with the game's world models and lit like characters.
 
 use crate::LoadedLevel;
-use crate::characters::{CharacterModels, lighting_at};
+use crate::characters::{CharacterModels, lighting_at_collision};
 use crate::coords::{rotation_to_bevy, to_bevy};
 use crate::material::WorldMaterial;
 use crate::player::SimWorld;
@@ -85,6 +85,9 @@ struct Placed {
 pub struct GroundInstances {
     items: HashMap<u32, Placed>,
     bomb: Option<(glam::Vec3, Placed)>,
+    /// Immutable overlay identity is the collision generation. A weak owner
+    /// prevents address reuse without retaining old geometry; map clear resets it.
+    lighting_collision: Option<std::sync::Weak<collision::CollisionWorld>>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -321,9 +324,16 @@ pub fn sync(
         }
     }
 
-    // Light new instances once their materials exist, and refresh moved drops.
-    let GroundInstances { items, bomb } = &mut *placed;
+    // Light new/moved instances and stationary ones after a door/breakable
+    // overlay change. Stable collision does not trigger per-frame relighting.
+    let GroundInstances { items, bomb, lighting_collision } = &mut *placed;
+    let collision_changed = lighting_collision.as_ref()
+        .is_none_or(|previous| !std::ptr::eq(previous.as_ptr(), Arc::as_ptr(&world.collision)));
+    if collision_changed {
+        *lighting_collision = Some(Arc::downgrade(&world.collision));
+    }
     for p in items.values_mut().chain(bomb.iter_mut().map(|b| &mut b.1)) {
+        p.lighting_dirty |= collision_changed;
         if !p.lighting_dirty {
             continue;
         }
@@ -335,7 +345,7 @@ pub fn sync(
         if p.materials.is_empty() {
             continue;
         }
-        let (cube, sun_dir, sun_color) = lighting_at(&level.0, sun, p.pos + glam::Vec3::Z * 8.0);
+        let (cube, sun_dir, sun_color) = lighting_at_collision(&level.0, &world.collision, sun, p.pos + glam::Vec3::Z * 8.0);
         for h in &p.materials {
             if let Some(mut m) = materials.get_mut(h) {
                 m.params.ambient_cube = cube;
@@ -592,12 +602,91 @@ mod tests {
         for (joint, expected) in joints.iter().zip(skinning::pose_transforms(transform, &pose)) {
             assert_eq!(*app.world().get::<Transform>(*joint).unwrap(), expected);
         }
-        let expected = lighting_at(&app.world().resource::<LoadedLevel>().0, None, item.pos + glam::Vec3::Z * 8.);
+        let expected = lighting_at_collision(&app.world().resource::<LoadedLevel>().0,
+            &app.world().resource::<SimWorld>().0.collision, None, item.pos + glam::Vec3::Z * 8.);
         let materials = app.world().resource::<Assets<WorldMaterial>>();
         let m = materials.get(&material).unwrap();
         assert_eq!((m.params.ambient_cube, m.params.sun_dir, m.params.sun_color), expected);
         assert_eq!(m.params.color, tint);
         assert_eq!(app.world().get::<crate::skin_finish::SkinPart>(meshes[0]).unwrap().applied, Some((1, 2, 3)));
+    }
+
+    #[test]
+    fn stationary_same_id_drop_relights_for_destroyed_and_restored_cover_without_new_owners() {
+        use crate::characters::lighting_tests::{install_cover, restore_cover, sun};
+        let mut app = fixture_app("authored drop", &["weapon_famas"]);
+        let collision = {
+            let mut level = app.world_mut().resource_mut::<LoadedLevel>();
+            install_cover(&mut level.0);
+            level.0.collision.clone()
+        };
+        {
+            let mut world = app.world_mut().resource_mut::<SimWorld>();
+            let items = world.0.items.clone();
+            world.0 = sim::World::with_catalog(collision, world.0.catalog.clone());
+            world.0.items = items;
+        }
+        app.world_mut().resource_mut::<CharacterModels>().sun = Some(sun());
+        app.update(); app.update();
+        let placed = &app.world().resource::<GroundInstances>().items[&0];
+        let joints = placed.instance.joints.clone();
+        let meshes = placed.instance.meshes.clone();
+        let material = placed.materials[0].clone();
+        let material_count = app.world().resource::<Assets<WorldMaterial>>().len();
+        let mesh_count = app.world().resource::<Assets<Mesh>>().len();
+        let bindpose_count = app.world().resource::<Assets<SkinnedMeshInverseBindposes>>().len();
+        let item = app.world().resource::<SimWorld>().0.items[0].clone();
+        let initial = {
+            let materials = app.world().resource::<Assets<WorldMaterial>>();
+            let m = materials.get(&material).unwrap();
+            (m.params.ambient_cube, m.params.sun_dir, m.params.sun_color)
+        };
+        assert_eq!(initial.1.w, 0.);
+        let tint = Vec4::new(0.1, 0.2, 0.3, 0.4);
+        app.world_mut().get_mut::<crate::skin_finish::SkinPart>(meshes[0]).unwrap().applied = Some((1, 2, 3));
+
+        for destroyed in [true, false] {
+            {
+                let mut materials = app.world_mut().resource_mut::<Assets<WorldMaterial>>();
+                let mut m = materials.get_mut(&material).unwrap();
+                m.params.sun_dir.w = -7.;
+                m.params.color = tint;
+            }
+            // The real sync system must skip lighting when neither geometry
+            // nor position changed, rather than tracing stationary items every frame.
+            app.update();
+            assert_eq!(app.world().resource::<Assets<WorldMaterial>>()
+                .get(&material).unwrap().params.sun_dir.w, -7.);
+            let previous = Arc::downgrade(&app.world().resource::<SimWorld>().0.collision);
+            restore_cover(&mut app.world_mut().resource_mut::<SimWorld>().0, destroyed);
+            assert!(previous.upgrade().is_none(), "lighting cache must not keep superseded geometry alive");
+            let state = app.world().resource::<SimWorld>().0.state();
+            app.update();
+            assert_eq!(app.world().resource::<SimWorld>().0.state(), state);
+            assert_eq!(app.world().resource::<SimWorld>().0.items[0], item);
+            let placed = &app.world().resource::<GroundInstances>().items[&0];
+            assert_eq!(placed.instance.joints, joints);
+            assert_eq!(placed.instance.meshes, meshes);
+            assert_eq!(placed.materials, vec![material.clone()]);
+            assert!(!placed.lighting_dirty);
+            assert_eq!(app.world().resource::<Assets<WorldMaterial>>().len(), material_count);
+            assert_eq!(app.world().resource::<Assets<Mesh>>().len(), mesh_count);
+            assert_eq!(app.world().resource::<Assets<SkinnedMeshInverseBindposes>>().len(), bindpose_count);
+            let level = &app.world().resource::<LoadedLevel>().0;
+            let world = &app.world().resource::<SimWorld>().0;
+            let expected = lighting_at_collision(level, &world.collision, Some(sun()), item.pos + glam::Vec3::Z * 8.);
+            let materials = app.world().resource::<Assets<WorldMaterial>>();
+            let m = materials.get(&material).unwrap();
+            assert_eq!((m.params.ambient_cube, m.params.sun_dir, m.params.sun_color), expected);
+            assert_eq!(m.params.sun_dir.w, if destroyed { 1. } else { 0. });
+            assert_eq!(m.params.color, tint);
+            assert_eq!(app.world().get::<crate::skin_finish::SkinPart>(meshes[0]).unwrap().applied, Some((1, 2, 3)));
+            assert_eq!(crate::characters::lighting_at(level, Some(sun()), item.pos + glam::Vec3::Z * 8.), initial);
+        }
+        crate::session::clear_match(app.world_mut());
+        let instances = app.world().resource::<GroundInstances>();
+        assert!(instances.items.is_empty() && instances.bomb.is_none());
+        assert!(instances.lighting_collision.is_none(), "map clear releases the weak generation cache");
     }
 
     #[test]
