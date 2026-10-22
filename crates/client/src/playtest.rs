@@ -10,6 +10,7 @@ pub(crate) struct Panel {
     pub(crate) weapon: Option<u32>,
     bots: Option<u32>,
     selected_bots: Option<u32>,
+    reload_bots: Option<u32>,
     offline_playtest: bool,
     bots_paused: bool,
     respawn: bool,
@@ -34,11 +35,12 @@ fn enter(mut panel: ResMut<Panel>, opts: Res<crate::Options>, remote: Option<Res
 impl Panel {
     fn enter_match(&mut self, playtest: bool, remote: bool) {
         self.offline_playtest = playtest && !remote;
-        if !self.offline_playtest { self.selected_bots = None; }
+        let reload_bots = self.reload_bots.take().filter(|_| self.offline_playtest);
+        if reload_bots.is_none() { self.selected_bots = None; }
         // F8's explicit count overrides the menu quota, including No Bots.
         // Reapply it through fixed-tick configure after a map reload; keep the
         // selected difficulty/profile independent of Solo or combat population.
-        self.bots = self.selected_bots;
+        self.bots = reload_bots;
         self.bots_paused = false;
         self.open = self.offline_playtest;
         self.dirty = true;
@@ -102,6 +104,7 @@ fn input(
             Action::PauseBots => { panel.bots_paused = !panel.bots_paused; panel.open = false; }
             Action::Respawn => { panel.respawn = true; panel.open = false; }
             Action::Map(map) => {
+                panel.reload_bots = panel.selected_bots;
                 let mut options = opts.0.clone();
                 options.map = map.clone();
                 if let Some(count) = panel.selected_bots {
@@ -390,11 +393,12 @@ mod tests {
     }
     #[test]
     fn normal_and_remote_match_entry_clear_explicit_playtest_population() {
-        for (playtest, remote) in [(false, false), (true, true)] {
+        for (playtest, remote) in [(false, false), (true, true), (true, false)] {
             let mut panel = Panel { selected_bots: Some(9), bots: Some(9), ..default() };
             panel.enter_match(playtest, remote);
             assert!(panel.selected_bots.is_none() && panel.bots.is_none());
-            assert!(!panel.offline_playtest && !panel.open);
+            assert_eq!(panel.offline_playtest, playtest && !remote);
+            assert_eq!(panel.open, playtest && !remote);
         }
     }
     #[test]
