@@ -1858,8 +1858,12 @@ pub fn load(
 ) -> ViewModels {
     let fs = &level.vfs;
     let mut out = ViewModels::default();
+    // Glove team variants, mapped stickers and per-weapon StatTrak counters
+    // retain their own geometry/material assets, but repeat the same VMT work.
+    // Keep successful preparation values only for this level/load's inputs.
+    let mut prepared = skinning::PreparedMaterials::new(fs, images, textures, shared, exposure, true);
     let mut build = |model: mdl::Model| {
-        skinning::build_asset(Arc::new(model), fs, meshes, materials, images, textures, shared, bindposes, exposure, true)
+        skinning::build_asset_with_materials(Arc::new(model), meshes, materials, bindposes, &mut prepared)
     };
     for def in &level.catalog.weapons {
         if def.view_model.is_empty() || out.weapons.contains_key(&def.class_name) {
