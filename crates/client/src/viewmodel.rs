@@ -190,7 +190,7 @@ mod life_tests {
         let mut images = Assets::<Image>::default();
         let mut textures = TextureCache::default();
         let mut bindposes = Assets::<SkinnedMeshInverseBindposes>::default();
-        let models = load(&level, &Default::default(), &mut meshes, &mut materials,
+        let models = load(&level, &Default::default(), &HashMap::new(), &mut meshes, &mut materials,
             &mut images, &mut textures, &SharedHandles { lightmap: Default::default() },
             &mut bindposes, 1.);
         let mut app = App::new();
