@@ -479,7 +479,7 @@ pub fn update(
                 blood_hit(
                     &mut commands,
                     &assets,
-                    &level.0.collision,
+                    &world.0.collision,
                     pos,
                     direction,
                     eye,
@@ -739,6 +739,106 @@ mod decal_tests {
 #[cfg(test)]
 mod mob_blood_tests {
     use super::*;
+
+    #[test]
+    fn damage_update_places_both_blood_marks_on_current_runtime_geometry() {
+        use std::{collections::BTreeMap, sync::Arc};
+        use collision::{CollisionWorld, Convex, Plane};
+
+        let solid = |mins: glam::Vec3, maxs: glam::Vec3| Convex {
+            planes: vec![
+                Plane { normal: glam::Vec3::X, dist: maxs.x },
+                Plane { normal: -glam::Vec3::X, dist: -mins.x },
+                Plane { normal: glam::Vec3::Y, dist: maxs.y },
+                Plane { normal: -glam::Vec3::Y, dist: -mins.y },
+                Plane { normal: glam::Vec3::Z, dist: maxs.z },
+                Plane { normal: -glam::Vec3::Z, dist: -mins.z },
+            ],
+            mins, maxs, contents: collision::contents::SOLID, surface: 0,
+        };
+        let mut base = CollisionWorld::new();
+        base.add_convex(solid(glam::Vec3::new(-128., -128., -16.), glam::Vec3::new(128., 128., 0.)));
+        base.add_convex(solid(glam::Vec3::new(120., -128., 0.), glam::Vec3::new(128., 128., 128.)));
+        base.breakables = vec![collision::breakables::Breakable {
+            entity: 1, model: 1, origin: glam::Vec3::ZERO, health: 10., material: 0,
+            prop_data: String::new(), bullet_scale: 1., club_scale: 1., minimum_damage: 0.,
+            trigger_only: false, studio: None,
+            solids: vec![
+                solid(glam::Vec3::new(32., -16., 48.), glam::Vec3::new(40., 16., 80.)),
+                solid(glam::Vec3::new(-16., -16., 24.), glam::Vec3::new(16., 16., 32.)),
+            ],
+        }].into();
+        base.finalize();
+        let base = Arc::new(base);
+
+        for destroyed in [false, true] {
+            // In-memory empty BSP follows the existing audio combat fixture;
+            // no install, graphics plugins or asset files are needed.
+            let mut bsp = vec![0u8; 1036];
+            bsp[..4].copy_from_slice(b"VBSP");
+            bsp[4..8].copy_from_slice(&20i32.to_le_bytes());
+            let mut fs = vfs::Vfs::new();
+            fs.push_back("blood fixture", vfs::Mount::Memory(BTreeMap::from([
+                ("maps/blood_fixture.bsp".into(), Arc::<[u8]>::from(bsp)),
+            ])));
+            let mut level = level::Level::load_from_vfs(
+                content::ContentId::csgo(content::ContentKind::Map, "blood_fixture"),
+                "blood_fixture", Default::default(), fs,
+            ).unwrap();
+            let mut world = sim::World::new(base.clone());
+            // Retain the intact overlay as the frozen level geometry. Restore
+            // rebuilds only the sim's overlay, as a runtime correction does.
+            level.collision = world.collision.clone();
+            let pos = glam::Vec3::new(0., 0., 64.);
+            let attacker = world.add_player("attacker", sim::Team::Terrorist);
+            let victim = world.add_player("victim", sim::Team::CounterTerrorist);
+            let shooter = world.player_mut(attacker).unwrap();
+            shooter.movement.origin = pos - glam::Vec3::X * 16.
+                - glam::Vec3::Z * shooter.movement.view_offset();
+            let mut state = world.state();
+            if destroyed {
+                state.breakables[0] = sim::breakables::State { health: 0., destroyed: true };
+            }
+            world.restore(state);
+            let frozen = level.collision.trace_ray(pos, pos - glam::Vec3::Z * 100., collision::contents::MASK_SOLID);
+            assert!(frozen.hit() && frozen.end.z > 32., "level must retain the old blocker");
+
+            let mut effects = Effects::default();
+            effects.feedback.push(sim::GameEvent::Damage {
+                attacker, victim, health: 24, group: sim::weapon::HitGroup::Chest, pos,
+                protection: sim::weapon::HitProtection::Flesh,
+            });
+            let mut app = App::new();
+            app.insert_resource(effects)
+                .insert_resource(FeedbackAssets {
+                    disc: default(), quad: default(), blood: default(), hole: default(),
+                    dust: default(), decals: default(), puffs: default(),
+                })
+                .insert_resource(SimWorld(world))
+                .insert_resource(LocalPlayer::new(attacker, pos - glam::Vec3::X * 16., 0.))
+                .insert_resource(crate::LoadedLevel(level))
+                .init_resource::<crate::surfaces::SurfaceProps>()
+                .init_resource::<crate::settings::Settings>()
+                .init_resource::<Hurt>().init_resource::<Time>().init_resource::<Assets<Mesh>>()
+                .add_systems(Update, update);
+            app.update();
+            assert!(app.world().resource::<Effects>().feedback.is_empty());
+            let mut query = app.world_mut().query::<(&Transform, &ImpactFx)>();
+            let fx: Vec<_> = query.iter(app.world()).collect();
+            assert_eq!(fx.iter().filter(|(_, fx)| fx.billboard).count(), 6);
+            let marks: Vec<_> = fx.iter().filter(|(_, fx)| !fx.billboard).collect();
+            assert_eq!(marks.len(), 2);
+            let wall = marks.iter().find(|(pose, _)| pose.scale.x == 16.).unwrap().0;
+            let floor = marks.iter().find(|(pose, _)| pose.scale.x == 12.).unwrap().0;
+            // Compare against fixture surfaces, allowing the existing clip and
+            // decal offsets. Using frozen collision fails both destroyed checks.
+            let wall_x = if destroyed { 120. } else { 32. };
+            let floor_z = if destroyed { 0. } else { 32. };
+            assert!((wall.translation - to_bevy(glam::Vec3::new(wall_x, 0., 64.))).length() < 0.25);
+            assert!((floor.translation - to_bevy(glam::Vec3::new(0., 0., floor_z))).length() < 0.25);
+        }
+    }
+
     #[test]
     fn shared_blood_respects_setting_budget_and_short_lifetime() {
         let mut world = World::new();
