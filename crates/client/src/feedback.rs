@@ -823,6 +823,8 @@ mod mob_blood_tests {
                 protection: sim::weapon::HitProtection::Flesh,
             });
             let mut app = App::new();
+            // The normal VisibilityPlugin supplies this Mesh3d requirement.
+            app.register_required_components::<Mesh3d, Visibility>();
             app.insert_resource(effects)
                 .insert_resource(FeedbackAssets {
                     disc: default(), quad: default(), blood: default(), hole: default(),
