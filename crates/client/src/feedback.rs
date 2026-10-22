@@ -18,6 +18,7 @@ pub struct FeedbackAssets {
     disc: Handle<Mesh>,
     quad: Handle<Mesh>,
     blood: Handle<StandardMaterial>,
+    surface_blood: Handle<ImpactDecalMaterial>,
     hole: Handle<StandardMaterial>,
     dust: Handle<StandardMaterial>,
     decals: crate::impact_decals::Catalog,
@@ -148,17 +149,22 @@ pub fn setup(
             image.sampler = bevy::image::ImageSampler::linear();
             Some(images.add(image))
         });
+    let blood_material = StandardMaterial {
+        base_color: Color::srgba(0.28, 0.008, 0.005, 0.88),
+        base_color_texture: blood,
+        unlit: true,
+        alpha_mode: AlphaMode::Blend,
+        cull_mode: None,
+        ..default()
+    };
     let mut assets = FeedbackAssets {
         disc: meshes.add(Circle::new(1.0)),
         quad: meshes.add(Rectangle::new(1.0, 1.0)),
-        blood: materials.add(StandardMaterial {
-            base_color: Color::srgba(0.28, 0.008, 0.005, 0.88),
-            base_color_texture: blood,
-            unlit: true,
-            alpha_mode: AlphaMode::Blend,
-            cull_mode: None,
-            ..default()
+        surface_blood: decal_materials.add(ImpactDecalMaterial {
+            base: blood_material.clone(),
+            extension: default(),
         }),
+        blood: materials.add(blood_material),
         hole: materials.add(StandardMaterial {
             base_color: Color::srgba(0.035, 0.026, 0.018, 0.92),
             unlit: true,
@@ -181,7 +187,7 @@ pub fn setup(
     let (forward, _, _) = movement::angle_vectors(glam::Vec3::new(local.pitch, local.yaw, 0.0));
     let pos = to_bevy(local.curr_eye + forward * 16.0);
     let now = time.elapsed_secs();
-    for (blood, moving) in [(true, true), (false, true), (false, false)] {
+    for (blood, moving) in [(true, true), (true, false), (false, true), (false, false)] {
         let _ = spawn(
             &mut commands,
             &assets,
@@ -269,9 +275,9 @@ fn spawn_impact_edge_control(
     let receiver_mesh = meshes.add(Rectangle::new(48., 112.));
     let normal = -Vec3::X;
     let rotation = Quat::from_rotation_arc(Vec3::Z, normal);
-    // Startup contributes at most five existing FX. Both fixture marks use
+    // Startup contributes at most six existing FX. Both fixture marks use
     // the same admission/lifetime bound as ordinary impacts, with no child FX.
-    let mut budget = MAX_FEEDBACK_FX.saturating_sub(5);
+    let mut budget = MAX_FEEDBACK_FX.saturating_sub(6);
     let mut retired = HashSet::new();
     for (side, clipped) in [(-80., true), (80., false)] {
         if !reserve_impact_slot(commands, &mut budget, &mut retired, std::iter::empty()) { break; }
@@ -309,18 +315,11 @@ fn spawn(
     if normal.length_squared() < 0.5 || !pos.is_finite() {
         return None;
     }
-    Some(commands.spawn((
+    let mut entity = commands.spawn((
         Mesh3d(if blood {
             assets.quad.clone()
         } else {
             assets.disc.clone()
-        }),
-        MeshMaterial3d(if blood {
-            assets.blood.clone()
-        } else if moving {
-            assets.dust.clone()
-        } else {
-            assets.hole.clone()
         }),
         Transform::from_translation(pos + normal * MARK_OFFSET)
             .with_rotation(Quat::from_rotation_arc(Vec3::Z, normal))
@@ -331,7 +330,21 @@ fn spawn(
             velocity,
             billboard: moving,
         },
-    )).id())
+    ));
+    if blood && !moving {
+        // Surface marks share the receiver clip; airborne spray stays a
+        // normal billboard with the identical Blend base material.
+        entity.insert(MeshMaterial3d(assets.surface_blood.clone()));
+    } else {
+        entity.insert(MeshMaterial3d(if blood {
+            assets.blood.clone()
+        } else if moving {
+            assets.dust.clone()
+        } else {
+            assets.hole.clone()
+        }));
+    }
+    Some(entity.id())
 }
 
 // DecalModulate uses neutral 128 grey; DXT compression shifts it by a few
@@ -942,7 +955,7 @@ mod mob_blood_tests {
         app.register_required_components::<Mesh3d, Visibility>();
         app.insert_resource(effects)
             .insert_resource(FeedbackAssets {
-                disc: default(), quad: default(), blood: default(), hole: default(),
+                disc: default(), quad: default(), blood: default(), surface_blood: default(), hole: default(),
                 dust: default(), decals: default(), puffs: default(),
             })
             .insert_resource(SimWorld(world))
@@ -953,6 +966,33 @@ mod mob_blood_tests {
             .init_resource::<Hurt>().init_resource::<Time>().init_resource::<Assets<Mesh>>()
             .add_systems(Update, (update, crate::breakables::sync).chain());
         app
+    }
+
+    fn assert_blood_material_split(app: &mut App) {
+        let mut query = app.world_mut().query::<(Entity, &ImpactFx, &Transform)>();
+        let assets = app.world().resource::<FeedbackAssets>();
+        let mut moving = 0;
+        let mut surface_sizes = Vec::new();
+        for (entity, fx, pose) in query.iter(app.world()) {
+            let standard = app.world().get::<MeshMaterial3d<StandardMaterial>>(entity);
+            let clipped = app.world().get::<MeshMaterial3d<ImpactDecalMaterial>>(entity);
+            if fx.billboard {
+                assert_eq!(standard.map(|m| &m.0), Some(&assets.blood));
+                assert!(clipped.is_none(), "airborne spray must never sample receiver depth");
+                assert!(fx.life < 0.5);
+                moving += 1;
+            } else {
+                assert_eq!(clipped.map(|m| &m.0), Some(&assets.surface_blood));
+                assert!(standard.is_none());
+                assert_eq!(fx.life, 25.);
+                assert_eq!(fx.velocity, Vec3::ZERO);
+                assert_eq!(pose.scale, Vec3::splat(pose.scale.x));
+                surface_sizes.push(pose.scale.x);
+            }
+        }
+        surface_sizes.sort_by(f32::total_cmp);
+        assert_eq!(surface_sizes, [12., 16.]);
+        assert_eq!(moving, 6);
     }
 
     #[test]
@@ -1014,6 +1054,7 @@ mod mob_blood_tests {
             let mut app = blood_app(level, world, effects,
                 LocalPlayer::new(attacker, pos - glam::Vec3::X * 16., 0.));
             app.update();
+            assert_blood_material_split(&mut app);
             assert!(app.world().resource::<Effects>().feedback.is_empty());
             let mut query = app.world_mut().query::<(&Transform, &ImpactFx)>();
             let fx: Vec<_> = query.iter(app.world()).collect();
@@ -1075,6 +1116,7 @@ mod mob_blood_tests {
         let mut app = blood_app(level, world, effects,
             LocalPlayer::new(attacker, pos + glam::Vec3::Z * 16., 0.));
         app.update();
+        assert_blood_material_split(&mut app);
         let mut query = app.world_mut().query::<(Entity, &Transform, &ImpactFx, Option<&DoorImpactMark>)>();
         let fx: Vec<_> = query.iter(app.world()).collect();
         assert_eq!(fx.iter().filter(|(_, _, fx, _)| fx.billboard).count(), 6);
@@ -1129,6 +1171,7 @@ mod mob_blood_tests {
             disc: default(),
             quad: default(),
             blood: default(),
+            surface_blood: default(),
             hole: default(),
             dust: default(),
             decals: default(),
