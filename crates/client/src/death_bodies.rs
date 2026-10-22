@@ -2,7 +2,7 @@
 //! Physical bodies use runtime model data; missing rigs retain the authored fallback.
 use bevy::prelude::*;
 use bevy::tasks::{AsyncComputeTaskPool, Task, block_on, poll_once};
-use super::{CharacterModels, own_materials, despawn_instance, lighting_at};
+use super::{CharacterModels, own_materials, despawn_instance, lighting_at_collision};
 use crate::{coords::{rotation_to_bevy,to_bevy}, material::WorldMaterial, skinning::{self,SkinnedInstance}};
 use sim::death::{DeathReceipt,DeathKey};
 use std::collections::VecDeque;
@@ -20,6 +20,7 @@ struct Body {
     captured_pose: Vec<glam::Mat4>,
     last_time: f32,
     trace_pending: bool,
+    lighting_dirty: bool,
 }
 
 #[derive(Default)]
@@ -27,6 +28,7 @@ pub(super) struct DeathBodies {
     bodies: VecDeque<Body>,
     seen: VecDeque<DeathKey>,
     round: Option<u32>,
+    lighting_collision: Option<std::sync::Weak<collision::CollisionWorld>>,
 }
 
 impl DeathBodies {
@@ -49,11 +51,18 @@ pub(super) fn update(
     commands: &mut Commands, state: &mut DeathBodies, deaths: Vec<(DeathReceipt, Option<Vec<glam::Mat4>>)>,
     round: u32, now: f32, models: &mut CharacterModels,
     materials: &mut Assets<WorldMaterial>, level: &level::Level,
+    collision: &std::sync::Arc<collision::CollisionWorld>,
     mat_query: &Query<&MeshMaterial3d<WorldMaterial>>,
     transforms: &mut Query<&mut Transform>, visibility: &mut Query<&mut Visibility>,
 ) {
     let _frame_scope = crate::input_latency::frame_scope("characters.bodies");
     let sun = models.sun;
+    // One map-owned weak identity; do not retain superseded collision worlds.
+    let collision_changed = state.lighting_collision.as_ref()
+        .is_none_or(|previous| !std::ptr::eq(previous.as_ptr(), std::sync::Arc::as_ptr(collision)));
+    if collision_changed {
+        state.lighting_collision = Some(std::sync::Arc::downgrade(collision));
+    }
     if state.round != Some(round) {
         for body in state.bodies.drain(..) { despawn_instance(commands,&body.instance); }
         state.seen.clear();state.round=Some(round);
@@ -99,9 +108,10 @@ pub(super) fn update(
                     death.pose.velocity, death.hit.map(|hit| (hit.position, hit.direction)))
             })
         });
-        state.bodies.push_back(Body {death,born:now,instance,materials:Vec::new(),corpse:None,pending,captured_pose:pose,last_time:now,trace_pending});
+        state.bodies.push_back(Body {death,born:now,instance,materials:Vec::new(),corpse:None,pending,captured_pose:pose,last_time:now,trace_pending,lighting_dirty:true});
     }
     for body in &mut state.bodies {
+        body.lighting_dirty |= collision_changed;
         let model=match body.death.victim_team {sim::Team::Terrorist=>models.terrorist.as_mut(),_=>models.counter_terrorist.as_mut()};
         let Some(model)=model else {continue};
         if let Some(result) = body.pending.as_mut().and_then(|task| block_on(poll_once(task))) {
@@ -130,10 +140,13 @@ pub(super) fn update(
         skinning::apply_pose(&body.instance,world,&pose,transforms);
         if body.materials.is_empty() {
             body.materials=own_materials(&body.instance,mat_query);
-            let (cube,sun_dir,sun_color)=lighting_at(level,sun,body.death.pose.origin+glam::Vec3::Z*32.);
+        }
+        if body.lighting_dirty && !body.materials.is_empty() {
+            let (cube,sun_dir,sun_color)=lighting_at_collision(level,collision,sun,body.death.pose.origin+glam::Vec3::Z*32.);
             for handle in &body.materials {
                 if let Some(mut m)=materials.get_mut(handle) {m.params.ambient_cube=cube;m.params.sun_dir=sun_dir;m.params.sun_color=sun_color;}
             }
+            body.lighting_dirty=false;
         }
         for e in &body.instance.meshes {
             if let Ok(mut v)=visibility.get_mut(*e) {*v=Visibility::Inherited;}
