@@ -26,6 +26,7 @@ pub mod model_pose;
 pub mod death;
 pub mod doors;
 pub mod breakables;
+mod ground_items;
 pub mod loadout;
 pub mod objectives;
 pub mod rewind;
@@ -361,6 +362,10 @@ pub struct GroundItem {
     pub dropped_by: PlayerId,
     /// The dropper cannot pick it back up before this time.
     pub pickup_after: f32,
+    /// Support-loss motion only; initial drop placement still uses throw_point.
+    pub vertical_velocity: f32,
+    /// Resting anchor; collision changes recheck support before the next fall.
+    pub settled: bool,
 }
 
 impl GroundItem {
@@ -470,6 +475,10 @@ pub struct World {
     character_hitboxes: std::collections::HashMap<PlayerId, model_pose::CachedHitboxes>,
     next_id: PlayerId,
     next_item: u32,
+    /// Derived support-query cache, invalidated on restore. Runtime door and
+    /// breakable changes replace the collision Arc; unchanged floors need no
+    /// per-item stationary traces. GroundItem carries the replicated rest/motion.
+    ground_support_collision: Option<Arc<CollisionWorld>>,
 }
 
 /// Slab test: entry distance of a ray into an axis-aligned box.
@@ -529,6 +538,7 @@ impl World {
             character_hitboxes: Default::default(),
             next_id: 1,
             next_item: 1,
+            ground_support_collision: None,
         };
         world.reset_breakables();
         world.reset_doors();
@@ -1078,7 +1088,8 @@ impl World {
     fn new_item(&mut self, kind: GroundKind, pos: Vec3, yaw: f32, dropped_by: PlayerId, pickup_after: f32) {
         let id = self.next_item;
         self.next_item += 1;
-        self.items.push(GroundItem { id, kind, pos, yaw, dropped_by, pickup_after });
+        self.items.push(GroundItem { id, kind, pos, yaw, dropped_by, pickup_after,
+            vertical_velocity: 0.0, settled: false });
     }
 
     /// Where an item thrown by a player lands: a little ahead, on the floor.
@@ -1088,7 +1099,7 @@ impl World {
         let tr = self.collision.trace_ray(start, start + fwd * distance, contents::MASK_PLAYERSOLID);
         let ahead = start + (tr.end - start) * 0.8;
         let down = self.collision.trace_ray(ahead, ahead - Vec3::Z * 512.0, contents::MASK_PLAYERSOLID);
-        down.end + Vec3::Z * 1.0
+        down.end + Vec3::Z * ground_items::SUPPORT_OFFSET
     }
 
     /// Drops one inventory item on the ground.
@@ -1721,6 +1732,7 @@ impl World {
             self.players[i].last_input = input;
         }
         self.step_utility();
+        self.step_ground_items();
         if self.competitive() {
             self.check_elimination();
         }

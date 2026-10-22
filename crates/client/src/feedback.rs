@@ -42,6 +42,19 @@ pub(crate) struct DoorImpactMark {
 }
 
 impl DoorImpactMark {
+    fn from_trace(world: &sim::World, map: &content::ContentId, index: usize,
+        tr: &collision::Trace) -> Option<Self> {
+        if !tr.hit() || tr.start_solid || tr.all_solid { return None; }
+        let def = world.collision.doors.get(index)?;
+        // Invert the same current hinge frame that produced the owned trace.
+        // Equivalent to sim's crate-private World::door_impact conversion.
+        let rotation = def.rotation(world.doors.get(index)?.angle).transpose();
+        let impact = sim::doors::Impact { door: index as u32,
+            pos: rotation * (tr.end - def.origin),
+            normal: (rotation * tr.normal).normalize_or_zero() };
+        impact.valid().then(|| Self { map: map.clone(), impact, surface: tr.surface })
+    }
+
     fn pose(&self, map: &content::ContentId, collision: &collision::CollisionWorld,
         states: &[sim::doors::State]) -> Option<Transform> {
         if self.map != *map || !self.impact.valid() { return None; }
@@ -279,9 +292,26 @@ pub fn impact_sound(surface: &str) -> &'static str {
 // Use the exact runtime trace owner, so a nearby or destroyed breakable
 // cannot claim a mark on an unrelated surviving surface.
 fn own_blood_mark(commands: &mut Commands, entity: Entity,
-    owner: Option<collision::HitOwner>) {
-    if let Some(index) = owner.and_then(collision::HitOwner::breakable) {
-        commands.entity(entity).insert(crate::breakables::BreakableMesh(vec![index]));
+    world: &sim::World, map: &content::ContentId, owner: Option<collision::HitOwner>,
+    trace: &collision::Trace, size: f32) {
+    match owner {
+        Some(collision::HitOwner::Door(index)) => {
+            let attachment = DoorImpactMark::from_trace(world, map, index, trace)
+                .and_then(|mark| {
+                    let pose = mark.pose(map, &world.collision, &world.doors)?;
+                    Some((mark, pose.with_scale(Vec3::splat(size))))
+                });
+            if let Some(attachment) = attachment {
+                // Use the attachment's texture frame on the spawning frame too.
+                commands.entity(entity).insert(attachment);
+            } else {
+                commands.entity(entity).despawn();
+            }
+        }
+        Some(collision::HitOwner::Breakable(index)) => {
+            commands.entity(entity).insert(crate::breakables::BreakableMesh(vec![index]));
+        }
+        None => {}
     }
 }
 
@@ -290,7 +320,8 @@ fn own_blood_mark(commands: &mut Commands, entity: Entity,
 fn blood_hit(
     commands: &mut Commands,
     assets: &FeedbackAssets,
-    collision: &collision::CollisionWorld,
+    world: &sim::World,
+    map: &content::ContentId,
     pos: glam::Vec3,
     direction: glam::Vec3,
     eye: Vec3,
@@ -323,6 +354,7 @@ fn blood_hit(
             0.22 + i as f32 * 0.025,
         );
     }
+    let collision = &world.collision;
     let (tr, owner) = collision.trace_owned_ray(
         pos + direction * 3.0,
         pos + direction * 180.0,
@@ -341,7 +373,7 @@ fn blood_hit(
             now,
             25.0,
         ) {
-            own_blood_mark(commands, entity, owner);
+            own_blood_mark(commands, entity, world, map, owner, &tr, 16.0);
         }
     }
     let (floor, owner) = collision.trace_owned_ray(
@@ -362,7 +394,7 @@ fn blood_hit(
             now,
             25.0,
         ) {
-            own_blood_mark(commands, entity, owner);
+            own_blood_mark(commands, entity, world, map, owner, &floor, 12.0);
         }
     }
 }
@@ -492,7 +524,8 @@ pub fn update(
                 blood_hit(
                     &mut commands,
                     &assets,
-                    &world.0.collision,
+                    &world.0,
+                    &level.0.id,
                     pos,
                     direction,
                     eye,
@@ -524,7 +557,9 @@ pub fn update(
                     commands.entity(e).despawn();
                     continue;
                 };
-                *transform = pose;
+                // Door blood cards keep their 16/12-unit size; bullet art is unit scale.
+                transform.translation = pose.translation;
+                transform.rotation = pose.rotation;
             }
             if fx.billboard {
                 transform.translation += fx.velocity * dt;
@@ -599,7 +634,7 @@ mod tests {
 mod decal_tests {
     use super::*;
 
-    fn door_mark() -> (DoorImpactMark, collision::CollisionWorld, Vec<sim::doors::State>) {
+    pub(super) fn door_mark() -> (DoorImpactMark, collision::CollisionWorld, Vec<sim::doors::State>) {
         let mut map = bsp::Bsp::default();
         let doc = kv::parse(r#"door { classname prop_door_rotating model models/fixture_leaf.mdl
             origin "100 200 32" angles "12 27 9" }"#).unwrap();
@@ -753,9 +788,44 @@ mod decal_tests {
 mod mob_blood_tests {
     use super::*;
 
+    fn blood_level() -> level::Level {
+        use std::{collections::BTreeMap, sync::Arc};
+        // Reuse the in-memory empty BSP from the audio combat fixture.
+        let mut bsp = vec![0u8; 1036];
+        bsp[..4].copy_from_slice(b"VBSP");
+        bsp[4..8].copy_from_slice(&20i32.to_le_bytes());
+        let mut fs = vfs::Vfs::new();
+        fs.push_back("blood fixture", vfs::Mount::Memory(BTreeMap::from([
+            ("maps/blood_fixture.bsp".into(), Arc::<[u8]>::from(bsp)),
+        ])));
+        level::Level::load_from_vfs(
+            content::ContentId::csgo(content::ContentKind::Map, "blood_fixture"),
+            "blood_fixture", Default::default(), fs,
+        ).unwrap()
+    }
+
+    fn blood_app(level: level::Level, world: sim::World, effects: Effects, local: LocalPlayer) -> App {
+        let mut app = App::new();
+        // The normal VisibilityPlugin supplies this Mesh3d requirement.
+        app.register_required_components::<Mesh3d, Visibility>();
+        app.insert_resource(effects)
+            .insert_resource(FeedbackAssets {
+                disc: default(), quad: default(), blood: default(), hole: default(),
+                dust: default(), decals: default(), puffs: default(),
+            })
+            .insert_resource(SimWorld(world))
+            .insert_resource(local)
+            .insert_resource(crate::LoadedLevel(level))
+            .init_resource::<crate::surfaces::SurfaceProps>()
+            .init_resource::<crate::settings::Settings>()
+            .init_resource::<Hurt>().init_resource::<Time>().init_resource::<Assets<Mesh>>()
+            .add_systems(Update, (update, crate::breakables::sync).chain());
+        app
+    }
+
     #[test]
     fn damage_update_places_both_blood_marks_on_current_runtime_geometry() {
-        use std::{collections::BTreeMap, sync::Arc};
+        use std::sync::Arc;
         use collision::{CollisionWorld, Convex, Plane};
 
         let solid = |mins: glam::Vec3, maxs: glam::Vec3| Convex {
@@ -785,19 +855,7 @@ mod mob_blood_tests {
         let base = Arc::new(base);
 
         for destroyed in [false, true] {
-            // In-memory empty BSP follows the existing audio combat fixture;
-            // no install, graphics plugins or asset files are needed.
-            let mut bsp = vec![0u8; 1036];
-            bsp[..4].copy_from_slice(b"VBSP");
-            bsp[4..8].copy_from_slice(&20i32.to_le_bytes());
-            let mut fs = vfs::Vfs::new();
-            fs.push_back("blood fixture", vfs::Mount::Memory(BTreeMap::from([
-                ("maps/blood_fixture.bsp".into(), Arc::<[u8]>::from(bsp)),
-            ])));
-            let mut level = level::Level::load_from_vfs(
-                content::ContentId::csgo(content::ContentKind::Map, "blood_fixture"),
-                "blood_fixture", Default::default(), fs,
-            ).unwrap();
+            let mut level = blood_level();
             let mut world = sim::World::new(base.clone());
             // Retain the intact overlay as the frozen level geometry. Restore
             // rebuilds only the sim's overlay, as a runtime correction does.
@@ -821,21 +879,8 @@ mod mob_blood_tests {
                 attacker, victim, health: 24, group: sim::weapon::HitGroup::Chest, pos,
                 protection: sim::weapon::HitProtection::Flesh,
             });
-            let mut app = App::new();
-            // The normal VisibilityPlugin supplies this Mesh3d requirement.
-            app.register_required_components::<Mesh3d, Visibility>();
-            app.insert_resource(effects)
-                .insert_resource(FeedbackAssets {
-                    disc: default(), quad: default(), blood: default(), hole: default(),
-                    dust: default(), decals: default(), puffs: default(),
-                })
-                .insert_resource(SimWorld(world))
-                .insert_resource(LocalPlayer::new(attacker, pos - glam::Vec3::X * 16., 0.))
-                .insert_resource(crate::LoadedLevel(level))
-                .init_resource::<crate::surfaces::SurfaceProps>()
-                .init_resource::<crate::settings::Settings>()
-                .init_resource::<Hurt>().init_resource::<Time>().init_resource::<Assets<Mesh>>()
-                .add_systems(Update, (update, crate::breakables::sync).chain());
+            let mut app = blood_app(level, world, effects,
+                LocalPlayer::new(attacker, pos - glam::Vec3::X * 16., 0.));
             app.update();
             assert!(app.world().resource::<Effects>().feedback.is_empty());
             let mut query = app.world_mut().query::<(&Transform, &ImpactFx)>();
@@ -870,6 +915,82 @@ mod mob_blood_tests {
     }
 
     #[test]
+    fn damage_blood_marks_follow_current_door_frame_without_changing_size_or_roll() {
+        let (_, collision, _) = super::decal_tests::door_mark();
+        let mut world = sim::World::new(std::sync::Arc::new(collision));
+        let mut level = blood_level();
+        // Keep the level closed while runtime collision already has an open leaf.
+        level.collision = world.collision.clone();
+        let initial_angle = -37.;
+        let mut state = world.state();
+        state.doors[0].angle = initial_angle;
+        world.restore(state);
+        let def = &world.collision.doors[0];
+        let hinge = to_bevy(def.origin);
+        let rotation = def.rotation(initial_angle);
+        // Both the forward and downward traces hit the interior of the top face.
+        let contact = glam::Vec3::new(0., 24., 96.);
+        let pos = def.origin + rotation * contact + glam::Vec3::Z * 24.;
+        let attacker = world.add_player("attacker", sim::Team::Terrorist);
+        let victim = world.add_player("victim", sim::Team::CounterTerrorist);
+        let shooter = world.player_mut(attacker).unwrap();
+        shooter.movement.origin = pos + glam::Vec3::Z * (16. - shooter.movement.view_offset());
+        let mut effects = Effects::default();
+        effects.feedback.push(sim::GameEvent::Damage {
+            attacker, victim, health: 24, group: sim::weapon::HitGroup::Chest, pos,
+            protection: sim::weapon::HitProtection::Flesh,
+        });
+        let mut app = blood_app(level, world, effects,
+            LocalPlayer::new(attacker, pos + glam::Vec3::Z * 16., 0.));
+        app.update();
+        let mut query = app.world_mut().query::<(Entity, &Transform, &ImpactFx, Option<&DoorImpactMark>)>();
+        let fx: Vec<_> = query.iter(app.world()).collect();
+        assert_eq!(fx.iter().filter(|(_, _, fx, _)| fx.billboard).count(), 6);
+        let marks: Vec<_> = fx.iter().filter(|(_, _, fx, _)| !fx.billboard)
+            .map(|(e, pose, fx, mark)| {
+                let mark = mark.expect("each blood surface mark must own the exact door");
+                assert_eq!(mark.map, app.world().resource::<crate::LoadedLevel>().0.id);
+                assert_eq!(mark.impact.door, 0);
+                assert!((mark.impact.pos - contact).length() < 0.1);
+                assert!((mark.impact.normal - glam::Vec3::Z).length() < 0.001);
+                assert_eq!(fx.life, 25.);
+                let expected = rotation_to_bevy(rotation)
+                    * Quat::from_rotation_arc(Vec3::Z, to_bevy(glam::Vec3::Z));
+                for axis in [Vec3::Z, Vec3::X] {
+                    assert!((pose.rotation * axis - expected * axis).length() < 0.001);
+                }
+                (*e, **pose)
+            }).collect();
+        assert_eq!(marks.len(), 2);
+        assert!(marks.iter().any(|(_, pose)| pose.scale == Vec3::splat(16.)));
+        assert!(marks.iter().any(|(_, pose)| pose.scale == Vec3::splat(12.)));
+        for angle in [initial_angle, 37., 0., initial_angle] {
+            let mut state = app.world().resource::<SimWorld>().0.state();
+            state.doors[0].angle = angle;
+            app.world_mut().resource_mut::<SimWorld>().0.restore(state);
+            app.update();
+            let world = &app.world().resource::<SimWorld>().0;
+            let swing = rotation_to_bevy(world.collision.doors[0].rotation(angle) * rotation.transpose());
+            for (entity, initial) in &marks {
+                let pose = app.world().get::<Transform>(*entity).unwrap();
+                assert_eq!(pose.scale, initial.scale);
+                assert!((pose.translation - (hinge + swing * (initial.translation - hinge))).length() < 0.001);
+                for axis in [Vec3::Z, Vec3::X] {
+                    assert!((pose.rotation * axis - swing * (initial.rotation * axis)).length() < 0.001);
+                }
+            }
+        }
+        app.world_mut().get_mut::<DoorImpactMark>(marks[0].0).unwrap().impact.door = sim::doors::MAX_DOORS as u32;
+        app.update();
+        assert!(app.world().get_entity(marks[0].0).is_err());
+        assert!(app.world().get_entity(marks[1].0).is_ok());
+        app.world_mut().resource_mut::<crate::LoadedLevel>().0.id =
+            content::ContentId::csgo(content::ContentKind::Map, "another_map");
+        app.update();
+        assert!(app.world().get_entity(marks[1].0).is_err());
+    }
+
+    #[test]
     fn shared_blood_respects_setting_budget_and_short_lifetime() {
         let mut world = World::new();
         let assets = FeedbackAssets {
@@ -881,7 +1002,8 @@ mod mob_blood_tests {
             decals: default(),
             puffs: default(),
         };
-        let collision = collision::CollisionWorld::new();
+        let sim = sim::World::new(std::sync::Arc::new(collision::CollisionWorld::new()));
+        let map = content::ContentId::csgo(content::ContentKind::Map, "blood_fixture");
         let mut queue = bevy::ecs::world::CommandQueue::default();
         let mut budget = 512;
         {
@@ -889,7 +1011,8 @@ mod mob_blood_tests {
             blood_hit(
                 &mut commands,
                 &assets,
-                &collision,
+                &sim,
+                &map,
                 glam::Vec3::ZERO,
                 glam::Vec3::X,
                 Vec3::Z * 10.,
@@ -907,7 +1030,8 @@ mod mob_blood_tests {
                 blood_hit(
                     &mut commands,
                     &assets,
-                    &collision,
+                    &sim,
+                    &map,
                     glam::Vec3::ZERO,
                     glam::Vec3::X,
                     Vec3::Z * 10.,
