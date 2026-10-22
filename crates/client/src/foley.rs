@@ -766,6 +766,8 @@ mod tests {
                     // A fresh observer joins the same real reload without an
                     // earlier Draw/Reload event history.
                     handling_step(&mut app, id, RELOAD);
+                    app.world_mut().resource_mut::<SimWorld>().0
+                        .step(&[(id, sim::TickInput::default())]);
                     let world = &app.world().resource::<SimWorld>().0;
                     let now = world.time();
                     let end = world.player(id).unwrap().active_weapon().unwrap().reload_end.unwrap();
