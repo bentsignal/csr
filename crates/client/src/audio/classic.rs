@@ -1,7 +1,8 @@
-//! Optional private historical shots, with verified retained-file fallback.
+//! Optional private historical weapon waves, with installed-file fallback.
 //! Classic shots keep their declared normal pitch instead of modern resampling.
 //! Historical scripts/assets are never embedded in this module.
 mod historical;
+mod handling;
 
 use super::{Entry, decoded_audio};
 use content::{ContentId, ContentKind};
@@ -33,6 +34,7 @@ pub(super) struct Profile {
     historical_pairs: usize,
 }
 
+#[derive(Clone, Copy)]
 struct WaveSpec<'a> {
     path: &'a str,
     size: usize,
@@ -278,6 +280,9 @@ impl Profile {
                         reason
                     );
                 }
+            }
+            if let Some(historical) = &historical {
+                handling::install(fs, entries, historical);
             }
             bevy::log::info!(
                 "Classic2015 shots: {} historical pairs, {} retained pairs",
@@ -543,6 +548,34 @@ mod tests {
         assert_eq!(entries["csr.test.near"].pitch, (100.0, 100.0));
         assert_eq!(entries["csr.test.distant"].pitch, (100.0, 100.0));
         assert_eq!(profile.historical_pairs, 1);
+    }
+
+    #[test]
+    #[ignore = "requires the private verified 2015 audio pack in CSR_DATA_DIR/packs and Legacy installed data"]
+    fn installed_private_handling_respects_pack_contents_and_sound_era() {
+        let path = packs::Installed::current().dir().join(historical::FILENAME);
+        let pack = path.is_file().then(|| historical::Historical::open(&path).expect("private pack"));
+        let (_, fs) = level::mount_game(None).unwrap();
+        let mag_ready = pack.as_ref().is_some_and(|pack|
+            pack.wave("sound/weapons/mag7/mag7_pump_back.wav").is_ok()
+                && pack.wave("sound/weapons/mag7/mag7_pump_forward.wav").is_ok());
+        for era in [SoundEra::Classic2015, SoundEra::InstalledLegacy] {
+            let library = super::super::SoundLibrary::load_with_era(&fs, era);
+            for (binding, path) in [
+                ("weapon_nova.pumpduringshot", "sound/weapons/nova/nova_pump.wav"),
+                ("weapon_mag7.pumpback", "sound/weapons/mag7/mag7_pump_back.wav"),
+                ("weapon_mag7.pumpforward", "sound/weapons/mag7/mag7_pump_forward.wav"),
+            ] {
+                let expected = (era == SoundEra::Classic2015
+                    && (!binding.starts_with("weapon_mag7.") || mag_ready))
+                    .then(|| pack.as_ref().and_then(|pack| pack.wave(path).ok())).flatten();
+                let actual = library.entries[binding].frozen_wave.as_ref();
+                match expected {
+                    Some(wave) => assert_eq!(actual.expect("classic handling activation").bytes, wave.bytes),
+                    None => assert!(actual.is_none(), "installed handling must remain available"),
+                }
+            }
+        }
     }
 
     #[test]

@@ -6,10 +6,14 @@ use bevy::prelude::*;
 use std::{collections::HashMap, sync::Arc};
 
 const PCF: &str = "particles/impact_fx.pcf";
-const CHILDREN: [(&str, &str); 3] = [
+// Wood's child omits radius_end_scale; retain fallback rather than inventing
+// the missing endpoint. Sand is N in Legacy SurfaceProps; S is water/slime.
+const CHILDREN: [(&str, &str); 5] = [
     ("C", "impact_concrete_child_base"),
     ("M", "impact_metal_child_base"),
     ("Y", "impact_glass_child_base"),
+    ("D", "impact_dirt_child_base"),
+    ("N", "impact_sand_child_base"),
 ];
 
 #[derive(Default)]
@@ -86,7 +90,7 @@ impl Catalog {
             return out;
         };
         let mut textures: HashMap<String, Handle<Image>> = HashMap::new();
-        // C/M/Y are declared by installed surfaceproperties_cs.txt. Only the
+        // These codes are declared by installed surfaceproperties_cs.txt. Only the
         // named single child is selected, never the full native parent system.
         for (family, name) in CHILDREN {
             let Some(profile) = (|| {
@@ -244,6 +248,26 @@ mod tests {
         }
         assert_ne!(catalog.profiles["C"].radius, catalog.profiles["M"].radius);
         assert_ne!(catalog.profiles["M"].color, catalog.profiles["Y"].color);
+        assert_ne!(catalog.profiles["D"].color, catalog.profiles["N"].color);
+        for family in ["D", "N"] {
+            let profile = &catalog.profiles[family];
+            assert_eq!(profile.radius, [6., 9.]);
+            // Preserve the authored reversed lifetime endpoints.
+            assert_eq!(profile.life, [0.275, 0.2]);
+        }
+        let props = crate::surfaces::SurfaceProps::load(&fs);
+        for (prop, family) in [("concrete_block", "C"), ("metal_box", "M"),
+            ("glassbottle", "Y"), ("dirt", "D"), ("sand", "N")] {
+            let code = props.get_declared(prop).unwrap().game_material.as_deref().unwrap();
+            assert_eq!(code, family, "installed inherited material code: {prop}");
+            assert!(catalog.profiles.contains_key(code));
+        }
+        // Unsupported wood and liquid surfaces must still use feedback's fallback.
+        for (prop, family) in [("wood_plank", "W"), ("water", "S")] {
+            let code = props.get_declared(prop).unwrap().game_material.as_deref().unwrap();
+            assert_eq!(code, family, "installed inherited material code: {prop}");
+            assert!(!catalog.profiles.contains_key(code));
+        }
     }
 
     #[test]
