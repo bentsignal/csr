@@ -63,6 +63,58 @@ pub struct SkinnedInstance {
     pub meshes: Vec<Entity>,
 }
 
+/// Successful material preparations for one synchronous import scope. Binding
+/// the conversion inputs here prevents reuse across VFS/texture stores,
+/// lightmap handles, exposure or lighting policies. Viewmodels share this only
+/// within one load; ordinary callers retain a fresh scope per model.
+pub(crate) struct PreparedMaterials<'a> {
+    fs: &'a vfs::Vfs,
+    images: &'a mut Assets<Image>,
+    textures: &'a mut TextureCache,
+    shared: &'a SharedHandles,
+    exposure: f32,
+    dynamic_lit: bool,
+    successful: std::collections::HashMap<(Vec<String>, Option<String>), WorldMaterial>,
+}
+
+impl<'a> PreparedMaterials<'a> {
+    pub(crate) fn new(
+        fs: &'a vfs::Vfs,
+        images: &'a mut Assets<Image>,
+        textures: &'a mut TextureCache,
+        shared: &'a SharedHandles,
+        exposure: f32,
+        dynamic_lit: bool,
+    ) -> Self {
+        Self { fs, images, textures, shared, exposure, dynamic_lit, successful: Default::default() }
+    }
+
+    fn material(&mut self, model: &mdl::Model, texture: usize) -> WorldMaterial {
+        // The complete ordered search list matters: identical texture names
+        // can resolve differently in another model's material directories.
+        // material_from_vmt also observes this debug override.
+        let key = (model.material_candidates(texture), std::env::var("CSR_NO_CULL").ok());
+        if let Some(material) = self.successful.get(&key) {
+            return material.clone();
+        }
+        let vmt = key.0.iter().find_map(|path| vmt::Material::load(path, &|p| self.fs.read_string(p)));
+        let mut material = material_from_vmt(vmt.as_ref(), self.fs, self.textures,
+            self.images, self.shared, self.exposure, false);
+        if self.dynamic_lit {
+            material.params.flags = (material.params.flags & !crate::material::flags::VERTEX_LIT)
+                | crate::material::flags::DYNAMIC_LIT;
+            // Preserve the existing dynamic weapon/character presentation.
+            material.params.self_illum = Vec4::ZERO;
+        }
+        // A missing/invalid VMT retains the original fallback for this asset,
+        // but another asset must be allowed to retry the resolution.
+        if vmt.is_some() {
+            self.successful.insert(key, material.clone());
+        }
+        material
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn build_asset(
     model: Arc<mdl::Model>,
@@ -76,7 +128,19 @@ pub fn build_asset(
     exposure: f32,
     dynamic_lit: bool,
 ) -> SkinnedAsset {
-    let read = |p: &str| fs.read_string(p);
+    let mut prepared = PreparedMaterials::new(fs, images, textures, shared, exposure, dynamic_lit);
+    build_asset_with_materials(model, meshes, materials, bindposes, &mut prepared)
+}
+
+/// Reuse immutable preparation values, never mutable material or mesh assets.
+/// The caller owns a bounded import scope containing all conversion inputs.
+pub(crate) fn build_asset_with_materials(
+    model: Arc<mdl::Model>,
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<WorldMaterial>,
+    bindposes: &mut Assets<SkinnedMeshInverseBindposes>,
+    prepared: &mut PreparedMaterials<'_>,
+) -> SkinnedAsset {
     let s = axis_change();
     let s_inv = s.inverse();
     let inverse: Vec<Mat4> = model.bones.iter().map(|b| s * to_bevy_mat(b.pose_to_bone) * s_inv).collect();
@@ -136,20 +200,8 @@ pub fn build_asset(
                 }).collect::<Vec<_>>());
             } else if let Err(e) = m.generate_tangents() { warn!("model tangents: {e}"); }
             let tex = model.skin_texture(0, mesh.material);
-            let mat = prepared_materials.entry(tex).or_insert_with(|| {
-                let vmt = model
-                    .material_candidates(tex)
-                    .into_iter()
-                    .find_map(|c| vmt::Material::load(&c, &read));
-                let mut mat = material_from_vmt(vmt.as_ref(), fs, textures, images, shared, exposure, false);
-                if dynamic_lit {
-                    mat.params.flags = (mat.params.flags & !crate::material::flags::VERTEX_LIT) | crate::material::flags::DYNAMIC_LIT;
-                    // Dynamic Phong/rim/emission composition is unvalidated;
-                    // preserve existing weapon/character presentation this pass.
-                    mat.params.self_illum = Vec4::ZERO;
-                }
-                mat
-            }).clone();
+            let mat = prepared_materials.entry(tex)
+                .or_insert_with(|| prepared.material(&model, tex)).clone();
             culling.push(crate::skinning_bounds::certify(&mut m, &inverse));
             (meshes.add(m), materials.add(mat))
         })
@@ -347,6 +399,103 @@ pub fn spawn_posed(
 #[cfg(test)]
 mod material_preparation_tests {
     use super::*;
+
+    #[test]
+    fn load_material_reuse_keeps_search_order_owned_assets_and_missing_retries() {
+        // Synthetic loose VMTs let us remove a successful source to prove a
+        // later asset uses its preparation, and introduce a missing source to
+        // prove failures were not retained. Never touch installed game data.
+        struct Fixture(std::path::PathBuf);
+        impl Drop for Fixture {
+            fn drop(&mut self) {
+                for path in ["materials/first/paint.vmt", "materials/second/paint.vmt",
+                    "materials/first/retry.vmt", "materials/base.vmt"] {
+                    let _ = std::fs::remove_file(self.0.join(path));
+                }
+                for path in ["materials/first", "materials/second", "materials", ""] {
+                    let _ = std::fs::remove_dir(self.0.join(path));
+                }
+            }
+        }
+        let fixture = Fixture(std::env::temp_dir().join(format!("csr-material-preparation-{}-{}",
+            std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos())));
+        for dir in ["materials/first", "materials/second"] {
+            std::fs::create_dir_all(fixture.0.join(dir)).unwrap();
+        }
+        std::fs::write(fixture.0.join("materials/base.vmt"),
+            r#"VertexLitGeneric { "$phong" "1" "$nocull" "1" }"#).unwrap();
+        std::fs::write(fixture.0.join("materials/first/paint.vmt"),
+            r#"Patch { include "materials/base.vmt" insert { "$color" "[.25 .5 .75]" } }"#).unwrap();
+        std::fs::write(fixture.0.join("materials/second/paint.vmt"),
+            r#"UnlitGeneric { "$color" "[.75 .5 .25]" }"#).unwrap();
+        let mut fs = vfs::Vfs::new();
+        fs.push_back("fixture", vfs::Mount::Dir(fixture.0.clone()));
+        let model = Arc::new(mdl::Model {
+            textures: vec!["paint".into()],
+            cd_textures: vec!["first/".into(), "second/".into()],
+            meshes: vec![mdl::Mesh {
+                vertices: [glam::Vec3::ZERO, glam::Vec3::X, glam::Vec3::Y].map(|position| mdl::Vertex {
+                    position, normal: glam::Vec3::Z, tangent: Some([1., 0., 0., 1.]),
+                    ..Default::default()
+                }).to_vec(),
+                indices: vec![0, 1, 2], ..Default::default()
+            }], ..Default::default()
+        });
+        let mut images = Assets::<Image>::default();
+        let mut textures = TextureCache::new(&mut images);
+        let shared = SharedHandles { lightmap: textures.white.clone() };
+        let mut meshes = Assets::<Mesh>::default();
+        let mut materials = Assets::<WorldMaterial>::default();
+        let mut bindposes = Assets::<SkinnedMeshInverseBindposes>::default();
+        let expected = build_asset(model.clone(), &fs, &mut meshes, &mut materials,
+            &mut images, &mut textures, &shared, &mut bindposes, 2., true);
+        let mut prepared = PreparedMaterials::new(&fs, &mut images, &mut textures, &shared, 2., true);
+        let first = build_asset_with_materials(model.clone(), &mut meshes, &mut materials, &mut bindposes, &mut prepared);
+        assert_eq!(prepared.successful.len(), 1);
+        std::fs::remove_file(fixture.0.join("materials/first/paint.vmt")).unwrap();
+        let second = build_asset_with_materials(model.clone(), &mut meshes, &mut materials, &mut bindposes, &mut prepared);
+        assert_eq!(prepared.successful.len(), 1);
+        for asset in [&first, &second] {
+            assert_eq!(format!("{:?}", materials.get(&asset.parts[0].1).unwrap()),
+                format!("{:?}", materials.get(&expected.parts[0].1).unwrap()));
+            assert_ne!(asset.parts[0].0, expected.parts[0].0);
+            assert_ne!(asset.parts[0].1, expected.parts[0].1);
+        }
+        assert_ne!(first.parts[0].0, second.parts[0].0);
+        assert_ne!(first.parts[0].1, second.parts[0].1);
+        let second_mesh = format!("{:?}", meshes.get(&second.parts[0].0).unwrap());
+        materials.get_mut(&first.parts[0].1).unwrap().params.color = Vec4::ZERO;
+        meshes.get_mut(&first.parts[0].0).unwrap().insert_attribute(Mesh::ATTRIBUTE_POSITION, vec![[99., 99., 99.]; 3]);
+        assert_eq!(materials.get(&second.parts[0].1).unwrap().params.color, Vec4::new(0.25, 0.5, 0.75, 1.));
+        assert_eq!(format!("{:?}", meshes.get(&second.parts[0].0).unwrap()), second_mesh);
+
+        let mut reversed = (*model).clone();
+        reversed.cd_textures.reverse();
+        let reversed = build_asset_with_materials(Arc::new(reversed), &mut meshes, &mut materials, &mut bindposes, &mut prepared);
+        assert_eq!(prepared.successful.len(), 2);
+        assert_eq!(materials.get(&reversed.parts[0].1).unwrap().params.color, Vec4::new(0.75, 0.5, 0.25, 1.));
+        let mut retry = (*model).clone();
+        retry.textures[0] = "retry".into();
+        let retry = Arc::new(retry);
+        let missing = build_asset_with_materials(retry.clone(), &mut meshes, &mut materials, &mut bindposes, &mut prepared);
+        assert_eq!(prepared.successful.len(), 2);
+        assert_eq!(materials.get(&missing.parts[0].1).unwrap().base, prepared.textures.black);
+        std::fs::write(fixture.0.join("materials/first/retry.vmt"),
+            r#"VertexLitGeneric { "$color" "[.1 .2 .3]" }"#).unwrap();
+        let recovered = build_asset_with_materials(retry, &mut meshes, &mut materials, &mut bindposes, &mut prepared);
+        assert_eq!(prepared.successful.len(), 3);
+        assert_eq!(materials.get(&recovered.parts[0].1).unwrap().params.color, Vec4::new(0.1, 0.2, 0.3, 1.));
+        drop(prepared);
+
+        // A later load resolves the current source again with its own complete
+        // conversion context, even when the asset stores survive the match.
+        let mut next_load = PreparedMaterials::new(&fs, &mut images, &mut textures, &shared, 4., false);
+        let next = build_asset_with_materials(model, &mut meshes, &mut materials, &mut bindposes, &mut next_load);
+        let next = materials.get(&next.parts[0].1).unwrap();
+        assert_eq!(next.params.color, Vec4::new(0.75, 0.5, 0.25, 1.));
+        assert_eq!(next.params.exposure, 4.);
+        assert_eq!(next.params.flags & crate::material::flags::DYNAMIC_LIT, 0);
+    }
 
     #[test]
     fn repeated_skin_materials_match_serial_import_and_keep_part_and_vfs_scope() {
