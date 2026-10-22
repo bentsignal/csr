@@ -257,9 +257,28 @@ enum Task {
     Guard(Vec3),
 }
 
-/// The best gun slot a bot has: primary, else pistol.
-fn gun_slot(bot: &Player) -> u8 {
-    if bot.weapon_in_slot(1).is_some() { 1 } else { 2 }
+/// Prefer the usual gun, but do not keep returning to an exhausted one.
+fn gun_slot(bot: &Player, time: f32) -> u8 {
+    let preferred = if bot.weapon_in_slot(1).is_some() { 1 } else { 2 };
+    let Some(index) = bot.weapon_in_slot(preferred) else { return preferred; };
+    let w = &bot.weapons[index];
+    if !w.uses_ammo() || w.clip > 0 || w.reserve > 0 {
+        return preferred;
+    }
+    let fallback = (1..=3).find(|&slot| bot.weapon_in_slot(slot).is_some_and(|i| {
+        let w = &bot.weapons[i];
+        w.is_melee() || (slot <= 2 && w.uses_ammo() && (w.clip > 0 || w.reserve > 0))
+    }));
+    let Some(slot) = fallback else { return preferred; };
+    // Let the current action finish; selection would cancel these states.
+    // Zero means retain the active weapon, including during fallback deploy.
+    if bot.plant_start.is_some() || bot.active_weapon().is_some_and(|w| {
+        w.reload_end.is_some() || w.burst.is_some() || w.suppressor_transition.is_some()
+            || w.grenade_throw.is_some() || time < w.next_attack || time < w.next_secondary_attack
+    }) {
+        return 0;
+    }
+    slot
 }
 
 /// The next thing a bot buys, given what it has (one item per tick).
@@ -471,7 +490,7 @@ impl Bots {
             if bot.health<brain.last_health {brain.hurt_at=time;}
             brain.last_health=bot.health;
             let mut input = TickInput {
-                weapon_slot: gun_slot(bot),
+                weapon_slot: gun_slot(bot, time),
                 ..Default::default()
             };
 
@@ -1711,6 +1730,105 @@ mod tests {
         assert!(world.bots.team.roles.contains_key(&survivor));
         assert!(world.bots.team.reserve.contains_key(&survivor));
         assert_eq!(world.bots.skill, skill);
+    }
+
+    #[test]
+    fn exhausted_combat_gun_selects_usable_inventory_without_reverting() {
+        for rate in [64, 128] {
+            for (active, pistol_clip, pistol_reserve, expected_slot) in [
+                (0, 12, 0, 2),
+                (0, 0, 24, 2), // A reloadable pistol is still usable.
+                (0, 0, 0, 3),
+                (1, 0, 0, 3), // The active pistol can also exhaust its reserve.
+            ] {
+                let catalog = weapons::Catalog::from_items_game(r#"items_game { items {
+                    "7" { "name" "weapon_ak47" "baseitem" "1" "attributes" {
+                        "primary clip size" "30" "is full auto" "1"
+                    } }
+                    "4" { "name" "weapon_glock" "baseitem" "1" "attributes" {
+                        "primary clip size" "20"
+                    } }
+                    "42" { "name" "weapon_knife" "baseitem" "1" }
+                } }"#).unwrap();
+                let mut collision = collision::CollisionWorld::new();
+                collision.finalize();
+                let mut world = World::with_catalog(Arc::new(collision), Arc::new(catalog));
+                world.set_tick_rate(rate);
+                world.tick = world.ticks(2.);
+                let id = world.add_bot("exhausted burst", Team::Terrorist);
+                let enemy = world.add_player("visible target", Team::CounterTerrorist);
+                world.player_mut(enemy).unwrap().movement.origin = Vec3::X * 100.;
+                let mut inventory: Vec<_> = ["weapon_ak47", "weapon_glock", "weapon_knife"]
+                    .map(|name| crate::WeaponState::new(Arc::new(world.catalog.get(name).unwrap().clone())))
+                    .into_iter().collect();
+                inventory[0].clip = 0;
+                inventory[0].reserve = 0;
+                inventory[1].clip = pistol_clip;
+                inventory[1].reserve = pistol_reserve;
+                let bot = world.player_mut(id).unwrap();
+                bot.weapons = inventory;
+                bot.active = active;
+                bot.movement.origin = Vec3::ZERO;
+                bot.movement.on_ground = true;
+                bot.last_input.buttons = buttons::ATTACK;
+                let (pitch, yaw) = look_angles(bot.eye(), Vec3::new(100., 0., 50.));
+                let mut brain = Brain::fresh(bot, 0);
+                brain.target = Some(enemy);
+                brain.pitch = pitch;
+                brain.yaw = yaw;
+                brain.burst_left = 2;
+                let mut bots = Bots::with_skill(1.);
+                bots.brains.insert(id, brain);
+                let inputs = bots.think(&world);
+                let input = &inputs.iter().find(|(actor, _)| *actor == id).unwrap().1;
+                assert!(bots.brains[&id].visible);
+                assert_eq!(input.weapon_slot, expected_slot);
+                world.step_prediction(&inputs);
+                let bot = world.player(id).unwrap();
+                assert_eq!(crate::weapon::slot(&bot.active_weapon().unwrap().def), expected_slot);
+                assert_eq!((bot.weapons[0].clip, bot.weapons[0].reserve), (0, 0));
+                assert_eq!((bot.weapons[1].clip, bot.weapons[1].reserve), (pistol_clip, pistol_reserve));
+                // Repeated decisions must retain the fallback through deploy
+                // and after readiness, rather than select the empty primary.
+                assert_eq!(gun_slot(bot, world.time()), 0);
+                assert_eq!(gun_slot(bot, world.time() + 2.), expected_slot);
+            }
+        }
+    }
+
+    #[test]
+    fn exhausted_fallback_preserves_pending_actions_and_reloadable_primary() {
+        let (_, mut world, id, _) = stuck_path_fixture();
+        let catalog = weapons::Catalog::from_items_game(r#"items_game { items {
+            "7" { "name" "weapon_ak47" "baseitem" "1" "attributes" { "primary clip size" "30" } }
+            "42" { "name" "weapon_knife" "baseitem" "1" }
+        } }"#).unwrap();
+        let bot = world.player_mut(id).unwrap();
+        bot.weapons = ["weapon_ak47", "weapon_knife"]
+            .map(|name| crate::WeaponState::new(Arc::new(catalog.get(name).unwrap().clone())))
+            .into_iter().collect();
+        bot.active = 0;
+        bot.weapons[0].clip = 0;
+        bot.weapons[0].reserve = 1;
+        assert_eq!(gun_slot(bot, 2.), 1, "R6 reload must retain the primary");
+        bot.weapons[0].reserve = 0;
+        assert_eq!(gun_slot(bot, 2.), 3);
+        bot.weapons[0].reload_end = Some(3.);
+        assert_eq!(gun_slot(bot, 2.), 0);
+        bot.weapons[0].reload_end = None;
+        bot.weapons[0].next_attack = 3.;
+        assert_eq!(gun_slot(bot, 2.), 0, "do not interrupt deployment/attack lockout");
+        assert_eq!(gun_slot(bot, 3.), 3);
+        bot.weapons[0].burst = Some(crate::weapon::BurstState { remaining: 1, next_shot: 3. });
+        assert_eq!(gun_slot(bot, 3.), 0);
+        bot.weapons[0].burst = None;
+        bot.weapons[0].suppressor_transition = Some(crate::weapon::SuppressorTransition {
+            started_tick: 0, attached: false,
+        });
+        assert_eq!(gun_slot(bot, 3.), 0);
+        bot.weapons[0].suppressor_transition = None;
+        bot.weapons.pop();
+        assert_eq!(gun_slot(bot, 3.), 1, "no fallback without an owned usable weapon");
     }
 
     #[test]
