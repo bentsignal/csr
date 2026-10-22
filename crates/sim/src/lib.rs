@@ -1092,14 +1092,20 @@ impl World {
             vertical_velocity: 0.0, settled: false });
     }
 
-    /// Where an item thrown by a player lands: a little ahead, on the floor.
+    /// Initial drop anchor: a little ahead, on the floor when one is found.
     fn throw_point(&self, p: &Player, distance: f32) -> Vec3 {
         let (fwd, _, _) = movement::angle_vectors(Vec3::new(0.0, p.view_angles.y, 0.0));
         let start = p.movement.origin + Vec3::Z * 36.0;
         let tr = self.collision.trace_ray(start, start + fwd * distance, contents::MASK_PLAYERSOLID);
         let ahead = start + (tr.end - start) * 0.8;
         let down = self.collision.trace_ray(ahead, ahead - Vec3::Z * 512.0, contents::MASK_PLAYERSOLID);
-        down.end + Vec3::Z * ground_items::SUPPORT_OFFSET
+        if down.hit() {
+            down.end + Vec3::Z * ground_items::SUPPORT_OFFSET
+        } else {
+            // No support in range: start here and let the tick-owned fall
+            // advance the item, rather than teleporting it to the ray's end.
+            ahead
+        }
     }
 
     /// Drops one inventory item on the ground.

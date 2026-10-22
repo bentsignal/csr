@@ -1183,6 +1183,7 @@ mod empty_trigger;
 mod aim;
 mod rewind;
 mod death;
+mod drops;
 mod movement_fidelity;
 
 #[path = "tests/suppressors.rs"]
