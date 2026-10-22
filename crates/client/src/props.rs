@@ -395,7 +395,9 @@ struct InstanceImport {
 
 const PROP_TEXELS: usize = 9;
 // Both limits are render preparation policy, independent of simulation ticks.
-const VERTICES_PER_CHUNK: usize = 1024;
+// Keep enough samples for the existing eight 256-sample lighting workers.
+// Smaller chunks halve parallelism on large props and lengthen map loads.
+const VERTICES_PER_CHUNK: usize = 2048;
 const INDICES_PER_CHUNK: usize = 3072;
 
 impl<'a> PropImport<'a> {
