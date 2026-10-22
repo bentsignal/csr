@@ -1417,7 +1417,10 @@ fn follow_ladder(mesh: &NavMesh, world: &World, bot: &Player, brain: &mut Brain,
         brain.ladder_route = Some(LadderRoute { from, to, id: ladder.id, attached: false, exiting: false });
     }
     let route = brain.ladder_route.as_mut().unwrap();
-    if on_mount { route.attached = true; }
+    // Geometric reach alone is not accepted attachment. A descending bot
+    // must first move into the face; fresh outward motion intentionally does
+    // not catch a ladder in the human movement solver.
+    if on_mount && bot.movement.ladder_normal.is_some() { route.attached = true; }
     if route.attached && ((up && actual.is_none() && pos.z >= ladder.top.z)
         || (!up && pos.z <= destination.z_at(pos.x, pos.y) + world.config.step_size)) {
         route.exiting = true;
@@ -1437,7 +1440,7 @@ fn follow_ladder(mesh: &NavMesh, world: &World, bot: &Player, brain: &mut Brain,
     if on_mount && !route.exiting {
         // Level input into the actual face climbs; backward input descends.
         // Center laterally while climbing instead of strafing off its edge.
-        direction = normal * (if up { -1.0 } else { 1.0 })
+        direction = normal * (if up || !route.attached { -1.0 } else { 1.0 })
             - lateral * (offset.dot(lateral) / ladder.width.max(1.0)).clamp(-0.5, 0.5);
     } else if route.exiting && !up && on_mount && bot.movement.ladder_normal.is_some()
         && bot.last_input.buttons & buttons::JUMP == 0 {
