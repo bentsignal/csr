@@ -50,6 +50,13 @@
 - [x] Keep local/remote locomotion interpolating between successive shots while
   holding the shot receipt until its frame; restore original Sawed-Off and
   XM1014 shell-insert recordings from the private classic pack (#291).
+- [x] Reuse successful cosmetic material preparation, preserve reload foley
+  across skipped observations, and let bots clear friendly firing lanes
+  (#294, #295, #296).
+- [x] Clip bullet-impact artwork at visible opaque receiver edges while
+  retaining ordinary wall marks, original composition and door attachments.
+  Paired GPU controls and normal AK/match captures passed; transparent and
+  disconnected coplanar receivers remain limitations.
 - [ ] Finish unresolved player outcomes in the approved order; an increment or
   first pass does not finish its backlog category.
 

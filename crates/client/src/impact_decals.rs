@@ -1,5 +1,7 @@
 //! Runtime impact groups, subrect artwork and dimensions from the mounted game.
-//! These are planar cosmetic decals; edge clipping and native projection remain open.
+//! Planar cosmetic decals clip to the visible opaque receiver's plane/depth.
+//! Exact native projection and receiver identity remain outside this bounded path.
+use crate::impact_decal_material::{self, ImpactDecalMaterial};
 use bevy::{
     asset::RenderAssetUsages,
     image::{ImageAddressMode, ImageSampler, ImageSamplerDescriptor},
@@ -12,7 +14,7 @@ use std::collections::HashMap;
 pub(crate) struct Decal {
     pub id: content::ContentId,
     pub mesh: Handle<Mesh>,
-    pub material: Handle<StandardMaterial>,
+    pub material: Handle<ImpactDecalMaterial>,
     weight: f32,
 }
 
@@ -103,7 +105,7 @@ impl Catalog {
         fs: &vfs::Vfs,
         meshes: &mut Assets<Mesh>,
         images: &mut Assets<Image>,
-        materials: &mut Assets<StandardMaterial>,
+        materials: &mut Assets<ImpactDecalMaterial>,
     ) -> Self {
         let mut out = Self::default();
         let Some(doc) = fs
@@ -179,15 +181,7 @@ impl Catalog {
                 // DecalModulate is a color multiplier, not a transparent dark
                 // circle. Linear upload preserves the authored neutral midpoint;
                 // the two-times factor makes that midpoint leave the wall alone.
-                let material = materials.add(StandardMaterial {
-                    base_color: Color::linear_rgba(2., 2., 2., 1.),
-                    base_color_texture: Some(images.add(image)),
-                    unlit: true,
-                    alpha_mode: AlphaMode::Multiply,
-                    cull_mode: None,
-                    depth_bias: 1.,
-                    ..default()
-                });
+                let material = materials.add(impact_decal_material::material(images.add(image)));
                 let decal = Decal {
                     id: content::ContentId::csgo(content::ContentKind::Material, path),
                     mesh: meshes.add(Rectangle::new(w as f32 * art.scale, h as f32 * art.scale)),
@@ -212,6 +206,11 @@ impl Catalog {
     /// One tiny startup entity warms the shared Multiply pipeline before fire.
     pub(crate) fn prewarm(&self) -> Option<&Decal> {
         self.groups.values().find_map(|variants| variants.first())
+    }
+
+    /// Screenshot control uses the mounted concrete group, not embedded art.
+    pub(crate) fn edge_control(&mut self) -> Option<Decal> {
+        self.choose("c")
     }
 
     /// Respect decal exclusions and compiler-hidden receiving materials,

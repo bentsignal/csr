@@ -43,6 +43,7 @@ mod console;
 pub mod menu;
 pub mod feedback;
 mod impact_decals;
+mod impact_decal_material;
 pub mod utility_fx;
 mod particle_data;
 mod particle_material;
@@ -211,10 +212,12 @@ impl Plugin for CsgoPlugin {
         embedded_asset!(app, "shaders/world.wgsl");
         embedded_asset!(app, "shaders/radar.wgsl");
         embedded_asset!(app, "shaders/particle.wgsl");
+        embedded_asset!(app, "shaders/impact_decal.wgsl");
         app.add_plugins(menu_blur::PostProcessPlugin)
             .add_plugins(UiMaterialPlugin::<radar_view::RadarMaterial>::default())
             .add_plugins(MaterialPlugin::<WorldMaterial>::default())
             .add_plugins(MaterialPlugin::<particle_material::ParticleMaterial>::default())
+            .add_plugins(MaterialPlugin::<impact_decal_material::ImpactDecalMaterial>::default())
             .add_plugins(particle_depth::ParticleDepthPlugin)
             .init_state::<AppState>()
             .init_resource::<session::Loader>()
