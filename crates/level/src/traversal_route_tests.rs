@@ -670,3 +670,18 @@ fn cached_classic_vertigo_parented_doors_open_and_admit_full_player_hulls() {
             "{rate}Hz entity{} player did not enter", entity);
     } }
 }
+
+#[test]
+#[ignore = "requires read-only installed CS:GO Legacy NAV files; no native process"]
+fn installed_authored_ladder_departures_survive_navigation_loading() {
+    let (_, fs) = mount_game(None).expect("read-only Legacy data");
+    for name in ["de_mirage", "de_nuke", "de_train", "de_overpass"] {
+        let bytes = fs.read(&format!("maps/{name}.nav")).expect(name);
+        let mesh = nav::NavMesh::parse(&bytes).expect(name);
+        assert!(!mesh.ladders().is_empty(), "{name} must retain its authored ladders");
+        let directed = mesh.areas.iter().any(|area| mesh.ladders().iter().any(|ladder|
+            mesh.ladder_transition(area.id, ladder.bottom_area).is_some()
+                || ladder.top_areas.iter().any(|&to| mesh.ladder_transition(area.id, to).is_some())));
+        assert!(directed, "{name} must expose an authored directed departure");
+    }
+}
