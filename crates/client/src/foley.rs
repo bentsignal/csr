@@ -258,9 +258,11 @@ fn team_prefix(team: sim::Team) -> &'static str {
 
 /// The surface's step entry under `origin` (`stepleft`/`stepright` of its
 /// surface property), e.g. `Gravel.StepLeft`.
-fn surface_step(level: &level::Level, props: &SurfaceProps, origin: glam::Vec3, left: bool) -> String {
-    let tr = level.collision.trace_ray(origin + glam::Vec3::Z, origin - glam::Vec3::Z * 32.0, collision::contents::MASK_SOLID);
-    let sounds = (tr.fraction < 1.0).then(|| props.sounds(&level.vfs, level.collision.surface_name(tr.surface))).flatten();
+fn surface_step(fs: &vfs::Vfs, collision: &collision::CollisionWorld, props: &SurfaceProps, origin: glam::Vec3, left: bool) -> String {
+    // The map omits runtime doors and breakables. Resolve contact and its
+    // material from the same current geometry that supports the player.
+    let tr = collision.trace_ray(origin + glam::Vec3::Z, origin - glam::Vec3::Z * 32.0, collision::contents::MASK_SOLID);
+    let sounds = (tr.fraction < 1.0).then(|| props.sounds(fs, collision.surface_name(tr.surface))).flatten();
     let step = sounds.and_then(|s| if left { s.step_left.clone() } else { s.step_right.clone() });
     step.unwrap_or_else(|| if left { "Default.StepLeft".into() } else { "Default.StepRight".into() })
 }
@@ -436,7 +438,7 @@ pub fn update(
                 props.get_declared("ladder").and_then(|s|
                     if left { s.step_left.clone() } else { s.step_right.clone() })
                     .unwrap_or_default()
-            } else { surface_step(&level.0, &props, p.movement.origin, left) };
+            } else { surface_step(fs, &world.0.collision, &props, p.movement.origin, left) };
             if step.is_empty() { continue; }
             if climbing && !sounds.has(&step) && !sounds.has(&format!("{}{step}", team_prefix(p.team))) { continue; }
             let entry = step_entry(&sounds, p.team, &step, left);
@@ -489,11 +491,11 @@ pub fn jump(commands: &mut Commands, sounds: &mut SoundLibrary, sources: &mut As
 /// Landing: the surface's `Land_` step entry plus the suit, e.g.
 /// `Land_Gravel.StepLeft` and `CT_Default.SuitLand`.
 #[allow(clippy::too_many_arguments)]
-pub fn land(commands: &mut Commands, sounds: &mut SoundLibrary, sources: &mut Assets<AudioSource>, level: &level::Level, props: &SurfaceProps, p: &sim::Player, local: &LocalPlayer, speed: f32) {
+pub fn land(commands: &mut Commands, sounds: &mut SoundLibrary, sources: &mut Assets<AudioSource>, level: &level::Level, collision: &collision::CollisionWorld, props: &SurfaceProps, p: &sim::Player, local: &LocalPlayer, speed: f32) {
     if speed < LAND_SPEED {
         return;
     }
-    let step = surface_step(level, props, p.movement.origin, true);
+    let step = surface_step(&level.vfs, collision, props, p.movement.origin, true);
     let land = format!("Land_{step}");
     let entry = if sounds.has(&land) { land } else { "Default.Land".into() };
     let emit = emit_for(p, local, p.movement.origin);
@@ -504,6 +506,66 @@ pub fn land(commands: &mut Commands, sounds: &mut SoundLibrary, sources: &mut As
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn contact_surface_follows_runtime_breakable_removal_and_restore() {
+        use collision::{CollisionWorld, Convex, Plane, contents};
+        use glam::Vec3;
+        use std::{collections::BTreeMap, sync::Arc};
+        let mut fs = vfs::Vfs::new();
+        let files = [
+            ("scripts/surfaceproperties_manifest.txt", r#""surfaceproperties_manifest" { "file" "scripts/test_surfaces.txt" }"#),
+            ("scripts/test_surfaces.txt", r#"
+                "default" { "stepleft" "Default.StepLeft" "stepright" "Default.StepRight" }
+                "concrete" { "stepleft" "Concrete.StepLeft" "stepright" "Concrete.StepRight" }
+                "wood" { "stepleft" "Wood.StepLeft" "stepright" "Wood.StepRight" }
+            "#),
+            ("materials/test_floor.vmt", r#""LightmappedGeneric" { "$surfaceprop" "concrete" }"#),
+            ("materials/test_cover.vmt", r#""LightmappedGeneric" { "$surfaceprop" "wood" }"#),
+        ];
+        fs.push_back("contact fixture", vfs::Mount::Memory(BTreeMap::from_iter(
+            files.into_iter().map(|(name, text)| (name.into(), Arc::<[u8]>::from(text.as_bytes()))),
+        )));
+        let props = SurfaceProps::load(&fs);
+        let slab = |bottom, top, surface| {
+            let mins = Vec3::new(-64., -64., bottom);
+            let maxs = Vec3::new(64., 64., top);
+            Convex { mins, maxs, surface, contents: contents::SOLID, planes: vec![
+                Plane { normal: Vec3::X, dist: maxs.x },
+                Plane { normal: -Vec3::X, dist: -mins.x },
+                Plane { normal: Vec3::Y, dist: maxs.y },
+                Plane { normal: -Vec3::Y, dist: -mins.y },
+                Plane { normal: Vec3::Z, dist: maxs.z },
+                Plane { normal: -Vec3::Z, dist: -mins.z },
+            ] }
+        };
+        let mut base = CollisionWorld::new();
+        let floor = base.surface_id("test_floor");
+        let wood = base.surface_id("test_cover");
+        base.add_convex(slab(-32., -16., floor));
+        base.breakables = vec![collision::breakables::Breakable {
+            entity: 0, model: 1, origin: Vec3::ZERO, health: 10., material: 0,
+            prop_data: String::new(), bullet_scale: 1., club_scale: 1., minimum_damage: 0.,
+            trigger_only: false, solids: vec![slab(-8., 0., wood)], studio: None,
+        }].into();
+        base.finalize();
+        let base = Arc::new(base);
+        let mut world = sim::World::new(base.clone());
+        for destroyed in [false, true, false] {
+            let mut state = world.state();
+            state.breakables[0] = sim::breakables::State {
+                health: if destroyed { 0. } else { 10. }, destroyed,
+            };
+            world.restore(state);
+            for left in [true, false] {
+                let foot = if left { "Left" } else { "Right" };
+                assert_eq!(surface_step(&fs, &world.collision, &props, Vec3::Z, left),
+                    format!("{}.Step{foot}", if destroyed { "Concrete" } else { "Wood" }));
+                assert_eq!(surface_step(&fs, &base, &props, Vec3::Z, left),
+                    format!("Concrete.Step{foot}"), "map-only contact misses the live cover");
+            }
+        }
+    }
 
     // UNRUN: source-only handoff. Read only the installed models/schema and
     // sounds needed by this fixture, with an empty synthetic map and no GPU or
@@ -555,7 +617,7 @@ mod tests {
         let ani = (!full.anim_block_file.is_empty()).then(|| level.vfs.read(&full.anim_block_file)).flatten();
         full.decode_animation(draw.anims[0] as usize, ani.as_deref()).expect("fixture Draw must decode");
         assert_eq!(level.catalog.weapons[0].view_model, def.view_model);
-        let views = crate::viewmodel::load(&level, &Default::default(),
+        let views = crate::viewmodel::load(&level, &Default::default(), &HashMap::new(),
             &mut Assets::<Mesh>::default(), &mut Assets::<crate::material::WorldMaterial>::default(),
             &mut Assets::<Image>::default(), &mut crate::textures::TextureCache::default(),
             &crate::world_mesh::SharedHandles { lightmap: Default::default() },
