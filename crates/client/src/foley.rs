@@ -35,6 +35,7 @@ struct PlayerFoley {
     life_epoch: Option<u64>,
     weapon: String,
     reloading: bool,
+    reload_end: Option<f32>,
     shell_stage: Option<Option<i32>>,
     grenade_pull: Option<u64>,
     grenade_release: Option<u64>,
@@ -321,6 +322,7 @@ pub fn update(
         if weapon != st.weapon {
             st.weapon = weapon.clone();
             st.reloading = false;
+            st.reload_end = None;
             st.shell_stage = None;
             st.suppressor_transition = None;
             foley.queue.retain(|q| q.player != p.id);
@@ -392,7 +394,8 @@ pub fn update(
             }
         }
         let st = foley.players.get_mut(&p.id).unwrap();
-        let reloading = w.is_some_and(|w| w.reload_end.is_some());
+        let reload_end = w.and_then(|w| w.reload_end);
+        let reloading = reload_end.is_some();
         let shell = w.and_then(|w| w.shell_reload()).is_some();
         let stage = w.and_then(|w| w.shell_stage(now)).map(|s| s.0);
         let mut plan: Option<(&str, Option<f32>)> = None;
@@ -402,14 +405,18 @@ pub fn update(
             } else if !reloading && st.reloading {
                 plan = Some(("ACT_SHOTGUN_RELOAD_FINISH", None));
             }
-        } else if reloading && !st.reloading {
-            plan = Some(("ACT_VM_RELOAD", w.and_then(|w| w.reload_end).map(|end| (end - now).max(0.05))));
+        } else if reloading && reload_end != st.reload_end {
+            plan = Some(("ACT_VM_RELOAD", reload_end.map(|end| (end - now).max(0.05))));
         }
-        let cancelled = st.reloading && !reloading && !shell;
+        // A snapshot gap can hide a holster/cancel/restart of the same gun.
+        // Its accepted magazine deadline identifies the new playback without
+        // reconstructing an unobserved start. Completion/cancellation is None.
+        let retired = !shell && reload_end != st.reload_end;
         st.reloading = reloading;
+        st.reload_end = reload_end;
         st.shell_stage = stage;
-        if cancelled {
-            // Finished or interrupted: nothing of it may still play.
+        if retired {
+            // Retire old tails before scheduling or dispatching the new clip.
             foley.queue.retain(|q| !(q.player == p.id && q.reload));
         }
         if let Some((activity, stretch)) = plan {
@@ -650,6 +657,111 @@ mod tests {
         };
         app.world_mut().resource_mut::<crate::effects::PendingEvents>().0.extend(events);
         app.world_mut().run_schedule(FixedUpdate);
+    }
+
+    #[test]
+    #[ignore = "requires installed CS:GO Legacy; source-only regression is UNRUN"]
+    fn installed_magazine_reload_replaces_unobserved_restart_and_retires_ended_tails() {
+        use movement::buttons::{ATTACK, RELOAD};
+        for rate in [64, 128] {
+            for complete in [false, true] {
+                let name = "weapon_ak47";
+                let (mut app, id) = installed_handling_app(name, rate);
+                let schema = app.world().resource::<LoadedLevel>().0.vfs
+                    .read("scripts/items/items_game.txt").unwrap();
+                let catalog = weapons::Catalog::from_items_game(&kv::decode_text(&schema)).unwrap();
+                app.world_mut().resource_mut::<SimWorld>().0.player_mut(id).unwrap().weapons
+                    .push(sim::weapon::WeaponState::new(std::sync::Arc::new(
+                        catalog.get("weapon_knife").unwrap().clone())));
+                let (_, reload) = app.world().resource::<ViewModels>()
+                    .activity_sounds(name, "ACT_VM_RELOAD").unwrap();
+                app.world_mut().run_schedule(FixedUpdate);
+                while app.world().resource::<Foley>().queue.iter().any(|q| q.deploy) {
+                    handling_step(&mut app, id, 0);
+                }
+                handling_step(&mut app, id, ATTACK);
+                assert_eq!(app.world().resource::<SimWorld>().0.player(id).unwrap().shots, 1);
+                handling_step(&mut app, id, RELOAD);
+                let old_end = app.world().resource::<SimWorld>().0.player(id).unwrap()
+                    .active_weapon().unwrap().reload_end.unwrap();
+                let stale_at = app.world().resource::<Foley>().queue.iter().filter(|q| q.reload)
+                    .map(|q| q.at).min_by(f32::total_cmp).expect("authored reload tail");
+                assert!(stale_at < old_end);
+                let scheduled_before = app.world().resource::<Foley>().scheduled.len();
+                let dispatched_before = app.world().resource::<Foley>().dispatched.len();
+                let new_end = {
+                    // Advance real authority without Foley: both observations
+                    // hold the same reloading gun, hiding the cancelled reload.
+                    let mut world = app.world_mut().resource_mut::<SimWorld>();
+                    world.0.step(&[(id, sim::TickInput { weapon_slot: 3, ..Default::default() })]);
+                    let p = world.0.player(id).unwrap();
+                    assert_eq!(p.active_weapon().unwrap().def.class_name, "weapon_knife");
+                    assert!(p.weapons[0].reload_end.is_none());
+                    world.0.step(&[(id, sim::TickInput { weapon_slot: 1, buttons: RELOAD, ..Default::default() })]);
+                    assert!(world.0.events.iter().any(|e| matches!(e,
+                        sim::GameEvent::Reload { player } if *player == id)));
+                    let end = world.0.player(id).unwrap().active_weapon().unwrap().reload_end.unwrap();
+                    assert!(end > old_end);
+                    // Make at least one old cue overdue before the new state
+                    // is observed, so dispatch order also tests retirement.
+                    while world.0.time() < stale_at {
+                        world.0.step(&[(id, sim::TickInput::default())]);
+                    }
+                    assert_eq!(world.0.player(id).unwrap().active_weapon().unwrap().reload_end, Some(end));
+                    end
+                };
+                let observed = app.world().resource::<SimWorld>().0.time();
+                let expected: Vec<_> = reload.iter().map(|(cycle, entry)|
+                    (id, name.to_string(), entry.clone(), observed + cycle * (new_end - observed).max(0.05))).collect();
+                app.world_mut().run_schedule(FixedUpdate);
+                assert_eq!(app.world().resource::<Foley>().scheduled[scheduled_before..], expected);
+                assert_eq!(app.world().resource::<Foley>().queue.iter().filter(|q| q.reload)
+                    .map(|q| (q.player, q.weapon.clone(), q.entry.clone(), q.at)).collect::<Vec<_>>(),
+                    expected.iter().filter(|cue| cue.3 > observed).cloned().collect::<Vec<_>>());
+                app.world_mut().run_schedule(FixedUpdate); // identical timestamp
+                handling_step(&mut app, id, 0); // advancing tick, stable deadline
+                let first_new_tail = expected.iter().filter(|cue| cue.3 > observed)
+                    .map(|cue| cue.3).min_by(f32::total_cmp).unwrap();
+                while app.world().resource::<SimWorld>().0.time() < first_new_tail {
+                    handling_step(&mut app, id, 0);
+                }
+                app.world_mut().run_schedule(FixedUpdate); // repeat a dispatched cue's tick
+                let now = app.world().resource::<SimWorld>().0.time();
+                let foley = app.world().resource::<Foley>();
+                assert_eq!(foley.scheduled[scheduled_before..], expected,
+                    "{rate}Hz: stable reload deadline must schedule exactly once");
+                assert_eq!(foley.dispatched[dispatched_before..], expected.iter()
+                    .filter(|cue| cue.3 <= now).cloned().collect::<Vec<_>>(),
+                    "{rate}Hz: overdue old cues must never dispatch");
+                assert!(foley.queue.iter().any(|q| q.reload), "exercise a remaining tail");
+                let dispatched = foley.dispatched.clone();
+                {
+                    let mut world = app.world_mut().resource_mut::<SimWorld>();
+                    if complete {
+                        while world.0.player(id).unwrap().active_weapon().unwrap().reload_end.is_some() {
+                            world.0.step(&[(id, sim::TickInput::default())]);
+                        }
+                        let w = world.0.player(id).unwrap().active_weapon().unwrap();
+                        assert_eq!(w.clip, w.def.clip_size);
+                    } else {
+                        world.0.step(&[(id, sim::TickInput { weapon_slot: 3, ..Default::default() })]);
+                        world.0.step(&[(id, sim::TickInput { weapon_slot: 1, ..Default::default() })]);
+                        let w = world.0.player(id).unwrap().active_weapon().unwrap();
+                        assert_eq!(w.def.class_name, name);
+                        assert!(w.reload_end.is_none());
+                        assert!(w.clip < w.def.clip_size);
+                    }
+                }
+                app.world_mut().run_schedule(FixedUpdate);
+                app.world_mut().run_schedule(FixedUpdate);
+                let foley = app.world().resource::<Foley>();
+                assert!(foley.queue.iter().all(|q| !q.reload));
+                assert!(foley.players[&id].reload_end.is_none());
+                assert_eq!(foley.scheduled[scheduled_before..], expected);
+                assert_eq!(foley.dispatched, dispatched,
+                    "{rate}Hz complete={complete}: ended reload must retire even overdue tails");
+            }
+        }
     }
 
     #[test]
