@@ -1673,11 +1673,18 @@ mod tests {
                 let mut attached = false;
                 let mut detached = false;
                 let mut max_height = 0f32;
+                let mut approach = Vec::new();
                 for _ in 0..rate * 8 {
                     let before = world.player(id).unwrap().movement;
                     let inputs = bots.think(&world);
                     assert_eq!(world.player(id).unwrap().movement, before, "think emits input only");
                     assert_eq!(inputs[0].1.buttons & buttons::ATTACK, 0);
+                    if !up && before.origin.z > 200. && world.tick % 4 == 0 {
+                        let mount = ladder_contact(&world, world.player(id).unwrap(), bots.nav.as_ref().unwrap().ladder(7).unwrap());
+                        approach.push((world.tick, before.origin, before.velocity, before.ladder_normal,
+                            mount, inputs[0].1.forward_move, inputs[0].1.side_move, inputs[0].1.view_angles,
+                            bots.brains[&id].ladder_route.clone()));
+                    }
                     world.step_prediction(&inputs);
                     let pm = &world.player(id).unwrap().movement;
                     max_height = max_height.max(pm.origin.z);
@@ -1688,7 +1695,7 @@ mod tests {
                     if pm.on_ground && pm.ladder_normal.is_none() && arrived { break; }
                 }
                 let pm = &world.player(id).unwrap().movement;
-                assert!(attached && detached, "{rate} Hz up={up} cap={cap}: {pm:?}");
+                assert!(attached && detached, "{rate} Hz up={up} cap={cap}: {pm:?}; approach={approach:?}");
                 assert!(pm.on_ground && pm.ladder_normal.is_none());
                 assert!(if up { pm.origin.x > 32. && pm.origin.z > 248. } else { pm.origin.x < -40. && pm.origin.z < 8. }, "{pm:?}");
                 if up { assert!(max_height > cap, "actual cap, not NAV top, ends climbing"); }
