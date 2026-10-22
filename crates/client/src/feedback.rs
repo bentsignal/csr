@@ -2,6 +2,7 @@
 use crate::{
     coords::{rotation_to_bevy, to_bevy},
     effects::Effects,
+    impact_decal_material::{ImpactDecalMaterial, MARK_OFFSET},
     player::{LocalPlayer, SimWorld},
 };
 use bevy::prelude::*;
@@ -63,7 +64,7 @@ impl DoorImpactMark {
         if self.surface != def.surface || self.impact.pos.length() > def.radius + 0.25 { return None; }
         let rotation = def.rotation(state.angle);
         let normal = self.impact.normal.normalize_or_zero();
-        Some(Transform::from_translation(to_bevy(def.origin + rotation * (self.impact.pos + normal * 0.12)))
+        Some(Transform::from_translation(to_bevy(def.origin + rotation * (self.impact.pos + normal * MARK_OFFSET)))
             .with_rotation(rotation_to_bevy(rotation) * Quat::from_rotation_arc(Vec3::Z, to_bevy(normal))))
     }
 }
@@ -118,6 +119,9 @@ pub fn setup(
     mut meshes: ResMut<Assets<Mesh>>,
     mut images: ResMut<Assets<Image>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    mut decal_materials: ResMut<Assets<ImpactDecalMaterial>>,
+    options: Res<crate::Options>,
+    remote: Option<Res<crate::remote::RemoteClient>>,
 ) {
     let blood = level
         .0
@@ -144,7 +148,7 @@ pub fn setup(
             image.sampler = bevy::image::ImageSampler::linear();
             Some(images.add(image))
         });
-    let assets = FeedbackAssets {
+    let mut assets = FeedbackAssets {
         disc: meshes.add(Circle::new(1.0)),
         quad: meshes.add(Rectangle::new(1.0, 1.0)),
         blood: materials.add(StandardMaterial {
@@ -169,7 +173,7 @@ pub fn setup(
             cull_mode: None,
             ..default()
         }),
-        decals: crate::impact_decals::Catalog::load(&level.0.vfs, &mut meshes, &mut images, &mut materials),
+        decals: crate::impact_decals::Catalog::load(&level.0.vfs, &mut meshes, &mut images, &mut decal_materials),
         puffs: impact_puffs::Catalog::load(&level.0.vfs, &mut materials, &mut images),
     };
     // Queue these pipeline/material variants during startup so the first
@@ -210,6 +214,11 @@ pub fn setup(
             ImpactFx { born: now, life: 2., velocity: Vec3::ZERO, billboard: false },
             bevy::light::NotShadowCaster, bevy::light::NotShadowReceiver));
     }
+    if impact_edge_control_enabled(std::env::var("CSR_TEST_IMPACT_EDGE").as_deref().ok(),
+        options.0.screenshot.is_some(), remote.is_some()) {
+        spawn_impact_edge_control(&mut commands, &mut assets.decals, &mut meshes,
+            &mut materials, &decal_materials, now);
+    }
     commands.insert_resource(assets);
     commands.init_resource::<Hurt>();
     for side in 0..4 {
@@ -222,6 +231,65 @@ pub fn setup(
             BackgroundColor(Color::NONE),
             HurtEdge(side),
         ));
+    }
+}
+
+fn impact_edge_control_enabled(flag: Option<&str>, screenshot: bool, remote: bool) -> bool {
+    flag == Some("1") && screenshot && !remote
+}
+
+/// Screenshot-only paired edge control. Source camera: 0 0 16384, pitch/yaw 0 0.
+/// Left: clipped material; right: identical mounted art with the old quad material.
+/// Receiver right edges bisect each mark; the larger background is 32 units back.
+/// Only fixture scale changes for readability; production art dimensions stay intact.
+fn spawn_impact_edge_control(
+    commands: &mut Commands,
+    catalog: &mut crate::impact_decals::Catalog,
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<StandardMaterial>,
+    decal_materials: &Assets<ImpactDecalMaterial>,
+    now: f32,
+) {
+    let Some(decal) = catalog.edge_control() else { return; };
+    let Some(material) = decal_materials.get(&decal.material) else { return; };
+    let Some(positions) = meshes.get(&decal.mesh)
+        .and_then(|mesh| mesh.attribute(Mesh::ATTRIBUTE_POSITION))
+        .and_then(|values| values.as_float3()) else { return; };
+    let extent = positions.iter().fold(0.0_f32, |size, p| size.max(p[0].abs()).max(p[1].abs())) * 2.;
+    if !extent.is_finite() || extent <= 0. { return; }
+    let scale = 96. / extent;
+    let unclipped = materials.add(material.base.clone());
+    let background = materials.add(StandardMaterial {
+        base_color: Color::linear_rgb(0.35, 0.5, 0.65), unlit: true, ..default()
+    });
+    let receiver = materials.add(StandardMaterial {
+        base_color: Color::linear_rgb(0.75, 0.75, 0.75), unlit: true, ..default()
+    });
+    let background_mesh = meshes.add(Rectangle::new(128., 128.));
+    let receiver_mesh = meshes.add(Rectangle::new(48., 112.));
+    let normal = -Vec3::X;
+    let rotation = Quat::from_rotation_arc(Vec3::Z, normal);
+    // Startup contributes at most five existing FX. Both fixture marks use
+    // the same admission/lifetime bound as ordinary impacts, with no child FX.
+    let mut budget = MAX_FEEDBACK_FX.saturating_sub(5);
+    let mut retired = HashSet::new();
+    for (side, clipped) in [(-80., true), (80., false)] {
+        if !reserve_impact_slot(commands, &mut budget, &mut retired, std::iter::empty()) { break; }
+        let center = Vec3::new(256., 16384., side);
+        commands.spawn((Mesh3d(background_mesh.clone()), MeshMaterial3d(background.clone()),
+            Transform::from_translation(center + Vec3::X * 32.).with_rotation(rotation)));
+        commands.spawn((Mesh3d(receiver_mesh.clone()), MeshMaterial3d(receiver.clone()),
+            Transform::from_translation(center + rotation * Vec3::new(-24., 0., 0.)).with_rotation(rotation)));
+        let mut mark = commands.spawn((Mesh3d(decal.mesh.clone()),
+            Transform::from_translation(center + normal * MARK_OFFSET)
+                .with_rotation(rotation).with_scale(Vec3::splat(scale)),
+            ImpactArtwork(decal.id.clone()),
+            ImpactFx { born: now, life: 30., velocity: Vec3::ZERO, billboard: false }));
+        if clipped {
+            mark.insert(MeshMaterial3d(decal.material.clone()));
+        } else {
+            mark.insert(MeshMaterial3d(unclipped.clone()));
+        }
     }
 }
 
@@ -254,7 +322,7 @@ fn spawn(
         } else {
             assets.hole.clone()
         }),
-        Transform::from_translation(pos + normal * 0.12)
+        Transform::from_translation(pos + normal * MARK_OFFSET)
             .with_rotation(Quat::from_rotation_arc(Vec3::Z, normal))
             .with_scale(Vec3::splat(size)),
         ImpactFx {
@@ -452,7 +520,7 @@ pub fn update(
                     let pose = match &attachment {
                         Some(mark) => mark.pose(&level.0.id, &level.0.collision, &world.0.doors),
                         None => (normal.length_squared() > 0.5 && pos.is_finite()).then(||
-                            Transform::from_translation(to_bevy(pos) + normal * 0.12)
+                            Transform::from_translation(to_bevy(pos) + normal * MARK_OFFSET)
                                 .with_rotation(Quat::from_rotation_arc(Vec3::Z, normal))),
                     };
                     if normal.length_squared() > 0.5 && pos.is_finite()
@@ -634,6 +702,68 @@ mod tests {
 mod decal_tests {
     use super::*;
 
+    #[test]
+    fn edge_control_is_screenshot_only_and_keeps_artwork_owned_and_bounded() {
+        use crate::session::{AppState, MatchEntity};
+        use std::{collections::BTreeMap, sync::Arc};
+        for flag in [None, Some("0"), Some("1"), Some("2"), Some("true")] {
+            for screenshot in [false, true] {
+                for remote in [false, true] {
+                    assert_eq!(impact_edge_control_enabled(flag, screenshot, remote),
+                        flag == Some("1") && screenshot && !remote);
+                }
+            }
+        }
+        // Original synthetic RGBA VTF, 4x2, no installed data or artwork.
+        let mut pixels = vec![0u8; 80];
+        pixels[0..4].copy_from_slice(b"VTF\0");
+        pixels[4..8].copy_from_slice(&7u32.to_le_bytes());
+        pixels[8..12].copy_from_slice(&2u32.to_le_bytes());
+        pixels[12..16].copy_from_slice(&80u32.to_le_bytes());
+        pixels[16..18].copy_from_slice(&4u16.to_le_bytes());
+        pixels[18..20].copy_from_slice(&2u16.to_le_bytes());
+        pixels[24..26].copy_from_slice(&1u16.to_le_bytes());
+        pixels[56] = 1;
+        pixels[57..61].copy_from_slice(&(-1i32).to_le_bytes());
+        pixels[63..65].copy_from_slice(&1u16.to_le_bytes());
+        pixels.extend_from_slice(&[64u8; 32]);
+        let mut files = BTreeMap::<String, Arc<[u8]>>::new();
+        files.insert("scripts/decals_subrect.txt".into(), Arc::from(
+            &br#"TranslationData { c Impact.Concrete } Impact.Concrete { test/mark 1 }"#[..]));
+        files.insert("materials/test/mark.vmt".into(), Arc::from(
+            &br#"DecalModulate { "$basetexture" "test/pixels" "$decalscale" "0.5" }"#[..]));
+        files.insert("materials/test/pixels.vtf".into(), Arc::from(pixels));
+        let mut fs = vfs::Vfs::new();
+        fs.push_back("synthetic edge", vfs::Mount::Memory(files));
+        let mut meshes = Assets::<Mesh>::default();
+        let mut images = Assets::<Image>::default();
+        let mut materials = Assets::<StandardMaterial>::default();
+        let mut clipped = Assets::<ImpactDecalMaterial>::default();
+        let mut catalog = crate::impact_decals::Catalog::load(&fs, &mut meshes, &mut images, &mut clipped);
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, bevy::state::app::StatesPlugin))
+            .insert_state(AppState::Match)
+            .add_observer(crate::session::own_entity::<Transform>)
+            .add_systems(OnExit(AppState::Match), crate::session::clear_match);
+        app.update();
+        let mut queue = bevy::ecs::world::CommandQueue::default();
+        spawn_impact_edge_control(&mut Commands::new(&mut queue, app.world()),
+            &mut catalog, &mut meshes, &mut materials, &clipped, 1.);
+        queue.apply(app.world_mut());
+        app.world_mut().flush();
+        let mut marks = app.world_mut().query::<(&ImpactFx, &ImpactArtwork, &Transform, &MatchEntity)>();
+        let marks: Vec<_> = marks.iter(app.world()).collect();
+        assert_eq!(marks.len(), 2);
+        assert!(marks.iter().all(|(fx, art, pose, _)| fx.life == 30. && !fx.billboard
+            && fx.velocity == Vec3::ZERO && pose.scale == Vec3::splat(48.)
+            && art.0 == content::ContentId::csgo(content::ContentKind::Material, "test/mark")));
+        assert_eq!(app.world_mut().query::<&MeshMaterial3d<ImpactDecalMaterial>>().iter(app.world()).count(), 1);
+        app.world_mut().resource_mut::<NextState<AppState>>().set(AppState::Menu);
+        app.update();
+        assert_eq!(app.world_mut().query::<&ImpactFx>().iter(app.world()).count(), 0);
+        assert_eq!(app.world_mut().query::<&MatchEntity>().iter(app.world()).count(), 0);
+    }
+
     pub(super) fn door_mark() -> (DoorImpactMark, collision::CollisionWorld, Vec<sim::doors::State>) {
         let mut map = bsp::Bsp::default();
         let doc = kv::parse(r#"door { classname prop_door_rotating model models/fixture_leaf.mdl
@@ -703,6 +833,7 @@ mod decal_tests {
         app.update();
         let (mark, _, _) = door_mark();
         let entity = app.world_mut().spawn((mark, Transform::default(),
+            Mesh3d(default()), MeshMaterial3d::<ImpactDecalMaterial>(default()),
             ImpactArtwork(content::ContentId::csgo(content::ContentKind::Material, "impact.fixture")),
             ImpactFx { born: 1., life: 30., velocity: Vec3::ZERO, billboard: false })).id();
         app.world_mut().flush();
@@ -729,9 +860,9 @@ mod decal_tests {
             for i in 0..32 {
                 assert!(reserve_impact_slot(&mut commands, &mut budget, &mut retired,
                     candidates.iter(&world).map(|(e, fx)| (e, fx.born))));
-                added.push(commands.spawn(ImpactFx {
+                added.push(commands.spawn((MeshMaterial3d::<ImpactDecalMaterial>(default()), ImpactFx {
                     born: 1000. + i as f32, life: 30., velocity: Vec3::ZERO, billboard: false,
-                }).id());
+                })).id());
             }
         }
         queue.apply(&mut world);
@@ -739,6 +870,7 @@ mod decal_tests {
         assert_eq!(retired.len(), 32);
         assert!(old[..32].iter().all(|e| world.get_entity(*e).is_err()));
         assert!(old[32..].iter().chain(&added).all(|e| world.get::<ImpactFx>(*e).is_some()));
+        assert!(added.iter().all(|e| world.get::<MeshMaterial3d<ImpactDecalMaterial>>(*e).is_some()));
         assert_eq!(budget, 0);
     }
 
