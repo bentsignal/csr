@@ -1433,7 +1433,10 @@ fn follow_ladder(mesh: &NavMesh, world: &World, bot: &Player, brain: &mut Brain,
             // the existing attachment band. Stopping exactly on hull clearance
             // can leave a fraction of the hull supported indefinitely.
             + if up { 0.0 } else { collision::LADDER_REACH };
-        face.end + face.normal * clearance
+        // Ascending input should press into the actual face, just like a
+        // player. Stopping at an exact clearance point can stall a little short
+        // of contact at high tick rates; the movement sweep owns clearance.
+        if up { face.end } else { face.end + face.normal * clearance }
     });
     let target = if route.exiting {
         destination.center()
