@@ -61,6 +61,9 @@
 - [x] Continue explicit F8 weapon/knife choices across F8 map changes through
   the next map's catalog. Clip static blood marks with the same opaque-depth
   receiver test while preserving airborne spray and attached-door behavior.
+- [x] Admit reachable ladder-cap mounts beneath low ceilings using the actual
+  movement-solver jump preview, retaining blocked-headroom recovery and
+  unchanged human physics. Parsed-NAV bot traversal passed at 64/128 Hz.
 - [ ] Finish unresolved player outcomes in the approved order; an increment or
   first pass does not finish its backlog category.
 
