@@ -82,6 +82,11 @@ pub fn build_asset(
     let inverse: Vec<Mat4> = model.bones.iter().map(|b| s * to_bevy_mat(b.pose_to_bone) * s_inv).collect();
     let mut culling = Vec::with_capacity(model.meshes.len());
     let joint_limit = model.bones.len().saturating_sub(1).min(255) as u16;
+    // Body parts often share a skin texture. Resolve/convert it once in this
+    // exact model/VFS/exposure scope, including the missing-VMT fallback.
+    // Keep values rather than asset handles: every part still owns a separate
+    // material for later lighting, finish and suppressor changes.
+    let mut prepared_materials = std::collections::HashMap::new();
     let parts = model
         .meshes
         .iter()
@@ -131,17 +136,20 @@ pub fn build_asset(
                 }).collect::<Vec<_>>());
             } else if let Err(e) = m.generate_tangents() { warn!("model tangents: {e}"); }
             let tex = model.skin_texture(0, mesh.material);
-            let vmt = model
-                .material_candidates(tex)
-                .into_iter()
-                .find_map(|c| vmt::Material::load(&c, &read));
-            let mut mat = material_from_vmt(vmt.as_ref(), fs, textures, images, shared, exposure, false);
-            if dynamic_lit {
-                mat.params.flags = (mat.params.flags & !crate::material::flags::VERTEX_LIT) | crate::material::flags::DYNAMIC_LIT;
-                // Dynamic Phong/rim/emission composition is unvalidated;
-                // preserve existing weapon/character presentation this pass.
-                mat.params.self_illum = Vec4::ZERO;
-            }
+            let mat = prepared_materials.entry(tex).or_insert_with(|| {
+                let vmt = model
+                    .material_candidates(tex)
+                    .into_iter()
+                    .find_map(|c| vmt::Material::load(&c, &read));
+                let mut mat = material_from_vmt(vmt.as_ref(), fs, textures, images, shared, exposure, false);
+                if dynamic_lit {
+                    mat.params.flags = (mat.params.flags & !crate::material::flags::VERTEX_LIT) | crate::material::flags::DYNAMIC_LIT;
+                    // Dynamic Phong/rim/emission composition is unvalidated;
+                    // preserve existing weapon/character presentation this pass.
+                    mat.params.self_illum = Vec4::ZERO;
+                }
+                mat
+            }).clone();
             culling.push(crate::skinning_bounds::certify(&mut m, &inverse));
             (meshes.add(m), materials.add(mat))
         })
@@ -334,6 +342,87 @@ pub fn spawn_posed(
         commands.entity(*joint).insert(t);
     }
     instance
+}
+
+#[cfg(test)]
+mod material_preparation_tests {
+    use super::*;
+
+    #[test]
+    fn repeated_skin_materials_match_serial_import_and_keep_part_and_vfs_scope() {
+        let mesh = mdl::Mesh {
+            vertices: [glam::Vec3::ZERO, glam::Vec3::X, glam::Vec3::Y].map(|position| mdl::Vertex {
+                position, normal: glam::Vec3::Z, tangent: Some([1., 0., 0., 1.]),
+                ..Default::default()
+            }).to_vec(),
+            indices: vec![0, 1, 2],
+            ..Default::default()
+        };
+        let model = Arc::new(mdl::Model {
+            textures: vec!["paint".into(), "absent".into()],
+            cd_textures: vec!["preferred/".into(), "fallback/".into()],
+            // Different material slots alias one resolved texture. Missing
+            // declarations must also retain their original fallback.
+            skins: vec![vec![0, 0, 1, 1]],
+            meshes: (0..4).map(|material| mdl::Mesh { material, ..mesh.clone() }).collect(),
+            ..Default::default()
+        });
+        let mut images = Assets::<Image>::default();
+        let mut meshes = Assets::<Mesh>::default();
+        let mut materials = Assets::<WorldMaterial>::default();
+        let mut bindposes = Assets::<SkinnedMeshInverseBindposes>::default();
+        let mut textures = TextureCache::new(&mut images);
+        let shared = SharedHandles { lightmap: textures.white.clone() };
+        // Reuse all asset stores across successive imports, just as callers
+        // do. The same material names must still use each selected VFS and
+        // the current import's exposure/dynamic-lighting policy.
+        for (color, exposure, dynamic_lit) in [("[.25 .5 .75]", 1., true), ("[.75 .5 .25]", 3., false)] {
+            let mut fs = vfs::Vfs::new();
+            fs.push_back("fixture", vfs::Mount::Memory(std::collections::BTreeMap::from([
+                ("materials/preferred/paint.vmt".into(),
+                    format!(r#"Patch {{ include "materials/base.vmt" insert {{ "$color" "{color}" }} }}"#).into_bytes().into()),
+                ("materials/base.vmt".into(),
+                    br#"VertexLitGeneric { "$basetexture" "missing/base" "$phong" "1" "$nocull" "1" }"#.to_vec().into()),
+                ("materials/fallback/paint.vmt".into(),
+                    br#"UnlitGeneric { "$color" "[1 0 0]" }"#.to_vec().into()),
+            ])));
+            let asset = build_asset(model.clone(), &fs, &mut meshes, &mut materials,
+                &mut images, &mut textures, &shared, &mut bindposes, exposure, dynamic_lit);
+            assert_eq!(asset.parts.len(), 4);
+            let expected_color = if dynamic_lit { Vec4::new(0.25, 0.5, 0.75, 1.) }
+                else { Vec4::new(0.75, 0.5, 0.25, 1.) };
+            assert_eq!(materials.get(&asset.parts[0].1).unwrap().params.color, expected_color);
+            assert_eq!(materials.get(&asset.parts[2].1).unwrap().base, textures.black);
+            for (index, (_, handle)) in asset.parts.iter().enumerate() {
+                assert!(asset.parts[..index].iter().all(|(_, earlier)| earlier != handle));
+                // Original serial material path, independent of the reuse map.
+                let tex = model.skin_texture(0, model.meshes[index].material);
+                let source = model.material_candidates(tex).into_iter()
+                    .find_map(|path| vmt::Material::load(&path, &|p| fs.read_string(p)));
+                let mut expected = material_from_vmt(source.as_ref(), &fs, &mut textures,
+                    &mut images, &shared, exposure, false);
+                if dynamic_lit {
+                    expected.params.flags = (expected.params.flags & !crate::material::flags::VERTEX_LIT)
+                        | crate::material::flags::DYNAMIC_LIT;
+                    expected.params.self_illum = Vec4::ZERO;
+                }
+                let actual = materials.get(handle).unwrap();
+                let gpu_bytes = |material: &WorldMaterial| {
+                    let mut buffer = bevy::render::render_resource::encase::UniformBuffer::new(Vec::new());
+                    buffer.write(&material.params).unwrap();
+                    buffer.into_inner()
+                };
+                assert_eq!(gpu_bytes(actual), gpu_bytes(&expected));
+                // Compare every binding, alpha/cull policy and CPU field too.
+                assert_eq!(format!("{actual:?}"), format!("{expected:?}"));
+            }
+            let first = &asset.parts[0].1;
+            let second = &asset.parts[1].1;
+            let before = materials.get(second).unwrap().params.color;
+            materials.get_mut(first).unwrap().params.color = Vec4::ZERO;
+            assert_eq!(materials.get(second).unwrap().params.color, before);
+        }
+    }
 }
 
 #[cfg(test)]
