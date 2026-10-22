@@ -523,17 +523,17 @@ mod tests {
         let mut files = BTreeMap::<String, Arc<[u8]>>::new();
         files.insert("scripts/items/items_game.txt".into(), schema.into());
         files.insert("scripts/game_sounds_weapons.txt".into(), script.into());
-        files.insert(def.view_model.clone(), model_bytes.into());
+        files.insert(def.view_model.replace('\\', "/").to_ascii_lowercase(), model_bytes.into());
         let base = def.view_model.trim_end_matches(".mdl");
         for path in [format!("{base}.vvd"), format!("{base}.dx90.vtx")]
             .into_iter().chain((!model.anim_block_file.is_empty()).then(|| model.anim_block_file.clone())) {
-            files.insert(path.clone(), installed.read(&path).unwrap().into());
+            files.insert(path.replace('\\', "/").to_ascii_lowercase(), installed.read(&path).unwrap().into());
         }
         for event in model.sequences.iter().flat_map(|seq| &seq.events) {
             if let Some(wave) = event.client_sound().and_then(|entry|
                 declarations.block(entry)).and_then(|entry| entry.str("wave")) {
                 let path = format!("sound/{}", wave.trim_start_matches(['~', ')', '^', '*']));
-                files.insert(path.clone(), installed.read(&path).unwrap().into());
+                files.insert(path.replace('\\', "/").to_ascii_lowercase(), installed.read(&path).unwrap().into());
             }
         }
         let mut bsp = vec![0u8; 1036];
