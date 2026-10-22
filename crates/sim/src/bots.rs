@@ -604,7 +604,34 @@ impl Bots {
                 brain.yaw = approach(brain.yaw, ty, turn_rate);
                 let on_target = angle_diff(ty, brain.yaw).abs() < 2.5 && angle_diff(tp, brain.pitch).abs() < 2.5;
                 let reaction = self.reaction_time.unwrap_or(0.45 - 0.3 * self.skill);
-                if on_target && brain.visible && time - brain.seen_at > reaction {
+                if bot.active_weapon().is_some_and(|w| w.is_melee()) {
+                    let target = world.player(brain.target.unwrap()).unwrap();
+                    let (mn, mx) = target.bounds();
+                    let in_range = crate::ray_box(eye, (brain.target_pos - eye).normalize_or_zero(), mn, mx)
+                        .is_some_and(|distance| distance <= crate::MELEE_RANGE);
+                    if in_range {
+                        if on_target && time - brain.seen_at > reaction {
+                            input.buttons |= buttons::ATTACK;
+                        }
+                    } else if let Some(mesh) = nav.as_deref() {
+                        if let Some(area) = mesh.nearest_area(target.movement.origin) {
+                            // Keep the existing planner's recovery, portals and
+                            // movement speeds, while aiming at the visible enemy.
+                            let aim = (brain.pitch, brain.yaw);
+                            follow_path(mesh, world, bot, brain, &mut input, &mut rng, time, turn_rate,
+                                Some(area.id), Some(target.movement.origin));
+                            let (forward, right, _) = movement::angle_vectors(Vec3::new(0.0, brain.yaw, 0.0));
+                            let wish = forward * input.forward_move + right * input.side_move;
+                            (brain.pitch, brain.yaw) = aim;
+                            move_towards(&mut input, brain.yaw, wish, wish.length());
+                        }
+                    } else {
+                        let delta = (target.movement.origin - bot.movement.origin).with_z(0.0);
+                        if can_walk(world, bot, delta.normalize_or_zero() * crate::MELEE_RANGE) {
+                            move_towards(&mut input, brain.yaw, delta, 450.0);
+                        }
+                    }
+                } else if on_target && brain.visible && time - brain.seen_at > reaction {
                     if brain.burst_left == 0 && time >= brain.next_burst {
                         brain.burst_left = if eye.distance(brain.target_pos)>1000.0 {2} else if eye.distance(brain.target_pos)<250.0 {7} else {3};
                     }
@@ -787,8 +814,16 @@ impl Bots {
                     let delta=brain.target_pos-eye;let t=((p.eye()-eye).dot(delta)/delta.length_squared().max(1.0)).clamp(0.0,1.0);
                     t>0.0 && t<1.0 && (eye+delta*t).distance(p.eye()-Vec3::Z*10.0)<30.0
                 });
-                let moving=bot.movement.velocity.truncate().length()>bot.active_weapon().map_or(55.0,|w|w.def.max_player_speed*0.28);
-                if blocked || moving || !bot.movement.on_ground || !brain.visible || angle_diff(y, brain.yaw+punch[1]*crate::weapon::RECOIL_SCALE).abs() > 4.0 || angle_diff(p, brain.pitch+punch[0]*crate::weapon::RECOIL_SCALE).abs() > 4.0 {
+                let melee = bot.active_weapon().is_some_and(|w| w.is_melee());
+                let moving=!melee && bot.movement.velocity.truncate().length()>bot.active_weapon().map_or(55.0,|w|w.def.max_player_speed*0.28);
+                // Melee authority permits movement and uses the final aim ray
+                // against the enemy hull, rather than a gun's accuracy posture.
+                let melee_miss = melee && brain.target.and_then(|id| world.player(id)).is_none_or(|target| {
+                    let (mn, mx) = target.bounds();
+                    let (dir, _, _) = movement::angle_vectors(Vec3::new(brain.pitch, brain.yaw, 0.0));
+                    crate::ray_box(eye, dir, mn, mx).is_none_or(|distance| distance > crate::MELEE_RANGE)
+                });
+                if blocked || moving || (!melee && !bot.movement.on_ground) || melee_miss || !brain.visible || angle_diff(y, brain.yaw+punch[1]*crate::weapon::RECOIL_SCALE).abs() > 4.0 || angle_diff(p, brain.pitch+punch[0]*crate::weapon::RECOIL_SCALE).abs() > 4.0 {
                     input.buttons &= !buttons::ATTACK;
                 }
             }
@@ -1792,6 +1827,119 @@ mod tests {
                 // and after readiness, rather than select the empty primary.
                 assert_eq!(gun_slot(bot, world.time()), 0);
                 assert_eq!(gun_slot(bot, world.time() + 2.), expected_slot);
+            }
+        }
+    }
+
+    #[test]
+    fn exhausted_melee_fallback_pursues_without_distant_slashes() {
+        for rate in [64, 128] {
+            for with_nav in [false, true] {
+                let catalog = weapons::Catalog::from_items_game(r#"items_game { items {
+                    "7" { "name" "weapon_ak47" "baseitem" "1" "attributes" {
+                        "primary clip size" "30" "is full auto" "1"
+                    } }
+                    "42" { "name" "weapon_knife" "baseitem" "1" }
+                } }"#).unwrap();
+                let mut collision = collision::CollisionWorld::new();
+                collision.finalize();
+                let mut world = World::with_catalog(Arc::new(collision), Arc::new(catalog));
+                world.set_tick_rate(rate);
+                world.tick = world.ticks(2.);
+                let id = world.add_bot("melee fallback", Team::Terrorist);
+                let enemy = world.add_player("visible target", Team::CounterTerrorist);
+                world.player_mut(enemy).unwrap().movement.origin = Vec3::X * 200.;
+                let inventory = ["weapon_ak47", "weapon_knife"]
+                    .map(|name| crate::WeaponState::new(Arc::new(world.catalog.get(name).unwrap().clone())))
+                    .into_iter().collect();
+                let bot = world.player_mut(id).unwrap();
+                bot.weapons = inventory;
+                bot.active = 0;
+                bot.weapons[0].clip = 0;
+                bot.weapons[0].reserve = 0;
+                bot.movement.origin = Vec3::ZERO;
+                bot.movement.on_ground = true;
+                let mut brain = Brain::fresh(bot, 0);
+                brain.target = Some(enemy);
+                (brain.pitch, brain.yaw) = look_angles(bot.eye(), Vec3::new(200., 0., 50.));
+                brain.burst_left = 2;
+                let mut bots = Bots::with_skill(1.);
+                if with_nav {
+                    let area = |id, nw, se| nav::Area {
+                        id, nw, se, flags: 0, ne_z: 0., sw_z: 0.,
+                        connections: Default::default(), place: 0, hiding_spots: vec![],
+                    };
+                    // The nav route bends north before reaching the enemy
+                    // east of us. Pursuit must preserve that world direction
+                    // while the combat aim continues to face the enemy.
+                    let mut start = area(1, Vec3::new(-64., -64., 0.), Vec3::new(64., 64., 0.));
+                    let mut bend = area(2, Vec3::new(-64., 64., 0.), Vec3::new(256., 192., 0.));
+                    let goal = area(3, Vec3::new(64., -64., 0.), Vec3::new(256., 64., 0.));
+                    start.connections[2].push(2);
+                    bend.connections[0].push(3);
+                    bots.nav = Some(Arc::new(NavMesh::from_areas(vec![start, bend, goal])));
+                }
+                bots.brains.insert(id, brain);
+                let inputs = bots.think(&world);
+                assert_eq!(inputs[0].1.weapon_slot, 3);
+                world.step_prediction(&inputs);
+                assert!(world.player(id).unwrap().active_weapon().unwrap().is_melee());
+                // Finish ordinary fallback deployment before testing pursuit.
+                world.tick += world.ticks(2.);
+                let now = world.time();
+                let bot = world.player_mut(id).unwrap();
+                bot.movement.origin = Vec3::ZERO;
+                bot.movement.on_ground = true;
+                bots.brains.get_mut(&id).unwrap().progress_time = now;
+                let inputs = bots.think(&world);
+                let input = inputs[0].1;
+                assert!(bots.brains[&id].visible);
+                assert_eq!(input.buttons & (buttons::ATTACK | buttons::ATTACK2), 0);
+                let (forward, right, _) = movement::angle_vectors(input.view_angles.with_x(0.));
+                let wish = forward * input.forward_move + right * input.side_move;
+                if with_nav {
+                    assert_eq!(bots.brains[&id].path, [1, 2, 3]);
+                    assert!(wish.y > 400., "follow the portal, not a direct charge east");
+                    assert!(angle_diff(input.view_angles.y, 0.).abs() < 1.);
+                } else {
+                    assert!(wish.x > 400.);
+                }
+                world.step_prediction(&inputs);
+                let bot = world.player(id).unwrap();
+                assert!(if with_nav { bot.movement.origin.y > 0. } else { bot.movement.origin.x > 0. });
+                assert!(bot.active_weapon().unwrap().last_melee_attack.is_none());
+                assert_eq!((bot.weapons[0].clip, bot.weapons[0].reserve), (0, 0));
+
+                // A moving knife can hit a hull even when its centre is
+                // farther than MELEE_RANGE. Gun bursts/accuracy gates must
+                // neither suppress the slash nor determine its damage.
+                for grounded in [true, false] {
+                    world.player_mut(enemy).unwrap().movement.origin = Vec3::X * 60.;
+                    let bot = world.player_mut(id).unwrap();
+                    bot.movement.origin = Vec3::ZERO;
+                    bot.movement.velocity = Vec3::X * 200.;
+                    bot.movement.on_ground = grounded;
+                    let target = world.player(enemy).unwrap();
+                    let (pitch, yaw) = look_angles(world.player(id).unwrap().eye(), target.eye() - Vec3::Z * 14.);
+                    let brain = bots.brains.get_mut(&id).unwrap();
+                    brain.pitch = pitch; brain.yaw = yaw;
+                    brain.turn_velocity = glam::Vec2::ZERO;
+                    brain.burst_left = 0;
+                    brain.next_burst = world.time() + 10.;
+                    let inputs = bots.think(&world);
+                    assert_ne!(inputs[0].1.buttons & buttons::ATTACK, 0);
+                    assert_eq!(inputs[0].1.weapon_slot, if grounded { 3 } else { 0 });
+                    assert_eq!((inputs[0].1.forward_move, inputs[0].1.side_move), (0., 0.));
+                    let health = world.player(enemy).unwrap().health;
+                    let ready = world.player(id).unwrap().active_weapon().unwrap().next_attack;
+                    world.step_prediction(&inputs);
+                    if grounded {
+                        assert!(world.player(enemy).unwrap().health < health, "ordinary melee authority must apply the hit");
+                    } else {
+                        assert_eq!(world.player(enemy).unwrap().health, health, "pending melee cooldown must still apply");
+                        assert_eq!(world.player(id).unwrap().active_weapon().unwrap().next_attack, ready);
+                    }
+                }
             }
         }
     }
