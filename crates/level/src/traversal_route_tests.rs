@@ -670,3 +670,72 @@ fn cached_classic_vertigo_parented_doors_open_and_admit_full_player_hulls() {
             "{rate}Hz entity{} player did not enter", entity);
     } }
 }
+
+#[test]
+#[ignore = "requires read-only installed CS:GO Legacy NAV files; no native process"]
+fn installed_authored_ladder_departures_survive_navigation_loading() {
+    let (_, fs) = mount_game(None).expect("read-only Legacy data");
+    for name in ["de_mirage", "de_nuke", "de_train", "de_overpass"] {
+        let bytes = fs.read(&format!("maps/{name}.nav")).expect(name);
+        let mesh = nav::NavMesh::parse(&bytes).expect(name);
+        assert!(!mesh.ladders().is_empty(), "{name} must retain its authored ladders");
+        let directed = mesh.areas.iter().any(|area| mesh.ladders().iter().any(|ladder|
+            mesh.ladder_transition(area.id, ladder.bottom_area).is_some()
+                || ladder.top_areas.iter().any(|&to| mesh.ladder_transition(area.id, to).is_some())));
+        assert!(directed, "{name} must expose an authored directed departure");
+    }
+}
+
+#[test]
+#[ignore = "requires read-only installed Mirage BSP/NAV; no native process"]
+fn installed_mirage_bot_uses_authored_ladder_route_through_tick_input() {
+    let level = Level::load("de_mirage", None).expect("installed Mirage");
+    let mesh = level.nav.as_ref().expect("installed navigation");
+    let ladder = mesh.ladders().first().expect("authored ladder");
+    let from = ladder.bottom_area;
+    let to = *ladder.top_areas.iter().find(|&&to|
+        mesh.ladder_transition(from, to).is_some_and(|(selected, up)| selected.id == ladder.id && up))
+        .expect("authored ascending departure");
+    let path = mesh.find_path(from, to).expect("reachable exit");
+    assert!(path.windows(2).any(|pair| mesh.ladder_transition(pair[0], pair[1]).is_some()),
+        "this control must actually select an authored ladder: {path:?}");
+    for rate in [64, 128] {
+        let mut world = sim::World::with_catalog(level.collision.clone(),
+            Arc::new(weapons::Catalog { weapons: vec![] }));
+        world.set_tick_rate(rate);
+        world.tick = world.ticks(2.);
+        let id = world.add_bot("installed ladder route", sim::Team::CounterTerrorist);
+        let start = world.drop_to_floor(mesh.area(from).unwrap().center() + Vec3::Z, false);
+        let bot = world.player_mut(id).unwrap();
+        bot.movement = movement::PlayerMove::spawn_at(start);
+        bot.movement.on_ground = true;
+        world.mode = sim::GameMode::Competitive;
+        world.round.phase = sim::rules::Phase::Live;
+        let goal = mesh.area(to).unwrap().center();
+        world.objectives.bomb_sites.push(sim::objectives::BombSite { name: 'A',
+            zone: sim::objectives::Zone { mins: goal - Vec3::splat(16.), maxs: goal + Vec3::splat(16.) } });
+        world.bomb = Some(sim::PlantedBomb { pos: goal, site: 0, planter: id,
+            planted_at: 0., explode_at: 200., defuser: None });
+        let mut bots = sim::bots::Bots::with_skill(1.).with_nav(Some(mesh.clone()));
+        let mut attached = false;
+        let mut arrived = false;
+        let mut approach = Vec::new();
+        for _ in 0..rate * 12 {
+            let inputs = bots.think(&world);
+            world.step_prediction(&inputs);
+            let actor = world.player(id).unwrap();
+            attached |= actor.movement.ladder_normal.is_some();
+            let at = actor.movement.origin;
+            if world.tick % (rate as u64 / 8) == 0 && at.distance(ladder.bottom) < 256. {
+                approach.push((world.tick, at, actor.movement.velocity, actor.movement.ladder_normal,
+                    inputs[0].1.forward_move, inputs[0].1.side_move, inputs[0].1.view_angles));
+            }
+            arrived = actor.movement.on_ground && actor.movement.ladder_normal.is_none()
+                && mesh.area(to).unwrap().contains_xy(at, 0.)
+                && (at.z - mesh.area(to).unwrap().z_at(at.x, at.y)).abs() <= world.config.step_size;
+            if arrived { break; }
+        }
+        assert!(attached && arrived, "{rate}Hz ladder {}: start={start:?} destination={to} attached={attached} actor={:?} approach={approach:?}",
+            ladder.id, world.player(id).unwrap().movement);
+    }
+}

@@ -3,7 +3,7 @@ use super::*;
 
 /// Reach from the player's collision hull, in map units. This includes the
 /// ordinary sweep separation epsilon; it never expands solid movement hulls.
-const REACH: f32 = 2.0;
+pub const REACH: f32 = 2.0;
 
 impl CollisionWorld {
     /// Outward normal of a nearby ladder face. Use all convex planes rather

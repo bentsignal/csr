@@ -49,6 +49,15 @@ struct FailedTransition {
     retry_at: f32,
 }
 
+#[derive(Clone, Debug)]
+struct LadderRoute {
+    from: u32,
+    to: u32,
+    id: u32,
+    attached: bool,
+    exiting: bool,
+}
+
 #[derive(Clone, Debug, Default)]
 struct Brain {
     target: Option<PlayerId>,
@@ -78,6 +87,9 @@ struct Brain {
     /// An unreachable query under the current temporary edge exclusions.
     failed_route: Option<(u32, u32)>,
     route_searches: u64,
+    ladder_route: Option<LadderRoute>,
+    /// This decision followed a ladder; do not add walking recovery/yield jumps.
+    ladder_navigation: bool,
     /// Round the bot finished buying in, and failed attempts this round.
     bought_round: u32,
     buy_attempts: u32,
@@ -477,6 +489,7 @@ impl Bots {
             let contact=self.team.contact(bot.team,time,bot.movement.origin);
             let purchase=next_purchase(world,bot,&self.team);
             let brain = self.brains.entry(bot.id).or_insert_with(|| Brain::fresh(bot, 0));
+            brain.ladder_navigation = false;
             if !bot.alive {
                 // Forget everything; start fresh after respawning.
                 *brain = Brain::fresh(bot, 0);
@@ -525,6 +538,7 @@ impl Bots {
             }
             if frozen {
                 brain.route_obstruction = None;
+                brain.ladder_route = None;
                 // New round: drop the old path and objectives.
                 brain.path.clear();
                 brain.failed_transitions.clear();
@@ -807,7 +821,7 @@ impl Bots {
                     }
                 }
             }
-            if wish.length_squared() > 1.0 {
+            if wish.length_squared() > 1.0 && !brain.ladder_navigation {
                 for other in world.players.iter().filter(|p| p.alive && p.id != bot.id && p.team == bot.team) {
                     let delta = (bot.movement.origin - other.movement.origin).truncate();
                     let distance = delta.length();
@@ -823,7 +837,7 @@ impl Bots {
             // along the actual movement command, then let ordinary player use
             // selection admit the final smoothed aim below. Do not borrow aim
             // from combat, bomb work, utility or an unfinished weapon action.
-            let route_action = !brain.visible && brain.throw.is_none()
+            let route_action = !brain.ladder_navigation && !brain.visible && brain.throw.is_none()
                 && bot.plant_start.is_none()
                 && !world.bomb.is_some_and(|b| b.defuser.is_some_and(|(id, _)| id == bot.id))
                 && input.buttons & (buttons::USE | buttons::ATTACK | buttons::ATTACK2 | buttons::RELOAD) == 0
@@ -855,6 +869,13 @@ impl Bots {
             }
             brain.pitch = smooth_angle(old_angles.x, brain.pitch, &mut brain.turn_velocity.x, dt, 300.0);
             brain.yaw = smooth_angle(old_angles.y, brain.yaw, &mut brain.turn_velocity.y, dt, 420.0);
+            // The surface converts level inward/outward input into climbing.
+            // Keep that command independent of a previous search/contact pitch;
+            // combat and utility retain their existing aim ownership.
+            if brain.ladder_navigation && !brain.visible && brain.throw.is_none() {
+                brain.pitch = 0.0;
+                brain.turn_velocity.x = 0.0;
+            }
             let (forward, right, _) = movement::angle_vectors(Vec3::new(0.0, brain.yaw, 0.0));
             input.forward_move = wish.dot(forward);
             input.side_move = wish.dot(right);
@@ -1101,6 +1122,12 @@ fn wander(world: &World, bot: &crate::Player, brain: &mut Brain, input: &mut Tic
 }
 
 fn prepare_jump(bot: &Player, brain: &mut Brain, input: &mut TickInput) {
+    if brain.ladder_navigation {
+        brain.duck_jump = false;
+        // Only an attached bottom dismount may request a fresh jump-away.
+        if bot.movement.ladder_normal.is_none() { input.buttons &= !buttons::JUMP; }
+        return;
+    }
     if bot.movement.on_ground {
         // Only a fresh grounded press starts a duck-jump. Falling off an
         // edge must not turn a recovery request into an airborne crouch.
@@ -1143,6 +1170,8 @@ fn follow_path(
             a.contains_xy(pos, margin) && (-8.0..120.0).contains(&dz)
         })
     };
+    let current_ladder = brain.path.get(brain.path_index).zip(brain.path.get(brain.path_index + 1))
+        .and_then(|(&from, &to)| mesh.ladder_transition(from, to));
     let old_failed_count = brain.failed_transitions.len();
     brain.failed_transitions.retain(|edge| time < edge.retry_at);
     if brain.failed_transitions.len() != old_failed_count {
@@ -1162,6 +1191,7 @@ fn follow_path(
     // in another area to establish displacement: linked areas may have gaps,
     // and airborne feet may leave their floor bounds. Preserve combat resume.
     if !brain.path.iter().skip(brain.path_index).take(4).any(|&id| in_area(id, 0.0))
+        && !current_ladder.is_some_and(|(ladder, _)| ladder_contact(world, bot, ladder).1)
         && (resumed || (bot.movement.on_ground
             && mesh.nearest_area(pos).is_some_and(|a| in_area(a.id, 0.0))))
     {
@@ -1178,6 +1208,7 @@ fn follow_path(
     if (world.tick+bot.id as u64)%interval(world, FIRE_CHECK_RATE)==0 && brain.path.iter().skip(brain.path_index).take(3).any(|id|mesh.area(*id).is_some_and(|a|world.fire_at(a.center()))) {brain.path.clear();}
     let need_path = brain.path_index + 1 >= brain.path.len();
     if need_path {
+        brain.ladder_route = None;
         let start = mesh.nearest_area(pos).map(|a| a.id);
         if let (Some(g), Some(s)) = (goal, start) {
             if s == g && in_area(g, -2.0) {
@@ -1229,8 +1260,14 @@ fn follow_path(
     // the mesh on a prop, or drop past a small area).
     for ahead in (1..=3).rev() {
         let k = brain.path_index + ahead;
-        if k < brain.path.len() && in_area(brain.path[k], -2.0) {
+        // Never look ahead across a ladder or call an airborne/climbing bot
+        // arrived on a lower floor merely because it is within 120 units.
+        let ladder_crossing = (brain.path_index..k.min(brain.path.len().saturating_sub(1)))
+            .any(|i| mesh.ladder_transition(brain.path[i], brain.path[i + 1]).is_some());
+        let ladder_arrival = ahead == 1 && bot.movement.on_ground && bot.movement.ladder_normal.is_none();
+        if k < brain.path.len() && (!ladder_crossing || ladder_arrival) && in_area(brain.path[k], -2.0) {
             brain.path_index = k;
+            brain.ladder_route = None;
             brain.progress_pos = pos;
             brain.progress_time = time;
             break;
@@ -1241,6 +1278,11 @@ fn follow_path(
     }
     let cur = brain.path[brain.path_index];
     let next = brain.path[brain.path_index + 1];
+    if let Some((ladder, up)) = mesh.ladder_transition(cur, next) {
+        follow_ladder(mesh, world, bot, brain, input, ladder, up, cur, next, time, turn_rate);
+        return false;
+    }
+    brain.ladder_route = None;
     let Some(mut target) = mesh.portal(cur, next, 20.0) else {
         brain.path.clear();
         return false;
@@ -1295,14 +1337,7 @@ fn follow_path(
         // retry this same inaccessible crossing indefinitely. Remember only
         // the attempted directed edge, leaving other approaches available.
         if cur != next && mesh.area(cur).is_some_and(|a| a.connections.iter().any(|d| d.contains(&next))) {
-            brain.failed_transitions.retain(|e| e.from != cur || e.to != next);
-            if brain.failed_transitions.len() == MAX_FAILED_TRANSITIONS {
-                brain.failed_transitions.remove(0);
-            }
-            brain.failed_transitions.push(FailedTransition {
-                from: cur, to: next, retry_at: time + FAILED_TRANSITION_SECONDS,
-            });
-            brain.failed_route = None;
+            remember_failed_transition(brain, cur, next, time);
         }
         brain.path.clear();
         brain.progress_time = time;
@@ -1322,6 +1357,137 @@ fn follow_path(
         input.side_move = brain.escape_side * 300.0;
     }
     false
+}
+
+fn ladder_face(world: &World, bot: &Player, ladder: &nav::Ladder, point: Vec3) -> Option<collision::Trace> {
+    let (mins, maxs) = bot.movement.hull();
+    let normal = ladder.normal();
+    let reach = ladder.width + ((maxs - mins) * 0.5).dot(normal.abs());
+    let start = point + normal * reach;
+    let end = point - normal * reach;
+    if !start.is_finite() || !end.is_finite() || !(end - start).is_finite() { return None; }
+    let tr = world.collision.trace_ray(start, end, collision::contents::LADDER);
+    (tr.hit() && !tr.start_solid && !tr.all_solid && tr.normal.dot(normal) > 0.7).then_some(tr)
+}
+
+/// Confirm this selected NAV ribbon, not merely some ladder in movement state.
+fn ladder_contact(world: &World, bot: &Player, ladder: &nav::Ladder) -> (Option<Vec3>, bool) {
+    let pos = bot.movement.origin;
+    let (mins, maxs) = bot.movement.hull();
+    let extent = (maxs - mins) * 0.5;
+    let normal = ladder.normal();
+    let t = ((pos.z - ladder.bottom.z) / (ladder.top.z - ladder.bottom.z)).clamp(0.0, 1.0);
+    let line = ladder.bottom.lerp(ladder.top, t);
+    let lateral = Vec3::Z.cross(normal);
+    let actual = world.collision.ladder_normal(pos, mins, maxs);
+    let face = ladder_face(world, bot, ladder, line);
+    let matches = actual.is_some_and(|n| n.dot(normal) > 0.7 && face.is_some_and(|face| {
+        let gap = (pos + (mins + maxs) * 0.5 - face.end).dot(n) - extent.dot(n.abs());
+        // Match CollisionWorld::ladder_normal's two-unit attachment reach.
+        n.dot(face.normal) > 0.99 && gap.abs() <= collision::LADDER_REACH + collision::DIST_EPSILON
+    }))
+        && (pos - line).dot(lateral).abs() <= ladder.width * 0.5 + extent.dot(lateral.abs())
+        && pos.z + maxs.z >= ladder.bottom.z && pos.z <= ladder.top.z + maxs.z;
+    (actual, matches)
+}
+
+/// A local input policy, not an off-mesh movement system. NAV selects a mount;
+/// the authoritative collision query must confirm its face and authored ribbon.
+/// Actual cap/side departure, not an elapsed climb duration, starts dismounting.
+#[allow(clippy::too_many_arguments)]
+fn follow_ladder(mesh: &NavMesh, world: &World, bot: &Player, brain: &mut Brain,
+    input: &mut TickInput, ladder: &nav::Ladder, up: bool, from: u32, to: u32,
+    time: f32, turn_rate: f32)
+{
+    brain.ladder_navigation = true;
+    let pos = bot.movement.origin;
+    let Some(destination) = mesh.area(to) else { brain.path.clear(); return };
+    let normal = ladder.normal();
+    let (mins, maxs) = bot.movement.hull();
+    let extent = (maxs - mins) * 0.5;
+    let t = ((pos.z - ladder.bottom.z) / (ladder.top.z - ladder.bottom.z)).clamp(0.0, 1.0);
+    let line = ladder.bottom.lerp(ladder.top, t);
+    let lateral = Vec3::Z.cross(normal);
+    let offset = pos - line;
+    // NAV is a guide to the mount, not an exact collision plane. Probe the
+    // authored ribbon and derive hull clearance from the real ladder face.
+    // This also keeps a parallel nearby ladder from impersonating this mount.
+    let (actual, on_mount) = ladder_contact(world, bot, ladder);
+    if brain.ladder_route.as_ref().is_none_or(|r| r.from != from || r.to != to || r.id != ladder.id) {
+        brain.ladder_route = Some(LadderRoute { from, to, id: ladder.id, attached: false, exiting: false });
+    }
+    let route = brain.ladder_route.as_mut().unwrap();
+    // Geometric reach alone is not accepted attachment. A descending bot
+    // must first move into the face; fresh outward motion intentionally does
+    // not catch a ladder in the human movement solver.
+    if on_mount && bot.movement.ladder_normal.is_some_and(|held| held.dot(normal) > 0.7) { route.attached = true; }
+    if route.attached && ((up && actual.is_none() && pos.z >= ladder.top.z)
+        || (!up && pos.z <= destination.z_at(pos.x, pos.y) + world.config.step_size)) {
+        route.exiting = true;
+    }
+    let entry = if up { ladder.bottom } else { ladder.top };
+    let mount = ladder_face(world, bot, ladder, entry).map(|face| {
+        let clearance = extent.dot(face.normal.abs()) - ((mins + maxs) * 0.5).dot(face.normal)
+            + collision::DIST_EPSILON
+            // At the top, move fully past floor support while remaining in
+            // the existing attachment band. Stopping exactly on hull clearance
+            // can leave a fraction of the hull supported indefinitely.
+            + if up { 0.0 } else { collision::LADDER_REACH };
+        // Ascending input should press into the actual face, just like a
+        // player. Stopping at an exact clearance point can stall a little short
+        // of contact at high tick rates; the movement sweep owns clearance.
+        if up { face.end } else { face.end + face.normal * clearance }
+    });
+    let target = if route.exiting {
+        destination.center()
+    } else if route.attached {
+        line
+    } else { mount.unwrap_or(entry) };
+    let mut direction = target - pos;
+    if on_mount && !route.exiting {
+        // Level input into the actual face climbs; backward input descends.
+        // Center laterally while climbing instead of strafing off its edge.
+        direction = normal * (if up || !route.attached { -1.0 } else { 1.0 })
+            - lateral * (offset.dot(lateral) / ladder.width.max(1.0)).clamp(-0.5, 0.5);
+    } else if route.exiting && !up && on_mount && bot.movement.ladder_normal.is_some()
+        && bot.last_input.buttons & buttons::JUMP == 0 {
+        // Backward motion on a face descends rather than stepping away. Use
+        // the human jump-away command at the bottom; movement owns the impulse.
+        input.buttons |= buttons::JUMP;
+    } else if ((actual.is_some() && !on_mount) || (!route.attached && mount.is_none())) && !route.exiting {
+        // Missing/wrong face: hold and let the existing failure deadline recover.
+        direction = Vec3::ZERO;
+    }
+    let (_, yaw) = look_angles(pos, pos + direction);
+    brain.yaw = approach(brain.yaw, yaw, turn_rate);
+    brain.pitch = approach(brain.pitch, 0.0, turn_rate);
+    let speed = if !route.attached { (direction.truncate().length() * 6.0).min(450.0) } else { 450.0 };
+    move_towards(input, brain.yaw, direction, speed);
+    let delta = pos - brain.progress_pos;
+    let progressed = if on_mount && !route.exiting {
+        delta.z * (if up { 1.0 } else { -1.0 }) > 48.0
+    } else {
+        (target - brain.progress_pos).truncate().length() - (target - pos).truncate().length() > 48.0
+    };
+    if progressed {
+        brain.progress_pos = pos;
+        brain.progress_time = time;
+    } else if time - brain.progress_time > 2.0 {
+        remember_failed_transition(brain, from, to, time);
+        brain.path.clear();
+        brain.ladder_route = None;
+        brain.progress_time = time;
+        input.forward_move = 0.0;
+        input.side_move = 0.0;
+        input.buttons &= !buttons::JUMP;
+    }
+}
+
+fn remember_failed_transition(brain: &mut Brain, from: u32, to: u32, time: f32) {
+    brain.failed_transitions.retain(|e| e.from != from || e.to != to);
+    if brain.failed_transitions.len() == MAX_FAILED_TRANSITIONS { brain.failed_transitions.remove(0); }
+    brain.failed_transitions.push(FailedTransition { from, to, retry_at: time + FAILED_TRANSITION_SECONDS });
+    brain.failed_route = None;
 }
 
  fn reload_cover(mesh: &NavMesh, world: &World, bot: &Player, threat: Vec3) -> Option<(u32, Vec3)> {
@@ -1444,6 +1610,152 @@ mod tests {
 
 #[cfg(test)] mod regression_tests {
     use super::*;
+
+    /// Own synthetic NAV bytes and collision geometry; no private asset fixture.
+    fn ladder_nav() -> NavMesh {
+        let mut bytes = Vec::new();
+        let word = |bytes: &mut Vec<u8>, value: u32| bytes.extend(value.to_le_bytes());
+        for value in [0xFEED_FACE, 16, 1, 0] { word(&mut bytes, value); }
+        bytes.push(1); bytes.extend(0u16.to_le_bytes()); bytes.push(1);
+        word(&mut bytes, 2);
+        for (id, x0, x1, z) in [(1, -160f32, -16f32, 0f32), (2, 16f32, 160f32, 256f32)] {
+            word(&mut bytes, id); word(&mut bytes, 0);
+            for value in [x0, -64.0, z, x1, 64.0, z, z, z] { word(&mut bytes, value.to_bits()); }
+            for _ in 0..4 { word(&mut bytes, 0); }
+            bytes.push(0); word(&mut bytes, 0); bytes.extend(0u16.to_le_bytes());
+            for active in [id == 1, id == 2] {
+                word(&mut bytes, u32::from(active));
+                if active { word(&mut bytes, 7); }
+            }
+            bytes.extend([0; 24]); word(&mut bytes, 0); word(&mut bytes, 0); bytes.push(0);
+        }
+        word(&mut bytes, 1); word(&mut bytes, 7); word(&mut bytes, 48f32.to_bits());
+        for value in [0f32, 0.0, 256.0, 0.0, 0.0, 0.0, 256.0] { word(&mut bytes, value.to_bits()); }
+        for value in [3, 2, 0, 0, 0, 1] { word(&mut bytes, value); }
+        NavMesh::parse(&bytes).unwrap()
+    }
+
+    fn ladder_box(low: Vec3, high: Vec3, contents: i32) -> collision::Convex {
+        collision::Convex { planes: vec![
+            collision::Plane { normal: Vec3::X, dist: high.x },
+            collision::Plane { normal: -Vec3::X, dist: -low.x },
+            collision::Plane { normal: Vec3::Y, dist: high.y },
+            collision::Plane { normal: -Vec3::Y, dist: -low.y },
+            collision::Plane { normal: Vec3::Z, dist: high.z },
+            collision::Plane { normal: -Vec3::Z, dist: -low.z },
+        ], mins: low, maxs: high, contents, surface: 0 }
+    }
+
+    fn ladder_route_fixture(rate: u32, up: bool, ladder: bool, cap: f32) -> (World, Bots, PlayerId) {
+        let mut collision = collision::CollisionWorld::new();
+        collision.add_convex(ladder_box(Vec3::new(-512., -512., -16.), Vec3::new(512., 512., 0.), collision::contents::SOLID));
+        collision.add_convex(ladder_box(Vec3::new(0., -128., 240.), Vec3::new(512., 128., 256.), collision::contents::SOLID));
+        if ladder {
+            collision.add_convex(ladder_box(Vec3::new(0., -24., 0.), Vec3::new(1., 24., cap),
+                collision::contents::LADDER | collision::contents::GRATE));
+        }
+        collision.finalize();
+        let mut world = World::with_catalog(Arc::new(collision), Arc::new(weapons::Catalog { weapons: vec![] }));
+        world.set_tick_rate(rate); world.tick = world.ticks(2.0);
+        let id = world.add_bot("ladder route", Team::CounterTerrorist);
+        let start = if up { Vec3::new(-100., 0., 0.03125) } else { Vec3::new(100., 0., 256.03125) };
+        let bot = world.player_mut(id).unwrap();
+        bot.movement = movement::PlayerMove::spawn_at(start); bot.movement.on_ground = true;
+        world.mode = GameMode::Competitive; world.round.phase = Phase::Live;
+        let goal = if up { Vec3::new(120., 0., 256.) } else { Vec3::new(-120., 0., 0.) };
+        world.objectives.bomb_sites.push(crate::objectives::BombSite { name: 'A',
+            zone: Zone { mins: goal - Vec3::splat(16.), maxs: goal + Vec3::splat(16.) } });
+        world.bomb = Some(crate::PlantedBomb { pos: goal, site: 0, planter: id,
+            planted_at: 0., explode_at: 200., defuser: None });
+        let bots = Bots::with_skill(1.).with_nav(Some(Arc::new(ladder_nav())));
+        (world, bots, id)
+    }
+
+    // All ladder regressions are intentionally UNRUN in this source-only slot.
+    #[test]
+    fn parsed_nav_think_and_world_movement_climb_and_dismount_at_both_rates() {
+        for rate in [64, 128] {
+            for (up, cap) in [(true, 256.), (true, 280.), (false, 256.)] {
+                let (mut world, mut bots, id) = ladder_route_fixture(rate, up, true, cap);
+                let mut attached = false;
+                let mut detached = false;
+                let mut max_height = 0f32;
+                let mut approach = Vec::new();
+                for _ in 0..rate * 8 {
+                    let before = world.player(id).unwrap().movement;
+                    let inputs = bots.think(&world);
+                    assert_eq!(world.player(id).unwrap().movement, before, "think emits input only");
+                    assert_eq!(inputs[0].1.buttons & buttons::ATTACK, 0);
+                    if !up && before.origin.z > 200. && world.tick % 4 == 0 {
+                        let mount = ladder_contact(&world, world.player(id).unwrap(), bots.nav.as_ref().unwrap().ladder(7).unwrap());
+                        approach.push((world.tick, before.origin, before.velocity, before.ladder_normal,
+                            mount, inputs[0].1.forward_move, inputs[0].1.side_move, inputs[0].1.view_angles,
+                            bots.brains[&id].ladder_route.clone()));
+                    }
+                    world.step_prediction(&inputs);
+                    let pm = &world.player(id).unwrap().movement;
+                    max_height = max_height.max(pm.origin.z);
+                    attached |= pm.ladder_normal == Some(-Vec3::X);
+                    detached |= attached && pm.ladder_normal.is_none();
+                    let arrived = if up { pm.origin.x > 32. && pm.origin.z > 248. }
+                        else { pm.origin.x < -40. && pm.origin.z < 8. };
+                    if pm.on_ground && pm.ladder_normal.is_none() && arrived { break; }
+                }
+                let pm = &world.player(id).unwrap().movement;
+                assert!(attached && detached, "{rate} Hz up={up} cap={cap}: {pm:?}; approach={approach:?}");
+                assert!(pm.on_ground && pm.ladder_normal.is_none());
+                assert!(if up { pm.origin.x > 32. && pm.origin.z > 248. } else { pm.origin.x < -40. && pm.origin.z < 8. }, "{pm:?}");
+                if up { assert!(max_height > cap, "actual cap, not NAV top, ends climbing"); }
+                assert!(bots.brains[&id].failed_transitions.is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn ladder_missing_contact_wrong_mount_and_incomplete_descent_fail_boundedly() {
+        for rate in [64, 128] {
+            let (mut world, mut bots, id) = ladder_route_fixture(rate, true, false, 256.);
+            for _ in 0..rate * 4 {
+                let inputs = bots.think(&world);
+                assert_eq!(inputs[0].1.buttons & buttons::JUMP, 0, "no invented mounting jump");
+                world.step_prediction(&inputs);
+            }
+            assert!(world.player(id).unwrap().movement.origin.z < 8.);
+            assert!(bots.brains[&id].failed_transitions.iter().any(|e| e.from == 1 && e.to == 2));
+
+            let (mut world, mut bots, id) = ladder_route_fixture(rate, true, true, 256.);
+            let mut collision = collision::CollisionWorld::new();
+            collision.add_convex(ladder_box(Vec3::new(-80., -24., 0.), Vec3::new(-79., 24., 256.),
+                collision::contents::LADDER | collision::contents::GRATE));
+            collision.finalize(); world.collision = Arc::new(collision);
+            let started = world.time();
+            let bot = world.player_mut(id).unwrap();
+            bot.movement.origin = Vec3::new(-96.03125, 0., 64.);
+            bot.movement.on_ground = false;
+            bot.movement.ladder_normal = Some(-Vec3::X);
+            // Seed the actual parsed route, while standing on a different,
+            // parallel collision ladder. A normal alone is not mount identity.
+            bots.brains.insert(id, Brain { path: vec![1, 2], goal_area: Some(2),
+                progress_time: started, progress_pos: bot.movement.origin,
+                ..Brain::fresh(bot, 0) });
+            let inputs = bots.think(&world);
+            assert_eq!((inputs[0].1.forward_move, inputs[0].1.side_move), (0., 0.));
+            assert!(!bots.brains[&id].ladder_route.as_ref().unwrap().attached);
+            world.step_prediction(&inputs);
+            assert_eq!(world.player(id).unwrap().movement.origin.z, 64., "wrong mount receives no climbing command");
+
+            let (mut world, mut bots, id) = ladder_route_fixture(rate, false, true, 256.);
+            let started = world.time();
+            let bot = world.player_mut(id).unwrap();
+            bot.movement.origin = Vec3::new(-16.03125, 0., 96.);
+            bot.movement.on_ground = false; bot.movement.ladder_normal = Some(-Vec3::X);
+            bots.brains.insert(id, Brain { path: vec![2, 1], goal_area: Some(1),
+                progress_time: started, progress_pos: bot.movement.origin,
+                ..Brain::fresh(bot, 0) });
+            let _ = bots.think(&world);
+            assert_eq!(bots.brains[&id].path_index, 0, "120-unit floor tolerance cannot finish a ladder descent");
+        }
+    }
 
     fn door_route_fixture(rate: u32, locked_leaf: Option<usize>) -> (World, Bots, PlayerId) {
         let hull = mdl::ConvexHull {
