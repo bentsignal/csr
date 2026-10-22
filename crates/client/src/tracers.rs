@@ -1,7 +1,7 @@
 //! Cosmetic tracers follow the rendered muzzle; the simulation owns hit rays.
 use crate::{
     coords::{to_bevy, to_source},
-    player::LocalPlayer,
+    player::{LocalPlayer, SimWorld},
 };
 use bevy::prelude::*;
 use std::collections::HashMap;
@@ -103,7 +103,7 @@ pub fn draw(
     mut trails: ResMut<Tracers>,
     muzzles: Res<Muzzles>,
     local: Res<LocalPlayer>,
-    level: Res<crate::LoadedLevel>,
+    world: Res<SimWorld>,
     time: Res<Time>,
     mut gizmos: Gizmos,
 ) {
@@ -118,7 +118,7 @@ pub fn draw(
         let Some(mut start) = muzzle else { continue };
         // Do not let a cosmetic muzzle origin poke through nearby cover.
         let trace =
-            level
+            world
                 .0
                 .collision
                 .trace_ray(eye, to_source(start), collision::contents::MASK_SHOT);
@@ -149,6 +149,70 @@ pub fn draw(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn removed_cover_no_longer_clamps_the_rendered_muzzle() {
+        use bevy::{ecs::system::RunSystemOnce, gizmos::{AppGizmoBuilder, config::DefaultGizmoConfigGroup}};
+        use collision::{CollisionWorld, Convex, Plane};
+        use std::sync::Arc;
+
+        let solid = |lo: glam::Vec3, hi: glam::Vec3| Convex {
+            planes: vec![
+                Plane { normal: glam::Vec3::X, dist: hi.x },
+                Plane { normal: -glam::Vec3::X, dist: -lo.x },
+                Plane { normal: glam::Vec3::Y, dist: hi.y },
+                Plane { normal: -glam::Vec3::Y, dist: -lo.y },
+                Plane { normal: glam::Vec3::Z, dist: hi.z },
+                Plane { normal: -glam::Vec3::Z, dist: -lo.z },
+            ],
+            mins: lo, maxs: hi, contents: collision::contents::SOLID, surface: 0,
+        };
+        let mut collision = CollisionWorld::new();
+        collision.breakables = vec![collision::breakables::Breakable {
+            entity: 1, model: 1, origin: glam::Vec3::ZERO, health: 1., material: 0,
+            prop_data: String::new(), bullet_scale: 1., club_scale: 1., minimum_damage: 0.,
+            trigger_only: false, studio: None,
+            solids: vec![solid(glam::Vec3::new(8., -16., 48.), glam::Vec3::new(12., 16., 80.))],
+        }].into();
+        collision.finalize();
+        let world = sim::World::new(Arc::new(collision));
+        let frozen = world.collision.clone();
+        let eye = glam::Vec3::new(0., 0., 64.);
+        let muzzle = to_bevy(eye + glam::Vec3::X * 32.);
+        let end = eye + glam::Vec3::X * 96.;
+        let mut app = App::new();
+        app.insert_resource(SimWorld(world))
+            .insert_resource(LocalPlayer::new(1, eye, 0.))
+            .insert_resource(Muzzles { first: Some((1, muzzle)), ..default() })
+            .init_gizmo_group::<DefaultGizmoConfigGroup>()
+            .init_resource::<Time>()
+            .init_resource::<Tracers>();
+        for removed in [false, true, false] {
+            {
+                let mut world = app.world_mut().resource_mut::<SimWorld>();
+                let mut state = world.0.state();
+                state.breakables[0] = sim::breakables::State {
+                    health: if removed { 0. } else { 1. }, destroyed: removed,
+                };
+                world.0.restore(state);
+            }
+            let authority = app.world().resource::<SimWorld>().0.state();
+            let mut trails = app.world_mut().resource_mut::<Tracers>();
+            trails.live.clear();
+            trails.pending.push((1, eye, end));
+            drop(trails);
+            app.world_mut().run_system_once(draw).unwrap();
+            let trails = app.world().resource::<Tracers>();
+            assert!(trails.pending.is_empty());
+            assert_eq!(trails.live.len(), 1);
+            let start = to_source(trails.live[0].start);
+            assert!((start.x - if removed { 32. } else { 7.5 }).abs() < 0.1,
+                "the actual draw must release the muzzle after cover breaks, and clip it after restore: {start:?}");
+            assert_eq!(trails.live[0].end, to_bevy(end));
+            assert!(frozen.trace_ray(eye, to_source(muzzle), collision::contents::MASK_SHOT).hit());
+            assert_eq!(app.world().resource::<SimWorld>().0.state(), authority);
+        }
+    }
     #[test]
     fn muzzle_uses_attachment_offset_in_animated_bone_space() {
         let model=mdl::Model {attachments:vec![mdl::Attachment{name:"1".into(),bone:0,position:glam::Vec3::new(0.0,3.0,9.0),rotation:glam::Mat3::IDENTITY}],..Default::default()};
