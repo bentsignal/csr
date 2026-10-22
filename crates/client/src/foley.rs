@@ -546,6 +546,11 @@ mod tests {
             content::ContentId::csgo(content::ContentKind::Map, "handling_fixture"),
             "handling_fixture", game, fs).unwrap();
         Arc::get_mut(&mut level.catalog).unwrap().weapons.retain(|def| def.class_name == name);
+        assert_eq!(level.catalog.weapons.len(), 1, "fixture must retain {name}");
+        mdl::Model::load(&level.vfs.read(&def.view_model).unwrap(),
+            &level.vfs.read(&format!("{base}.vvd")).unwrap(),
+            &level.vfs.read(&format!("{base}.dx90.vtx")).unwrap())
+            .expect("fixture must mount a complete production weapon model");
         let views = crate::viewmodel::load(&level, &Default::default(),
             &mut Assets::<Mesh>::default(), &mut Assets::<crate::material::WorldMaterial>::default(),
             &mut Assets::<Image>::default(), &mut crate::textures::TextureCache::default(),
