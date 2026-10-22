@@ -623,7 +623,7 @@ mod tests {
                 let mut expected = installed.entries[binding].clone();
                 if active {
                     let expected_wave = if binding.starts_with("weapon_ak47.") {
-                        decoded_audio(fs.read(path).unwrap()).unwrap().0
+                        Arc::<[u8]>::from(decoded_audio(fs.read(path).unwrap()).unwrap().0)
                     } else {
                         pack.as_ref().unwrap().wave(path).unwrap().bytes
                     };
