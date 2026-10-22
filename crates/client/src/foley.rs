@@ -326,7 +326,9 @@ pub fn update(
             st.shell_stage = None;
             st.suppressor_transition = None;
             foley.queue.retain(|q| q.player != p.id);
-            if p.active_weapon().is_none_or(|w| w.suppressor_transition.is_none()) {
+            // A newly observed player may already be reloading. That state
+            // owns the handling sounds; joining it must not also play Draw.
+            if p.active_weapon().is_none_or(|w| w.suppressor_transition.is_none() && w.reload_end.is_none()) {
                 let draw = if viewed_knife { selected_draw } else {
                     views.activity_sounds(&weapon, p.active_weapon().map_or("ACT_VM_DRAW", |w| w.draw_activity()))
                 };
@@ -760,6 +762,22 @@ mod tests {
                 assert_eq!(foley.scheduled[scheduled_before..], expected);
                 assert_eq!(foley.dispatched, dispatched,
                     "{rate}Hz complete={complete}: ended reload must retire even overdue tails");
+                if !complete {
+                    // A fresh observer joins the same real reload without an
+                    // earlier Draw/Reload event history.
+                    handling_step(&mut app, id, RELOAD);
+                    let world = &app.world().resource::<SimWorld>().0;
+                    let now = world.time();
+                    let end = world.player(id).unwrap().active_weapon().unwrap().reload_end.unwrap();
+                    let expected: Vec<_> = reload.iter().map(|(cycle, entry)|
+                        (id, name.to_string(), entry.clone(), now + cycle * (end - now).max(0.05))).collect();
+                    app.insert_resource(Foley::default());
+                    app.world_mut().run_schedule(FixedUpdate);
+                    app.world_mut().run_schedule(FixedUpdate);
+                    let foley = app.world().resource::<Foley>();
+                    assert_eq!(foley.scheduled, expected, "joining a reload must not schedule Draw");
+                    assert!(foley.queue.iter().all(|q| !q.deploy));
+                }
             }
         }
     }
