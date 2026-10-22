@@ -418,7 +418,7 @@ mod tests {
     use content::GameOrigin;
     use std::collections::BTreeMap;
 
-    fn wav(sample: i16) -> Vec<u8> {
+    pub(super) fn wav(sample: i16) -> Vec<u8> {
         let mut bytes = b"RIFF".to_vec();
         bytes.extend_from_slice(&38u32.to_le_bytes());
         bytes.extend_from_slice(b"WAVEfmt ");
@@ -491,7 +491,7 @@ mod tests {
         fs
     }
 
-    fn private_pack(near: &[u8], far: Option<&[u8]>, origin: &str, wrong_id: bool) -> packs::Pack {
+    pub(super) fn private_pack(near: &[u8], far: Option<&[u8]>, origin: &str, wrong_id: bool) -> packs::Pack {
         let mut inputs = vec![("sound/old_near.wav", near)];
         if let Some(far) = far {
             inputs.push(("sound/old_distant.wav", far));
@@ -556,6 +556,7 @@ mod tests {
         let path = packs::Installed::current().dir().join(historical::FILENAME);
         let pack = path.is_file().then(|| historical::Historical::open(&path).expect("private pack"));
         let (_, fs) = level::mount_game(None).unwrap();
+        let installed = super::super::SoundLibrary::load_with_era(&fs, SoundEra::InstalledLegacy);
         let mag_ready = pack.as_ref().is_some_and(|pack|
             pack.wave("sound/weapons/mag7/mag7_pump_back.wav").is_ok()
                 && pack.wave("sound/weapons/mag7/mag7_pump_forward.wav").is_ok());
@@ -563,6 +564,7 @@ mod tests {
             let library = super::super::SoundLibrary::load_with_era(&fs, era);
             for (binding, path) in [
                 ("weapon_nova.pumpduringshot", "sound/weapons/nova/nova_pump.wav"),
+                ("weapon_nova.pump", "sound/weapons/nova/nova_pump.wav"),
                 ("weapon_mag7.pumpback", "sound/weapons/mag7/mag7_pump_back.wav"),
                 ("weapon_mag7.pumpforward", "sound/weapons/mag7/mag7_pump_forward.wav"),
             ] {
@@ -574,6 +576,10 @@ mod tests {
                     Some(wave) => assert_eq!(actual.expect("classic handling activation").bytes, wave.bytes),
                     None => assert!(actual.is_none(), "installed handling must remain available"),
                 }
+                let mut definition = library.entries[binding].clone();
+                definition.frozen_wave = None;
+                assert_eq!(format!("{definition:?}"), format!("{:?}", installed.entries[binding]),
+                    "handling metadata must remain installed: {binding}");
             }
         }
     }
