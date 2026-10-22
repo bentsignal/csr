@@ -801,10 +801,31 @@ impl Bots {
                     }
                 }
             }
+            wish = wish.clamp_length_max(450.0);
+            // A closed use-only leaf is not an unreachable nav crossing. Look
+            // along the actual movement command, then let ordinary player use
+            // selection admit the final smoothed aim below. Do not borrow aim
+            // from combat, bomb work, utility or an unfinished weapon action.
+            let route_door = if !brain.visible && brain.throw.is_none()
+                && bot.plant_start.is_none()
+                && !world.bomb.is_some_and(|b| b.defuser.is_some_and(|(id, _)| id == bot.id))
+                && input.buttons & (buttons::USE | buttons::ATTACK | buttons::ATTACK2 | buttons::RELOAD) == 0
+                && input.utility == 0 && input.weapon_slot != 5
+                && bot.active_weapon().is_none_or(|w| {
+                    w.reload_end.is_none() && w.burst.is_none() && w.suppressor_transition.is_none()
+                        && w.grenade_throw.is_none() && time >= w.next_attack && time >= w.next_secondary_attack
+                })
+            {
+                closed_route_door(world, bot, wish)
+            } else { None };
+            if route_door.is_some() {
+                let (pitch, yaw) = look_angles(eye, eye + wish);
+                brain.pitch = approach(brain.pitch, pitch, turn_rate);
+                brain.yaw = approach(brain.yaw, yaw, turn_rate);
+            }
             brain.pitch = smooth_angle(old_angles.x, brain.pitch, &mut brain.turn_velocity.x, dt, 300.0);
             brain.yaw = smooth_angle(old_angles.y, brain.yaw, &mut brain.turn_velocity.y, dt, 420.0);
             let (forward, right, _) = movement::angle_vectors(Vec3::new(0.0, brain.yaw, 0.0));
-            wish = wish.clamp_length_max(450.0);
             input.forward_move = wish.dot(forward);
             input.side_move = wish.dot(right);
             if brain.visible && !finishing {
@@ -843,6 +864,12 @@ impl Bots {
             prepare_jump(bot, brain, &mut input);
             input.view_angles = Vec3::new(brain.pitch.clamp(-89.0, 89.0), brain.yaw, 0.0);
             if !self.shooting { input.buttons &= !(buttons::ATTACK | buttons::ATTACK2); }
+            if let Some(index) = route_door {
+                let use_input = TickInput { buttons: input.buttons | buttons::USE, ..input };
+                if world.used_door(bot, &use_input) == Some(index) {
+                    input = use_input;
+                }
+            }
             out.push((bot.id, input));
         }
         out
@@ -884,6 +911,31 @@ fn choose_utility(world: &World, bot: &Player, contact: Option<crate::tactics::C
         if world.clear_bot_lob(bot,w.def.def_index,target,angles) {return Some((w.def.def_index,target))}
     }
     None
+}
+
+/// The eye-height movement ray identifies a leaf, and the next commanded hull
+/// position must overlap it. Proximity alone must not open doors beyond a
+/// stopping point. Use the existing interaction reach, hull and collision
+/// owner; walls and other runtime solids in front reject the query.
+/// Every linked leaf must be closed and idle: USE would otherwise close the
+/// group, and a partially closing leaf must finish before we request opening.
+fn closed_route_door(world: &World, bot: &Player, wish: Vec3) -> Option<usize> {
+    if world.doors.is_empty() { return None; }
+    let direction = wish.try_normalize()?;
+    let (trace, owner) = world.collision.trace_owned_ray(bot.eye(),
+        bot.eye() + direction * crate::doors::USE_DISTANCE, collision::contents::MASK_PLAYERSOLID);
+    if !trace.hit() || trace.start_solid || trace.all_solid { return None; }
+    let collision::HitOwner::Door(index) = owner? else { return None; };
+    let def = &world.collision.doors[index];
+    let (mins, maxs) = bot.movement.hull();
+    if !collision::doors::obstructed(&def.solids(world.doors[index].angle),
+        bot.movement.origin + wish * world.dt(), mins, maxs)
+    { return None; }
+    let group = def.group;
+    world.collision.doors.iter().zip(&world.doors)
+        .filter(|(def, _)| def.group == group)
+        .all(|(def, state)| !def.locked && state.angle == 0.0 && state.target == 0.0)
+        .then_some(index)
 }
 
 fn wander(world: &World, bot: &crate::Player, brain: &mut Brain, input: &mut TickInput, rng: &mut Rng, turn_rate: f32) {
@@ -1243,6 +1295,181 @@ mod tests {
 
 #[cfg(test)] mod regression_tests {
     use super::*;
+
+    fn door_route_fixture(rate: u32, locked_leaf: Option<usize>) -> (World, Bots, PlayerId) {
+        let hull = mdl::ConvexHull {
+            points: vec![Vec3::new(-2., 0., 0.), Vec3::new(2., 0., 0.),
+                Vec3::new(2., 48., 0.), Vec3::new(-2., 48., 0.),
+                Vec3::new(-2., 0., 96.), Vec3::new(2., 0., 96.),
+                Vec3::new(2., 48., 96.), Vec3::new(-2., 48., 96.)],
+            triangles: vec![[0, 2, 1], [0, 3, 2], [4, 5, 6], [4, 6, 7],
+                [0, 1, 5], [0, 5, 4], [1, 2, 6], [1, 6, 5],
+                [2, 3, 7], [2, 7, 6], [3, 0, 4], [3, 4, 7]],
+        };
+        let mut map = bsp::Bsp::default();
+        for index in 0..2 {
+            let flags = if locked_leaf == Some(index) { 2048 } else { 0 };
+            let link = if index == 0 { "targetname route slavename partner" } else { "targetname partner" };
+            let doc = kv::parse(&format!(r#"door {{ classname prop_door_rotating
+                model models/fixture_leaf.mdl origin "0 {} 0" angles "0 0 0"
+                distance 90 speed 180 spawnflags {flags} {link} }}"#, index * 200)).unwrap();
+            map.entities.push(doc.block("door").unwrap().clone());
+        }
+        let mut collision = collision::CollisionWorld::from_bsp(&map,
+            &collision::MapCollisionOptions::default(), &|_| Some(vec![hull.clone()]));
+        let a = Vec3::new(-1024., -1024., 0.);
+        let b = Vec3::new(1024., -1024., 0.);
+        let c = Vec3::new(1024., 1024., 0.);
+        let d = Vec3::new(-1024., 1024., 0.);
+        collision.add_triangle([a, b, c], collision::contents::SOLID, 0);
+        collision.add_triangle([a, c, d], collision::contents::SOLID, 0);
+        collision.finalize();
+        let mut world = World::with_catalog(Arc::new(collision),
+            Arc::new(weapons::Catalog { weapons: vec![] }));
+        world.set_tick_rate(rate);
+        world.tick = world.ticks(2.);
+        let id = world.add_bot("door route", Team::CounterTerrorist);
+        let bot = world.player_mut(id).unwrap();
+        bot.movement = movement::PlayerMove::spawn_at(Vec3::new(-60., 24., 1.));
+        bot.movement.on_ground = true;
+        world.mode = GameMode::Competitive;
+        world.round.phase = Phase::Live;
+        world.objectives.bomb_sites.push(crate::objectives::BombSite {
+            name: 'A', zone: Zone { mins: Vec3::new(550., -40., 0.), maxs: Vec3::new(650., 88., 128.) },
+        });
+        world.bomb = Some(crate::PlantedBomb { pos: Vec3::new(600., 24., 1.), site: 0,
+            planter: id, planted_at: 0., explode_at: 40., defuser: None });
+        let area = |id, min_x, max_x| nav::Area {
+            id, flags: 0, nw: Vec3::new(min_x, -40., 0.), se: Vec3::new(max_x, 88., 0.),
+            ne_z: 0., sw_z: 0., connections: Default::default(), place: 0, hiding_spots: vec![],
+        };
+        let mut start = area(1, -128., 0.);
+        start.connections[1].push(2);
+        let mesh = NavMesh::from_areas(vec![start, area(2, 0., 768.)]);
+        let bots = Bots::with_skill(1.).with_nav(Some(Arc::new(mesh)));
+        (world, bots, id)
+    }
+
+    // Source-only regression: intentionally UNRUN in this implementation slot.
+    #[test]
+    fn route_door_use_opens_once_and_preserves_locked_open_and_bomb_actions() {
+        for rate in [64, 128] {
+            let (mut world, mut bots, id) = door_route_fixture(rate, None);
+            let blocked = |world: &World| world.collision.trace_box(
+                Vec3::new(-60., 24., 1.), Vec3::new(80., 24., 1.),
+                movement::STAND_MINS, movement::STAND_MAXS, collision::contents::MASK_PLAYERSOLID).hit();
+            assert!(blocked(&world));
+            let inputs = bots.think(&world);
+            assert_eq!(inputs[0].1.buttons & buttons::USE, 0, "being within use reach alone is insufficient");
+            world.step_prediction(&inputs);
+            let mut pressed = false;
+            for _ in 0..rate {
+                let inputs = bots.think(&world);
+                assert!(inputs[0].1.forward_move > 0.);
+                assert_eq!(world.doors[0].target, 0., "thinking must not mutate doors");
+                pressed = inputs[0].1.buttons & buttons::USE != 0;
+                world.step_prediction(&inputs);
+                if pressed { break; }
+            }
+            assert!(pressed, "closed door blocking the command at {rate} Hz");
+            assert_ne!(world.doors[0].target, 0.);
+            assert_ne!(world.doors[1].target, 0., "ordinary use opens the linked leaf too");
+            let target = world.doors[0].target;
+            for _ in 0..rate * 2 {
+                let inputs = bots.think(&world);
+                assert_eq!(inputs[0].1.buttons & buttons::USE, 0, "opening/open group must never be toggled closed");
+                world.step_prediction(&inputs);
+                assert_eq!(world.doors[0].target, target);
+                if world.player(id).unwrap().movement.origin.x > 80. { break; }
+            }
+            assert!(!blocked(&world), "the authoritative door pose clears the route");
+            assert!(world.player(id).unwrap().movement.origin.x > 80., "ordinary movement traverses the leaf");
+            assert!(bots.brains[&id].failed_transitions.is_empty());
+
+            for locked in [Some(0), Some(1)] {
+                let (mut world, mut bots, id) = door_route_fixture(rate, locked);
+                world.player_mut(id).unwrap().movement.origin.x = -19.;
+                for _ in 0..4 {
+                    let inputs = bots.think(&world);
+                    assert_eq!(inputs[0].1.buttons & buttons::USE, 0, "no futile use on a locked group");
+                    world.step_prediction(&inputs);
+                    assert!(world.doors.iter().all(|s| s.angle == 0. && s.target == 0.));
+                }
+            }
+            // The selected leaf is closed but its linked partner is already
+            // opening/open/closing. Using it would toggle the whole group.
+            for (angle, target) in [(0., 90.), (90., 90.), (45., 0.)] {
+                let (mut world, mut bots, id) = door_route_fixture(rate, None);
+                world.player_mut(id).unwrap().movement.origin.x = -19.;
+                world.doors[1].angle = angle;
+                world.doors[1].target = target;
+                world.rebuild_door_collision();
+                let inputs = bots.think(&world);
+                assert_eq!(inputs[0].1.buttons & buttons::USE, 0);
+                world.step_prediction(&inputs);
+                assert_eq!(world.doors[0].target, 0.);
+                assert_eq!(world.doors[1].target, target);
+            }
+            // The final smoothed player aim, not the route query's aim,
+            // decides when a USE edge can actually select this door.
+            let (mut world, mut bots, id) = door_route_fixture(rate, None);
+            world.player_mut(id).unwrap().movement.origin.x = -19.;
+            world.player_mut(id).unwrap().view_angles.y = 90.;
+            let inputs = bots.think(&world);
+            assert_eq!(inputs[0].1.buttons & buttons::USE, 0);
+            assert!(inputs[0].1.view_angles.y > 80.);
+            world.step_prediction(&inputs);
+            assert_eq!(world.doors[0].target, 0.);
+
+            let (mut world, mut bots, id) = door_route_fixture(rate, None);
+            let bot = world.player_mut(id).unwrap();
+            bot.movement.origin.x = -19.;
+            bot.last_input.buttons = buttons::USE;
+            let inputs = bots.think(&world);
+            assert_eq!(inputs[0].1.buttons & buttons::USE, 0, "release an old use before a fresh edge");
+            world.step_prediction(&inputs);
+            assert_eq!(world.doors[0].target, 0.);
+            let inputs = bots.think(&world);
+            assert_ne!(inputs[0].1.buttons & buttons::USE, 0);
+            world.step_prediction(&inputs);
+            assert_ne!(world.doors[0].target, 0.);
+
+            let (mut world, mut bots, id) = door_route_fixture(rate, None);
+            let bomb = world.bomb.as_mut().unwrap();
+            bomb.pos = Vec3::new(-40., 24., 1.);
+            bomb.defuser = Some((id, 10.));
+            world.player_mut(id).unwrap().last_input.buttons = buttons::USE;
+            let inputs = bots.think(&world);
+            assert_ne!(inputs[0].1.buttons & buttons::USE, 0, "keep holding defuse");
+            assert_eq!((inputs[0].1.forward_move, inputs[0].1.side_move), (0., 0.));
+            world.step_prediction(&inputs);
+            assert_eq!(world.bomb.unwrap().defuser, Some((id, 10.)));
+            assert_eq!(world.doors[0].target, 0.);
+
+            let (mut world, mut bots, id) = door_route_fixture(rate, None);
+            world.catalog = Arc::new(weapons::Catalog::from_items_game(r#"items_game { items {
+                49 { name weapon_c4 item_class weapon_c4 baseitem 1 }
+            } }"#).unwrap());
+            world.bomb = None;
+            world.objectives.bomb_sites[0].zone = Zone {
+                mins: Vec3::new(-128., -40., 0.), maxs: Vec3::new(-20., 88., 128.),
+            };
+            let started = world.time();
+            let c4 = crate::WeaponState::new(Arc::new(world.catalog.get("weapon_c4").unwrap().clone()));
+            let bot = world.player_mut(id).unwrap();
+            bot.team = Team::Terrorist;
+            bot.weapons = vec![c4];
+            bot.active = 0;
+            bot.plant_start = Some(started);
+            let inputs = bots.think(&world);
+            assert_eq!(inputs[0].1.weapon_slot, 5);
+            assert_ne!(inputs[0].1.buttons & buttons::ATTACK, 0);
+            assert_eq!(inputs[0].1.buttons & buttons::USE, 0, "planting retains its input");
+            world.step_prediction(&inputs);
+            assert_eq!(world.player(id).unwrap().plant_start, Some(started));
+            assert_eq!(world.doors[0].target, 0.);
+        }
+    }
 
     fn stuck_path_fixture() -> (NavMesh, World, PlayerId, Brain) {
         let area = |id, min_x, max_x| nav::Area {
