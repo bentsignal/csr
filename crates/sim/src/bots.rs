@@ -625,6 +625,7 @@ impl Bots {
             // A defuse close to done is worth finishing under fire.
             let finishing = world.bomb.and_then(|b| b.defuser).is_some_and(|(d, done)| d == bot.id && (done - time < 2.5 || world.smoke_occludes(eye,brain.target_pos) || world.bomb.is_some_and(|b|b.explode_at-done<2.0)));
             let turn_rate = (240.0 + 480.0 * self.skill) * dt;
+            let mut holding_shot = false;
             if brain.visible && !finishing {
                 let err = (1.0 - self.skill) * 3.0;
                 let (mut tp, mut ty) = look_angles(eye, brain.target_pos);
@@ -672,6 +673,7 @@ impl Bots {
                         }
                     }
                 } else if on_target && brain.visible && time - brain.seen_at > reaction {
+                    holding_shot = true;
                     if brain.burst_left == 0 && time >= brain.next_burst {
                         brain.burst_left = if eye.distance(brain.target_pos)>1000.0 {2} else if eye.distance(brain.target_pos)<250.0 {7} else {3};
                     }
@@ -685,10 +687,7 @@ impl Bots {
                         }
                     }
                 } else if brain.visible {
-                    if time >= brain.next_strafe_change {
-                        brain.strafe = if rng.next_f32() < 0.5 { -450.0 } else { 450.0 };
-                        brain.next_strafe_change = time + 0.3 + rng.next_f32() * 0.5;
-                    }
+                    update_combat_strafe(brain, &mut rng, time);
                     let (_, right, _) = movement::angle_vectors(Vec3::new(0.0, brain.yaw, 0.0));
                     if can_walk(world, bot, right * brain.strafe.signum() * 48.0) {
                         input.side_move = brain.strafe * 0.45;
@@ -896,6 +895,34 @@ impl Bots {
                     t>0.0 && t<1.0 && (eye+delta*t).distance(p.eye()-Vec3::Z*10.0)<30.0
                 });
                 let melee = bot.active_weapon().is_some_and(|w| w.is_melee());
+                // An aligned gun otherwise holds still forever behind an ally:
+                // the attack gate below suppresses every burst. Reuse combat
+                // strafing only when no other action or movement owns this tick.
+                if blocked && holding_shot && !melee && bot.movement.on_ground
+                    && bot.movement.ladder_normal.is_none() && !brain.ladder_navigation
+                    && input.forward_move == 0.0 && input.side_move == 0.0
+                    && brain.throw.is_none() && brain.reload_cover.is_none()
+                    && bot.plant_start.is_none()
+                    && !world.bomb.is_some_and(|b| b.defuser.is_some_and(|(id, _)| id == bot.id))
+                    && input.buttons & (buttons::USE | buttons::RELOAD | buttons::JUMP | buttons::ATTACK2) == 0
+                    && input.utility == 0 && input.weapon_slot != 5
+                    && bot.active_weapon().is_some_and(|w| {
+                        w.uses_ammo() && w.clip > 0 && w.def.class != weapons::WeaponClass::Grenade
+                            && w.reload_end.is_none() && w.burst.is_none() && w.suppressor_transition.is_none()
+                            && w.grenade_throw.is_none() && time >= w.next_attack && time >= w.next_secondary_attack
+                            && (input.weapon_slot == 0 || input.weapon_slot == crate::weapon::slot(&w.def))
+                    })
+                {
+                    update_combat_strafe(brain, &mut rng, time);
+                    for side in [brain.strafe, -brain.strafe] {
+                        let speed = side.abs() * 0.45;
+                        if supported_combat_strafe(world, bot, right * side.signum() * 48.0, speed) {
+                            brain.strafe = side;
+                            input.side_move = side.signum() * speed;
+                            break;
+                        }
+                    }
+                }
                 let moving=!melee && bot.movement.velocity.truncate().length()>bot.active_weapon().map_or(55.0,|w|w.def.max_player_speed*0.28);
                 // Melee authority permits movement and uses the final aim ray
                 // against the enemy hull, rather than a gun's accuracy posture.
@@ -1668,6 +1695,32 @@ fn can_walk(world: &World, bot: &Player, delta: Vec3) -> bool {
     let (mn, mx) = bot.bounds();
     !world.collision.trace_box(pos + Vec3::Z * 2.0, pos + delta + Vec3::Z * 2.0,
         mn - pos, mx - pos, collision::contents::MASK_PLAYERSOLID).hit()
+}
+
+fn update_combat_strafe(brain: &mut Brain, rng: &mut Rng, time: f32) {
+    if time >= brain.next_strafe_change {
+        brain.strafe = if rng.next_f32() < 0.5 { -450.0 } else { 450.0 };
+        brain.next_strafe_change = time + 0.3 + rng.next_f32() * 0.5;
+    }
+}
+
+/// Wall clearance alone admits a strafe off a ledge. Check the whole probe at
+/// ordinary command spacing with movement's hull, step-down and ground normal.
+fn supported_combat_strafe(world: &World, bot: &Player, delta: Vec3, speed: f32) -> bool {
+    if !can_walk(world, bot, delta) { return false; }
+    let (mins, maxs) = bot.movement.hull();
+    let steps = (delta.length() / (speed * world.dt())).ceil() as u32;
+    let mut height = bot.movement.origin.z;
+    for step in 0..=steps {
+        let point = (bot.movement.origin + delta * (step as f32 / steps as f32)).with_z(height);
+        let support = world.collision.trace_box(point + Vec3::Z * 2.0,
+            point - Vec3::Z * world.config.step_size, mins, maxs, collision::contents::MASK_PLAYERSOLID);
+        if !support.hit() || support.start_solid || support.all_solid || support.normal.z < movement::MIN_GROUND_NORMAL {
+            return false;
+        }
+        height = support.end.z;
+    }
+    true
 }
 
 /// Bounded acceleration and braking remove instant angular velocity changes
@@ -2861,6 +2914,170 @@ mod tests {
         assert_eq!(gun_slot(bot, 3.), 1, "no fallback without an owned usable weapon");
     }
 
+    /// Synthetic friendly-lane fixture; additions below are source-only, UNRUN.
+    /// Positive strafe is south at yaw zero, deliberately chosen before think.
+    fn friendly_lane_fixture(rate: u32, south_wall: bool, north_wall: bool,
+        floor_min: f32, floor_max: f32) -> (World, Bots, PlayerId, PlayerId, PlayerId) {
+        let mut collision = collision::CollisionWorld::new();
+        collision.add_convex(ladder_box(Vec3::new(-512., floor_min, -16.),
+            Vec3::new(1024., floor_max, 0.), collision::contents::SOLID));
+        for (wall, min_y, max_y) in [(south_wall, -128., -20.), (north_wall, 20., 128.)] {
+            if wall {
+                collision.add_convex(ladder_box(Vec3::new(-64., min_y, 0.),
+                    Vec3::new(64., max_y, 128.), collision::contents::SOLID));
+            }
+        }
+        collision.finalize();
+        let catalog = weapons::Catalog::from_items_game(r#"items_game { items {
+            7 { name weapon_ak47 baseitem 1 attributes {
+                "primary clip size" 30 "is full auto" 1 damage 20
+                "range modifier" 1 "recoil magnitude" 0 cycletime 0.1
+            } }
+            4 { name weapon_glock baseitem 1 attributes { "primary clip size" 20 } }
+            42 { name weapon_knife baseitem 1 }
+            44 { name weapon_hegrenade baseitem 1 }
+        } }"#).unwrap();
+        let mut world = World::with_catalog(Arc::new(collision), Arc::new(catalog));
+        world.set_tick_rate(rate);
+        world.tick = world.ticks(2.);
+        let id = world.add_bot("blocked gun", Team::Terrorist);
+        let ally = world.add_player("friendly screen", Team::Terrorist);
+        let enemy = world.add_player("visible enemy", Team::CounterTerrorist);
+        for (actor, x) in [(id, 0.), (ally, 100.), (enemy, 400.)] {
+            let player = world.player_mut(actor).unwrap();
+            player.movement = movement::PlayerMove::spawn_at(Vec3::new(x, 0., 0.03125));
+            player.movement.on_ground = true;
+        }
+        let weapon = crate::WeaponState::new(Arc::new(world.catalog.get("weapon_ak47").unwrap().clone()));
+        let bot = world.player_mut(id).unwrap();
+        bot.weapons = vec![weapon]; bot.active = 0; bot.last_input.weapon_slot = 1;
+        let mut brain = Brain::fresh(bot, 0);
+        (brain.pitch, brain.yaw) = look_angles(bot.eye(), world.player(enemy).unwrap().eye() - Vec3::Z * 14.);
+        brain.target = Some(enemy); brain.burst_left = 3;
+        brain.strafe = 450.; brain.next_strafe_change = 20.;
+        let mut bots = Bots::with_skill(1.);
+        bots.brains.insert(id, brain);
+        (world, bots, id, ally, enemy)
+    }
+
+    #[test]
+    fn aligned_friendly_lane_strafes_safely_and_resumes_ordinary_fire_at_both_rates() {
+        for rate in [64, 128] {
+            for (wall, floor_min, expected_y) in [(false, -512., -1.), (true, -512., 1.), (false, -16., 1.)] {
+                let (mut world, mut bots, id, ally, enemy) = friendly_lane_fixture(rate, wall, false, floor_min, 512.);
+                let start = world.player(id).unwrap().movement;
+                let ally_health = world.player(ally).unwrap().health;
+                let mut moved = false;
+                let mut fired = false;
+                for tick in 0..rate * 3 {
+                    let before = world.player(id).unwrap();
+                    let shots = before.shots;
+                    let inputs = bots.think(&world);
+                    assert_eq!(world.player(id).unwrap().shots, shots, "think only emits commands");
+                    let input = inputs[0].1;
+                    if tick == 0 {
+                        assert_eq!(input.buttons & buttons::ATTACK, 0, "aligned ally suppresses fire");
+                        assert_eq!(input.side_move.abs(), 202.5);
+                        assert_eq!(input.forward_move, 0.);
+                    }
+                    if input.buttons & buttons::ATTACK != 0 {
+                        let bot = world.player(id).unwrap();
+                        let punch = bot.active_weapon().unwrap().aim_punch();
+                        let aim = input.view_angles + Vec3::new(punch[0], punch[1], 0.) * crate::weapon::RECOIL_SCALE;
+                        let (ray, _, _) = movement::angle_vectors(aim);
+                        let (mn, mx) = world.player(ally).unwrap().bounds();
+                        assert!(crate::ray_box(bot.eye(), ray, mn, mx).is_none(), "never shoot through the ally hull");
+                    }
+                    // Explicit Bots::think inputs win in ordinary authoritative
+                    // World::step; no movement/weapon state is advanced by hand.
+                    world.step(&inputs);
+                    let bot = world.player(id).unwrap();
+                    assert!(bot.movement.on_ground && bot.movement.origin.z >= start.origin.z - 0.1);
+                    assert!(!world.collision.trace_box(bot.movement.origin, bot.movement.origin,
+                        movement::STAND_MINS, movement::STAND_MAXS, collision::contents::MASK_PLAYERSOLID).start_solid);
+                    moved |= (bot.movement.origin.y - start.origin.y) * expected_y > 1.;
+                    assert_eq!(world.player(ally).unwrap().health, ally_health);
+                    if bot.shots > shots { fired = true; break; }
+                }
+                assert!(moved && fired, "{rate} Hz wall={wall} floor_min={floor_min}: clear the lane and fire");
+                assert!(world.player(enemy).unwrap().health < 100, "ordinary attack reaches the enemy");
+            }
+        }
+    }
+
+    #[test]
+    fn friendly_lane_with_no_safe_side_keeps_fire_suppressed_at_both_rates() {
+        for rate in [64, 128] {
+            for (walls, floor_min, floor_max) in [(true, -512., 512.), (false, -16., 16.)] {
+                let (mut world, mut bots, id, ally, _) = friendly_lane_fixture(rate, walls, walls, floor_min, floor_max);
+                let start = world.player(id).unwrap().movement.origin;
+                for _ in 0..rate {
+                    let inputs = bots.think(&world);
+                    assert_eq!((inputs[0].1.forward_move, inputs[0].1.side_move), (0., 0.));
+                    assert_eq!(inputs[0].1.buttons & buttons::ATTACK, 0);
+                    world.step(&inputs);
+                }
+                assert!(world.player(id).unwrap().movement.origin.distance(start) < 0.1);
+                assert!(world.player(id).unwrap().movement.on_ground);
+                assert_eq!(world.player(id).unwrap().shots, 0);
+                assert_eq!(world.player(ally).unwrap().health, 100);
+            }
+        }
+    }
+
+    #[test]
+    fn friendly_lane_reposition_preserves_pending_actions_at_both_rates() {
+        for rate in [64, 128] {
+            for pending in 0..13 {
+                let (mut world, mut bots, id, _, _) = friendly_lane_fixture(rate, false, false, -512., 512.);
+                let time = world.time();
+                let tick = world.tick;
+                let pistol = crate::WeaponState::new(Arc::new(world.catalog.get("weapon_glock").unwrap().clone()));
+                let grenade = crate::WeaponState::new(Arc::new(world.catalog.get("weapon_hegrenade").unwrap().clone()));
+                let knife = crate::WeaponState::new(Arc::new(world.catalog.get("weapon_knife").unwrap().clone()));
+                let bot = world.player_mut(id).unwrap();
+                match pending {
+                    0 => bot.weapons[0].reload_end = Some(time + 1.),
+                    1 => bot.weapons[0].next_attack = time + 1.,
+                    2 => bot.weapons[0].next_secondary_attack = time + 1.,
+                    3 => bot.weapons[0].burst = Some(crate::weapon::BurstState { remaining: 2, next_shot: time + 1. }),
+                    4 => bot.weapons[0].suppressor_transition = Some(crate::weapon::SuppressorTransition { started_tick: tick, attached: true }),
+                    5 => bot.weapons[0].grenade_throw = Some(crate::utility::ThrowState {
+                        phase: crate::utility::ThrowPhase::PullingPin, mode: crate::utility::ThrowMode::Overhand,
+                        pull_started_tick: tick, throw_started_tick: None, release_requested: false, spawned: false,
+                    }),
+                    6 => bot.plant_start = Some(time),
+                    7 => {}, // Active defuser below; even a non-finishing defuse owns movement.
+                    8 => { bot.weapons.push(pistol); bot.active = 1; bot.last_input.weapon_slot = 2; },
+                    9 => bot.movement.ladder_normal = Some(-Vec3::X),
+                    10 => bot.movement.on_ground = false,
+                    11 => {
+                        bot.weapons.push(grenade);
+                        bots.brains.get_mut(&id).unwrap().throw = Some((44, Vec3::new(600., 0., 0.), time + 3.));
+                    },
+                    12 => {
+                        bot.weapons[0].clip = 0; bot.weapons[0].reserve = 0;
+                        bot.weapons.push(knife); bot.active = 1; bot.last_input.weapon_slot = 3;
+                    },
+                    _ => unreachable!(),
+                }
+                if pending == 7 {
+                    world.bomb = Some(crate::PlantedBomb { pos: Vec3::ZERO, site: 0, planter: id,
+                        planted_at: 0., explode_at: 40., defuser: Some((id, time + 8.)) });
+                }
+                let inputs = bots.think(&world);
+                if pending == 12 {
+                    assert_eq!((inputs[0].1.forward_move, inputs[0].1.side_move), (450., 0.), "retain melee pursuit");
+                } else {
+                    assert_eq!((inputs[0].1.forward_move, inputs[0].1.side_move), (0., 0.), "{rate} Hz pending={pending}");
+                }
+                if pending == 8 { assert_eq!(inputs[0].1.weapon_slot, 1, "retain the pending primary selection"); }
+                world.step(&inputs);
+                assert_eq!(world.player(id).unwrap().movement.origin.y, 0., "no added reposition");
+            }
+        }
+    }
+
     #[test]
     fn grounded_empty_combat_burst_reloads_and_moves_to_cover() {
         for rate in [64, 128] {
@@ -2890,7 +3107,9 @@ mod tests {
                 world.set_tick_rate(rate);
                 world.tick = world.ticks(2.);
                 let id = world.add_bot("empty burst", Team::Terrorist);
+                let ally = world.add_player("friendly screen", Team::Terrorist);
                 let enemy = world.add_player("visible target", Team::CounterTerrorist);
+                world.player_mut(ally).unwrap().movement.origin = Vec3::X * 40.;
                 world.player_mut(enemy).unwrap().movement.origin = Vec3::X * 100.;
                 let mut weapon = crate::WeaponState::new(Arc::new(world.catalog.get("weapon_ak47").unwrap().clone()));
                 weapon.clip = clip;
