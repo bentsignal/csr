@@ -8,6 +8,9 @@ enum Page { #[default] Weapons, Knives, Match, Maps }
 pub(crate) struct Panel {
     pub(crate) open: bool,
     pub(crate) weapon: Option<u32>,
+    selected_weapon: Option<String>,
+    reload_weapon: Option<String>,
+    pending_weapon: Option<String>,
     bots: Option<u32>,
     selected_bots: Option<u32>,
     reload_bots: Option<u32>,
@@ -20,7 +23,7 @@ pub(crate) struct Panel {
     dirty: bool,
 }
 #[derive(Component, Clone)]
-enum Action { Toggle, Page(Page), Weapon(u32), Bots(u32), PauseBots, Respawn, Map(String), Previous, Next }
+enum Action { Toggle, Page(Page), Weapon(u32, String), Bots(u32), PauseBots, Respawn, Map(String), Previous, Next }
 
 pub(crate) fn install(app: &mut App) {
     app.init_resource::<Panel>()
@@ -35,6 +38,11 @@ fn enter(mut panel: ResMut<Panel>, opts: Res<crate::Options>, remote: Option<Res
 impl Panel {
     fn enter_match(&mut self, playtest: bool, remote: bool) {
         self.offline_playtest = playtest && !remote;
+        // Only an explicit F8 map action continues the choice. OnEnter need
+        // not see SimWorld yet: resolve against the new catalog at fixed tick.
+        self.pending_weapon = self.reload_weapon.take().filter(|_| self.offline_playtest);
+        self.selected_weapon = self.pending_weapon.clone();
+        self.weapon = None;
         let reload_bots = self.reload_bots.take().filter(|_| self.offline_playtest);
         if reload_bots.is_none() { self.selected_bots = None; }
         // F8's explicit count overrides the menu quota, including No Bots.
@@ -65,6 +73,9 @@ pub(crate) fn append_bot_inputs(
 }
 /// Called only by the offline fixed-tick owner, never by a UI/render system.
 pub(crate) fn configure(panel: &mut Panel, world: &mut sim::World, id: sim::PlayerId) {
+    if let Some(name) = panel.pending_weapon.take() {
+        panel.weapon = world.catalog.get(&name).map(|def| def.def_index);
+    }
     if let Some(count) = panel.bots.take() {
         let old: Vec<_> = world.players.iter().filter(|p| p.is_bot).map(|p| p.id).collect();
         for bot in old { world.remove_player(bot); }
@@ -99,12 +110,18 @@ fn input(
             Action::Page(page) => { panel.page = *page; panel.offset = 0; }
             Action::Previous => panel.offset = panel.offset.saturating_sub(12),
             Action::Next => panel.offset += 12,
-            Action::Weapon(index) => { panel.weapon = Some(*index); panel.open = false; }
+            Action::Weapon(index, name) => {
+                panel.weapon = Some(*index);
+                panel.selected_weapon = Some(name.clone());
+                panel.pending_weapon = None;
+                panel.open = false;
+            }
             Action::Bots(count) => { panel.selected_bots = Some(*count); panel.bots = Some(*count); panel.respawn = true; panel.open = false; }
             Action::PauseBots => { panel.bots_paused = !panel.bots_paused; panel.open = false; }
             Action::Respawn => { panel.respawn = true; panel.open = false; }
             Action::Map(map) => {
                 panel.reload_bots = panel.selected_bots;
+                panel.reload_weapon = panel.selected_weapon.clone();
                 let mut options = opts.0.clone();
                 options.map = map.clone();
                 if let Some(count) = panel.selected_bots {
@@ -199,7 +216,7 @@ fn draw(
             use weapons::WeaponClass::*;
             if panel.page == Page::Knives { d.class == Knife && crate::classic_cosmetics::item_available(&d.class_name, 0) }
             else { matches!(d.class, Pistol|Smg|Rifle|Sniper|Shotgun|MachineGun|Grenade) }
-        }).map(|d| (loc.weapon_name(d), Action::Weapon(d.def_index))).collect()).unwrap_or_default(),
+        }).map(|d| (loc.weapon_name(d), Action::Weapon(d.def_index, d.class_name.clone()))).collect()).unwrap_or_default(),
         Page::Maps => menu.maps.iter().map(|name| (
             workshop::find(name).map(|m| m.title.to_owned()).unwrap_or_else(|| name.clone()), Action::Map(name.clone())
         )).collect(),
@@ -403,6 +420,104 @@ mod tests {
         }
     }
     #[test]
+    fn weapon_buttons_continue_only_through_f8_maps_using_the_new_catalog() {
+        fn next_world(reordered: bool, missing: Option<&str>) -> (sim::World, sim::PlayerId) {
+            let (mut world, local, bot) = pause_world();
+            world.remove_player(bot);
+            let mut catalog = weapons::Catalog::from_items_game(r#""items_game" { "items" {
+                "7" { "name" "weapon_ak47" "baseitem" "1" }
+                "16" { "name" "weapon_m4a1_silencer" "baseitem" "1" }
+                "42" { "name" "weapon_knife" "baseitem" "1" }
+                "500" { "name" "weapon_bayonet" "baseitem" "1" }
+                "515" { "name" "weapon_knife_butterfly" "baseitem" "1" }
+            } }"#).unwrap();
+            if reordered {
+                for def in &mut catalog.weapons {
+                    def.def_index = match def.class_name.as_str() {
+                        "weapon_m4a1_silencer" => 7, // Reuse the old rifle index.
+                        "weapon_bayonet" => 515, // Reuse the old knife index.
+                        _ => def.def_index + 100,
+                    };
+                }
+                catalog.weapons.reverse();
+            }
+            catalog.weapons.retain(|def| Some(def.class_name.as_str()) != missing);
+            world.catalog = std::sync::Arc::new(catalog);
+            world.set_mode(sim::GameMode::Deathmatch, sim::RulesConfig { grenade_practice: true, ..default() });
+            world.respawn(local);
+            (world, local)
+        }
+        for (page, name, old_index, new_index) in [
+            (Page::Weapons, "weapon_ak47", 7, 107),
+            (Page::Knives, "weapon_knife_butterfly", 515, 615),
+        ] {
+            for supported in [true, false] {
+                let (world, local) = next_world(false, None);
+                let mut app = panel_app(crate::ClientOptions { playtest: true, ..default() }, world, local);
+                app.insert_resource(crate::player::InputEnabled(true))
+                    .init_resource::<crate::player::InputBlockFrames>()
+                    .init_resource::<crate::buymenu::BuyMenu>()
+                    .init_resource::<crate::effects::PendingEvents>()
+                    .init_resource::<crate::interpolation::RenderPoses>()
+                    .init_resource::<crate::sound_probe::SoundProbe>()
+                    .add_systems(FixedUpdate, crate::player::tick);
+                app.world_mut().resource_mut::<crate::menu::Menu>().maps = vec!["de_nuke".into()];
+                click_panel(&mut app, |a| matches!(a, Action::Page(p) if *p == page));
+                click_panel(&mut app, |a| matches!(a, Action::Weapon(_, n) if n == name));
+                assert_eq!(app.world().resource::<Panel>().weapon, Some(old_index));
+                app.world_mut().resource_mut::<ButtonInput<MouseButton>>().reset_all();
+                app.world_mut().run_schedule(FixedUpdate);
+                assert!(app.world().resource::<Panel>().weapon.is_none());
+                let player = app.world().resource::<crate::player::SimWorld>().0.player(local).unwrap();
+                assert_eq!(player.active_weapon().unwrap().def.class_name, name);
+                assert_eq!(player.last_input.buy, sim::Purchase::Weapon(old_index));
+                click_panel(&mut app, |a| matches!(a, Action::Page(Page::Maps)));
+                click_panel(&mut app, |a| matches!(a, Action::Map(_)));
+                let request = app.world().resource::<crate::menu::LoadRequest>().0.lock().unwrap().take().unwrap();
+                // Model loader teardown: enter must not depend on the catalog
+                // or on ordering relative to deferred spawn_level resources.
+                app.world_mut().remove_resource::<crate::player::SimWorld>();
+                app.insert_resource(crate::Options(request.options));
+                app.world_mut().run_system_cached(enter).unwrap();
+                assert!(app.world().resource::<Panel>().weapon.is_none());
+                let (world, next_local) = next_world(true, if supported { None } else { Some(name) });
+                let default_weapon = world.player(next_local).unwrap().active_weapon().unwrap().def.class_name.clone();
+                app.insert_resource(crate::player::SimWorld(world))
+                    .insert_resource(LocalPlayer::new(next_local, glam::Vec3::ZERO, 0.));
+                app.update();
+                app.world_mut().run_schedule(FixedUpdate);
+                assert!(app.world().resource::<Panel>().pending_weapon.is_some(), "open panel holds fixed ticks");
+                click_panel(&mut app, |a| matches!(a, Action::Toggle));
+                app.world_mut().resource_mut::<ButtonInput<MouseButton>>().reset_all();
+                app.world_mut().run_schedule(FixedUpdate);
+                let player = app.world().resource::<crate::player::SimWorld>().0.player(next_local).unwrap();
+                assert_eq!(player.last_input.buy, if supported { sim::Purchase::Weapon(new_index) } else { sim::Purchase::None });
+                assert_eq!(player.active_weapon().unwrap().def.class_name, if supported { name } else { &default_weapon });
+                app.world_mut().run_schedule(FixedUpdate);
+                assert_eq!(app.world().resource::<crate::player::SimWorld>().0.player(next_local).unwrap().last_input.buy, sim::Purchase::None);
+                // A later loadout change must win on respawn. Keep the normal
+                // practice purchase's per-match loadout behavior unchanged.
+                app.world_mut().resource_mut::<crate::player::SimWorld>().0.set_loadout(next_local, sim::Loadout::default());
+                click_panel(&mut app, |a| matches!(a, Action::Page(Page::Match)));
+                click_panel(&mut app, |a| matches!(a, Action::Respawn));
+                app.world_mut().resource_mut::<ButtonInput<MouseButton>>().reset_all();
+                app.world_mut().run_schedule(FixedUpdate);
+                let player = app.world().resource::<crate::player::SimWorld>().0.player(next_local).unwrap();
+                assert_eq!(player.last_input.buy, sim::Purchase::None);
+                assert_eq!(player.active_weapon().unwrap().def.class_name, default_weapon, "respawn retains the normal loadout");
+                assert!(app.world().resource::<Panel>().pending_weapon.is_none());
+            }
+        }
+        for (playtest, remote, map_action) in [(true, false, false), (false, false, true), (true, true, true)] {
+            let mut panel = Panel { weapon: Some(7), selected_weapon: Some("weapon_ak47".into()),
+                reload_weapon: map_action.then(|| "weapon_ak47".into()),
+                pending_weapon: Some("weapon_ak47".into()), ..default() };
+            panel.enter_match(playtest, remote);
+            assert!(panel.weapon.is_none() && panel.selected_weapon.is_none()
+                && panel.reload_weapon.is_none() && panel.pending_weapon.is_none());
+        }
+    }
+    #[test]
     fn pause_button_and_draw_only_change_panel_until_fixed_tick() {
         let (world, local, _) = pause_world();
         let before = world.state_hash();
@@ -515,7 +630,7 @@ mod tests {
             .init_resource::<ButtonInput<MouseButton>>()
             .add_systems(Update, input);
         app.world_mut().spawn((Window::default(), CursorOptions::default(), PrimaryWindow));
-        let button = app.world_mut().spawn((Interaction::Pressed, Action::Weapon(515))).id();
+        let button = app.world_mut().spawn((Interaction::Pressed, Action::Weapon(515, "weapon_knife_butterfly".into()))).id();
         app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Left);
         app.update();
         let panel = app.world().resource::<Panel>();
