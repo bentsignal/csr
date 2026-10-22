@@ -719,18 +719,23 @@ fn installed_mirage_bot_uses_authored_ladder_route_through_tick_input() {
         let mut bots = sim::bots::Bots::with_skill(1.).with_nav(Some(mesh.clone()));
         let mut attached = false;
         let mut arrived = false;
+        let mut approach = Vec::new();
         for _ in 0..rate * 12 {
             let inputs = bots.think(&world);
             world.step_prediction(&inputs);
             let actor = world.player(id).unwrap();
             attached |= actor.movement.ladder_normal.is_some();
             let at = actor.movement.origin;
+            if world.tick % (rate as u64 / 8) == 0 && at.distance(ladder.bottom) < 256. {
+                approach.push((world.tick, at, actor.movement.velocity, actor.movement.ladder_normal,
+                    inputs[0].1.forward_move, inputs[0].1.side_move, inputs[0].1.view_angles));
+            }
             arrived = actor.movement.on_ground && actor.movement.ladder_normal.is_none()
                 && mesh.area(to).unwrap().contains_xy(at, 0.)
                 && (at.z - mesh.area(to).unwrap().z_at(at.x, at.y)).abs() <= world.config.step_size;
             if arrived { break; }
         }
-        assert!(attached && arrived, "{rate}Hz ladder {}: start={start:?} destination={to} actor={:?}",
+        assert!(attached && arrived, "{rate}Hz ladder {}: start={start:?} destination={to} attached={attached} actor={:?} approach={approach:?}",
             ladder.id, world.player(id).unwrap().movement);
     }
 }
