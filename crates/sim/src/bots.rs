@@ -64,6 +64,7 @@ struct LadderTopMount {
     launch: Vec3,
     cap: Vec3,
     jumping: bool,
+    previewed: bool,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -1450,7 +1451,7 @@ fn ladder_top_mount(world: &World, bot: &Player, ladder: &nav::Ladder,
     if !support_trace.hit() || support_trace.start_solid || support_trace.all_solid
         || support_trace.normal.z < movement::MIN_GROUND_NORMAL
         || !clear(pos, launch) || !clear(launch, high) || !clear(high, across) { return None; }
-    Some(LadderTopMount { launch, cap: cap.end, jumping: false })
+    Some(LadderTopMount { launch, cap: cap.end, jumping: false, previewed: false })
 }
 
 fn ladder_cap_supported(world: &World, pm: &movement::PlayerMove, mount: &LadderTopMount) -> bool {
@@ -1572,10 +1573,16 @@ fn follow_ladder(mesh: &NavMesh, world: &World, bot: &Player, brain: &mut Brain,
                 && bot.last_input.buttons & buttons::JUMP == 0
                 && (input.weapon_slot == 0 || bot.active_weapon()
                     .is_some_and(|w| input.weapon_slot == crate::weapon::slot(&w.def)))
-                && ladder_cap_jump_clear(world, bot, top, normal)
+                && !top.previewed
             {
-                top.jumping = true;
-                input.buttons |= buttons::JUMP;
+                // Preview once for this mount attempt. A rejected trajectory
+                // uses normal bounded recovery rather than repeating a full
+                // jump simulation on every waiting bot tick.
+                top.previewed = true;
+                if ladder_cap_jump_clear(world, bot, top, normal) {
+                    top.jumping = true;
+                    input.buttons |= buttons::JUMP;
+                }
             }
         }
     } else if blocked_top {
