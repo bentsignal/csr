@@ -54,9 +54,13 @@
   across skipped observations, and let bots clear friendly firing lanes
   (#294, #295, #296).
 - [x] Clip bullet-impact artwork at visible opaque receiver edges while
-  retaining ordinary wall marks, original composition and door attachments.
+  retaining ordinary wall marks, original composition and door attachments
+  (#297).
   Paired GPU controls and normal AK/match captures passed; transparent and
   disconnected coplanar receivers remain limitations.
+- [x] Continue explicit F8 weapon/knife choices across F8 map changes through
+  the next map's catalog. Clip static blood marks with the same opaque-depth
+  receiver test while preserving airborne spray and attached-door behavior.
 - [ ] Finish unresolved player outcomes in the approved order; an increment or
   first pass does not finish its backlog category.
 
