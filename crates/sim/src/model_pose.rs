@@ -82,11 +82,10 @@ impl Sample {
             return next;
         }
         let t = alpha.clamp(0., 1.);
-        // Do not expose a later shot, stance, class or reload before its frame.
+        // Stance, class, reload and ground transitions hold the locomotion pose.
         if self.input.on_ground != next.input.on_ground
             || self.input.ducked != next.input.ducked
             || self.input.class != next.input.class
-            || self.last_fire_tick != next.last_fire_tick
             || self.input.reload_progress.is_some() != next.input.reload_progress.is_some()
         {
             let mut held = self;
@@ -106,7 +105,11 @@ impl Sample {
         value.input.move_yaw = self.input.move_yaw
             + ((next.input.move_yaw - self.input.move_yaw + 180.).rem_euclid(360.) - 180.) * t;
         value.input.pitch = lerp(self.input.pitch, next.input.pitch);
-        value.input.time_since_fire = lerp(self.input.time_since_fire, next.input.time_since_fire);
+        // A new shot holds only its receipt/gesture clock until its frame;
+        // locomotion must keep following the interpolated actor transform.
+        if self.last_fire_tick == next.last_fire_tick {
+            value.input.time_since_fire = lerp(self.input.time_since_fire, next.input.time_since_fire);
+        }
         value.input.air_time = lerp(self.input.air_time, next.input.air_time);
         value.input.reload_progress = self
             .input
@@ -174,6 +177,82 @@ mod tests {
         ground.input.on_ground = true;
         ground.input.air_time = 0.;
         for (older, newer) in [(ground, air), (air, ground)] {
+            for alpha in [0., 0.25, 0.5, 0.75] {
+                assert_eq!(older.interpolate(newer, alpha), older);
+            }
+            assert_eq!(older.interpolate(newer, 1.), newer);
+        }
+    }
+
+    #[test]
+    fn successive_shots_interpolate_locomotion_but_hold_the_fire_receipt() {
+        for rate in [64, 128] {
+            for grounded in [false, true] {
+                let mut older = airborne();
+                older.input.on_ground = grounded;
+                if grounded {
+                    older.input.air_time = 0.;
+                }
+                older.input.speed = 100.;
+                older.input.move_yaw = 170.;
+                older.input.pitch = -20.;
+                older.move_cycle = 0.95;
+                older.last_fire_tick = Some(rate as u64);
+                for shot in 1..=2 {
+                    let mut newer = older;
+                    newer.last_fire_tick = Some(rate as u64 + shot * 8);
+                    newer.input.time_since_fire = 0.;
+                    newer.input.speed += 40.;
+                    newer.input.move_yaw = if shot == 1 { -170. } else { -150. };
+                    newer.input.pitch += 20.;
+                    if !grounded {
+                        newer.input.air_time += 8. / rate as f32;
+                    }
+                    newer.move_cycle = if shot == 1 { 0.05 } else { 0.15 };
+                    for alpha in [0., 0.25, 0.5, 0.75] {
+                        let value = older.interpolate(newer, alpha);
+                        let cycle = (older.move_cycle + 0.1 * alpha).rem_euclid(1.);
+                        assert!((value.move_cycle - cycle).abs() < 0.00001);
+                        assert_eq!(value.input.speed, older.input.speed + 40. * alpha);
+                        assert_eq!(value.input.move_yaw, older.input.move_yaw + 20. * alpha);
+                        assert_eq!(value.input.pitch, older.input.pitch + 20. * alpha);
+                        assert_eq!(value.last_fire_tick, older.last_fire_tick);
+                        assert_eq!(value.input.time_since_fire, older.input.time_since_fire);
+                        assert_eq!(value.input.on_ground, grounded);
+                        assert_eq!(value.input.ducked, older.input.ducked);
+                        assert_eq!(value.input.class, older.input.class);
+                        assert_eq!(value.input.reload_progress, older.input.reload_progress);
+                    }
+                    assert_eq!(older.interpolate(newer, 1.), newer);
+                    older = newer;
+                    older.input.time_since_fire = 7. / rate as f32;
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn simultaneous_shots_do_not_blend_across_pose_boundaries() {
+        for boundary in 0..6 {
+            let mut older = airborne();
+            older.input.on_ground = boundary != 5;
+            if boundary == 3 {
+                older.input.reload_progress = Some(0.5);
+            }
+            let mut newer = older;
+            newer.last_fire_tick = Some(5);
+            newer.input.time_since_fire = 0.;
+            newer.move_cycle = 0.45;
+            newer.input.speed = 200.;
+            newer.input.move_yaw = 90.;
+            newer.input.pitch = 40.;
+            match boundary {
+                0 => newer.input.ducked = true,
+                1 => newer.input.class = weapons::WeaponClass::Pistol,
+                2 => newer.input.reload_progress = Some(0.),
+                3 => newer.input.reload_progress = None,
+                _ => newer.input.on_ground = !older.input.on_ground,
+            }
             for alpha in [0., 0.25, 0.5, 0.75] {
                 assert_eq!(older.interpolate(newer, alpha), older);
             }

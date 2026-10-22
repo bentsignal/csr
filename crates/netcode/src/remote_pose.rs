@@ -460,6 +460,94 @@ mod tests {
     }
 
     #[test]
+    fn successive_remote_shots_keep_locomotion_on_the_transform_timeline() {
+        for rate in [64, 128] {
+            let (mut world, id) = world();
+            world.set_tick_rate(rate);
+            let mut history = history(rate);
+            let mut previous: Option<RenderPose> = None;
+            for shot in 0..3 {
+                world.tick = rate as u64 + shot * 8;
+                let actor = &mut world.players[0];
+                actor.movement.on_ground = true;
+                actor.movement.origin = Vec3::X * (shot as f32 * 8.);
+                let yaw = 170. + shot as f32 * 20.;
+                let speed = 100. + shot as f32 * 40.;
+                actor.movement.velocity =
+                    Vec3::new(yaw.to_radians().cos(), yaw.to_radians().sin(), 0.) * speed;
+                actor.view_angles = Vec3::new(-20. + shot as f32 * 20., 0., 0.);
+                actor.animation.move_cycle = [0.95, 0.05, 0.15][shot as usize];
+                actor.animation.last_fire_tick = Some(world.tick - [2, 0, 1][shot as usize]);
+                let next = RenderPose::capture(actor, world.tick, rate).unwrap();
+                let before = world.state();
+                history.push(&before).unwrap();
+                if let Some(older) = previous {
+                    for alpha in [0.25, 0.5, 0.75] {
+                        let tick = (world.tick - 8) as f64 + 8. * alpha as f64;
+                        let sample = history.sample(id, tick).unwrap().unwrap();
+                        assert_eq!(sample.mode, SampleMode::Interpolated);
+                        assert_eq!(sample.pose.origin, older.origin.lerp(next.origin, alpha));
+                        let animation = sample.pose.animation;
+                        let cycle = (older.animation.move_cycle + 0.1 * alpha).rem_euclid(1.);
+                        assert!((animation.move_cycle - cycle).abs() < 0.00001);
+                        assert!(
+                            (animation.input.speed - (older.animation.input.speed + 40. * alpha))
+                                .abs() < 0.0001
+                        );
+                        let expected_yaw = 170. + (shot - 1) as f32 * 20. + 20. * alpha;
+                        assert!(wrap_angle(animation.input.move_yaw - expected_yaw).abs() < 0.0001);
+                        assert_eq!(animation.input.pitch, sample.pose.view_angles.x);
+                        assert_eq!(
+                            animation.input.pitch,
+                            older.animation.input.pitch + 20. * alpha
+                        );
+                        assert_eq!(animation.last_fire_tick, older.animation.last_fire_tick);
+                        assert_eq!(
+                            animation.input.time_since_fire,
+                            older.animation.input.time_since_fire
+                        );
+                    }
+                    assert_eq!(
+                        history.sample(id, world.tick as f64).unwrap().unwrap()
+                            .pose.animation,
+                        next.animation
+                    );
+                }
+                assert_eq!(world.state(), before);
+                previous = Some(next);
+            }
+        }
+    }
+
+    #[test]
+    fn remote_shots_preserve_stance_and_class_pose_boundaries() {
+        let (world, _) = world();
+        let older = RenderPose::capture(&world.players[0], world.tick, 128).unwrap();
+        for stance in [false, true] {
+            let mut newer = older.clone();
+            newer.origin.x += 8.;
+            newer.animation.move_cycle = 0.25;
+            newer.animation.input.speed = 200.;
+            newer.animation.input.move_yaw = 90.;
+            newer.animation.input.pitch = 40.;
+            newer.animation.last_fire_tick = Some(4);
+            newer.animation.input.time_since_fire = 0.;
+            if stance {
+                newer.animation.input.ducked = !older.animation.input.ducked;
+            } else {
+                newer.animation.input.class = weapons::WeaponClass::Rifle;
+                assert_ne!(newer.animation.input.class, older.animation.input.class);
+            }
+            for alpha in [0., 0.25, 0.5, 0.75] {
+                let held = older.interpolate(&newer, alpha);
+                assert_eq!(held.animation, older.animation);
+                assert_eq!(held.origin.x, older.origin.x + 8. * alpha);
+            }
+            assert_eq!(older.interpolate(&newer, 1.).animation, newer.animation);
+        }
+    }
+
+    #[test]
     fn invalid_animation_snapshots_do_not_replace_the_sampled_history() {
         let (mut world, _) = world(); let mut history = history(128);
         history.push(&world.state()).unwrap(); world.tick = 4;
