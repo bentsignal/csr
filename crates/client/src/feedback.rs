@@ -165,7 +165,7 @@ pub fn setup(
     let pos = to_bevy(local.curr_eye + forward * 16.0);
     let now = time.elapsed_secs();
     for (blood, moving) in [(true, true), (false, true), (false, false)] {
-        spawn(
+        let _ = spawn(
             &mut commands,
             &assets,
             pos,
@@ -223,12 +223,12 @@ fn spawn(
     velocity: Vec3,
     now: f32,
     life: f32,
-) {
+) -> Option<Entity> {
     let normal = normal.normalize_or_zero();
     if normal.length_squared() < 0.5 || !pos.is_finite() {
-        return;
+        return None;
     }
-    commands.spawn((
+    Some(commands.spawn((
         Mesh3d(if blood {
             assets.quad.clone()
         } else {
@@ -250,7 +250,7 @@ fn spawn(
             velocity,
             billboard: moving,
         },
-    ));
+    )).id())
 }
 
 // DecalModulate uses neutral 128 grey; DXT compression shifts it by a few
@@ -273,6 +273,16 @@ pub fn impact_sound(surface: &str) -> &'static str {
         "Glass.BulletImpact"
     } else {
         "Concrete.BulletImpact"
+    }
+}
+
+// Reuse the same destruction visibility ownership as bullet marks. The
+// collision definitions remain map-scoped even when their runtime solids leave.
+fn own_blood_mark(commands: &mut Commands, entity: Entity,
+    collision: &collision::CollisionWorld, hit: &collision::Trace) {
+    if let Some(index) = collision.breakables.iter()
+        .position(|def| def.contains_surface(hit.end, hit.normal)) {
+        commands.entity(entity).insert(crate::breakables::BreakableMesh(vec![index]));
     }
 }
 
@@ -301,7 +311,7 @@ fn blood_hit(
                 10.0 + phase.sin() * 18.0,
                 phase.sin() * 24.0,
             );
-        spawn(
+        let _ = spawn(
             commands,
             assets,
             to_bevy(pos) + drift * 0.03,
@@ -320,7 +330,7 @@ fn blood_hit(
         collision::contents::MASK_SOLID,
     );
     if tr.hit() && !tr.start_solid && !collision.is_sky(tr.surface) {
-        spawn(
+        if let Some(entity) = spawn(
             commands,
             assets,
             to_bevy(tr.end),
@@ -331,7 +341,9 @@ fn blood_hit(
             Vec3::ZERO,
             now,
             25.0,
-        );
+        ) {
+            own_blood_mark(commands, entity, collision, &tr);
+        }
     }
     let floor = collision.trace_ray(
         pos,
@@ -339,7 +351,7 @@ fn blood_hit(
         collision::contents::MASK_SOLID,
     );
     if floor.hit() && !floor.start_solid {
-        spawn(
+        if let Some(entity) = spawn(
             commands,
             assets,
             to_bevy(floor.end),
@@ -350,7 +362,9 @@ fn blood_hit(
             Vec3::ZERO,
             now,
             25.0,
-        );
+        ) {
+            own_blood_mark(commands, entity, collision, &floor);
+        }
     }
 }
 
@@ -445,7 +459,7 @@ pub fn update(
                     budget -= 1;
                     let drift = to_bevy(normal) * 25.0
                         + Vec3::new(i as f32 * 9.0 - 9.0, 8.0, 5.0 - i as f32 * 5.0);
-                    spawn(
+                    let _ = spawn(
                         &mut commands,
                         &assets,
                         to_bevy(pos),
@@ -820,7 +834,7 @@ mod mob_blood_tests {
                 .init_resource::<crate::surfaces::SurfaceProps>()
                 .init_resource::<crate::settings::Settings>()
                 .init_resource::<Hurt>().init_resource::<Time>().init_resource::<Assets<Mesh>>()
-                .add_systems(Update, update);
+                .add_systems(Update, (update, crate::breakables::sync).chain());
             app.update();
             assert!(app.world().resource::<Effects>().feedback.is_empty());
             let mut query = app.world_mut().query::<(&Transform, &ImpactFx)>();
@@ -836,6 +850,21 @@ mod mob_blood_tests {
             let floor_z = if destroyed { 0. } else { 32. };
             assert!((wall.translation - to_bevy(glam::Vec3::new(wall_x, 0., 64.))).length() < 0.25);
             assert!((floor.translation - to_bevy(glam::Vec3::new(0., 0., floor_z))).length() < 0.25);
+            let mut attached = app.world_mut().query::<(Entity, &crate::breakables::BreakableMesh, &Visibility)>();
+            let marks: Vec<_> = attached.iter(app.world())
+                .map(|(entity, owner, visibility)| (entity, owner.0.clone(), *visibility)).collect();
+            assert_eq!(marks.len(), if destroyed { 0 } else { 2 });
+            if !destroyed {
+                assert!(marks.iter().all(|(_, owner, visibility)| owner == &[0]
+                    && *visibility != Visibility::Hidden));
+                let mut state = app.world().resource::<SimWorld>().0.state();
+                state.breakables[0] = sim::breakables::State { health: 0., destroyed: true };
+                app.world_mut().resource_mut::<SimWorld>().0.restore(state);
+                app.update();
+                assert!(marks.iter().all(|(entity, _, _)|
+                    app.world().get::<Visibility>(*entity) == Some(&Visibility::Hidden)),
+                    "existing blood marks must disappear with their receiver");
+            }
         }
     }
 
