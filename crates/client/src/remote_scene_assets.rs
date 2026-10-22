@@ -218,14 +218,13 @@ mod tests {
             )]),
             sun: None,
         });
-        world.insert_resource(GroundModels {
-            planted: Some(model(ground_mesh.clone(), material.clone())),
-            kit: None,
-            weapons: HashMap::from([(
-                "mod_weapon_ground_fixture".parse().unwrap(),
-                model(dropped_mesh.clone(), material),
-            )]),
-        });
+        let mut ground = GroundModels::default();
+        ground.planted = Some(model(ground_mesh.clone(), material.clone()));
+        ground.weapons.insert(
+            "mod_weapon_ground_fixture".parse().unwrap(),
+            model(dropped_mesh.clone(), material),
+        );
+        world.insert_resource(ground);
         world.insert_resource(ViewModels::default());
         world.insert_resource(meshes);
         world.insert_resource(images);

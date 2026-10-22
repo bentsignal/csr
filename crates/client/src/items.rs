@@ -17,12 +17,59 @@ use std::sync::Arc;
 pub const PLANTED_C4_MODEL: &str = "models/weapons/w_c4_planted.mdl";
 pub const DEFUSER_MODEL: &str = "models/weapons/w_defuser.mdl";
 
-#[derive(Resource)]
+#[derive(Resource, Default)]
 pub struct GroundModels {
     pub planted: Option<SkinnedAsset>,
     pub kit: Option<SkinnedAsset>,
     /// Separate authored drops; holding still uses CharacterModels.weapons.
     pub weapons: HashMap<content::ContentId, SkinnedAsset>,
+    /// Includes failed imports, so an unavailable drop never retries each frame.
+    prepared_paths: HashMap<String, Option<SkinnedAsset>>,
+    /// Moved here after the last map-spawn consumer; removed with this map.
+    context: Option<GroundLoadContext>,
+}
+
+struct GroundLoadContext {
+    textures: TextureCache,
+    shared: SharedHandles,
+    exposure: f32,
+}
+
+impl GroundModels {
+    pub(crate) fn with_load_context(
+        mut self,
+        textures: TextureCache,
+        shared: SharedHandles,
+        exposure: f32,
+    ) -> Self {
+        self.context = Some(GroundLoadContext { textures, shared, exposure });
+        self
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn prepare_weapon(
+        &mut self,
+        def: &weapons::WeaponDefinition,
+        fs: &vfs::Vfs,
+        meshes: &mut Assets<Mesh>,
+        materials: &mut Assets<WorldMaterial>,
+        images: &mut Assets<Image>,
+        bindposes: &mut Assets<SkinnedMeshInverseBindposes>,
+    ) {
+        if def.dropped_model.is_empty() || self.weapons.contains_key(&def.id) {
+            return;
+        }
+        let Some(context) = &mut self.context else { return };
+        let asset = self.prepared_paths.entry(def.dropped_model.clone()).or_insert_with(|| {
+            load_asset(fs, &def.dropped_model, meshes, materials, images,
+                &mut context.textures, &context.shared, bindposes, context.exposure)
+        });
+        if let Some(asset) = asset {
+            // Only immutable model/mesh templates are shared. spawn_posed still
+            // creates each item's joints and mutable materials independently.
+            self.weapons.insert(def.id.clone(), asset.clone());
+        }
+    }
 }
 
 struct Placed {
@@ -48,41 +95,38 @@ pub fn load(
     bindposes: &mut Assets<SkinnedMeshInverseBindposes>,
     exposure: f32,
 ) -> GroundModels {
-    let fs = &level.vfs;
-    let mut asset = |path: &str| -> Option<SkinnedAsset> {
-        let base = path.trim_end_matches(".mdl");
-        let model = mdl::Model::load(
-            &fs.read(path)?,
-            &fs.read(&format!("{base}.vvd"))?,
-            &fs.read(&format!("{base}.dx90.vtx"))?,
-        )
-        .ok()?;
-        Some(skinning::build_asset(
-            Arc::new(model),
-            fs,
-            meshes,
-            materials,
-            images,
-            textures,
-            shared,
-            bindposes,
-            exposure,
-            true,
-        ))
+    let mut asset = |path: &str| {
+        load_asset(&level.vfs, path, meshes, materials, images, textures, shared, bindposes, exposure)
     };
-    let mut weapons = HashMap::new();
-    for def in &level.catalog.weapons {
-        if !def.dropped_model.is_empty() {
-            if let Some(model) = asset(&def.dropped_model) {
-                weapons.insert(def.id.clone(), model);
-            }
-        }
-    }
+    // Catalog presence is not a ground-item request. Deathmatch commonly
+    // starts with none; prepare authored weapon drops only in sync below.
     GroundModels {
-        weapons,
         planted: asset(PLANTED_C4_MODEL),
         kit: asset(DEFUSER_MODEL),
+        ..Default::default()
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn load_asset(
+    fs: &vfs::Vfs,
+    path: &str,
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<WorldMaterial>,
+    images: &mut Assets<Image>,
+    textures: &mut TextureCache,
+    shared: &SharedHandles,
+    bindposes: &mut Assets<SkinnedMeshInverseBindposes>,
+    exposure: f32,
+) -> Option<SkinnedAsset> {
+    let base = path.trim_end_matches(".mdl");
+    let model = mdl::Model::load(
+        &fs.read(path)?,
+        &fs.read(&format!("{base}.vvd"))?,
+        &fs.read(&format!("{base}.dx90.vtx"))?,
+    ).ok()?;
+    Some(skinning::build_asset(Arc::new(model), fs, meshes, materials,
+        images, textures, shared, bindposes, exposure, true))
 }
 
 fn despawn(commands: &mut Commands, p: &Placed) {
@@ -150,11 +194,14 @@ pub fn sync(
     mut commands: Commands,
     world: Res<SimWorld>,
     characters: Res<CharacterModels>,
-    ground: Res<GroundModels>,
+    mut ground: ResMut<GroundModels>,
     mut placed: ResMut<GroundInstances>,
     mut materials: ResMut<Assets<WorldMaterial>>,
     level: Res<LoadedLevel>,
     mat_query: Query<&MeshMaterial3d<WorldMaterial>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut images: ResMut<Assets<Image>>,
+    mut bindposes: ResMut<Assets<SkinnedMeshInverseBindposes>>,
 ) {
     let _frame_scope = crate::input_latency::frame_scope("ground_items");
     let world = &world.0;
@@ -175,6 +222,10 @@ pub fn sync(
     for item in &world.items {
         if placed.items.contains_key(&item.id) {
             continue;
+        }
+        if let sim::GroundKind::Weapon(weapon) = &item.kind {
+            ground.prepare_weapon(&weapon.def, &level.0.vfs, &mut meshes,
+                &mut materials, &mut images, &mut bindposes);
         }
         let (asset, on_side) = match &item.kind {
             sim::GroundKind::Weapon(w) => (
@@ -269,6 +320,223 @@ pub fn sync(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const DROP: &str = "models/fixture/drop.mdl";
+    const OTHER_DROP: &str = "models/fixture/other.mdl";
+    const MISSING_DROP: &str = "models/fixture/missing.mdl";
+
+    // Generated empty studio headers exercise the real MDL/VVD/VTX importer,
+    // without installed assets, a renderer or any third-party geometry.
+    fn model_files(path: &str, name: &str) -> std::collections::BTreeMap<String, Arc<[u8]>> {
+        let mut mdl = vec![0u8; 408];
+        mdl[..4].copy_from_slice(b"IDST");
+        mdl[4..8].copy_from_slice(&48i32.to_le_bytes());
+        mdl[12..12 + name.len()].copy_from_slice(name.as_bytes());
+        let mut vvd = vec![0u8; 64];
+        vvd[..4].copy_from_slice(b"IDSV");
+        vvd[4..8].copy_from_slice(&4i32.to_le_bytes());
+        let mut vtx = vec![0u8; 36];
+        vtx[..4].copy_from_slice(&7i32.to_le_bytes());
+        let base = path.trim_end_matches(".mdl");
+        std::collections::BTreeMap::from([
+            (path.into(), mdl.into()),
+            (format!("{base}.vvd"), vvd.into()),
+            (format!("{base}.dx90.vtx"), vtx.into()),
+        ])
+    }
+
+    fn fixture_app(drop_name: &str, initial: &[&str]) -> App {
+        let mut files = model_files(DROP, drop_name);
+        files.extend(model_files(OTHER_DROP, "other authored drop"));
+        files.extend(model_files(PLANTED_C4_MODEL, "planted"));
+        files.extend(model_files(DEFUSER_MODEL, "kit"));
+        let mut bsp = vec![0u8; 1036];
+        bsp[..4].copy_from_slice(b"VBSP");
+        bsp[4..8].copy_from_slice(&20i32.to_le_bytes());
+        files.insert("maps/ground_fixture.bsp".into(), bsp.into());
+        let mut fs = vfs::Vfs::new();
+        fs.push_back("ground fixture", vfs::Mount::Memory(files));
+        let mut level = level::Level::load_from_vfs(
+            content::ContentId::csgo(content::ContentKind::Map, "ground_fixture"),
+            "ground_fixture", Default::default(), fs,
+        ).unwrap();
+        let declarations = [
+            ("weapon_ak47", DROP), ("weapon_glock", DROP),
+            ("weapon_awp", OTHER_DROP), ("weapon_aug", MISSING_DROP),
+            ("weapon_famas", ""),
+        ].into_iter().enumerate().map(|(index, (class, dropped))| format!(
+            r#""{index}" {{ "name" "{class}" "baseitem" "1" "model_dropped" "{dropped}" }}"#
+        )).collect::<Vec<_>>().join("\n");
+        level.catalog = Arc::new(weapons::Catalog::from_items_game(
+            &format!("items_game {{ items {{ {declarations} }} }}")
+        ).unwrap());
+        let mut meshes = Assets::<Mesh>::default();
+        let mut materials = Assets::<WorldMaterial>::default();
+        let mut images = Assets::<Image>::default();
+        let mut bindposes = Assets::<SkinnedMeshInverseBindposes>::default();
+        let mut textures = TextureCache::new(&mut images);
+        let shared = SharedHandles { lightmap: textures.white.clone() };
+        // The held fallback has real, synthetic mesh/joint owners. Authored
+        // empty drops above must not silently select this visibly different asset.
+        let held = skinning::build_asset(Arc::new(mdl::Model {
+            name: "held fallback".into(),
+            bones: vec![mdl::skeleton::Bone {
+                name: "fixture".into(), parent: -1, pos: glam::Vec3::ZERO,
+                quat: glam::Quat::IDENTITY, rot: glam::Vec3::ZERO,
+                pos_scale: glam::Vec3::ONE, rot_scale: glam::Vec3::ONE,
+                pose_to_bone: glam::Mat4::IDENTITY, flags: 0,
+            }],
+            meshes: vec![mdl::Mesh {
+                vertices: [glam::Vec3::ZERO, glam::Vec3::X, glam::Vec3::Y]
+                    .map(|position| mdl::Vertex {
+                        position, normal: glam::Vec3::Z, bone_count: 1,
+                        weights: [1., 0., 0.], tangent: Some([1., 0., 0., 1.]),
+                        ..Default::default()
+                    }).to_vec(),
+                indices: vec![0, 1, 2], ..Default::default()
+            }],
+            ..Default::default()
+        }), &level.vfs, &mut meshes, &mut materials, &mut images,
+            &mut textures, &shared, &mut bindposes, 1., true);
+        let ground = load(&level, &mut meshes, &mut materials, &mut images,
+            &mut textures, &shared, &mut bindposes, 1.)
+            .with_load_context(textures, shared, 1.);
+        let characters = CharacterModels {
+            terrorist: None, counter_terrorist: None, sun: None,
+            weapons: level.catalog.weapons.iter()
+                .map(|def| (def.class_name.clone(), held.clone())).collect(),
+        };
+        let mut sim = sim::World::with_catalog(level.collision.clone(), level.catalog.clone());
+        for (id, class) in initial.iter().enumerate() {
+            let item = ground_item(&sim, id as u32, class);
+            sim.items.push(item);
+        }
+        let mut app = App::new();
+        app.insert_resource(meshes).insert_resource(materials).insert_resource(images)
+            .insert_resource(bindposes).insert_resource(ground).insert_resource(characters)
+            .insert_resource(LoadedLevel(level)).insert_resource(SimWorld(sim))
+            .init_resource::<GroundInstances>().add_systems(Update, sync);
+        app
+    }
+
+    fn ground_item(world: &sim::World, id: u32, class: &str) -> sim::GroundItem {
+        sim::GroundItem {
+            id, kind: sim::GroundKind::Weapon(sim::weapon::WeaponState::new(
+                Arc::new(world.catalog.get(class).unwrap().clone()))),
+            pos: glam::Vec3::ZERO, yaw: 0., dropped_by: 0, pickup_after: 0.,
+        }
+    }
+
+    fn add_item(app: &mut App, id: u32, class: &str) {
+        let item = ground_item(&app.world().resource::<SimWorld>().0, id, class);
+        app.world_mut().resource_mut::<SimWorld>().0.items.push(item);
+    }
+
+    #[test]
+    fn empty_initial_items_do_not_import_catalog_drops_but_keep_bomb_and_kit() {
+        let mut app = fixture_app("authored drop", &[]);
+        app.update();
+        let ground = app.world().resource::<GroundModels>();
+        assert_eq!(app.world().resource::<SimWorld>().0.catalog.weapons.len(), 5);
+        assert!(ground.weapons.is_empty() && ground.prepared_paths.is_empty());
+        assert_eq!(ground.planted.as_ref().unwrap().model.name, "planted");
+        assert_eq!(ground.kit.as_ref().unwrap().model.name, "kit");
+        // One held fixture plus bomb/kit, with zero catalog drop imports.
+        assert_eq!(app.world().resource::<Assets<SkinnedMeshInverseBindposes>>().len(), 3);
+    }
+
+    #[test]
+    fn sync_imports_initial_and_later_item_ids_once_per_authored_path() {
+        // Also covers a remote world's already-populated initial items: no
+        // offline-only catalog filter or drop-event dependency in sync.
+        let mut app = fixture_app("authored drop", &["weapon_ak47"]);
+        let before = app.world().resource::<SimWorld>().0.items.clone();
+        app.update();
+        assert_eq!(app.world().resource::<SimWorld>().0.items, before);
+        let ground = app.world().resource::<GroundModels>();
+        let def = &app.world().resource::<SimWorld>().0.catalog.weapons[0];
+        let first = ground.weapons[&def.id].model.clone();
+        assert_eq!(first.name, "authored drop");
+        assert!(app.world().resource::<GroundInstances>().items[&0].instance.meshes.is_empty(),
+            "authored drop must win over the distinct held fallback");
+        assert_eq!(app.world().resource::<Assets<SkinnedMeshInverseBindposes>>().len(), 4);
+        add_item(&mut app, 1, "weapon_glock"); // New ContentId, same path.
+        add_item(&mut app, 2, "weapon_awp");   // New ContentId and path.
+        app.update();
+        app.update();
+        let ground = app.world().resource::<GroundModels>();
+        assert_eq!((ground.weapons.len(), ground.prepared_paths.len()), (3, 2));
+        let alias = &app.world().resource::<SimWorld>().0.catalog.get("weapon_glock").unwrap().id;
+        assert!(Arc::ptr_eq(&first, &ground.weapons[alias].model));
+        assert_eq!(app.world().resource::<Assets<SkinnedMeshInverseBindposes>>().len(), 5);
+        app.world_mut().resource_mut::<SimWorld>().0.items.clear();
+        app.update();
+        assert!(app.world().resource::<GroundInstances>().items.is_empty());
+        add_item(&mut app, 3, "weapon_ak47");
+        app.update();
+        assert!(app.world().resource::<GroundInstances>().items.contains_key(&3));
+        assert_eq!(app.world().resource::<Assets<SkinnedMeshInverseBindposes>>().len(), 5);
+        let ground = app.world().resource::<GroundModels>();
+        assert!(Arc::ptr_eq(&first, &ground.prepared_paths[DROP].as_ref().unwrap().model));
+    }
+
+    #[test]
+    fn missing_and_empty_drop_fallbacks_keep_instance_owners_and_bound_failed_imports() {
+        let mut app = fixture_app("authored drop", &["weapon_aug", "weapon_aug", "weapon_famas"]);
+        app.update();
+        let instances = app.world().resource::<GroundInstances>();
+        assert_eq!(instances.items.len(), 3);
+        let (a, b) = (&instances.items[&0].instance, &instances.items[&1].instance);
+        assert_ne!(a.joints, b.joints);
+        let (a, b) = (a.meshes[0], b.meshes[0]);
+        assert_ne!(app.world().get::<MeshMaterial3d<WorldMaterial>>(a).unwrap().0,
+            app.world().get::<MeshMaterial3d<WorldMaterial>>(b).unwrap().0);
+        assert!(app.world().get::<crate::decorations::Parent>(a).is_some());
+        assert!(app.world().get::<crate::skin_finish::SkinPart>(a).is_some());
+        assert!(matches!(app.world().get::<crate::skin_finish::Target>(a),
+            Some(crate::skin_finish::Target::Ground(0))));
+        let ground = app.world().resource::<GroundModels>();
+        assert!(ground.weapons.is_empty());
+        assert_eq!(ground.prepared_paths.len(), 1);
+        assert!(ground.prepared_paths[MISSING_DROP].is_none());
+        // Even if data appears later, the failed path is not re-read for a new
+        // item or a reappearance in this map. A map reload permits a retry.
+        app.world_mut().resource_mut::<LoadedLevel>().0.vfs.push_front(
+            "late fixture", vfs::Mount::Memory(model_files(MISSING_DROP, "late model")));
+        app.world_mut().resource_mut::<SimWorld>().0.items.clear();
+        app.update();
+        assert!(app.world().get_entity(a).is_err() && app.world().get_entity(b).is_err());
+        add_item(&mut app, 4, "weapon_aug");
+        app.update();
+        assert!(app.world().resource::<GroundModels>().prepared_paths[MISSING_DROP].is_none());
+        assert_eq!(app.world().resource::<Assets<SkinnedMeshInverseBindposes>>().len(), 3);
+        app.world_mut().resource_mut::<SimWorld>().0.items.clear();
+        app.update();
+        app.world_mut().resource_mut::<CharacterModels>().weapons.remove("weapon_aug");
+        add_item(&mut app, 5, "weapon_aug");
+        app.update();
+        app.update();
+        assert!(!app.world().resource::<GroundInstances>().items.contains_key(&5));
+        assert!(app.world().resource::<GroundModels>().prepared_paths[MISSING_DROP].is_none());
+        assert_eq!(app.world().resource::<Assets<SkinnedMeshInverseBindposes>>().len(), 3);
+    }
+
+    #[test]
+    fn map_teardown_or_cancel_drops_preparation_and_next_map_uses_its_own_vfs() {
+        let mut app = fixture_app("first map", &["weapon_ak47"]);
+        app.update();
+        let weak = Arc::downgrade(&app.world().resource::<GroundModels>()
+            .prepared_paths[DROP].as_ref().unwrap().model);
+        crate::session::clear_match(app.world_mut());
+        assert!(app.world().get_resource::<GroundModels>().is_none());
+        assert!(app.world().resource::<GroundInstances>().items.is_empty());
+        assert!(weak.upgrade().is_none(), "no map-owned prepared model survives teardown");
+        let mut next = fixture_app("next map override", &["weapon_ak47"]);
+        next.update();
+        assert_eq!(next.world().resource::<GroundModels>()
+            .prepared_paths[DROP].as_ref().unwrap().model.name, "next map override");
+    }
+
     #[test]
     fn detached_suppressor_does_not_move_visible_ground_weapon_off_its_pivot() {
         fn mesh(body_part: u32, points: [glam::Vec3; 2]) -> mdl::Mesh {

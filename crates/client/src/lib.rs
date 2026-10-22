@@ -628,6 +628,7 @@ fn spawn_level(
         &mut textures, &world_shared, &mut bindposes, opts.exposure);
     prop_breakables::spawn(&mut commands, &level, &mut meshes, &mut materials, &mut images,
         &mut textures, &world_shared, &mut bindposes, opts.exposure);
+    let ground_models = ground_models.with_load_context(textures, world_shared, opts.exposure);
     info!("characters and viewmodels loaded in {:.2}s", t_chars.elapsed().as_secs_f32());
     let localization = localize::Localization::load(&level.vfs);
     let sounds = audio::SoundLibrary::load(&level.vfs);
