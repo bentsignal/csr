@@ -595,6 +595,54 @@ mod tests {
 
     #[test]
     #[ignore = "requires the private verified 2015 audio pack in CSR_DATA_DIR/packs and Legacy installed data"]
+    fn installed_private_rifle_handling_uses_original_waves_and_declarations() {
+        let path = packs::Installed::current().dir().join(historical::FILENAME);
+        let pack = path.is_file().then(|| historical::Historical::open(&path).expect("private pack"));
+        let (_, fs) = level::mount_game(None).unwrap();
+        let installed = super::super::SoundLibrary::load_with_era(&fs, SoundEra::InstalledLegacy);
+        let m4 = [
+            ("weapon_m4a1.draw", "sound/weapons/m4a1/m4a1_draw.wav", 0.5, 6),
+            ("weapon_m4a1.clipout", "sound/weapons/m4a1/m4a1_clipout.wav", 1.0, 3),
+            ("weapon_m4a1.clipin", "sound/weapons/m4a1/m4a1_clipin.wav", 1.0, 3),
+            ("weapon_m4a1.boltforward", "sound/weapons/m4a1/m4a1_boltforward.wav", 1.0, 3),
+            ("weapon_m4a1.boltback", "sound/weapons/m4a1/m4a1_boltback.wav", 1.0, 3),
+        ];
+        let ak = [
+            ("weapon_ak47.draw", "sound/weapons/ak47/ak47_draw.wav", 0.5, 6),
+            ("weapon_ak47.boltpull", "sound/weapons/ak47/ak47_boltpull.wav", 1.0, 6),
+            ("weapon_ak47.clipout", "sound/weapons/ak47/ak47_clipout.wav", 1.0, 3),
+            ("weapon_ak47.clipin", "sound/weapons/ak47/ak47_clipin.wav", 1.0, 3),
+        ];
+        let m4_ready = pack.as_ref().is_some_and(|pack| m4.iter().all(|(_, path, _, _)| pack.wave(path).is_ok()));
+        for era in [SoundEra::Classic2015, SoundEra::InstalledLegacy] {
+            let library = super::super::SoundLibrary::load_with_era(&fs, era);
+            for (binding, path, volume, channel) in ak.into_iter().chain(m4) {
+                let active = era == SoundEra::Classic2015 && pack.is_some()
+                    && (binding.starts_with("weapon_ak47.") || m4_ready);
+                let mut actual = library.entries[binding].clone();
+                let mut expected = installed.entries[binding].clone();
+                if active {
+                    let expected_wave = if binding.starts_with("weapon_ak47.") {
+                        decoded_audio(fs.read(path).unwrap()).unwrap().0
+                    } else {
+                        pack.as_ref().unwrap().wave(path).unwrap().bytes
+                    };
+                    assert_eq!(actual.frozen_wave.take().expect("classic rifle handling").bytes, expected_wave, "{binding}");
+                    expected.volume = (volume, volume);
+                    expected.pitch = (100.0, 100.0);
+                    expected.channel = channel;
+                    expected.limit = None;
+                }
+                assert_eq!(format!("{actual:?}"), format!("{expected:?}"), "{binding}: {era:?}");
+            }
+            for binding in ["weapon_m4a1s.boltback", "weapon_m4a1s.boltforward", "weapon_m4a1.cliphit"] {
+                assert_eq!(format!("{:?}", library.entries[binding]), format!("{:?}", installed.entries[binding]));
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "requires the private verified 2015 audio pack in CSR_DATA_DIR/packs and Legacy installed data"]
     fn installed_private_historical_pack_decodes_and_drives_the_classic_profile() {
         let path = packs::Installed::current().dir().join(historical::FILENAME);
         let pack = historical::Historical::open(&path).expect("private historical pack");
