@@ -34,6 +34,11 @@ fn enter(mut panel: ResMut<Panel>, opts: Res<crate::Options>, remote: Option<Res
 impl Panel {
     fn enter_match(&mut self, playtest: bool, remote: bool) {
         self.offline_playtest = playtest && !remote;
+        if !self.offline_playtest { self.selected_bots = None; }
+        // F8's explicit count overrides the menu quota, including No Bots.
+        // Reapply it through fixed-tick configure after a map reload; keep the
+        // selected difficulty/profile independent of Solo or combat population.
+        self.bots = self.selected_bots;
         self.bots_paused = false;
         self.open = self.offline_playtest;
         self.dirty = true;
@@ -100,8 +105,8 @@ fn input(
                 let mut options = opts.0.clone();
                 options.map = map.clone();
                 if let Some(count) = panel.selected_bots {
+                    // Solo changes quota, not the current menu difficulty.
                     options.bots = count.div_ceil(2);
-                    options.bot_difficulty = if count == 0 { Some(0) } else { None };
                 }
                 options.direct = true;
                 options.deathmatch = true;
@@ -238,14 +243,41 @@ mod tests {
         let bot = world.add_bot("target", sim::Team::Terrorist);
         (world, local, bot)
     }
-    #[test]
-    fn pause_button_and_draw_only_change_panel_until_fixed_tick() {
-        let (world, local, _) = pause_world();
-        let before = world.state_hash();
+    fn bot_settings_level() -> level::Level {
+        use std::{collections::BTreeMap, sync::Arc};
+        // Synthetic content exercises the real resolver, not installed tuning.
+        let modes = r#"GameModes.txt { botDifficulty {
+            none { value 0 convars { bot_quota 0 } }
+            harmless { value 1 convars { bot_difficulty 0 bot_dont_shoot 1 } }
+            easy { value 2 convars { bot_difficulty 0 bot_dont_shoot 0 } }
+            medium { value 3 convars { bot_difficulty 1 bot_dont_shoot 0 } }
+            hard { value 4 convars { bot_difficulty 2 bot_dont_shoot 0 } }
+            expert { value 5 convars { bot_difficulty 3 bot_dont_shoot 0 } }
+        } }"#;
+        let profiles = "Default\nSkill = 40\nReactionTime = 0.5\nEnd\n\
+            Template Easy\nSkill = 10\nReactionTime = 0.75\nDifficulty = EASY\nEnd\n\
+            Template Normal\nDifficulty = NORMAL\nEnd\n\
+            Template Hard\nSkill = 75\nReactionTime = 0.25\nDifficulty = HARD\nEnd\n\
+            Template Expert\nSkill = 95\nReactionTime = 0.1\nDifficulty = EXPERT\nEnd\n";
+        let mut bsp = vec![0u8; 1036];
+        bsp[..4].copy_from_slice(b"VBSP");
+        bsp[4..8].copy_from_slice(&20i32.to_le_bytes());
+        let mut fs = vfs::Vfs::new();
+        fs.push_back("bot settings fixture", vfs::Mount::Memory(BTreeMap::from([
+            ("maps/bot_settings.bsp".into(), Arc::<[u8]>::from(bsp)),
+            ("gamemodes.txt".into(), Arc::<[u8]>::from(modes.as_bytes())),
+            ("botprofile.db".into(), Arc::<[u8]>::from(profiles.as_bytes())),
+        ])));
+        level::Level::load_from_vfs(
+            content::ContentId::csgo(content::ContentKind::Map, "bot_settings"),
+            "bot_settings", default(), fs,
+        ).unwrap()
+    }
+    fn panel_app(options: crate::ClientOptions, world: sim::World, local: sim::PlayerId) -> App {
         let mut panel = Panel { page: Page::Match, ..default() };
-        panel.enter_match(true, false);
+        panel.enter_match(options.playtest, false);
         let mut app = App::new();
-        app.insert_resource(crate::Options(crate::ClientOptions { playtest: true, ..default() }))
+        app.insert_resource(crate::Options(options))
             .insert_resource(panel)
             .insert_resource(crate::player::SimWorld(world))
             .insert_resource(LocalPlayer::new(local, glam::Vec3::ZERO, 0.))
@@ -260,6 +292,116 @@ mod tests {
             .add_systems(Update, (input, draw).chain());
         app.world_mut().spawn((Window::default(), CursorOptions::default(), PrimaryWindow));
         app.update();
+        app
+    }
+    fn click_panel(app: &mut App, matches: impl Fn(&Action) -> bool) {
+        let before = app.world().resource::<crate::player::SimWorld>().0.state_hash();
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().reset_all();
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().reset_all();
+        if !app.world().resource::<Panel>().open {
+            app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::F8);
+            app.update();
+            app.world_mut().resource_mut::<ButtonInput<KeyCode>>().reset_all();
+        }
+        let mut actions = app.world_mut().query::<(Entity, &Action)>();
+        let button = actions.iter(app.world()).find(|(_, action)| matches(action)).expect("drawn F8 button").0;
+        app.world_mut().entity_mut(button).insert(Interaction::Pressed);
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Left);
+        app.update();
+        assert_eq!(app.world().resource::<crate::player::SimWorld>().0.state_hash(), before,
+            "UI events must only queue simulation changes");
+    }
+    fn configure_app(app: &mut App) {
+        app.world_mut().resource_scope(|ecs, mut panel: Mut<Panel>| {
+            let local = ecs.resource::<LocalPlayer>().id;
+            configure(&mut panel, &mut ecs.resource_mut::<crate::player::SimWorld>().0, local);
+        });
+    }
+    fn assert_bot_settings(app: &App, count: usize, expected: &sim::bots::Bots, terrorist: bool) {
+        let world = &app.world().resource::<crate::player::SimWorld>().0;
+        let bots: Vec<_> = world.players.iter().filter(|p| p.is_bot).collect();
+        assert_eq!(bots.len(), count);
+        let mine = if terrorist { sim::Team::Terrorist } else { sim::Team::CounterTerrorist };
+        assert_eq!(bots.iter().filter(|p| p.team == mine).count(), count / 2);
+        assert_eq!(bots.iter().filter(|p| p.team != mine).count(), count.div_ceil(2));
+        assert_eq!((world.bots.skill, world.bots.reaction_time, world.bots.shooting, world.bots.aggressive),
+            (expected.skill, expected.reaction_time, expected.shooting, expected.aggressive));
+    }
+    #[test]
+    fn count_and_map_buttons_preserve_difficulty_across_solo_and_combat() {
+        let level = bot_settings_level();
+        for choice in [None, Some(0), Some(1), Some(2), Some(3), Some(4), Some(5)] {
+            for terrorist in [false, true] {
+                let options = crate::ClientOptions { playtest: true, bot_difficulty: choice, terrorist, ..default() };
+                let expected = level.configured_bots(choice).unwrap();
+                let (mut world, local, bot) = pause_world();
+                world.remove_player(bot);
+                world.player_mut(local).unwrap().team = if terrorist { sim::Team::Terrorist } else { sim::Team::CounterTerrorist };
+                world.bots = level.configured_bots(choice).unwrap();
+                let mut app = panel_app(options, world, local);
+                app.world_mut().resource_mut::<crate::menu::Menu>().maps = vec!["de_nuke".into(), "de_dust2".into()];
+                // Combat -> map -> Solo -> map -> combat -> map, including a
+                // session whose original picker choice was No Bots or Harmless.
+                for (count, map) in [(9, "de_nuke"), (0, "de_dust2"), (9, "de_nuke")] {
+                    click_panel(&mut app, |a| matches!(a, Action::Page(Page::Match)));
+                    click_panel(&mut app, |a| matches!(a, Action::Bots(n) if *n == count));
+                    assert!(app.world().resource::<crate::menu::LoadRequest>().0.lock().unwrap().is_none());
+                    assert_eq!(app.world().resource::<Panel>().bots, Some(count));
+                    configure_app(&mut app);
+                    assert_bot_settings(&app, count as usize, &expected, terrorist);
+                    click_panel(&mut app, |a| matches!(a, Action::Page(Page::Maps)));
+                    click_panel(&mut app, |a| matches!(a, Action::Map(name) if name == map));
+                    let request = app.world().resource::<crate::menu::LoadRequest>().0.lock().unwrap().take().unwrap();
+                    assert_eq!(request.options.map, map);
+                    assert_eq!(request.options.bots, count.div_ceil(2));
+                    assert_eq!(request.options.bot_difficulty, choice);
+                    assert!(request.options.playtest && request.options.direct
+                        && request.options.deathmatch && request.options.grenade_practice);
+                    // The loader replaces Options and rebuilds World's bot
+                    // profile. OnEnter queues the explicit F8 population again;
+                    // No Bots still means zero at spawn, until fixed configure.
+                    let (mut reloaded, local, bot) = pause_world();
+                    reloaded.remove_player(bot);
+                    reloaded.player_mut(local).unwrap().team = if terrorist { sim::Team::Terrorist } else { sim::Team::CounterTerrorist };
+                    reloaded.bots = level.configured_bots(request.options.bot_difficulty).unwrap();
+                    app.insert_resource(crate::Options(request.options))
+                        .insert_resource(crate::player::SimWorld(reloaded));
+                    app.world_mut().resource_mut::<Panel>().enter_match(true, false);
+                    configure_app(&mut app);
+                    assert_bot_settings(&app, count as usize, &expected, terrorist);
+                }
+            }
+        }
+    }
+    #[test]
+    fn map_button_without_count_selection_keeps_current_options() {
+        for choice in [None, Some(0), Some(3)] {
+            let options = crate::ClientOptions { playtest: true, bots: 2, bot_difficulty: choice, ..default() };
+            let (world, local, _) = pause_world();
+            let mut app = panel_app(options, world, local);
+            app.world_mut().resource_mut::<crate::menu::Menu>().maps = vec!["de_nuke".into()];
+            click_panel(&mut app, |a| matches!(a, Action::Page(Page::Maps)));
+            click_panel(&mut app, |a| matches!(a, Action::Map(name) if name == "de_nuke"));
+            let request = app.world().resource::<crate::menu::LoadRequest>().0.lock().unwrap().take().unwrap();
+            assert_eq!(request.options.bots, 2);
+            assert_eq!(request.options.bot_difficulty, choice);
+            assert!(app.world().resource::<Panel>().selected_bots.is_none());
+        }
+    }
+    #[test]
+    fn normal_and_remote_match_entry_clear_explicit_playtest_population() {
+        for (playtest, remote) in [(false, false), (true, true)] {
+            let mut panel = Panel { selected_bots: Some(9), bots: Some(9), ..default() };
+            panel.enter_match(playtest, remote);
+            assert!(panel.selected_bots.is_none() && panel.bots.is_none());
+            assert!(!panel.offline_playtest && !panel.open);
+        }
+    }
+    #[test]
+    fn pause_button_and_draw_only_change_panel_until_fixed_tick() {
+        let (world, local, _) = pause_world();
+        let before = world.state_hash();
+        let mut app = panel_app(crate::ClientOptions { playtest: true, ..default() }, world, local);
         let mut actions = app.world_mut().query::<(Entity, &Action)>();
         let button = actions.iter(app.world()).find(|(_, action)| matches!(action, Action::PauseBots)).unwrap().0;
         app.world_mut().entity_mut(button).insert(Interaction::Pressed);
