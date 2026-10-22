@@ -295,7 +295,7 @@ pub fn process(
             }
             GameEvent::Land { player, speed } => {
                 if let Some(p) = world.0.player(player) {
-                    crate::foley::land(&mut commands, &mut sounds, &mut sources, &level.0, &props, p, &local, speed);
+                    crate::foley::land(&mut commands, &mut sounds, &mut sources, &level.0, &world.0.collision, &props, p, &local, speed);
                 }
             }
             GameEvent::Pickup { player, item } => {
