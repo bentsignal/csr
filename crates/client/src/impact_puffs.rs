@@ -226,6 +226,22 @@ mod tests {
     use crate::particle_data::Value;
 
     #[test]
+    fn installed_material_children_load_with_distinct_authored_profiles() {
+        let Ok((_, fs)) = level::mount_game(None) else { return; };
+        let mut materials = Assets::<StandardMaterial>::default();
+        let mut images = Assets::<Image>::default();
+        let catalog = Catalog::load(&fs, &mut materials, &mut images);
+        for (family, child) in CHILDREN {
+            let profile = catalog.profiles.get(family)
+                .unwrap_or_else(|| panic!("installed impact child was rejected: {child}"));
+            assert_eq!(profile.id.to_string(), format!("csgo_particle_{child}"));
+            assert!(materials.get(&profile.material).unwrap().base_color_texture.is_some());
+        }
+        assert_ne!(catalog.profiles["C"].radius, catalog.profiles["M"].radius);
+        assert_ne!(catalog.profiles["M"].color, catalog.profiles["Y"].color);
+    }
+
+    #[test]
     fn puff_budget_rejects_parent_sparks_continuous_and_delayed_emission() {
         let mut all = vec![Element::default(), Element::default()];
         all[0].attrs.insert("functionname".into(), Value::Text("emit_instantaneously".into()));
