@@ -2,6 +2,7 @@
 use serde::{Deserialize, Serialize};
 use sim::{GameEvent, PlayerId, Snapshot, Team, TickInput};
 
+// v32 retains the admitted primary/secondary mode on each Fire event.
 // v31 retains pending primary trigger presses in authoritative weapon state.
 // v30 adds authoritative ground-item vertical velocity and settled state.
 // v29 retains protection at each damage event instead of reading later armor.
@@ -9,8 +10,8 @@ use sim::{GameEvent, PlayerId, Snapshot, Team, TickInput};
 // v27 combines authoritative door poses/cues, brush-breakable health/removal,
 // and replicated BSP ladder contact for prediction and foley.
 // Older peers must reject the session before attempting snapshot decoding.
-pub const VERSION: u32 = 31;
-pub const PROTOCOL_ID: u64 = 0x4353_5257_0000_001f;
+pub const VERSION: u32 = 32;
+pub const PROTOCOL_ID: u64 = 0x4353_5257_0000_0020;
 pub const CONTROL: u8 = 0;
 pub const INPUT: u8 = 1;
 pub const SNAPSHOT: u8 = 2;
@@ -865,7 +866,7 @@ mod tests {
                 player: 1,
                 weapon: "weapon_test".into(),
                 origin: Vec3::NAN,
-                suppressed: false,
+                secondary: false, suppressed: false,
             },
             GameEvent::Impact {
                 player: 1,
@@ -909,7 +910,7 @@ mod tests {
                         player: 1,
                         weapon: "weapon_test".into(),
                         origin: Vec3::ZERO,
-                        suppressed: false,
+                        secondary: false, suppressed: false,
                     },
                     GameEvent::Land {
                         player: 1,
@@ -919,6 +920,18 @@ mod tests {
             })
             .is_ok()
         );
+    }
+    #[test]
+    fn fire_events_retain_the_admitted_shot_mode_across_the_wire() {
+        for secondary in [false, true] {
+            let batch = EventBatch { tick: 42, events: vec![GameEvent::Fire {
+                player: 1, weapon: "weapon_revolver".into(), origin: glam::Vec3::ZERO,
+                suppressed: false, secondary,
+            }] };
+            assert!(validate_events(&batch).is_ok());
+            let decoded = decode::<EventBatch>(&encode(&batch).unwrap()).unwrap();
+            assert_eq!(decoded, batch);
+        }
     }
     #[test]
     fn vr_input_round_trips_without_camera_assumptions() {

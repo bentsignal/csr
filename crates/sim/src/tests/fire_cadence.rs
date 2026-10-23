@@ -90,6 +90,8 @@ fn revolver_secondary_fires_authored_shots_without_changing_instant_primary() {
         let mut primary = world.clone();
         primary.step(&[(id, held())]);
         assert_eq!(primary.players[0].shots, 1);
+        assert!(primary.events.iter().any(|e| matches!(e,
+            GameEvent::Fire { secondary: false, .. })));
         let w = &primary.players[0].weapons[0];
         assert!((w.next_attack - first - 0.55).abs() < 0.00001);
         assert_eq!(w.accuracy_penalty, 50.);
@@ -121,6 +123,8 @@ fn revolver_secondary_fires_authored_shots_without_changing_instant_primary() {
 
         world.step(&[(id, alternate)]);
         assert_eq!(world.players[0].shots, 1);
+        assert!(world.events.iter().any(|e| matches!(e,
+            GameEvent::Fire { secondary: true, .. })));
         assert_eq!(world.players[0].weapons[0].accuracy_penalty, 55.);
         // Assert the actual emitted ray uses alternate standing inaccuracy
         // AND spread, independently of the stat-selection helper.

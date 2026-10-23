@@ -862,7 +862,7 @@ mod tests {
         foley.interrupt_deploys(&[]);
         assert_eq!(foley.queue.len(), 10);
         foley.interrupt_deploys(&[sim::GameEvent::Fire { player: 1,
-            weapon: "weapon_mag7".into(), origin: glam::Vec3::ZERO, suppressed: false }]);
+            weapon: "weapon_mag7".into(), origin: glam::Vec3::ZERO, secondary: false, suppressed: false }]);
         assert_eq!(foley.queue.len(), 8);
         assert!(!foley.queue.iter().any(|q| q.player == 1 && q.weapon == "weapon_mag7" && q.deploy));
         for cues in [
