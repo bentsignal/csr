@@ -35,6 +35,10 @@ fn sigma_at(uv: vec2<f32>) -> f32 {
     let size = vec2<f32>(textureDimensions(scene));
     if settings.params.x > 0.0 {
         let radial = length((uv - vec2<f32>(0.5)) * size) / (size.y * 0.4217);
+        // The shared scene can already contain HUD from another camera. The
+        // sniper effect owns only the INSIDE of the optical opening: outside
+        // pixels must pass through unchanged, including radar/ammo/health.
+        if radial >= 1.0 { return 0.0; }
         // Keep the central 60% of the opening completely sharp at every
         // inaccuracy. Reticle defocus belongs to the mounted line sprite;
         // scene defocus is only the outer optical transition.
