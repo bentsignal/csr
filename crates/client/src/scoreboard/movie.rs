@@ -111,6 +111,11 @@ impl Presentation {
             self.sent = None;
             self.admitted = None;
         }
+        if self.admitted.as_ref().is_some_and(|old| !old.same_view(next)) {
+            // Money/equipment are filtered for this viewer. Never retain a
+            // raster belonging to a previous team, player or map/round heading.
+            self.admitted = None;
+        }
         if self.receipt.ready.load(Ordering::Acquire) == 1 && self.sent.as_ref() != Some(next) {
             self.revision = self.revision.checked_add(1).expect("scoreboard revision limit");
             self.send(Input::Present { commands: vec![Command::Call { path: API.into(),
@@ -155,7 +160,11 @@ impl Presentation {
             self.worker = None;
             warn!("Original scoreboard unavailable; retaining functional board");
         }
-        let visible = !self.failed && self.admitted.as_ref() == Some(next);
+        // A kill/death/money update must not flash the unrelated fallback
+        // layout while its replacement raster is in flight. Only admission of
+        // the new revision changes the displayed pixels; failure still falls
+        // back and viewer/viewport changes cleared the old raster above.
+        let visible = !self.failed && self.admitted.is_some();
         self.visible(commands, visible);
         visible
     }
@@ -164,6 +173,24 @@ impl Presentation {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn ordinary_score_updates_keep_the_same_view_but_team_changes_do_not() {
+        let mut world = sim::World::new(Arc::new(collision::CollisionWorld::new()));
+        let local = world.add_player("Local", sim::Team::CounterTerrorist);
+        let other = world.add_player("Other", sim::Team::Terrorist);
+        let admitted = super::super::board(&world, local, "de_dust2");
+        world.player_mut(local).unwrap().kills += 1;
+        world.player_mut(other).unwrap().deaths += 1;
+        let refreshed = super::super::board(&world, local, "de_dust2");
+        assert!(admitted != refreshed);
+        assert!(admitted.same_view(&refreshed), "hold the original raster through stat refreshes");
+        assert!(!admitted.same_view(&super::super::board(&world, other, "de_dust2")));
+        assert!(!admitted.same_view(&super::super::board(&world, local, "de_nuke")));
+        world.player_mut(local).unwrap().team = sim::Team::Terrorist;
+        assert!(!admitted.same_view(&super::super::board(&world, local, "de_dust2")),
+            "old teammate money/equipment cannot survive a team change");
+    }
+
     #[test]
     fn scoreboard_raster_requires_matching_snapshot_viewport_and_post_receipt_capture() {
         let mut frame = scaleform::Frame { width: 2, height: 2, rgba: vec![255; 16], serial: 1,
