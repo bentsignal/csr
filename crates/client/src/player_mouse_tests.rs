@@ -253,3 +253,70 @@ fn another_windows_focus_messages_do_not_steal_primary_mouse_counts() {
     frame(&mut app, &[[1000., 200.]], 2);
     assert_angles(&mut app, 4.4, 158.);
 }
+
+#[test]
+fn attack_cycles_in_one_render_batch_reach_separate_fixed_inputs() {
+    use bevy::input::keyboard::{Key, KeyboardInput};
+    use crate::settings::{MouseAction, KEY_ATTACK, KEY_ATTACK2};
+    for (device, binding, action, bit) in [
+        (Some(MouseButton::Left), KEY_ATTACK, MouseAction::Attack, buttons::ATTACK),
+        (Some(MouseButton::Back), KEY_ATTACK2, MouseAction::Attack2, buttons::ATTACK2),
+        (None, KEY_ATTACK, MouseAction::Attack, buttons::ATTACK),
+        (None, KEY_ATTACK2, MouseAction::Attack2, buttons::ATTACK2),
+    ] {
+        let (mut app, window) = app();
+        {
+            let mut settings = app.world_mut().resource_mut::<crate::settings::Settings>();
+            if let Some(device) = device {
+                let index = crate::settings::MOUSE_BUTTONS.iter().position(|b| *b == device).unwrap();
+                settings.mouse_binds[index] = action;
+            } else { settings.rebind(binding, KeyCode::KeyX); }
+        }
+        let send = |app: &mut App, state| {
+            if let Some(device) = device { button(app, window, device, state); }
+            else {
+                app.world_mut().write_message(KeyboardInput {
+                    key_code: KeyCode::KeyX, logical_key: Key::Character("x".into()),
+                    state, text: None, repeat: false, window,
+                });
+            }
+        };
+        send(&mut app, ButtonState::Pressed);
+        frame(&mut app, &[], 1);
+        assert_ne!(app.world().resource::<TickSamples>().0.last().unwrap().buttons & bit, 0);
+        // Both physical messages are processed by InputPlugin before look;
+        // the final device state is down, with both edge flags retained.
+        send(&mut app, ButtonState::Released);
+        send(&mut app, ButtonState::Pressed);
+        let before = app.world().resource::<TickSamples>().0.len();
+        frame(&mut app, &[], 3);
+        let samples = &app.world().resource::<TickSamples>().0[before..];
+        assert_eq!(samples.iter().map(|s| s.buttons & bit).collect::<Vec<_>>(), vec![0, bit, bit]);
+        frame(&mut app, &[], 2);
+        assert!(app.world().resource::<TickSamples>().0[before + 3..].iter().all(|s| s.buttons & bit != 0),
+            "a held trigger must stay held, not replay the batched release");
+    }
+}
+
+#[test]
+fn a_second_held_attack_binding_prevents_a_false_batched_release() {
+    use crate::settings::{MouseAction, KEY_ATTACK};
+    for keyboard in [false, true] {
+        let (mut app, window) = app();
+        {
+            let mut settings = app.world_mut().resource_mut::<crate::settings::Settings>();
+            if keyboard { settings.rebind(KEY_ATTACK, KeyCode::KeyX); }
+            else { settings.mouse_binds[3] = MouseAction::Attack; }
+        }
+        button(&mut app, window, MouseButton::Left, ButtonState::Pressed);
+        if keyboard { app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::KeyX); }
+        else { button(&mut app, window, MouseButton::Back, ButtonState::Pressed); }
+        frame(&mut app, &[], 1);
+        button(&mut app, window, MouseButton::Left, ButtonState::Released);
+        button(&mut app, window, MouseButton::Left, ButtonState::Pressed);
+        let before = app.world().resource::<TickSamples>().0.len();
+        frame(&mut app, &[], 3);
+        assert!(app.world().resource::<TickSamples>().0[before..].iter()
+            .all(|s| s.buttons & buttons::ATTACK != 0), "the other binding kept the action down");
+    }
+}

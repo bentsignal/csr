@@ -214,6 +214,45 @@ fn captured(cursor: &CursorOptions) -> bool {
     cursor.grab_mode != CursorGrabMode::None
 }
 
+/// ButtonInput keeps both edges when an entire up/down cycle arrives in one
+/// render frame. Preserve that release for a single active device, too. If
+/// multiple devices changed, their separate input streams do not establish
+/// aggregate ordering; never interrupt another held binding on that evidence.
+fn attack_released(
+    settings: &crate::settings::Settings,
+    keys: &ButtonInput<KeyCode>,
+    mouse: &ButtonInput<MouseButton>,
+    blocked: u8,
+    binding: usize,
+    action: crate::settings::MouseAction,
+) -> bool {
+    let mut held = false;
+    let mut involved = 0;
+    let mut cycled = false;
+    for (index, button) in crate::settings::MOUSE_BUTTONS.iter().copied().enumerate() {
+        if blocked & (1 << index) != 0 || settings.mouse_binds[index] != action { continue; }
+        let down = mouse.pressed(button);
+        let pressed = mouse.just_pressed(button);
+        let released = mouse.just_released(button);
+        held |= down;
+        if down || pressed || released {
+            involved += 1;
+            cycled = down && pressed && released;
+        }
+    }
+    if let Some(key) = settings.binds[binding] {
+        let down = keys.pressed(key);
+        let pressed = keys.just_pressed(key);
+        let released = keys.just_released(key);
+        held |= down;
+        if down || pressed || released {
+            involved += 1;
+            cycled = down && pressed && released;
+        }
+    }
+    !held || (involved == 1 && cycled)
+}
+
 /// Raw motion has no window id or ordering relative to focus messages. Reject
 /// the entire transition batch, including a loss/regain within one frame.
 /// Run after InputSystems even while the console/menu owns gameplay input.
@@ -393,8 +432,7 @@ pub fn look(
             (crate::settings::KEY_ATTACK, crate::settings::MouseAction::Attack, buttons::ATTACK),
             (crate::settings::KEY_ATTACK2, crate::settings::MouseAction::Attack2, buttons::ATTACK2),
         ] {
-            if !settings.mouse_pressed(action, &mouse, blocked_mouse)
-                && !settings.binds[binding].is_some_and(|key| keys.pressed(key)) {
+            if attack_released(&settings, &keys, &mouse, blocked_mouse, binding, action) {
                 local.released_attacks |= bit;
             }
         }
