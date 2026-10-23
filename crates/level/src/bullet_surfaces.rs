@@ -54,10 +54,12 @@ pub(super) fn load(world: &mut CollisionWorld, fs: &vfs::Vfs) {
 }
 
 pub(super) fn bind(world: &CollisionWorld, previous: Option<[u8; 20]>) -> Option<[u8; 20]> {
+    // With no resolved definitions both old and new worlds remain opaque.
+    // Keep empty/synthetic catalog identities stable in that case.
+    if world.bullet_surfaces.iter().all(Option::is_none) { return previous; }
     previous.map(|previous| {
         let mut hash = Sha1::new();
         hash.update(previous);
-        // Also changes identity for empty definitions: old peers stop at walls.
         hash.update(b"csr-practical-thin-slab-penetration-v1\0");
         hash.update((world.bullet_surfaces.len() as u64).to_le_bytes());
         for surface in &world.bullet_surfaces {
@@ -96,7 +98,9 @@ mod tests {
         let mut world = CollisionWorld::new();
         let old = Some([7; 20]);
         let empty = bind(&world, old);
-        assert_ne!(empty, old);
+        assert_eq!(empty, old);
+        world.bullet_surfaces.push(None);
+        assert_eq!(bind(&world, old), old);
         world.bullet_surfaces.push(Some(BulletSurface { material: b'W', penetration_modifier: 0.9, damage_modifier: 0.6 }));
         let wood = bind(&world, old);
         assert_ne!(wood, empty);
