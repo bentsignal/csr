@@ -170,6 +170,18 @@ mod tests {
                 let hit = intact.collision.trace_ray(from, to, contents::MASK_SHOT);
                 if !intact.collision.bullet_surface(hit.surface).is_some_and(|s| s.material == material) { continue; }
                 let Some(exit) = intact.collision.bullet_exit(from, to, &hit, 64.) else { continue; };
+                if material != b'W' {
+                    // Avoid grazing panel edges: the real weapon has authored
+                    // spread, so a single exactly-clear center ray is insufficient.
+                    let perpendicular = Vec3::Z.cross(dir);
+                    if [Vec3::Z * 2., -Vec3::Z * 2., perpendicular * 2., -perpendicular * 2.].into_iter().any(|offset| {
+                        let nearby = intact.collision.trace_ray(from + offset, to + offset, contents::MASK_SHOT);
+                        if nearby.start_solid || nearby.surface != hit.surface || nearby.normal != hit.normal
+                            || nearby.plane_dist != hit.plane_dist { return true; }
+                        let Some(other_exit) = intact.collision.bullet_exit(from + offset, to + offset, &nearby, 64.) else { return true; };
+                        (other_exit.position - exit.position - offset).length() > 0.25
+                    }) { continue; }
+                }
                 let Some(leaving) = intact.collision.bullet_surface(exit.surface) else { continue; };
                 let entry = intact.collision.bullet_surface(hit.surface).unwrap();
                 if leaving.material != material || exit.crossed_surfaces.iter().any(|&id|
@@ -177,6 +189,12 @@ mod tests {
                         && s.penetration_modifier >= entry.penetration_modifier.min(leaving.penetration_modifier)))
                     || exit.thickness >= 16. * gun.penetration
                     * entry.penetration_modifier.min(leaving.penetration_modifier) { continue; }
+                // Put hard-cover targets just behind the panel, with room for
+                // their full standing hull. The wood control retains its lane.
+                let to = if material == b'W' { to } else { exit.next_start + dir * 24. };
+                let target_feet = to - Vec3::Z * 64.;
+                if intact.collision.trace_box(target_feet, target_feet, movement::STAND_MINS,
+                    movement::STAND_MAXS, contents::MASK_PLAYERSOLID).start_solid { continue; }
                 if intact.collision.trace_ray(exit.next_start, to, contents::MASK_SHOT).hit() { continue; }
                 lane = Some((from, to, hit.surface, exit.thickness));
                 break 'solids;
