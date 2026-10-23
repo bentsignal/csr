@@ -67,10 +67,15 @@ Mounted material modifiers feed a bounded approximate thickness/damage policy;
 unknown materials and overlapping geometry stay opaque. Workspace checks and an
 actual installed Inferno wood-panel firing/opaque control pass at 64/128 Hz.
 The final PLAY build and Dust II probe/sim pass; small/full scoreboard captures
-confirm aligned original emblems and all twelve rows per team. CI remains pending.
+confirm aligned original emblems and all twelve rows per team. PR #310 merged
+after both CI checks passed.
 Penetrating pellets emit one completed tracer path with separate entry impacts.
 The original M3 task stays unchecked:
 native damage/thickness parity and broader cover geometry are unfinished.
+The active follow-through joins exact touching/overlapping convex intervals,
+counts their physical thickness once and checks every crossed component face.
+Hidden opaque/unknown backing must still block the shot. This retains the
+existing approximate damage policy; combined execution checks are pending.
 
 The owner launcher/profile has not been replaced.
 

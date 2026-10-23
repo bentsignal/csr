@@ -60,7 +60,9 @@ pub(super) fn bind(world: &CollisionWorld, previous: Option<[u8; 20]>) -> Option
     previous.map(|previous| {
         let mut hash = Sha1::new();
         hash.update(previous);
-        hash.update(b"csr-practical-thin-slab-penetration-v1\0");
+        // Connected convex intervals now form one piece of cover. Peers using
+        // the earlier isolated-slab policy must not share a catalog identity.
+        hash.update(b"csr-practical-thin-slab-penetration-v2\0");
         hash.update((world.bullet_surfaces.len() as u64).to_le_bytes());
         for surface in &world.bullet_surfaces {
             if let Some(surface) = surface {

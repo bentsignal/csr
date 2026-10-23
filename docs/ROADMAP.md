@@ -563,7 +563,8 @@ thing is uncanny. Fidelity is measured, never eyeballed:
       continues authoritative shots through supported wood/cardboard/plastic/
       glass/grate slabs. A real Inferno wood-panel firing control passes at
       64/128 Hz. Its thickness budget/damage retention remain approximations;
-      overlapping cover, other materials and native penetration parity stay open.
+      connected-cover handling is in progress; other materials and native
+      penetration parity stay open.
 - [x] Footsteps, reload/deploy event sounds, surface impact sounds: soundscript
       mixing and MDL events, fixed-tick foley, matched Legacy/client probes,
       1,425-file decode audit, and spatial-panning/downmix regression checks.
