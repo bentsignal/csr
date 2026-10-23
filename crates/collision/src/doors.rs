@@ -66,6 +66,12 @@ impl Door {
         }).collect()
     }
 
+    /// Brush-driven doors can use a visual MDL while their collision hulls
+    /// carry BSP material IDs. Validate contacts against the actual hulls.
+    pub fn has_surface(&self, surface: u32) -> bool {
+        self.hulls.iter().any(|hull| hull.surface == surface)
+    }
+
     pub fn center_at(&self, angle: f32) -> Vec3 { self.origin + self.rotation(angle) * self.center }
 
     pub fn opening_angle(&self, user: Vec3) -> f32 {

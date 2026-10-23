@@ -62,7 +62,7 @@ impl DoorImpactMark {
         if self.map != *map || !self.impact.valid() { return None; }
         let def = collision.doors.get(self.impact.door as usize)?;
         let state = states.get(self.impact.door as usize)?;
-        if self.surface != def.surface || self.impact.pos.length() > def.radius + 0.25 { return None; }
+        if !def.has_surface(self.surface) || self.impact.pos.length() > def.radius + 0.25 { return None; }
         let rotation = def.rotation(state.angle);
         let normal = self.impact.normal.normalize_or_zero();
         Some(Transform::from_translation(to_bevy(def.origin + rotation * (self.impact.pos + normal * MARK_OFFSET)))
@@ -811,6 +811,17 @@ mod decal_tests {
         app.update();
         assert_eq!(app.world_mut().query::<&ImpactFx>().iter(app.world()).count(), 0);
         assert_eq!(app.world_mut().query::<&MatchEntity>().iter(app.world()).count(), 0);
+    }
+
+    #[test]
+    fn brush_door_marks_accept_collision_material_instead_of_visual_model_identity() {
+        let (mark, mut world, states) = door_mark();
+        let visual = world.surface_id("models/different_visual_leaf.mdl");
+        std::sync::Arc::get_mut(&mut world.doors).unwrap()[0].surface = visual;
+        assert_ne!(mark.surface, visual);
+        assert!(mark.pose(&mark.map, &world, &states).is_some());
+        let wrong = DoorImpactMark { surface: visual, ..mark };
+        assert!(wrong.pose(&wrong.map, &world, &states).is_none());
     }
 
     pub(super) fn door_mark() -> (DoorImpactMark, collision::CollisionWorld, Vec<sim::doors::State>) {
