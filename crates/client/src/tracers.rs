@@ -52,6 +52,9 @@ pub fn muzzle_attachment(model: &mdl::Model, left: bool) -> Option<(usize, glam:
         .attachments
         .iter()
         .find(|a| a.name == name)
+        // The Elite viewmodel names its barrels 1/2; the held world model
+        // instead exports muzzle_flash/muzzle_flash2 for right/left.
+        .or_else(|| left.then(|| model.attachments.iter().find(|a| a.name == "muzzle_flash2")).flatten())
         .or_else(|| model.attachments.iter().find(|a| a.name == "muzzle_flash"))
         .map(|a| (a.bone, a.position))
         .or_else(|| {
@@ -219,6 +222,20 @@ mod tests {
         let pose=[glam::Mat4::from_translation(glam::Vec3::new(10.0,20.0,30.0))];
         assert_eq!(muzzle_position(&model,&pose,false),Some(glam::Vec3::new(10.0,23.0,39.0)));
         assert!(muzzle_position(&model,&[],false).is_none());
+    }
+    #[test]
+    fn world_left_muzzle_keeps_single_barrel_fallback_and_viewmodel_numbering() {
+        let attachment = |name: &str, x| mdl::Attachment { name: name.into(), bone: 0,
+            position: glam::Vec3::X * x, rotation: glam::Mat3::IDENTITY };
+        let mut model = mdl::Model { attachments: vec![attachment("muzzle_flash", 1.),
+            attachment("muzzle_flash2", 2.)], ..Default::default() };
+        let pose = [glam::Mat4::IDENTITY];
+        assert_eq!(muzzle_position(&model, &pose, false), Some(glam::Vec3::X));
+        assert_eq!(muzzle_position(&model, &pose, true), Some(glam::Vec3::X * 2.));
+        model.attachments.push(attachment("2", 3.));
+        assert_eq!(muzzle_position(&model, &pose, true), Some(glam::Vec3::X * 3.));
+        model.attachments.truncate(1);
+        assert_eq!(muzzle_position(&model, &pose, true), Some(glam::Vec3::X));
     }
     #[test]
     fn trail_starts_at_muzzle_and_never_overshoots_hit() {

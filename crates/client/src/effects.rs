@@ -144,6 +144,13 @@ impl Effects {
         *seen = (*seen).max(*serial);
         fresh.then_some(*activity)
     }
+
+    /// Reuse the accepted Dualies animation side for third-person attachments.
+    /// Reading it must not consume the receipt needed by the viewmodel.
+    pub(crate) fn left_muzzle(&self, player: sim::PlayerId, weapon: &str) -> bool {
+        weapon == "weapon_elite" && self.attacks.get(&player).is_some_and(|(_, fired, activity)|
+            fired == weapon && *activity == "ACT_VM_PRIMARYATTACK")
+    }
 }
 
 const EXPLOSION_LIFE: f32 = 1.2;
@@ -464,6 +471,8 @@ mod attack_tests {
             effects.firearm_attack(1, "weapon_elite".into(), n as f32 * 0.12, false);
             let expected = if n % 2 == 0 { "ACT_VM_PRIMARYATTACK" } else { "ACT_VM_SECONDARYATTACK" };
             assert_eq!(effects.attacks[&1].2, expected);
+            assert_eq!(effects.left_muzzle(1, "weapon_elite"), n % 2 == 0);
+            assert!(!effects.left_muzzle(1, "weapon_ak47"));
             if n % 3 == 0 {
                 assert_eq!(effects.consume_attack(1, "weapon_elite", &mut seen), Some(expected));
                 assert_eq!(effects.consume_attack(1, "weapon_elite", &mut seen), None);
@@ -473,6 +482,7 @@ mod attack_tests {
         assert_eq!(effects.attacks[&2].2, "ACT_VM_PRIMARYATTACK");
         effects.firearm_attack(1, "weapon_ak47".into(), 2., false);
         assert_eq!(effects.attacks[&1].2, "ACT_VM_PRIMARYATTACK");
+        assert!(!effects.left_muzzle(1, "weapon_elite"));
     }
 
     #[test]
@@ -486,6 +496,26 @@ mod attack_tests {
             ("ACT_VM_SECONDARYATTACK", "shoot_right1")] {
             assert!(model.sequences.iter().any(|seq| seq.activity == activity && seq.name == name));
         }
+        let world = mdl::Model::load_header(&fs.read("models/weapons/w_pist_elite.mdl").unwrap()).unwrap();
+        let pose: Vec<_> = world.bones.iter().map(|bone| bone.pose_to_bone.inverse()).collect();
+        let mut effects = Effects::default();
+        let mut seen = 0;
+        let mut points = Vec::new();
+        for n in 0..4 {
+            effects.firearm_attack(1, "weapon_elite".into(), n as f32 * 0.12, false);
+            let left = effects.left_muzzle(1, "weapon_elite");
+            let name = if left { "muzzle_flash2" } else { "muzzle_flash" };
+            let attachment = world.attachments.iter().find(|a| a.name == name).unwrap();
+            let expected = pose[attachment.bone].transform_point3(attachment.position);
+            let point = crate::tracers::muzzle_position(&world, &pose, left).unwrap();
+            assert_eq!(point, expected);
+            assert!(effects.consume_attack(1, "weapon_elite", &mut seen).is_some(),
+                "world muzzle selection must not consume the first-person shot");
+            points.push(point);
+        }
+        assert!(points[0].distance(points[1]) > 1., "the authored barrels are distinct");
+        assert_eq!(points[0], points[2]);
+        assert_eq!(points[1], points[3]);
     }
 
     // UNRUN by source-only child. Read installed app 4465480 declarations;

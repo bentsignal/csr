@@ -78,12 +78,21 @@ Hidden opaque/unknown backing must still block the shot. Positive mounted
 concrete/metal declarations now use that same bounded policy rather than an
 unconditional material-code rejection. The loss formula is unchanged and
 approximate. The combined 1,328-test workspace, normal PLAY build, Dust II
-probe/sim and ordinary ten-player Nuke render pass. CI remains pending.
+probe/sim and ordinary ten-player Nuke render pass. Both CI checks passed;
+PR #311 merged the connected-cover increment.
 Installed-data controls now pass through an actual 16-unit Inferno wooden panel
 and 8-unit Nuke concrete/corrugated-metal panels at 64/128 Hz. Identical opaque
 controls retain the original collision/weapon data and block each shot when
 the ballistic definitions are removed. This is functional coverage, not measured
 native damage parity.
+
+Dualies follow-through: the third-person model exports separate
+`muzzle_flash` and `muzzle_flash2` attachments. Reuse the accepted alternating
+fire receipt for that choice so world flashes/tracers follow the firing hand;
+first-person numbering and single-barrel fallbacks stay intact. Validation
+is pending for this follow-through. Native penetration damage/thickness parity
+remains unfinished; the attempted original-game comparison could not start
+because Legacy could not connect to a running Steam client.
 
 The owner launcher/profile has not been replaced.
 

@@ -370,7 +370,7 @@ pub fn sync(
             if let Some(asset) = weapon_assets.get(&w.name) {
                 w.merge.evaluate_into(&pose, &mut w.pose);
                 skinning::apply_pose(&w.instance, world_from_model, &w.pose, &mut transforms);
-                if let Some(point)=crate::tracers::muzzle_position(&asset.model,&w.pose,false) {
+                if let Some(point)=crate::tracers::muzzle_position(&asset.model,&w.pose,effects.left_muzzle(p.id, &w.name)) {
                     muzzles.world.insert(p.id,world_from_model.transform_point3(to_bevy(point)));
                 }
             }
