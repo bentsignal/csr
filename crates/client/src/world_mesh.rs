@@ -771,16 +771,15 @@ pub fn material_from_vmt(
                 params.color = Vec4::new(tint[0], tint[1], tint[2], mat.alpha());
             }
             Some(ScopeLensFallback::ScoutRear) => {
-                // The installed Scout shared lens is opaque VertexLitGeneric,
-                // not AUG additive glass (nor the painted scope housing).
-                // Provisional dark backing for the absent optical reflection;
-                // preserve authored texture/normal/tint, but bound the diffuse
-                // and sun highlight that otherwise wash the rear lens grey.
-                // 0.1 is a presentation fallback, not a measured native value.
-                params.color.x *= 0.1;
-                params.color.y *= 0.1;
-                params.color.z *= 0.1;
-                params.phong.y *= 0.1;
+                // The installed SSG08 MDL actually binds snip_ssg08/glass,
+                // not shared/scope/scope_ssg08. Its scalar "$color" "0"
+                // is rejected by color() (which expects three channels), so
+                // the generic path previously added a white, sky-lit disc.
+                // This reflection-only material has zero diffuse contribution.
+                // Until cubemaps are implemented, black contributes nothing
+                // through additive blending; do not fabricate a reflection.
+                out.base = textures.black.clone();
+                params.color = Vec4::new(0.0, 0.0, 0.0, mat.alpha());
             }
             None => {}
         }
@@ -800,13 +799,10 @@ fn scope_lens_fallback(mat: &vmt::Material) -> Option<ScopeLensFallback> {
         && path_is("$envmap", "env_cubemap")
         && path_is("$envmapmask", "models/weapons/shared/scope/scope_lens_reflect_mask") {
         Some(ScopeLensFallback::AdditiveReflection)
-    } else if mat.shader == "vertexlitgeneric"
-        && path_is("$basetexture", "models/weapons/shared/scope/scope")
-        && path_is("$bumpmap", "models/weapons/shared/scope/scope_normal")
+    } else if mat.shader == "vertexlitgeneric" && mat.additive() && mat.base_texture().is_none()
         && path_is("$envmap", "env_cubemap")
-        && mat.color("$phongtint") == Some([0.5, 1.0, 0.7])
-        && mat.f32("$phongexponent") == Some(200.0) {
-        // Signature of shared/scope/scope_ssg08, not snip_ssg08_scope housing.
+        && mat.str("$color").and_then(|color| color.trim().parse::<f32>().ok()) == Some(0.0)
+        && mat.color("$envmaptint") == Some([0.1; 3]) {
         Some(ScopeLensFallback::ScoutRear)
     } else { None }
 }
@@ -937,20 +933,29 @@ mod authored_transform_tests {
     }
 
     #[test]
-    fn scout_fallback_bounds_lens_brightness_without_changing_other_scopes() {
-        let text = r#"VertexLitGeneric { "$basetexture" "models/weapons/shared/scope/scope"
-            "$bumpmap" "models/weapons/shared/scope/scope_normal" "$envmap" "env_cubemap"
-            "$phong" "1" "$phongboost" "3" "$phongexponent" "200" "$phongtint" "[.5 1 .7]" }"#;
+    fn scout_reflection_only_glass_keeps_authored_zero_diffuse() {
+        let text = r#"VertexLitGeneric { "$color" "0" "$additive" "1"
+            "$envmap" "env_cubemap" "$envmaptint" "[.1 .1 .1]" }"#;
         let scout = vmt::Material::parse_with(text, &|_| None, 0).unwrap();
-        let other = vmt::Material::parse_with(&text.replace("[.5 1 .7]", "[1 1 1]"), &|_| None, 0).unwrap();
+        let other = vmt::Material::parse_with(&text.replace("\"0\"", "\"1\""), &|_| None, 0).unwrap();
         assert_eq!(scope_lens_fallback(&scout), Some(ScopeLensFallback::ScoutRear));
         assert_eq!(scope_lens_fallback(&other), None);
-        let out = normal_material(Some(&scout), false);
+        let fs = normal_fs();
+        let mut images = Assets::<Image>::default();
+        let mut textures = TextureCache::new(&mut images);
+        let shared = SharedHandles { lightmap: textures.white.clone() };
+        let out = material_from_vmt(Some(&scout), &fs, &mut textures, &mut images, &shared, 1., false);
+        assert_eq!(out.base, textures.black);
+        assert_eq!(out.params.color, Vec4::new(0., 0., 0., 1.));
+        assert_eq!(out.alpha_mode, AlphaMode::Add);
         let unchanged = normal_material(Some(&scout), true);
-        assert_eq!(out.params.color, Vec4::new(0.1, 0.1, 0.1, 1.));
-        assert!((out.params.phong.y - 0.3).abs() < 0.00001);
         assert_eq!(unchanged.params.color, Vec4::ONE);
-        assert_eq!(out.alpha_mode, AlphaMode::Opaque);
+        // The unbound shared lens and painted housing are not this glass.
+        let unused = vmt::Material::parse_with(r#"VertexLitGeneric {
+            "$basetexture" "models/weapons/shared/scope/scope"
+            "$bumpmap" "models/weapons/shared/scope/scope_normal" "$envmap" "env_cubemap"
+            "$phong" "1" "$phongboost" "3" "$phongexponent" "200" "$phongtint" "[.5 1 .7]" }"#, &|_| None, 0).unwrap();
+        assert_eq!(scope_lens_fallback(&unused), None);
     }
 
     #[test]

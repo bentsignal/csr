@@ -1460,6 +1460,66 @@ pub fn vertical_fov(horizontal_4x3_deg: f32) -> f32 {
     2.0 * ((horizontal_4x3_deg.to_radians() * 0.5).tan() * 0.75).atan()
 }
 
+// Installed AUG/SG556 have an `unzoom` attachment but no eye/zoom
+// attachment. Use their authored rear-glass geometry; do not interpret the
+// unzoom attachment as a scoped camera or infer an undocumented native offset.
+fn scoped_rear_offset(rear: glam::Vec3) -> glam::Vec3 {
+    glam::Vec3::new(8.0, 0.0, 0.0) - rear
+}
+
+fn posed_scope_rear(model: &mdl::Model, pose: &[glam::Mat4]) -> Option<(glam::Vec3, f32)> {
+    let mut min = glam::Vec3::splat(f32::INFINITY);
+    let mut max = -min;
+    for mesh in &model.meshes {
+        let material = model.skin_texture(0, mesh.material);
+        if !model.textures.get(material).is_some_and(|name| name.contains("scope_glass")) { continue; }
+        for vertex in &mesh.vertices {
+            let point = mdl::skeleton::skin_vertex(vertex, pose, &model.bones);
+            min = min.min(point);
+            max = max.max(point);
+        }
+    }
+    if !min.is_finite() || !max.is_finite() { return None; }
+    let size = max - min;
+    Some(((min + max) * 0.5, size.y.min(size.z) * 0.5))
+}
+
+fn scope_aperture(lens: Vec3, radius: f32, viewport: Vec2) -> Vec4 {
+    // A lens behind the eye must not become a huge forward-facing cutout.
+    if !lens.is_finite() || lens.x <= 0.0 || !radius.is_finite() || radius <= 0.0 { return Vec4::ZERO; }
+    let focal = viewport.y * 0.5 / (vertical_fov(VIEWMODEL_FOV) * 0.5).tan();
+    Vec4::new(viewport.x * 0.5 - lens.y * focal / lens.x,
+        viewport.y * 0.5 - lens.z * focal / lens.x,
+        radius * focal / lens.x * 0.97, 0.0)
+}
+
+#[cfg(test)]
+mod optic_transform_tests {
+    use super::*;
+
+    #[test]
+    fn rear_eye_relief_is_independent_of_scope_tube_length() {
+        let rear = glam::Vec3::new(3.0, -2.0, 5.0);
+        let front = rear + glam::Vec3::X * 10.0;
+        let old_offset = glam::Vec3::new(8.0 - front.x, -rear.y, -rear.z);
+        assert!((rear + old_offset).x < 0.0);
+        assert_eq!(rear + scoped_rear_offset(rear), glam::Vec3::new(8.0, 0.0, 0.0));
+        let aperture = scope_aperture(to_bevy(glam::Vec3::ZERO), 1.0, Vec2::new(1920., 1080.));
+        assert_eq!(aperture, Vec4::ZERO);
+    }
+
+    #[test]
+    fn aperture_tracks_actual_rendered_lens_in_camera_space() {
+        let viewport = Vec2::new(1920., 1080.);
+        let centered = scope_aperture(Vec3::new(8., 0., 0.), 1., viewport);
+        assert_eq!(centered.truncate().truncate(), viewport * 0.5);
+        let displaced = scope_aperture(Vec3::new(8., 1., -0.5), 1., viewport);
+        assert!(displaced.x < centered.x && displaced.y > centered.y);
+        assert_eq!(displaced.z, centered.z);
+        assert_eq!(scope_aperture(Vec3::new(-1., 0., 0.), 1., viewport), Vec4::ZERO);
+    }
+}
+
 /// A decoded sequence: its clip and per-bone weights.
 #[derive(Clone)]
 struct SeqClip {
@@ -2421,7 +2481,10 @@ pub fn update(
         let scoped_fov = w.def.attr_f32("zoom fov 1").unwrap_or(45.0);
         let blend = ((90.0 - w.rendered_fov(world.0.time())) / (90.0 - scoped_fov)).clamp(0.0, 1.0);
         let rear = view.scope_rear.map_or(center, |(position, _)| position);
-        offset = offset.lerp(glam::Vec3::new(8.0 - center.x, -rear.y, -rear.z), blend);
+        // Eye relief is measured to the REAR lens, not the forward dirt
+        // plane. Subtracting center.x can place the rear housing on/behind
+        // the camera when the scope tube is longer than the nominal relief.
+        offset = offset.lerp(scoped_rear_offset(rear), blend);
     }
     let settling = if shared_motion {
         settling::Settling::sample(motion.velocity,
@@ -2469,13 +2532,13 @@ pub fn update(
     }
 
     let aperture = if w.is_some_and(|w| w.zoom_level > 0 && w.def.class == weapons::WeaponClass::Rifle) {
-        view.scope_rear.map_or(Vec4::ZERO, |(rear, radius)| {
-            let lens = rear + offset;
-            let focal = window.physical_height() as f32 * 0.5 / (vertical_fov(VIEWMODEL_FOV) * 0.5).tan();
-            let distance = lens.x.max(1.0);
-            Vec4::new(window.physical_width() as f32 * 0.5 - lens.y * focal / distance,
-                window.physical_height() as f32 * 0.5 - lens.z * focal / distance,
-                radius * focal / distance * 0.97, 0.0)
+        // Use the same posed lens and world transform that skinning rendered.
+        // The old idle rear + unmodified offset ignored firing, settling,
+        // look translation and air motion, cutting a hole beside the housing.
+        posed_scope_rear(model, &pose).map_or(Vec4::ZERO, |(rear, radius)| {
+            let delta = world_from_model.transform_point3(to_bevy(rear)) - to_bevy(eye);
+            let lens = Vec3::new(delta.dot(to_bevy(f)), -delta.dot(to_bevy(r)), delta.dot(to_bevy(u)));
+            scope_aperture(lens, radius, Vec2::new(window.physical_width() as f32, window.physical_height() as f32))
         })
     } else { Vec4::ZERO };
     if let Some((_, _, _, mats)) = &state.weapon {
