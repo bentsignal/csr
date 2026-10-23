@@ -135,19 +135,30 @@ mod tests {
     #[test]
     #[ignore = "requires read-only installed Legacy Inferno geometry/materials; no native game"]
     fn installed_thin_wood_uses_mounted_definitions_and_actual_tick_fire() {
+        installed_cover_case("de_inferno", b'W');
+    }
+
+    #[test]
+    #[ignore = "requires read-only installed Legacy Nuke geometry/materials; no native game"]
+    fn installed_thin_concrete_and_metal_use_actual_tick_fire() {
+        installed_cover_case("de_nuke", b'C');
+        installed_cover_case("de_nuke", b'M');
+    }
+
+    fn installed_cover_case(map: &str, material: u8) {
         use glam::Vec3;
         use collision::contents;
         use sim::{GameEvent, Team, TickInput, World, weapon::WeaponState};
         use std::sync::Arc;
-        let mut level = crate::Level::load("de_inferno", None).expect("installed Legacy Inferno");
+        let mut level = crate::Level::load(map, None).expect("installed Legacy map");
         let intact = World::with_catalog(level.collision.clone(), level.catalog.clone());
         let gun = Arc::new(level.catalog.get("weapon_ak47").unwrap().clone());
-        // Find a real isolated wood slab with room for standing players on both
+        // Find real cover with room for standing players on both
         // sides. Do not replace the mounted world, model, VMT or weapon values.
         let mut lane = None;
         'solids: for solid in &intact.collision.static_world().convexes {
             if !std::iter::once(&solid.surface).chain(&solid.plane_surfaces)
-                .any(|&id| intact.collision.bullet_surface(id).is_some_and(|s| s.material == b'W')) { continue; }
+                .any(|&id| intact.collision.bullet_surface(id).is_some_and(|s| s.material == material)) { continue; }
             let center = (solid.mins + solid.maxs) * 0.5;
             for dir in [Vec3::X, -Vec3::X, Vec3::Y, -Vec3::Y] {
                 let feet = intact.drop_to_floor(center - dir * 128. + Vec3::Z * 16., false);
@@ -157,28 +168,31 @@ mod tests {
                     intact.collision.trace_box(pos, pos, movement::STAND_MINS,
                         movement::STAND_MAXS, contents::MASK_PLAYERSOLID).start_solid) { continue; }
                 let hit = intact.collision.trace_ray(from, to, contents::MASK_SHOT);
-                if !intact.collision.bullet_surface(hit.surface).is_some_and(|s| s.material == b'W') { continue; }
+                if !intact.collision.bullet_surface(hit.surface).is_some_and(|s| s.material == material) { continue; }
                 let Some(exit) = intact.collision.bullet_exit(from, to, &hit, 64.) else { continue; };
                 let Some(leaving) = intact.collision.bullet_surface(exit.surface) else { continue; };
                 let entry = intact.collision.bullet_surface(hit.surface).unwrap();
-                if leaving.material != b'W' || exit.thickness >= 16. * gun.penetration
+                if leaving.material != material || exit.crossed_surfaces.iter().any(|&id|
+                    !intact.collision.bullet_surface(id).is_some_and(|s| s.material == material
+                        && s.penetration_modifier >= entry.penetration_modifier.min(leaving.penetration_modifier)))
+                    || exit.thickness >= 16. * gun.penetration
                     * entry.penetration_modifier.min(leaving.penetration_modifier) { continue; }
                 if intact.collision.trace_ray(exit.next_start, to, contents::MASK_SHOT).hit() { continue; }
                 lane = Some((from, to, hit.surface, exit.thickness));
                 break 'solids;
             }
         }
-        let (from, to, surface, thickness) = lane.expect("reachable actual Inferno wood slab");
-        eprintln!("installed thin-cover: eye={from:?} target_eye={to:?} surface={} thickness={thickness}",
-            intact.collision.surface_name(surface));
+        let (from, to, surface, thickness) = lane.unwrap_or_else(|| panic!("reachable {map} cover for material {}", material as char));
+        eprintln!("installed thin-cover: map={map} material={} eye={from:?} target_eye={to:?} surface={} thickness={thickness}",
+            material as char, intact.collision.surface_name(surface));
         drop(intact);
         for opaque in [false, true] {
             if opaque { Arc::get_mut(&mut level.collision).unwrap().bullet_surfaces.fill(None); }
             for rate in [64, 128] {
                 let mut world = World::with_catalog(level.collision.clone(), level.catalog.clone());
                 world.set_tick_rate(rate);
-                let shooter = world.add_player("wood control", Team::Terrorist);
-                let victim = world.add_player("behind actual wood", Team::CounterTerrorist);
+                let shooter = world.add_player("cover control", Team::Terrorist);
+                let victim = world.add_player("behind actual cover", Team::CounterTerrorist);
                 for (id, eye) in [(shooter, from), (victim, to)] {
                     let player = world.player_mut(id).unwrap();
                     player.movement = movement::PlayerMove::spawn_at(eye - Vec3::Z * 64.);
