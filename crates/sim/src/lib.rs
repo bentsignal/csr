@@ -1926,6 +1926,13 @@ impl World {
                     Some((j, t, authored_group)) => {
                         let hit = segment_start + dir * t;
                         self.events.push(GameEvent::Tracer { player: id, start: eye, end: hit });
+                        // Range falloff after the last exit can exhaust a pellet
+                        // that passed the exit budget. Recheck before the shared
+                        // damage path can restore one health through its minimum.
+                        if damage_scale < 1.0
+                            && def.damage * damage_scale * def.range_modifier.powf((traveled + t) / 500.) < 1. {
+                            break;
+                        }
                         let victim = &self.players[j];
                         let hull = self.target_hull(victim, rewind_tick);
                         let (mn, mx) = (hull.movement_mins, hull.movement_maxs);

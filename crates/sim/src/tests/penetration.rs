@@ -223,6 +223,34 @@ fn exhausted_pellets_cannot_gain_damage_from_the_health_minimum() {
 }
 
 #[test]
+fn range_falloff_after_exit_cannot_revive_exhausted_pellets() {
+    let (mut covered, _, victim) = pair();
+    let def = Arc::make_mut(&mut covered.players[0].weapons[0].def);
+    def.damage = 5.;
+    // Synthetic falloff isolates exhaustion in free flight, not a native coefficient.
+    def.range_modifier = 0.25;
+    covered.players[1].movement.origin.x = 1000.;
+    let mut clear = covered.clone();
+    clear.fire(0, 1., None, None);
+    assert!(damage(&clear) > 0);
+    drop(clear);
+    slab(&mut covered, 50., 8., b'W');
+    let mut near = covered.clone();
+    near.players[1].movement.origin.x = 140.;
+    near.fire(0, 1., None, None);
+    assert!(damage(&near) > 0); // The same pellet has budget at the exit and nearby hit.
+
+    covered.fire(0, 1., None, None);
+    assert_eq!(covered.player(victim).unwrap().health, 100);
+    assert!(!covered.events.iter().any(|e| matches!(e, GameEvent::Damage { .. })));
+    assert_eq!(covered.events.iter().filter(|e| matches!(e, GameEvent::Impact { .. })).count(), 1);
+    assert_eq!(covered.events.iter().filter(|e| matches!(e, GameEvent::Tracer { .. })).count(), 1);
+    assert_eq!(covered.events.iter().filter(|e| matches!(e, GameEvent::Fire { .. })).count(), 1);
+    assert_eq!(covered.players[0].weapons[0].clip, 29);
+    assert_eq!(covered.players[0].shots, 1);
+}
+
+#[test]
 fn every_supported_material_and_separated_cover_layers() {
     for material in [b'W', b'U', b'L', b'Y', b'G', b'C', b'M'] {
         let (mut world, _, victim) = pair();
