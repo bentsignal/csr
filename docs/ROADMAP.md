@@ -94,9 +94,8 @@
 - [x] Slow instant R8 primary to .65 seconds and use Deagle-like torso damage,
   preserving lethal heads and the authored faster secondary.
 
-The owner tested #317. The next six-outcome pass is locally checked and awaits
-its normal green-CI merge. Do not replace the desktop test or prepare another
-owner playtest unless requested.
+The owner tested #317. These locally checked changes do not replace that
+desktop test. Prepare another owner playtest only when requested.
 
 > **October 18 follow-up:** implementation approved: classic maps/playability,
 > then movement/viewmodels, hit-audio consistency, then grenades. Grenade feel
