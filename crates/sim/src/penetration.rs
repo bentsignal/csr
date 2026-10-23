@@ -20,10 +20,12 @@ fn observed_wood(surface: BulletSurface) -> bool {
 }
 
 fn supported(surface: BulletSurface) -> bool {
-    // Installed concrete/metal declarations may admit thin cover under this
-    // same approximation; their material codes alone never authorize an exit.
-    matches!(surface.material, b'W' | b'U' | b'L' | b'Y' | b'G' | b'C' | b'M'
-        | 2 | 5 | 13 | b'T')
+    // Legacy's letter and extended numeric material IDs all obey their
+    // mounted ballistic modifiers. A wood/metal-only whitelist silently made
+    // plaster, dense wood, rubber and other thin map cover bulletproof.
+    // The code alone never authorizes passage: missing declarations, invalid
+    // modifiers, opaque geometry and exhausted thickness budgets still block.
+    (surface.material.is_ascii_uppercase() || surface.material <= 14)
         && surface.penetration_modifier.is_finite() && surface.penetration_modifier > 0.
         && surface.damage_modifier.is_finite() && (0. ..=1.).contains(&surface.damage_modifier)
 }

@@ -172,7 +172,7 @@ fn declared_materials_still_require_valid_modifiers_and_supported_codes() {
             BulletSurface { damage_modifier: f32::NAN, ..declared },
             BulletSurface { damage_modifier: f32::INFINITY, ..declared },
             BulletSurface { material: b'?', ..declared },
-            BulletSurface { material: b'D', ..declared },
+            BulletSurface { material: 255, ..declared },
         ] {
             let (mut world, _, victim) = pair();
             slab_with_surface(&mut world, 50., 8., invalid);
@@ -265,7 +265,7 @@ fn range_falloff_after_exit_cannot_revive_exhausted_pellets() {
 
 #[test]
 fn every_supported_material_and_separated_cover_layers() {
-    for material in [b'W', b'U', b'L', b'Y', b'G', b'C', b'M', 2, 5, 13, b'T'] {
+    for material in (b'A'..=b'Z').chain(0..=14) {
         let (mut world, _, victim) = pair();
         // C/M retain less damage; keep both exits above the existing
         // sub-one-damage cutoff without changing the original wood fixtures.
