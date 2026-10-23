@@ -98,6 +98,9 @@ pub struct WeaponState {
     pub suppressor_transition: Option<SuppressorTransition>,
     pub burst_mode: bool,
     pub burst: Option<BurstState>,
+    /// An unconsumed primary press, valid only while the trigger stays held.
+    /// A press during shot cooldown may fire at readiness, once, not repeat.
+    pub primary_pending: bool,
     pub clip: i32,
     pub reserve: i32,
     /// Sim time at which the next shot may fire.
@@ -140,6 +143,7 @@ impl WeaponState {
             suppressor_transition: None,
             burst_mode: false,
             burst: None,
+            primary_pending: false,
             def,
             cosmetic: None,
             cosmetic_owner: None,
@@ -184,7 +188,8 @@ impl WeaponState {
         true
     }
 
-    pub fn cancel_burst(&mut self) { self.burst = None; }
+    /// Cancel outstanding trigger work on holster, drop, death or handling locks.
+    pub fn cancel_burst(&mut self) { self.burst = None; self.primary_pending = false; }
 
     pub fn burst_due(&self, time: f32) -> bool {
         self.burst_mode && self.burst.is_some_and(|burst| time >= burst.next_shot && burst.remaining > 0)
@@ -208,12 +213,11 @@ impl WeaponState {
             }
         }
         self.cancel_burst();
-        // A bolt-action scope is an aiming mode, not an alternate primary
-        // attack. Legacy's shared prefab also supplies a 0.3s `cycletime alt`;
-        // using that for a scoped AWP shortens both fire and resume-zoom to
-        // that inherited default. Keep the primary deadline across all zoom
-        // edges; other weapons retain their alternate attack policy.
-        let cycle = if self.def.attr_f32("unzoom after shot").is_some_and(|v| v != 0.0) {
+        // A scope is an aiming mode, not an alternate primary attack.
+        // Legacy's shared prefab supplies a 0.3s `cycletime alt`: using it
+        // while zoomed slows AUG/SG and speeds up bolt-action snipers.
+        // Keep the primary cadence for every scoped weapon.
+        let cycle = if self.zoom_levels() > 0 || self.def.attr_f32("unzoom after shot").is_some_and(|v| v != 0.0) {
             self.def.cycle_time
         } else { self.alt_stat("cycletime", self.def.cycle_time) }.max(0.01);
         let overdue = time - self.next_attack;

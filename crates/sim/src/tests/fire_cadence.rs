@@ -64,6 +64,93 @@ fn normal_ak_and_m4_reload_released_empty_magazines_and_replay_from_snapshot() {
 fn held() -> TickInput { TickInput { buttons: buttons::ATTACK, ..Default::default() } }
 
 #[test]
+fn semiauto_press_during_cooldown_fires_once_when_ready_and_replays() {
+    // Installed Legacy primary cycles; no pistol-specific speed boost.
+    for rate in [64, 128] { for cycle in [0.12, 0.15, 0.2, 0.225] {
+        let mut gun = def("weapon_pack_pistol", 902, WeaponClass::Pistol, Side::Both, 1000, 30);
+        gun.full_auto = false; gun.cycle_time = cycle;
+        let (mut world, id) = equipped(rate, gun);
+        world.step(&[(id, held())]);
+        assert_eq!(world.players[0].shots, 1);
+        world.step(&[(id, TickInput::default())]);
+        let deadline = world.players[0].weapons[0].next_attack;
+        while world.time() + world.dt() < deadline { world.step(&[(id, TickInput::default())]); }
+        assert!(world.time() < deadline);
+        world.step(&[(id, held())]);
+        assert_eq!(world.players[0].shots, 1, "a pending press must not fire early");
+        assert!(world.players[0].weapons[0].primary_pending);
+        let snapshot = world.decode::<Snapshot>(&state::encode(&world.snapshot())).unwrap();
+        let mut restored = world.clone(); restored.restore(snapshot.state);
+        let mut predicted = world.clone();
+        for _ in 0..rate {
+            world.step(&[(id, held())]);
+            restored.step(&[(id, held())]);
+            predicted.step_prediction(&[(id, held())]);
+            assert_eq!(world.state_hash(), restored.state_hash());
+            assert_eq!(world.state_hash(), predicted.state_hash());
+            assert_eq!(world.players[0].shots, 2, "one shot per press, including held cooldown presses");
+        }
+        world.step(&[(id, TickInput::default())]);
+        world.step(&[(id, held())]);
+        assert_eq!(world.players[0].shots, 3);
+    } }
+}
+
+#[test]
+fn releasing_pending_press_or_starting_reload_cancels_it() {
+    for rate in [64, 128] { for reload in [false, true] {
+        let mut gun = def("weapon_pack_pistol", 902, WeaponClass::Pistol, Side::Both, 1000, 30);
+        gun.full_auto = false; gun.cycle_time = 0.15; gun.reserve_ammo = 60;
+        let (mut world, id) = equipped(rate, gun);
+        world.step(&[(id, held())]);
+        world.step(&[(id, TickInput::default())]);
+        world.step(&[(id, held())]);
+        assert!(world.players[0].weapons[0].primary_pending);
+        world.step(&[(id, TickInput { buttons: if reload { buttons::ATTACK | buttons::RELOAD } else { 0 }, ..Default::default() })]);
+        assert!(!world.players[0].weapons[0].primary_pending);
+        for _ in 0..rate * 4 {
+            world.step(&[(id, if reload { held() } else { TickInput::default() })]);
+        }
+        assert_eq!(world.players[0].shots, 1, "cancelled press cannot fire later");
+    } }
+}
+
+#[test]
+fn pending_empty_press_starts_reload_at_readiness() {
+    for rate in [64, 128] {
+        let mut gun = def("weapon_pack_pistol", 902, WeaponClass::Pistol, Side::Both, 1000, 6);
+        gun.full_auto = false; gun.cycle_time = 0.15; gun.reserve_ammo = 12;
+        let (mut world, id) = equipped(rate, gun);
+        world.players[0].weapons[0].clip = 1;
+        world.step(&[(id, held())]);
+        world.step(&[(id, TickInput::default())]);
+        world.step(&[(id, held())]);
+        assert!(world.players[0].weapons[0].primary_pending);
+        for _ in 0..rate / 2 { world.step(&[(id, held())]); }
+        assert!(world.players[0].weapons[0].reload_end.is_some());
+        assert_eq!(world.players[0].shots, 1);
+    }
+}
+
+#[test]
+fn scoped_automatic_primary_cadence_matches_unscoped_despite_inherited_alt_cycle() {
+    for rate in [64, 128] { for cycle in [0.1, 0.11, 0.25] {
+        let mut gun = def("weapon_pack_scoped", 903, WeaponClass::Rifle, Side::Both, 1000, 30);
+        gun.full_auto = true; gun.cycle_time = cycle;
+        gun.attributes.insert("zoom levels".into(), "1".into());
+        gun.attributes.insert("cycletime alt".into(), "0.3".into());
+        let (mut plain, id) = equipped(rate, gun);
+        let mut scoped = plain.clone(); scoped.players[0].weapons[0].zoom_level = 1;
+        for _ in 0..rate * 2 {
+            plain.step(&[(id, held())]); scoped.step(&[(id, held())]);
+            assert_eq!(plain.players[0].shots, scoped.players[0].shots);
+            assert_eq!(plain.players[0].weapons[0].next_attack, scoped.players[0].weapons[0].next_attack);
+        }
+        assert!(scoped.players[0].shots >= (2. / cycle) as u64);
+    } }
+}
+
+#[test]
 fn magazine_reload_holster_cancels_and_completed_reload_preserves_trigger_mode() {
     for rate in [64, 128] { for automatic in [false, true] {
         let class = if automatic { WeaponClass::Rifle } else { WeaponClass::Pistol };

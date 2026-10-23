@@ -1663,6 +1663,15 @@ impl World {
                         });
                     }
                     if frozen || busy || muzzle_blocked { w.cancel_burst(); }
+                    // Do not consume a fresh press merely because its first
+                    // tick lands inside the previous shot's cooldown. Retain
+                    // it until ready while held; release and handling locks
+                    // cancel it, so this cannot queue a later surprise shot.
+                    if !attack || w.reload_end.is_some() || w.suppressor_transition.is_some() {
+                        w.primary_pending = false;
+                    } else if pressed && w.burst.is_none() {
+                        w.primary_pending = true;
+                    }
                     stab = secondary && w.is_melee();
                     let can_fire = w.def.class_name != C4 && w.def.class!=weapons::WeaponClass::Grenade;
                     // Pulling the trigger stops a shell-by-shell reload once
@@ -1673,9 +1682,11 @@ impl World {
                     if w.burst_due(time) {
                         fire = true;
                     } else if can_fire && (attack || stab) && w.reload_end.is_none() && time >= w.next_attack
-                        && ((w.def.full_auto && !w.burst_mode) || pressed || w.is_melee()) {
+                        && ((w.def.full_auto && !w.burst_mode) || w.primary_pending || w.is_melee()) {
+                        let primary_press = w.primary_pending;
+                        w.primary_pending = false;
                         if w.uses_ammo() && w.clip <= 0 {
-                            if pressed && w.can_reload() {
+                            if primary_press && w.can_reload() {
                                 w.reset_zoom(time);
                                 w.begin_reload(time);
                                 self.events.push(GameEvent::Reload { player: id });
