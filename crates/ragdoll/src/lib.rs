@@ -245,7 +245,7 @@ mod tests {
 
     fn floor() -> collision::CollisionWorld {
         let mut world = collision::CollisionWorld::new();
-        world.add_convex(collision::Convex {
+        world.add_convex(collision::Convex { plane_surfaces: Vec::new(),
             planes: vec![
                 collision::Plane {normal: Vec3::X, dist: 512.}, collision::Plane {normal: -Vec3::X, dist: 512.},
                 collision::Plane {normal: Vec3::Y, dist: 512.}, collision::Plane {normal: -Vec3::Y, dist: 512.},

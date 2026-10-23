@@ -4,7 +4,7 @@ use collision::{CollisionWorld, Convex, Plane};
 const DT: f32 = 1.0 / 64.0;
 
 fn aabb(mins: Vec3, maxs: Vec3) -> Convex {
-    Convex {
+    Convex { plane_surfaces: Vec::new(),
         planes: vec![
             Plane { normal: Vec3::X, dist: maxs.x },
             Plane { normal: -Vec3::X, dist: -mins.x },

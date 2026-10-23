@@ -1924,7 +1924,7 @@ mod tests {
     }
 
     fn ladder_box(low: Vec3, high: Vec3, contents: i32) -> collision::Convex {
-        collision::Convex { planes: vec![
+        collision::Convex { plane_surfaces: Vec::new(), planes: vec![
             collision::Plane { normal: Vec3::X, dist: high.x },
             collision::Plane { normal: -Vec3::X, dist: -low.x },
             collision::Plane { normal: Vec3::Y, dist: high.y },

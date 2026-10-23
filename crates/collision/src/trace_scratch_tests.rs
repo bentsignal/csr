@@ -15,7 +15,7 @@ fn reference(
         let e = end + offset;
         for (index, solid) in world.convexes.iter().enumerate() {
             if solid.contents & mask != 0 && swept_bounds_overlap(s, e, ext, solid.mins, solid.maxs) {
-                if clip_convex(&solid.planes, s, e, ext, solid.contents, solid.surface, &mut tr) {
+                if clip_convex_surfaces(&solid.planes, s, e, ext, solid.contents, solid.surface, &solid.plane_surfaces, &mut tr) {
                     owner = world.runtime_owners.get(index).copied().flatten();
                 }
             }
@@ -68,7 +68,7 @@ fn reference(
                         }
                         continue;
                     }
-                    clip_convex(&c.planes, s, e, ext, c.contents, c.surface, &mut tr);
+                    clip_convex_surfaces(&c.planes, s, e, ext, c.contents, c.surface, &c.plane_surfaces, &mut tr);
                 }
                 Shape::Triangle(i) => {
                     let t = &world.triangles[i as usize];
@@ -104,7 +104,7 @@ fn reference(
 
 
 fn solid(low: Vec3, high: Vec3, contents: i32, surface: u32) -> Convex {
-    Convex {
+    Convex { plane_surfaces: Vec::new(),
         planes: vec![
             Plane { normal: Vec3::X, dist: high.x },
             Plane { normal: -Vec3::X, dist: -low.x },

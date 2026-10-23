@@ -1036,7 +1036,7 @@ mod mob_blood_tests {
         use std::sync::Arc;
         use collision::{CollisionWorld, Convex, Plane};
 
-        let solid = |mins: glam::Vec3, maxs: glam::Vec3| Convex {
+        let solid = |mins: glam::Vec3, maxs: glam::Vec3| Convex { plane_surfaces: Vec::new(),
             planes: vec![
                 Plane { normal: glam::Vec3::X, dist: maxs.x },
                 Plane { normal: -glam::Vec3::X, dist: -mins.x },

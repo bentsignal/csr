@@ -112,8 +112,8 @@ fn runtime_swept_bounds_rejection_matches_unfiltered_convex_clipping() {
                             .trace_box_excluding(start, end, mins, maxs, mask, exclusion);
                         for solid in &world.convexes {
                             if solid.contents & mask != 0 {
-                                clip_convex(&solid.planes, start + offset, end + offset, ext,
-                                    solid.contents, solid.surface, &mut expected);
+                                clip_convex_surfaces(&solid.planes, start + offset, end + offset, ext,
+                                    solid.contents, solid.surface, &solid.plane_surfaces, &mut expected);
                             }
                         }
                         expected.end = if expected.all_solid { start } else { start + (end - start) * expected.fraction };

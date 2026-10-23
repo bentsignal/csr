@@ -63,7 +63,7 @@ fn actual_plane_all_solid_is_not_reconsidered() {
     assert_eq!(tr.fraction, 0.);
 }
 fn wall() -> Convex {
-    Convex {
+    Convex { plane_surfaces: Vec::new(),
         planes: vec![
             Plane {
                 normal: Vec3::X,
@@ -97,7 +97,7 @@ fn wall() -> Convex {
     }
 }
 fn ramp() -> Convex {
-    Convex {
+    Convex { plane_surfaces: Vec::new(),
         planes: vec![Plane { normal: N, dist: D }],
         mins: S.min(E) - Vec3::splat(100.),
         maxs: S.max(E) + Vec3::splat(100.),

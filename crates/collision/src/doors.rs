@@ -1,7 +1,7 @@
 //! Clean-room rotating prop doors from mounted BSP entities and PHY hulls.
 //! No geometry or map coordinates are supplied by the implementation.
 
-use crate::{CollisionWorld, Convex, PropHullLoader, Trace, contents, convex_from_hull, clip_convex};
+use crate::{CollisionWorld, Convex, PropHullLoader, Trace, contents, convex_from_hull, clip_convex_surfaces};
 use glam::{Mat3, Vec3};
 use std::sync::Arc;
 
@@ -271,7 +271,7 @@ pub fn obstructed(solids: &[Convex], origin: Vec3, mins: Vec3, maxs: Vec3) -> bo
     solids.iter().any(|solid| {
         if (origin + maxs).cmplt(solid.mins).any() || (origin + mins).cmpgt(solid.maxs).any() { return false; }
         let mut tr = Trace::empty(origin);
-        clip_convex(&solid.planes, origin + offset, origin + offset, ext, solid.contents, solid.surface, &mut tr);
+        clip_convex_surfaces(&solid.planes, origin + offset, origin + offset, ext, solid.contents, solid.surface, &solid.plane_surfaces, &mut tr);
         tr.start_solid
     })
 }
@@ -279,7 +279,7 @@ pub fn obstructed(solids: &[Convex], origin: Vec3, mins: Vec3, maxs: Vec3) -> bo
 pub fn ray_fraction(solids: &[Convex], start: Vec3, end: Vec3) -> Option<f32> {
     let mut tr = Trace::empty(end);
     for solid in solids {
-        clip_convex(&solid.planes, start, end, Vec3::ZERO, solid.contents, solid.surface, &mut tr);
+        clip_convex_surfaces(&solid.planes, start, end, Vec3::ZERO, solid.contents, solid.surface, &solid.plane_surfaces, &mut tr);
     }
     tr.hit().then_some(tr.fraction)
 }

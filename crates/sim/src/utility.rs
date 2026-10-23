@@ -596,7 +596,7 @@ mod tests {
         use std::sync::Arc;
         use collision::{CollisionWorld, Convex, Plane};
         use crate::TickInput;
-        let solid = |mins: Vec3, maxs: Vec3| Convex {
+        let solid = |mins: Vec3, maxs: Vec3| Convex { plane_surfaces: Vec::new(),
             mins, maxs,
             planes: [Vec3::X, -Vec3::X, Vec3::Y, -Vec3::Y, Vec3::Z, -Vec3::Z]
                 .into_iter().zip([maxs.x, -mins.x, maxs.y, -mins.y, maxs.z, -mins.z])
@@ -856,7 +856,7 @@ mod tests {
         use crate::{TickInput, weapon::WeaponState};
         use movement::buttons;
         let mut collision = collision::CollisionWorld::new();
-        collision.add_convex(collision::Convex {
+        collision.add_convex(collision::Convex { plane_surfaces: Vec::new(),
             mins: Vec3::new(-8192., -8192., -128.), maxs: Vec3::new(8192., 8192., 0.),
             planes: [Vec3::X, -Vec3::X, Vec3::Y, -Vec3::Y, Vec3::Z, -Vec3::Z]
                 .into_iter().zip([8192., 8192., 8192., 8192., 0., 128.])
@@ -2221,7 +2221,7 @@ mod tests {
         use std::sync::Arc;
         for rate in [64, 128] {
             let mut collision = CollisionWorld::new();
-            collision.add_convex(Convex {
+            collision.add_convex(Convex { plane_surfaces: Vec::new(),
                 mins: Vec3::new(-512., -512., -16.),
                 maxs: Vec3::new(512., 512., 0.),
                 planes: [Vec3::X, -Vec3::X, Vec3::Y, -Vec3::Y, Vec3::Z, -Vec3::Z]
@@ -2293,7 +2293,7 @@ mod tests {
         for rate in [64, 128] {
             for normal in [Vec3::Z, Vec3::new(0.6, 0.0, 0.8)] {
                 let mut floor = CollisionWorld::new();
-                floor.add_convex(Convex {
+                floor.add_convex(Convex { plane_surfaces: Vec::new(),
                     mins: Vec3::splat(-512.), maxs: Vec3::splat(512.),
                     planes: [Vec3::X, -Vec3::X, Vec3::Y, -Vec3::Y, normal, -Vec3::Z]
                         .into_iter().zip([512., 512., 512., 512., 0., 512.])
@@ -2531,7 +2531,7 @@ mod tests {
         let mut collision = CollisionWorld::new();
         let mins = Vec3::new(16., -128., 0.);
         let maxs = Vec3::new(24., 128., 128.);
-        assert!(collision.add_convex(Convex {
+        assert!(collision.add_convex(Convex { plane_surfaces: Vec::new(),
             mins, maxs,
             planes: [(Vec3::X, maxs.x), (-Vec3::X, -mins.x),
                 (Vec3::Y, maxs.y), (-Vec3::Y, -mins.y),

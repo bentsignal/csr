@@ -230,7 +230,7 @@ fn indestructible_trigger_only_minimum_damage_and_occlusion_cannot_be_bypassed()
     let (mut world, id) = fixture(128, "health 1", false);
     world.collision = CollisionWorld::map_arc(&world.collision);
     let collision = Arc::get_mut(&mut world.collision).unwrap();
-    collision.add_convex(collision::Convex { planes: vec![
+    collision.add_convex(collision::Convex { plane_surfaces: Vec::new(), planes: vec![
         collision::Plane { normal: Vec3::X, dist: -10. }, collision::Plane { normal: -Vec3::X, dist: 12. },
         collision::Plane { normal: Vec3::Y, dist: 64. }, collision::Plane { normal: -Vec3::Y, dist: 64. },
         collision::Plane { normal: Vec3::Z, dist: 96. }, collision::Plane { normal: -Vec3::Z, dist: 0. }],

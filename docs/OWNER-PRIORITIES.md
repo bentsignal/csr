@@ -22,7 +22,13 @@ batches until interrupted; multiplayer is explicitly deferred.
    retracted opacity request). F8 orders all guns before grenades; catalog is
    present, owner found subsequent pages.
 
-October 23 implementation status: the combined pass implements the firing,
+October 23 resumption: the owner explicitly rejects treating the first pass as
+backlog completion. Continue unresolved gun handling/accuracy, scope integration,
+material impacts and classic scoreboard work. Track specific remaining behavior;
+a merged increment or provisional implementation does not close that outcome.
+Preserve all owner-accepted scopes above and below. Do not make a new playtest.
+
+October 23 implementation status: the combined pass delivered initial firing,
 impact, head-cue, scope and HUD changes above. Workspace tests (1288), sound
 decoding (1425 entries), Release build and Dust II probe/sim pass. Final Release
 captures show wall marks, corrected AUG eye relief, dark Scout glass and the
