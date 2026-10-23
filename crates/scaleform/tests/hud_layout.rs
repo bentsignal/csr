@@ -28,7 +28,8 @@ impl ExternalInterfaceProvider for Sink {
 fn run(body: &str, width: u32, height: u32) -> Vec<Vec<Value>> {
     let source = include_str!("../src/shim.as").to_owned()
         + include_str!("../src/hud_layout.as")
-        + include_str!("../src/death_notice.as") + body;
+        + include_str!("../src/death_notice.as")
+        + include_str!("../src/scoreboard.as") + body;
     let mut builder = rascal::ProgramBuilder::new(Source(source))
         .with_compile_options(rascal::CompileOptions::default().with_swf_version(10));
     builder.add_script("synthetic.as");
@@ -133,5 +134,34 @@ while (i < widths.length) {
 }
 "#, 1920, 1080);
     assert_eq!(calls.len(), 4);
+    for call in calls { assert!(call.iter().all(|value| value == &Value::Bool(true)), "{call:?}"); }
+}
+
+#[test]
+fn scoreboard_rows_replace_template_values_and_hide_unowned_stats() {
+    let calls = run(r#"
+var row = _root.createEmptyMovieClip("row", 400);
+row.createEmptyMovieClip("Player_Name", 1);
+row.Player_Name.createTextField("Player_Name", 1, 0, 0, 300, 20);
+row.createTextField("Money", 2, 0, 0, 80, 20);
+row.createTextField("Kills", 3, 0, 0, 40, 20);
+row.createTextField("Death", 4, 0, 0, 40, 20);
+row.createTextField("Assists", 5, 0, 0, 40, 20);
+row.createEmptyMovieClip("Bomb", 6);
+row.createEmptyMovieClip("Skull", 7);
+row.createEmptyMovieClip("PlayerOutline", 8);
+row.Assists.text = "999";
+var api = _global.csrScoreboard;
+var ok = api.row(row, ["<literal & name>", "C4", "$800", "3", "2", true]);
+csrEI.call("csr.HudLayoutFixture", ok, row.Player_Name.Player_Name.text == "<literal & name>",
+    row.Money.text == "$800", row.Kills.text == "3", row.Death.text == "2",
+    row.Bomb._visible, !row.Skull._visible, row.PlayerOutline._visible, !row.Assists._visible);
+ok = api.row(row, ["Enemy", "DEAD", "", "4", "3", false]);
+csrEI.call("csr.HudLayoutFixture", ok, row.Money.text == "", !row.Bomb._visible,
+    row.Skull._visible, !row.PlayerOutline._visible);
+csrEI.call("csr.HudLayoutFixture", api.row(row, undefined), !row._visible,
+    !api.row(undefined, ["Missing", "ALIVE", "", "0", "0", false]));
+"#, 1920, 1080);
+    assert_eq!(calls.len(), 3);
     for call in calls { assert!(call.iter().all(|value| value == &Value::Bool(true)), "{call:?}"); }
 }

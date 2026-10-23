@@ -154,3 +154,13 @@ without reading bytecode, add a revision-fenced full-board surface, and switch
 Tab from the Bevy board only after successful raster admission. Do not feed
 scoreboard pixels through the kill feed's top-half crop. Source-only inspection
 cannot establish those runtime calls, so this pass leaves the working board.
+
+
+October 22 follow-up: the scoreboard adapter is now implemented in
+`scoreboard/movie.rs` and `scaleform/src/scoreboard.as`; see
+[authored-scoreboard.md](authored-scoreboard.md) for the declarative contract
+and remaining runtime checks. Root's capture rejected the generic user-head
+avatars above. Team tiles now select the actual installed scoreboard team
+avatars (`icons/scoreboard/avatar-ct.png`, `avatar-terrorist.png`), verified by
+offline image inspection as the original CT and T emblems. They apply to bots
+and offline local players alike; no generic Steam head is loaded.

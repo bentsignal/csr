@@ -7,19 +7,23 @@ use crate::LevelInfo;
 use bevy::prelude::*;
 use sim::{Phase, PlayerId, Team};
 
+mod movie;
+
 #[derive(Resource, Default)]
 pub struct Scoreboard {
     root: Option<Entity>,
     shown: Option<Board>,
+    movie: movie::Presentation,
+    original: bool,
 }
 
-#[derive(PartialEq)]
+#[derive(Clone, PartialEq)]
 struct Board {
     title: String,
     teams: Vec<(String, Vec<Row>)>,
 }
 
-#[derive(PartialEq)]
+#[derive(Clone, PartialEq)]
 struct Row {
     id: PlayerId,
     name: String,
@@ -91,17 +95,24 @@ pub fn draw(
     input: Res<InputEnabled>,
     menu: Res<BuyMenu>,
     art: Res<crate::ui_assets::UiAssets>,
+    data: Res<crate::GameData>,
+    windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
+    mut images: ResMut<Assets<Image>>,
 ) {
     let preview = !input.0 && std::env::var_os("CSR_SCOREBOARD").is_some();
     let show = !menu.open && (preview || (input.0 && settings.action_pressed(11, &keys, &mouse, local.capture_mouse)) || (world.0.competitive() && world.0.round.phase == Phase::MatchOver));
     let next = show.then(|| board(&world.0, local.id, &level.name));
-    if state.shown == next {
+    let original = state.movie.update(next.as_ref(), local.id, &data.game_dir,
+        windows.single().ok(), &mut commands, &mut images);
+    if state.shown == next && state.original == original {
         return;
     }
     if let Some(root) = state.root.take() {
         commands.entity(root).despawn();
     }
     state.shown = next;
+    state.original = original;
+    if original { return; }
     let Some(board) = &state.shown else { return };
     let root = commands.spawn((
         Node {

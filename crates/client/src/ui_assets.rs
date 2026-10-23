@@ -142,6 +142,10 @@ pub fn load(mut commands: Commands, level: Res<crate::GameData>, mut fonts: ResM
     for (side, model) in [("ct", "ctm_sas"), ("t", "tm_phoenix")] {
         png(&format!("character-{side}"), &format!("resource/flash/econ/characters/customplayer_{model}.png"));
     }
+    // Actual installed team avatars, not Steam's generic user-head fallback.
+    // Both bots and offline local players have a team but no Steam profile image.
+    png("avatar-ct", "materials/panorama/images/icons/scoreboard/avatar-ct.png");
+    png("avatar-t", "materials/panorama/images/icons/scoreboard/avatar-terrorist.png");
     png("knife_default_t", "materials/panorama/images/hud/deathnotice/icon-knife_default_t.png");
     for weapon in &level.catalog.weapons {
         let name = weapon.class_name.trim_start_matches("weapon_");
@@ -157,12 +161,6 @@ pub fn load(mut commands: Commands, level: Res<crate::GameData>, mut fonts: ResM
     for weapon in &level.catalog.weapons {
         let name = weapon.class_name.trim_start_matches("weapon_");
         add_equipment_fallback(fs, name, &mut art, &mut images);
-    }
-    for (key, path) in [("avatar-ct", "materials/vgui/avatar_default_64.vtf"),
-        ("avatar-t", "materials/vgui/avatar_default-t_64.vtf")] {
-        if let Some(image) = fs.read(path).and_then(|bytes| legacy_avatar(&bytes)) {
-            art.insert(key.into(), images.add(image));
-        }
     }
     info!("Original UI: Stratum regular/bold, {} images", art.len());
     commands.insert_resource(UiAssets { regular, bold, images: art });
@@ -283,15 +281,4 @@ pub(crate) fn death_notice_icons(fs: &vfs::Vfs) -> HashMap<String, Vec<u8>> {
         }
     }
     icons
-}
-
-fn legacy_avatar(bytes: &[u8]) -> Option<Image> {
-    use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
-    let v = vtf::Vtf::parse(bytes).ok()?;
-    if v.width == 0 || v.height == 0 || v.width > 256 || v.height > 256 { return None; }
-    let rgba = v.rgba8(0, 0, 0)?;
-    let mut image = Image::new(Extent3d { width: v.width as u32, height: v.height as u32, depth_or_array_layers: 1 },
-        TextureDimension::D2, rgba, TextureFormat::Rgba8UnormSrgb, RenderAssetUsages::RENDER_WORLD);
-    image.sampler = ImageSampler::linear();
-    Some(image)
 }
