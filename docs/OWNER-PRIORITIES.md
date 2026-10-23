@@ -101,8 +101,12 @@ The installed BSP confirms the exit and target occupy SOLID leaf 387.
 Ballistic exits now consult an immutable, validated copy of the world BSP
 partition. The old lane becomes a blocking regression; positive controls must
 put both players in nonsolid leaves. Brush/movement geometry and the approximate
-damage formula remain unchanged. Combined validation is pending. Native damage
-and thickness parity remain unfinished.
+damage formula remain unchanged. All 1,332 workspace tests and installed
+positive/opaque and sealed-void controls pass at 64/128 Hz. A replacement
+4-unit Inferno wooden post has nonsolid space on both sides; two ordinary native
+AK shots confirm passage from both sides. The native reverse eye settled lower
+than the planned height, so this establishes passable geometry, not matched
+damage. Native damage/thickness parity remains unfinished.
 
 The owner launcher/profile has not been replaced.
 
