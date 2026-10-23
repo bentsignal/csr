@@ -73,6 +73,9 @@
   preserving the same human movement solver and blocked-access recovery.
   Increase the soft prop work window while keeping per-update cancellation;
   focused traversal, workspace, Release and rendered cancellation checks passed.
+- [x] Preserve authored crouching through ordinary ladder approach, climb and
+  dismount. Independent human controls and parsed-NAV bot routes passed in
+  both directions at 64/128 Hz; unflagged low openings retain bounded failure.
 - [ ] Finish unresolved player outcomes in the approved order; an increment or
   first pass does not finish its backlog category.
 
