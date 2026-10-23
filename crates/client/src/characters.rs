@@ -228,6 +228,7 @@ pub fn sync(
 ) {
     let _frame_scope = crate::input_latency::frame_scope("characters");
     muzzles.world.clear();
+    muzzles.world_pairs.clear();
     let dt = time.delta_secs();
     let sim_now = world.0.time();
     let sun = models.sun;
@@ -372,6 +373,11 @@ pub fn sync(
                 skinning::apply_pose(&w.instance, world_from_model, &w.pose, &mut transforms);
                 if let Some(point)=crate::tracers::muzzle_position(&asset.model,&w.pose,effects.left_muzzle(p.id, &w.name)) {
                     muzzles.world.insert(p.id,world_from_model.transform_point3(to_bevy(point)));
+                }
+                if w.name == "weapon_elite" {
+                    let pair = [false, true].map(|left| crate::tracers::muzzle_position(&asset.model, &w.pose, left)
+                        .map(|point| world_from_model.transform_point3(to_bevy(point))));
+                    muzzles.world_pairs.insert(p.id, pair);
                 }
             }
         }

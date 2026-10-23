@@ -34,6 +34,21 @@ impl InspectRequest {
 pub struct Muzzles {
     pub first: Option<(sim::PlayerId, Vec3)>,
     pub world: HashMap<sim::PlayerId, Vec3>,
+    pub first_pair: Option<(sim::PlayerId, [Option<Vec3>; 2])>,
+    pub world_pairs: HashMap<sim::PlayerId, [Option<Vec3>; 2]>,
+}
+impl Muzzles {
+    /// Each batched shot retains its barrel instead of following the final
+    /// shot's selected attachment for every event in that render frame.
+    pub(crate) fn position(&self, owner: sim::PlayerId, first: bool, left: Option<bool>) -> Option<Vec3> {
+        let pair = if first { self.first_pair.filter(|(id, _)| *id == owner).map(|(_, pair)| pair) }
+            else { self.world_pairs.get(&owner).copied() };
+        if let Some(left) = left {
+            if let Some(pair) = pair { return pair[usize::from(left)]; }
+        }
+        if first { self.first.filter(|(id, _)| *id == owner).map(|(_, p)| p) }
+            else { self.world.get(&owner).copied() }
+    }
 }
 struct Trail {
     start: Vec3,
@@ -42,7 +57,7 @@ struct Trail {
 }
 #[derive(Resource, Default)]
 pub struct Tracers {
-    pub pending: Vec<(sim::PlayerId, glam::Vec3, glam::Vec3)>,
+    pub pending: Vec<(sim::PlayerId, glam::Vec3, glam::Vec3, Option<bool>)>,
     live: Vec<Trail>,
 }
 /// Prefer the authored attachment, including its offset from the parent bone.
@@ -112,12 +127,8 @@ pub fn draw(
 ) {
     let now = time.elapsed_secs();
     let pending = std::mem::take(&mut trails.pending);
-    for (owner, eye, end) in pending {
-        let muzzle = if owner == local.view_target() && !local.noclip {
-            muzzles.first.filter(|m| m.0 == owner).map(|m| m.1)
-        } else {
-            muzzles.world.get(&owner).copied()
-        };
+    for (owner, eye, end, left) in pending {
+        let muzzle = muzzles.position(owner, owner == local.view_target() && !local.noclip, left);
         let Some(mut start) = muzzle else { continue };
         // Do not let a cosmetic muzzle origin poke through nearby cover.
         let trace =
@@ -202,7 +213,7 @@ mod tests {
             let authority = app.world().resource::<SimWorld>().0.state();
             let mut trails = app.world_mut().resource_mut::<Tracers>();
             trails.live.clear();
-            trails.pending.push((1, eye, end));
+            trails.pending.push((1, eye, end, None));
             drop(trails);
             app.world_mut().run_system_once(draw).unwrap();
             let trails = app.world().resource::<Tracers>();
@@ -215,6 +226,27 @@ mod tests {
             assert!(frozen.trace_ray(eye, to_source(muzzle), collision::contents::MASK_SHOT).hit());
             assert_eq!(app.world().resource::<SimWorld>().0.state(), authority);
         }
+        // Even though the current animation selects only the last barrel,
+        // two queued shots must leave from different authored attachments.
+        let right = to_bevy(eye + glam::Vec3::new(4., -4., 0.));
+        let left = to_bevy(eye + glam::Vec3::new(4., 4., 0.));
+        {
+            let mut muzzles = app.world_mut().resource_mut::<Muzzles>();
+            muzzles.first = Some((1, right));
+            muzzles.first_pair = Some((1, [Some(right), Some(left)]));
+        }
+        {
+            let mut trails = app.world_mut().resource_mut::<Tracers>();
+            trails.live.clear();
+            trails.pending.extend([(1, eye, end, Some(true)), (1, eye, end, Some(false))]);
+        }
+        let authority = app.world().resource::<SimWorld>().0.state();
+        app.world_mut().run_system_once(draw).unwrap();
+        let trails = app.world().resource::<Tracers>();
+        assert_eq!(trails.live.len(), 2);
+        assert_eq!(trails.live[0].start, left);
+        assert_eq!(trails.live[1].start, right);
+        assert_eq!(app.world().resource::<SimWorld>().0.state(), authority);
     }
     #[test]
     fn muzzle_uses_attachment_offset_in_animated_bone_space() {

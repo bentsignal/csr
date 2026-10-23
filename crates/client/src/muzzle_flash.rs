@@ -11,7 +11,7 @@ use crate::{
 use bevy::{asset::RenderAssetUsages, mesh::PrimitiveTopology, prelude::*};
 use std::collections::{HashMap, HashSet};
 
-const LIMIT: usize = 128;
+pub(crate) const LIMIT: usize = 128;
 
 #[derive(Clone, Debug)]
 struct Shot {
@@ -44,6 +44,7 @@ pub struct Flash {
     born: f32,
     owner: sim::PlayerId,
     first: bool,
+    left: Option<bool>,
     style: Style,
 }
 
@@ -420,6 +421,7 @@ pub fn draw(
     mut flashes: ResMut<Flashes>,
     level: Res<LoadedLevel>,
     muzzles: Res<Muzzles>,
+    effects: Res<crate::effects::Effects>,
     local: Res<LocalPlayer>,
     time: Res<Time>,
     cameras: Query<&Transform, (With<WorldPlayerCamera>, Without<Flash>)>,
@@ -474,13 +476,7 @@ pub fn draw(
     let pending = std::mem::take(&mut flashes.pending);
     let now = time.elapsed_secs();
     let camera = cameras.single().ok();
-    let position = |owner, first| {
-        if first {
-            muzzles.first.filter(|(id, _)| *id == owner).map(|(_, p)| p)
-        } else {
-            muzzles.world.get(&owner).copied()
-        }
-    };
+    let position = |owner, first, left| muzzles.position(owner, first, left);
     let mut count = 0;
     for (entity, flash, mut transform, mut mesh) in &mut live {
         let age = now - flash.born;
@@ -488,13 +484,13 @@ pub fn draw(
         if age >= flash.style.life
             || still_first != flash.first
             || camera.is_none()
-            || position(flash.owner, flash.first).is_none()
+            || position(flash.owner, flash.first, flash.left).is_none()
         {
             commands.entity(entity).despawn();
             continue;
         }
         count += 1;
-        transform.translation = position(flash.owner, flash.first).unwrap();
+        transform.translation = position(flash.owner, flash.first, flash.left).unwrap();
         transform.rotation = camera.unwrap().rotation;
         let frame = flash.style.sheet.as_ref().map_or(0, |s| {
             s.frame(age, flash.style.life, flash.style.rate, false)
@@ -502,12 +498,13 @@ pub fn draw(
         mesh.0 = flash.style.frames[frame].clone();
     }
     let Some(camera) = camera else { return };
-    for shot in pending {
+    for (index, shot) in pending.into_iter().enumerate() {
         if count >= LIMIT {
             break;
         }
         let first = shot.player == local.view_target() && !local.noclip;
-        let muzzle = position(shot.player, first);
+        let left = effects.fire_muzzles.get(index).copied().flatten();
+        let muzzle = position(shot.player, first, left);
         let name = flashes
             .names
             .get(&shot.weapon)
@@ -550,6 +547,7 @@ pub fn draw(
                 born: now,
                 owner: shot.player,
                 first,
+                left,
                 style,
             },
         ));
@@ -560,6 +558,83 @@ pub fn draw(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn batched_dualies_keep_each_shots_barrel_through_effects_and_live_flash_updates() {
+        use bevy::ecs::system::RunSystemOnce;
+        use std::{collections::BTreeMap, sync::Arc};
+        for first in [true, false] {
+            let mut bsp = vec![0; 1036];
+            bsp[..4].copy_from_slice(b"VBSP");
+            bsp[4..8].copy_from_slice(&20i32.to_le_bytes());
+            let mut fs = vfs::Vfs::new();
+            fs.push_back("barrel fixture", vfs::Mount::Memory(BTreeMap::from([
+                ("maps/barrels.bsp".into(), Arc::<[u8]>::from(bsp)),
+                ("scripts/items/items_game.txt".into(), Arc::<[u8]>::from(&b"items_game { items {} }"[..])),
+            ])));
+            let level = level::Level::load_from_vfs(content::ContentId::csgo(content::ContentKind::Map, "barrels"),
+                "barrels", Default::default(), fs).unwrap();
+            let sim = sim::World::with_catalog(level.collision.clone(), level.catalog.clone());
+            let authority = sim.state();
+            let right = Vec3::new(4., 0., -8.);
+            let left = Vec3::new(4., 0., 8.);
+            let pair = [Some(right), Some(left)];
+            let mut muzzles = Muzzles { first: Some((1, right)), first_pair: Some((1, pair)), ..default() };
+            muzzles.world.insert(1, right);
+            muzzles.world_pairs.insert(1, pair);
+            let style = Style { material: Handle::default(), frames: vec![Handle::default()],
+                sheet: None, radius: 1., life: 0.025, rate: 1. };
+            let mut flashes = Flashes { loaded: true, ..default() };
+            flashes.names.insert("weapon_elite".into(), HashMap::from([
+                ("muzzle_flash_effect_1st_person".into(), "synthetic".into()),
+                ("muzzle_flash_effect_3rd_person".into(), "synthetic".into()),
+            ]));
+            flashes.styles.insert("synthetic".into(), Some(style));
+            let mut app = App::new();
+            app.insert_resource(LoadedLevel(level)).insert_resource(crate::player::SimWorld(sim))
+                .insert_resource(LocalPlayer::new(if first { 1 } else { 99 }, glam::Vec3::ZERO, 0.))
+                .insert_resource(muzzles).insert_resource(flashes)
+                .init_resource::<crate::effects::Effects>().init_resource::<crate::tracers::Tracers>()
+                .init_resource::<crate::audio::SoundLibrary>().init_resource::<Assets<AudioSource>>()
+                .init_resource::<Assets<Image>>().init_resource::<Assets<StandardMaterial>>().init_resource::<Assets<Mesh>>()
+                .init_resource::<Time>().init_resource::<crate::surfaces::SurfaceProps>()
+                .init_resource::<crate::settings::Settings>().init_resource::<crate::buymenu::BuyMenu>()
+                .init_resource::<crate::viewmodel::ViewModels>().init_resource::<crate::foley::Foley>();
+            app.world_mut().spawn((WorldPlayerCamera, Transform::default()));
+            // Three completed shots arrive in one render batch. A single final
+            // selected attachment cannot represent both the first and second.
+            let events = (0..3).flat_map(|_| [
+                sim::GameEvent::Fire { player: 1, weapon: "weapon_elite".into(), origin: glam::Vec3::ZERO,
+                    suppressed: false, secondary: false },
+                sim::GameEvent::Tracer { player: 1, start: glam::Vec3::ZERO, end: glam::Vec3::X * 100. },
+            ]).collect();
+            app.insert_resource(PendingEvents(events));
+            app.world_mut().run_system_once(capture).unwrap();
+            app.world_mut().run_system_once(crate::effects::process).unwrap();
+            assert_eq!(app.world().resource::<crate::effects::Effects>().fire_muzzles,
+                vec![Some(true), Some(false), Some(true)]);
+            assert_eq!(app.world().resource::<crate::tracers::Tracers>().pending.iter().map(|p| p.3).collect::<Vec<_>>(),
+                vec![Some(true), Some(false), Some(true)]);
+            app.world_mut().run_system_once(draw).unwrap();
+            for empty_frame in 0..2 {
+                let world = app.world_mut();
+                let mut positions = world.query::<(&Flash, &Transform)>().iter(world)
+                    .map(|(flash, transform)| {
+                        assert_eq!(flash.first, first);
+                        assert_eq!(transform.translation, if flash.left == Some(true) { left } else { right });
+                        flash.left
+                    }).collect::<Vec<_>>();
+                positions.sort();
+                assert_eq!(positions, vec![Some(false), Some(true), Some(true)]);
+                assert_eq!(world.resource::<crate::player::SimWorld>().0.state(), authority);
+                if empty_frame == 0 {
+                    world.run_system_once(capture).unwrap();
+                    world.run_system_once(crate::effects::process).unwrap();
+                    assert!(world.resource::<crate::effects::Effects>().fire_muzzles.is_empty());
+                    world.run_system_once(draw).unwrap();
+                }
+            }
+        }
+    }
     // Synthetic format fixture, not copied game content: one opaque RGBA pixel.
     fn legacy_sprite() -> Vec<u8> {
         let mut bytes = vec![0; 68];
