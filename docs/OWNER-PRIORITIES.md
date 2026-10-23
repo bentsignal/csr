@@ -152,8 +152,22 @@ match W/0.9/0.6. Other material and geometry guards remain intact; thicker
 cover remains an extrapolation. Policy salt is v7. The installed-data fixture
 now checks weapon powers as well as actual firing/opaque controls. Correction
 checks pass: all 1,334 workspace tests, installed Inferno firing/opaque controls
-at 64/128, normal PLAY and immutable Dust II probe/sim. CI is pending. See
+at 64/128, normal PLAY and immutable Dust II probe/sim. Both CI checks passed;
+PR #316 merged. See
 [calibration and boundaries](research/thin-wood-loss.md).
+
+The Dualies presentation now retains each shot's accepted barrel through a
+multi-shot render batch. Both posed attachments remain available; each queued
+tracer and live muzzle card selects its own side instead of following the
+final shot. A real capture/effects/draw regression covers three shots in one
+batch, first/third person and an empty following frame; the tracer draw also
+checks distinct origins with current-collision clipping. All 1,335 workspace
+tests, normal PLAY, immutable Dust II probe/sim and the inspected installed
+left/right firing captures pass. Protected userdata/binary hashes remain
+unchanged. CI is pending. The exact recovered June 2015 particle file retains
+the same missing radius, incompatible atlas sequences and unsupported trails
+as Legacy, so no first-person particle substitute was added. Dynamic scope
+vignette/edge blur and exact native thick-cover losses remain unqualified.
 
 The owner launcher/profile has not been replaced.
 
