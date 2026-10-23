@@ -7,7 +7,9 @@ use glam::Vec3;
 pub(super) const MAX_SLABS: usize = 4;
 
 fn supported(surface: BulletSurface) -> bool {
-    matches!(surface.material, b'W' | b'U' | b'L' | b'Y' | b'G')
+    // Installed concrete/metal declarations may admit thin cover under this
+    // same approximation; their material codes alone never authorize an exit.
+    matches!(surface.material, b'W' | b'U' | b'L' | b'Y' | b'G' | b'C' | b'M')
         && surface.penetration_modifier.is_finite() && surface.penetration_modifier > 0.
         && surface.damage_modifier.is_finite() && (0. ..=1.).contains(&surface.damage_modifier)
 }
