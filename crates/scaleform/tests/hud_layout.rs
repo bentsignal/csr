@@ -160,7 +160,8 @@ csrEI.call("csr.HudLayoutFixture", ok, row.Player_Name.Player_Name.text == "<lit
 ok = api.row(row, ["Enemy", "DEAD", "", "4", "3", false]);
 csrEI.call("csr.HudLayoutFixture", ok, row.Money.text == "", !row.Bomb._visible,
     row.Skull._visible, !row.PlayerOutline._visible);
-csrEI.call("csr.HudLayoutFixture", api.row(row, undefined), !row._visible,
+var removed = api.row(row, undefined);
+csrEI.call("csr.HudLayoutFixture", removed, !row._visible,
     !api.row(undefined, ["Missing", "ALIVE", "", "0", "0", false]));
 }
 checkScoreboardRows();
