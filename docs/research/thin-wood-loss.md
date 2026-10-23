@@ -25,8 +25,8 @@ with its actual power, the 0.91 curve predicts AWP loss 21.98 rather than 20.1.
 
 Fitting the same single prefactor to the three observations with their mounted
 powers gives 0.925315 (least squares), rounded to `0.925`. Predicted losses are
-AK 7.325, M4A4 6.715 and AWP 20.444: all within 0.6 raw damage. It applies only if the
-entry and **every** crossed face have that exact declaration. Mixed materials,
+AK 7.325, M4A4 6.715 and AWP 20.444: all within 0.6 raw damage. It applies
+only if the entry and **every** crossed face have that exact declaration. Mixed materials,
 hidden nonmatching faces, other declarations and unknowns retain prior behavior.
 The existing thickness budget, four-exit bound, BSP-solid guard, range, armor,
 hit groups and exhausted-pellet rule are preserved. Catalog policy salt is v7.
@@ -48,6 +48,8 @@ restored twelve exact preference snapshots. Private captures remain outside git.
 The regression now uses actual AWP power 2.5, includes the geometric oblique
 holdout, and keeps continuity and hidden-backing controls. The installed-data
 fixture also checks all three mounted weapon powers to prevent another
-synthetic-parameter mismatch. Checks for this correction are pending. Prior
-#315 checks passed with the incorrect synthetic AWP value and do not establish
-its advertised AWP error bound.
+synthetic-parameter mismatch. All 1,334 workspace tests, the installed Inferno
+firing/opaque controls at 64/128 Hz, the normal PLAY build and immutable Dust II
+probe/sim pass for this correction. CI is pending. Prior #315 checks passed
+with the incorrect synthetic AWP value and do not establish its advertised
+AWP error bound.

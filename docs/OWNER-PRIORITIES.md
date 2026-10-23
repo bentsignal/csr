@@ -151,7 +151,9 @@ loss errors below 0.6. A separate 30-degree AK shot through 11.9cm wood reports
 match W/0.9/0.6. Other material and geometry guards remain intact; thicker
 cover remains an extrapolation. Policy salt is v7. The installed-data fixture
 now checks weapon powers as well as actual firing/opaque controls. Correction
-checks are pending. See [calibration and boundaries](research/thin-wood-loss.md).
+checks pass: all 1,334 workspace tests, installed Inferno firing/opaque controls
+at 64/128, normal PLAY and immutable Dust II probe/sim. CI is pending. See
+[calibration and boundaries](research/thin-wood-loss.md).
 
 The owner launcher/profile has not been replaced.
 
