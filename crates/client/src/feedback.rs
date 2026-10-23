@@ -578,24 +578,9 @@ pub fn update(
                     });
                     continue;
                 }
-                for i in 0..3 {
-                    if budget == 0 { break; }
-                    budget -= 1;
-                    let drift = to_bevy(normal) * 25.0
-                        + Vec3::new(i as f32 * 9.0 - 9.0, 8.0, 5.0 - i as f32 * 5.0);
-                    let _ = spawn(
-                        &mut commands,
-                        &assets,
-                        to_bevy(pos),
-                        to_bevy(normal),
-                        1.0 + i as f32 * 0.4,
-                        false,
-                        true,
-                        drift,
-                        now,
-                        0.2,
-                    );
-                }
+                // Missing/unsupported particle content is not evidence of dust.
+                // In particular wood, water and flesh must not get the old
+                // generic three-puff burst. Decal selection is independent.
             }
             sim::GameEvent::Damage {
                 attacker,
@@ -643,6 +628,7 @@ pub fn update(
             }
             if let Some(puff) = puff {
                 *transform = puff.pose(now - fx.born, fx.life, eye);
+                puff.fade(now - fx.born, fx.life, &mut meshes);
                 continue;
             }
             if let Some(mark) = attachment {
