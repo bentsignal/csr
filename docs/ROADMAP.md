@@ -733,6 +733,11 @@ lightmaps, props and sun, HUD, and the weapon catalog.
 - [ ] Complete burst/suppressor/inspection fidelity and original revolver cocking
   (owner currently requests instant primary)
 - [ ] Wall penetration (`penetration`, surface props)
+  Native Inferno comparison exposed an exit into sealed BSP solid space; the
+  ballistic exit guard now rejects solid leaves while preserving brush traces.
+  The old 16-unit frame control is a negative; the new 4-unit post has actual
+  open space on both sides and passes ordinary native shots. Numerical native
+  damage parity remains unfinished.
 - [ ] Hit groups from the character models' hitboxes
 - [x] Sounds: soundscripts and WAV/MP3 playback (weapons)
 - [ ] Footsteps, impacts, reload sounds
