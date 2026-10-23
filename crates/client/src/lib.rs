@@ -29,6 +29,7 @@ mod sound_probe;
 mod playtest;
 pub mod surfaces;
 pub mod tracers;
+mod muzzle_flash;
 pub mod inventory;
 pub mod cosmetics;
 pub mod cosmetic_catalog;
@@ -264,6 +265,7 @@ impl Plugin for CsgoPlugin {
             .init_resource::<skin_finish::SkinTextures>()
             .init_resource::<decorations::Decorations>()
             .init_resource::<tracers::Tracers>()
+            .init_resource::<muzzle_flash::Flashes>()
             .init_resource::<tracers::InspectRequest>()
             .init_resource::<menu::Menu>()
             .insert_resource(inventory::Inventory::load())
@@ -282,7 +284,7 @@ impl Plugin for CsgoPlugin {
             .add_systems(
                 Update,
                 (
-                    (skin_finish::record, skin_finish::sync_loadout.run_if(remote_join::offline), effects::process.after(foley::update)).chain(),
+                    (skin_finish::record, skin_finish::sync_loadout.run_if(remote_join::offline), muzzle_flash::capture, effects::process.after(foley::update)).chain(),
                     (feedback::update, utility_fx::update).chain(),
                     sky::follow_camera,
                     visibility::update,
@@ -291,7 +293,7 @@ impl Plugin for CsgoPlugin {
                     items::sync,
                     (doors::sync, breakables::sync, window_fade::update).chain(),
                     (viewmodel::update, foley::inspect, utility_fx::update_wick).chain(),
-                    tracers::draw,
+                    (tracers::draw, muzzle_flash::draw).chain(),
                     scope::update,
                     buymenu::draw,
                     scoreboard::draw,
