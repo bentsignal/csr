@@ -559,12 +559,12 @@ thing is uncanny. Fidelity is measured, never eyeballed:
       open. [Placement](research/utility-particles.md#he-authored-initial-placement), PR172.
 - [ ] Wall penetration (surface properties) and hit groups from the models'
       real hitboxes.
-      An initial isolated thin-cover path reads mounted material modifiers and
-      continues authoritative shots through supported wood/cardboard/plastic/
-      glass/grate slabs. A real Inferno wood-panel firing control passes at
-      64/128 Hz. Its thickness budget/damage retention remain approximations;
-      connected-cover handling is in progress; other materials and native
-      penetration parity stay open.
+      An initial thin-cover path reads mounted material modifiers and continues
+      authoritative shots through supported wood/cardboard/plastic/glass/grate/
+      concrete/metal slabs, including connected convex cover. Real Inferno wood
+      and Nuke concrete/metal firing/opaque controls pass at 64/128 Hz. Its
+      thickness budget/damage retention remain approximations; other materials,
+      triangle backends and native penetration parity stay open.
 - [x] Footsteps, reload/deploy event sounds, surface impact sounds: soundscript
       mixing and MDL events, fixed-tick foley, matched Legacy/client probes,
       1,425-file decode audit, and spatial-panning/downmix regression checks.

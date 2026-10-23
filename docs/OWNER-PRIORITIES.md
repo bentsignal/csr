@@ -78,6 +78,11 @@ Hidden opaque/unknown backing must still block the shot. Positive mounted
 concrete/metal declarations now use that same bounded policy rather than an
 unconditional material-code rejection. The loss formula is unchanged and
 approximate; combined execution checks are pending.
+Installed-data controls now pass through an actual 16-unit Inferno wooden panel
+and 8-unit Nuke concrete/corrugated-metal panels at 64/128 Hz. Identical opaque
+controls retain the original collision/weapon data and block each shot when
+the ballistic definitions are removed. This is functional coverage, not measured
+native damage parity.
 
 The owner launcher/profile has not been replaced.
 
