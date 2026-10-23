@@ -74,8 +74,10 @@ The original M3 task stays unchecked:
 native damage/thickness parity and broader cover geometry are unfinished.
 The active follow-through joins exact touching/overlapping convex intervals,
 counts their physical thickness once and checks every crossed component face.
-Hidden opaque/unknown backing must still block the shot. This retains the
-existing approximate damage policy; combined execution checks are pending.
+Hidden opaque/unknown backing must still block the shot. Positive mounted
+concrete/metal declarations now use that same bounded policy rather than an
+unconditional material-code rejection. The loss formula is unchanged and
+approximate; combined execution checks are pending.
 
 The owner launcher/profile has not been replaced.
 
