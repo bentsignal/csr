@@ -65,7 +65,7 @@ fn coverage_image(images: &mut Assets<Image>, coverage: &[f32], width: usize, he
     images.add(image)
 }
 
-pub fn setup(mut commands: Commands, level: Res<crate::LoadedLevel>, mut images: ResMut<Assets<Image>>) {
+pub fn setup(commands: Commands, level: Res<crate::LoadedLevel>, mut images: ResMut<Assets<Image>>) {
     let mut cache = crate::textures::TextureCache::default();
     let arc = cache.load(&level.0.vfs, &mut images, "sprites/scope_arc", true).map(|t| t.handle);
     // The original optic dot uses its brightness as a coverage mask; its grey
@@ -93,6 +93,10 @@ pub fn setup(mut commands: Commands, level: Res<crate::LoadedLevel>, mut images:
             reticles.dot.push(coverage_image(&mut images, &blur_coverage(dot, RETICLE_SIZE, RETICLE_SIZE, sigma), RETICLE_SIZE, RETICLE_SIZE));
         }
     }
+    spawn_parts(commands, arc, reticles);
+}
+
+fn spawn_parts(mut commands: Commands, arc: Option<Handle<Image>>, reticles: ReticleImages) {
     for part in 0..11 {
         let mut entity = commands.spawn((
             Node { position_type: PositionType::Absolute, ..default() },
@@ -107,7 +111,10 @@ pub fn setup(mut commands: Commands, level: Res<crate::LoadedLevel>, mut images:
             if let Some(image) = reticles.dot.first() { entity.insert(ImageNode::new(image.clone())); }
         } else if part == 8 || part == 9 {
             let image = if part == 8 { &reticles.horizontal[0] } else { &reticles.vertical[0] };
-            entity.insert(ImageNode { image: image.clone(), color: Color::BLACK, ..default() });
+            // These are 1x97 / 97x1 coverage strips. Auto preserves their
+            // aspect ratio, leaving only short marks at the scope centre.
+            // Stretch along the line while retaining the blur across it.
+            entity.insert(ImageNode { image: image.clone(), color: Color::BLACK, image_mode: NodeImageMode::Stretch, ..default() });
         } else { entity.insert(BackgroundColor(Color::BLACK)); }
     }
     commands.insert_resource(reticles);
@@ -171,6 +178,32 @@ pub fn update(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn spawned_sniper_lines_stretch_the_coverage_strips_across_the_scope() {
+        use bevy::ecs::system::RunSystemOnce;
+
+        let mut world = World::new();
+        world.run_system_once(|commands: Commands| {
+            spawn_parts(commands, None, ReticleImages {
+                horizontal: vec![Handle::default()],
+                vertical: vec![Handle::default()],
+                dot: vec![Handle::default()],
+            });
+        }).unwrap();
+        let mut lines = 0;
+        for (part, image) in world.query::<(&ScopePart, &ImageNode)>().iter(&world) {
+            if part.0 == 8 || part.0 == 9 {
+                assert!(matches!(image.image_mode, NodeImageMode::Stretch),
+                    "reticle {} must fill its node rather than fit the strip's aspect ratio", part.0);
+                assert_eq!(image.color, Color::BLACK);
+                lines += 1;
+            } else {
+                assert!(matches!(image.image_mode, NodeImageMode::Auto));
+            }
+        }
+        assert_eq!(lines, 2);
+    }
 
     #[test]
     fn accuracy_driven_blur_scales_and_recovers_independently_of_frame_rate() {

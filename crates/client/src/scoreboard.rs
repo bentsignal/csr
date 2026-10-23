@@ -19,8 +19,17 @@ pub struct Scoreboard {
 
 #[derive(Clone, PartialEq)]
 struct Board {
+    viewer: (PlayerId, Team),
     title: String,
     teams: Vec<(String, Vec<Row>)>,
+}
+
+impl Board {
+    /// Ordinary stat updates may keep the previous raster while the worker
+    /// renders. A different viewer/team or match heading must replace it first.
+    fn same_view(&self, next: &Self) -> bool {
+        self.viewer == next.viewer && self.title == next.title
+    }
 }
 
 #[derive(Clone, PartialEq)]
@@ -66,7 +75,7 @@ fn board(world: &sim::World, local: PlayerId, map: &str) -> Board {
             rows.sort_by_key(|r| (std::cmp::Reverse(r.kills), r.deaths, r.id));
             (format!("{name}    {score}"), rows)
         }).collect();
-    Board { title, teams }
+    Board { viewer: (local, team), title, teams }
 }
 
 fn label(parent: &mut ChildSpawnerCommands, value: impl Into<String>, size: f32, color: Color) {
