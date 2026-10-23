@@ -149,6 +149,31 @@ mod tests {
     }
 
     #[test]
+    fn mounted_model_header_property_reaches_numeric_ballistic_resolution() {
+        use std::sync::Arc;
+        let mut data = vec![0u8; 432];
+        data[..4].copy_from_slice(b"IDST");
+        data[4..8].copy_from_slice(&49i32.to_le_bytes());
+        data[308..312].copy_from_slice(&416i32.to_le_bytes());
+        data[416..427].copy_from_slice(b"Wood_Dense\0");
+        let files = [
+            ("scripts/surfaceproperties_manifest.txt".to_string(), Arc::<[u8]>::from(
+                br#""surfaceproperties_manifest" { "file" "scripts/surfaces.txt" }"#.as_slice())),
+            ("scripts/surfaces.txt".to_string(), Arc::<[u8]>::from(
+                br#""Wood_Dense" { "gamematerial" "13" "penetrationmodifier" "0.5" "damagemodifier" "0.3" }"#.as_slice())),
+            ("models/fixture.mdl".to_string(), Arc::<[u8]>::from(data)),
+        ].into_iter().collect();
+        let mut fs = vfs::Vfs::new();
+        fs.push_front("pack:fixture", vfs::Mount::Memory(files));
+        let mut world = CollisionWorld::new();
+        let id = world.surface_id("models/fixture.mdl");
+        load(&mut world, &fs);
+        assert_eq!(world.bullet_surface(id), Some(BulletSurface {
+            material: 13, penetration_modifier: 0.5, damage_modifier: 0.3,
+        }));
+    }
+
+    #[test]
     fn mounted_manifest_order_and_patch_surfaceprop_are_resolved_once() {
         use std::sync::Arc;
         let files = [
