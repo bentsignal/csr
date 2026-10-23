@@ -28,6 +28,7 @@ pub struct Flashes {
     names: HashMap<String, HashMap<String, String>>,
     styles: HashMap<String, Option<Style>>,
     textures: crate::textures::TextureCache,
+    reported_selections: HashSet<(String, bool, bool)>,
 }
 #[derive(Clone)]
 struct Style {
@@ -277,7 +278,23 @@ fn sprite_sheets(bytes: &[u8]) -> Option<HashMap<usize, Sheet>> {
     if major != 7 || !(3..=5).contains(&minor) {
         return None;
     }
-    particle_data::sheets(bytes)
+    let sheets = particle_data::sheets(bytes)?;
+    if sheets.is_empty() {
+        // Legacy muzzleflash4 is also shipped as VTF 7.4 with no sheet resource.
+        // Its PCF requests sequence 2, but the texture is one static image, not
+        // an atlas. Permit that bounded static-card fallback after validating
+        // the image layout; do not do this for a missing sequence in an atlas.
+        let texture = vtf::Vtf::parse(bytes).ok()?;
+        if texture.frames != 1
+            || texture.faces != 1
+            || texture.depth != 1
+            || texture.width == 0
+            || texture.height == 0
+        {
+            return None;
+        }
+    }
+    Some(sheets)
 }
 
 fn load_style(
@@ -353,7 +370,7 @@ fn load_style(
             continue;
         };
         let sheet = sheets.get(&seq).cloned();
-        if sheet.is_none() && (!sheets.is_empty() || seq != 0) {
+        if sheet.is_none() && !sheets.is_empty() {
             continue;
         }
         if sheet.as_ref().is_some_and(|s| s.frames.len() > 64) {
@@ -490,17 +507,30 @@ pub fn draw(
             break;
         }
         let first = shot.player == local.view_target() && !local.noclip;
-        let Some(position) = position(shot.player, first) else {
-            continue;
-        };
-        let Some(name) = flashes
+        let muzzle = position(shot.player, first);
+        let name = flashes
             .names
             .get(&shot.weapon)
             .and_then(|f| effect_name(f, first, shot.suppressed))
-        else {
-            continue;
-        };
-        let Some(style) = flashes.styles.get(name).and_then(Option::as_ref).cloned() else {
+            .map(str::to_owned);
+        let style = name
+            .as_ref()
+            .and_then(|name| flashes.styles.get(name))
+            .and_then(Option::as_ref)
+            .cloned();
+        // One receipt per weapon/view/mode, bounded independently of Fire rate.
+        // The effect's spelling alone does not identify its camera: installed
+        // Legacy assigns the unsuffixed rifle effect to both views. Record the
+        // actual first-person selection and attachment before deciding to omit.
+        if flashes.reported_selections.len() < LIMIT
+            && flashes
+                .reported_selections
+                .insert((shot.weapon.clone(), first, shot.suppressed))
+        {
+            info!("Muzzle selection: weapon={} first_person={first} suppressed={} effect={} style={} attachment={}",
+                shot.weapon, shot.suppressed, name.as_deref().unwrap_or("<undeclared>"), style.is_some(), muzzle.is_some());
+        }
+        let (Some(position), Some(name), Some(style)) = (muzzle, name, style) else {
             continue;
         };
         // One card, at the rendered attachment, with the authored lower radius
@@ -546,6 +576,19 @@ mod tests {
         bytes
     }
 
+    fn modern_static_sprite() -> Vec<u8> {
+        let mut bytes = vec![0; 92];
+        bytes[..64].copy_from_slice(&legacy_sprite()[..64]);
+        bytes[8..12].copy_from_slice(&4u32.to_le_bytes());
+        bytes[12..16].copy_from_slice(&88u32.to_le_bytes());
+        bytes[63..65].copy_from_slice(&1u16.to_le_bytes());
+        bytes[68..72].copy_from_slice(&1u32.to_le_bytes());
+        bytes[80..84].copy_from_slice(&0x30u32.to_le_bytes());
+        bytes[84..88].copy_from_slice(&88u32.to_le_bytes());
+        bytes[88..].fill(255);
+        bytes
+    }
+
     #[test]
     fn legacy_single_sprite_is_not_mistaken_for_a_resource_directory() {
         let mut bytes = legacy_sprite();
@@ -560,7 +603,7 @@ mod tests {
     }
 
     #[test]
-    fn visuals_to_pcf_to_legacy_texture_produces_a_renderable_style() {
+    fn first_person_child_chain_and_static_sequence_produce_a_renderable_style() {
         let names = declarations(
             r#""items_game" {
             "prefabs" { "gun" { "visuals" {
@@ -572,11 +615,13 @@ mod tests {
         let name = effect_name(&names["weapon_test"], true, false).unwrap();
         let definition = Element {
             kind: "DmeParticleSystemDefinition".into(),
-            name: name.into(),
+            name: "test_vent_FP".into(),
             attrs: HashMap::from([
                 ("material".into(), Value::Text("test/sprite.vmt".into())),
-                ("radius".into(), Value::Number(5.0)),
-                ("initializers".into(), Value::Array(vec![Value::Ref(1)])),
+                (
+                    "initializers".into(),
+                    Value::Array(vec![Value::Ref(1), Value::Ref(4), Value::Ref(5)]),
+                ),
                 ("renderers".into(), Value::Array(vec![Value::Ref(2)])),
                 ("emitters".into(), Value::Array(vec![Value::Ref(3)])),
             ]),
@@ -587,12 +632,34 @@ mod tests {
         };
         let mut life = operator("Lifetime Random");
         life.attrs
-            .insert("lifetime_min".into(), Value::Number(0.025));
+            .insert("lifetime_min".into(), Value::Number(0.028));
+        let mut radius = operator("Remap Noise to Scalar");
+        radius
+            .attrs
+            .insert("output minimum".into(), Value::Number(3.0));
+        let mut sequence = operator("Sequence Random");
+        sequence
+            .attrs
+            .insert("sequence_min".into(), Value::Number(2.0));
+        let root = Element {
+            kind: "DmeParticleSystemDefinition".into(),
+            name: name.into(),
+            attrs: HashMap::from([("children".into(), Value::Array(vec![Value::Ref(7)]))]),
+        };
+        let child = Element {
+            kind: "DmeParticleChild".into(),
+            name: "test_vent_FP".into(),
+            attrs: HashMap::from([("child".into(), Value::Ref(0))]),
+        };
         let elements = [
             definition,
             life,
             operator("render_animated_sprites"),
             operator("emit_instantaneously"),
+            radius,
+            sequence,
+            root,
+            child,
         ];
         let mut fs = vfs::Vfs::new();
         fs.push_back(
@@ -606,7 +673,7 @@ mod tests {
                 ),
                 (
                     "materials/test/sprite.vtf".into(),
-                    std::sync::Arc::<[u8]>::from(legacy_sprite()),
+                    std::sync::Arc::<[u8]>::from(modern_static_sprite()),
                 ),
             ])),
         );
@@ -624,12 +691,12 @@ mod tests {
             &mut meshes,
         )
         .expect(
-            "nested visuals, case-sensitive PCF name and legacy VTF must reach the sprite renderer",
+            "first-person child graph and a nonzero sequence on a static image must reach the sprite renderer",
         );
         assert_eq!(style.frames.len(), 1);
         assert!(style.sheet.is_none());
-        assert_eq!(style.radius, 5.0);
-        assert_eq!(style.life, 0.025);
+        assert_eq!(style.radius, 3.0);
+        assert_eq!(style.life, 0.028);
         assert!(meshes.get(&style.frames[0]).is_some());
         let texture = materials
             .get(&style.material)
@@ -638,6 +705,51 @@ mod tests {
             .as_ref()
             .unwrap();
         assert!(images.get(texture).is_some());
+    }
+
+    /// Opt-in, read-only asset check for the parent verification slot. No game
+    /// process or renderer is created; validates the real Rust parser/loader.
+    #[test]
+    #[ignore = "requires the player's installed CS:GO Legacy assets"]
+    fn installed_first_person_rifles_and_explicit_fp_child_have_styles() {
+        let dir = std::env::var_os("CSR_GAME_DIR")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| {
+                std::path::PathBuf::from(
+                    r"C:\Program Files (x86)\Steam\steamapps\common\csgo legacy\csgo",
+                )
+            });
+        let mut fs = vfs::Vfs::new();
+        fs.mount_game_dir(&dir).unwrap();
+        let names = declarations(&fs.read_string("scripts/items/items_game.txt").unwrap());
+        let all =
+            particle_data::pcf(&fs.read("particles/weapons/cs_weapon_fx.pcf").unwrap()).unwrap();
+        let mut textures = crate::textures::TextureCache::default();
+        let mut images = Assets::<Image>::default();
+        let mut materials = Assets::<StandardMaterial>::default();
+        let mut meshes = Assets::<Mesh>::default();
+        let mut effects = vec!["weapon_muzzle_flash_assaultrifle_FP"];
+        for weapon in ["weapon_ak47", "weapon_m4a1", "weapon_aug"] {
+            effects
+                .push(effect_name(&names[weapon], true, false).expect("first-person declaration"));
+        }
+        for effect in effects {
+            let style = load_style(
+                effect,
+                &all,
+                &fs,
+                &mut textures,
+                &mut images,
+                &mut materials,
+                &mut meshes,
+            )
+            .unwrap_or_else(|| {
+                panic!("first-person rifle effect {effect} must have a supported sprite")
+            });
+            assert!(!style.frames.is_empty());
+            assert!(style.radius > 0.0 && style.radius <= 7.0);
+            assert!(style.life > 0.0 && style.life <= 0.03);
+        }
     }
 
     #[test]
