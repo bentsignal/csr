@@ -1332,6 +1332,100 @@ mod life_tests {
         assert_eq!((state.clip_index, state.completed_knife_index), (0, None));
     }
 
+    // UNRUN by source-only child; root owns Cargo and installed-data execution.
+    #[test]
+    #[ignore = "requires the player's installed CS:GO Legacy; no GPU required"]
+    fn installed_elite_alternating_fire_keeps_outgoing_hands_and_idle_serials() {
+        use std::time::Duration;
+        let (mut app, id) = installed_app(Some("weapon_elite"));
+        app.init_resource::<crate::effects::PendingEvents>()
+            .init_resource::<crate::tracers::Tracers>()
+            .init_resource::<crate::audio::SoundLibrary>()
+            .init_resource::<Assets<bevy::audio::AudioSource>>()
+            .init_resource::<crate::surfaces::SurfaceProps>()
+            .init_resource::<crate::settings::Settings>()
+            .init_resource::<crate::buymenu::BuyMenu>()
+            .init_resource::<crate::foley::Foley>()
+            .add_systems(Update, crate::effects::process.before(update));
+        let clips = {
+            let views = app.world().resource::<ViewModels>();
+            let view = &views.weapons["weapon_elite"];
+            [view.clips["ACT_VM_PRIMARYATTACK"][0].clone(),
+                view.clips["ACT_VM_SECONDARYATTACK"][0].clone()]
+        };
+        // Settle deployment before exercising real TickInput -> Fire ->
+        // Effects -> viewmodel dispatch. No test-only attack injection.
+        app.world_mut().resource_mut::<Time>().advance_by(Duration::from_secs(2));
+        app.update();
+        let mut starts = [None, None];
+        let mut previous_serial = app.world().resource::<crate::effects::Effects>().attack_serial;
+        for shot in 0..8 {
+            let events = {
+                let mut world = app.world_mut().resource_mut::<SimWorld>();
+                let deadline = world.0.player(id).unwrap().active_weapon().unwrap().next_attack;
+                world.0.step(&[(id, sim::TickInput::default())]); // release the semi-auto button
+                while world.0.time() <= deadline {
+                    world.0.step(&[(id, sim::TickInput::default())]);
+                }
+                world.0.step(&[(id, sim::TickInput {
+                    buttons: movement::buttons::ATTACK, ..Default::default()
+                })]);
+                world.0.events.iter().filter(|event| matches!(event,
+                    sim::GameEvent::Fire { player, weapon, .. }
+                        if *player == id && weapon == "weapon_elite")).cloned().collect::<Vec<_>>()
+            };
+            assert_eq!(events.len(), 1);
+            let authoritative = app.world().resource::<SimWorld>().0.state();
+            app.world_mut().resource_mut::<crate::effects::PendingEvents>().0.extend(events);
+            app.update();
+            let now = app.world().resource::<Time>().elapsed_secs();
+            let side = shot % 2;
+            starts[side] = Some(now);
+            let state = app.world().resource::<ViewModelState>();
+            let fire = state.elite_fire.as_ref().unwrap();
+            assert_eq!(state.activity, if side == 0 { "ACT_VM_PRIMARYATTACK" } else { "ACT_VM_SECONDARYATTACK" });
+            assert_eq!(fire.hands.each_ref().map(|hand| hand.as_ref().map(|hand| hand.started)), starts);
+            assert_eq!(state.last_attack_seen, previous_serial + 1);
+            previous_serial = state.last_attack_seen;
+            if let Some(started) = starts[1 - side] {
+                let mut expected = state.pose.clone();
+                clips[1 - side].clip.sample(now - started, &mut expected);
+                for (bone, mask) in fire.masks[1 - side].iter().enumerate() {
+                    if *mask > 0. { assert_eq!(state.pose[bone], expected[bone], "outgoing bone {bone} reset on shot {shot}"); }
+                }
+            }
+            assert_eq!(app.world().resource::<crate::effects::Effects>().fire_muzzles, [Some(side == 0)]);
+            assert!(app.world().resource::<crate::tracers::Muzzles>().first_pair.is_some());
+            // Empty render frames must advance existing clips without
+            // consuming/restarting either hand or the global attack serial.
+            for _ in 0..6 {
+                app.world_mut().resource_mut::<Time>().advance_by(Duration::from_millis(20));
+                app.update();
+                let state = app.world().resource::<ViewModelState>();
+                let fire = state.elite_fire.as_ref().unwrap();
+                assert_eq!(fire.hands.each_ref().map(|hand| hand.as_ref().map(|hand| hand.started)), starts);
+                assert_eq!(state.last_attack_seen, previous_serial);
+                assert_eq!(app.world().resource::<crate::effects::Effects>().attack_serial, previous_serial);
+            }
+            assert_eq!(app.world().resource::<SimWorld>().0.state(), authoritative,
+                "rendering must preserve ammunition, readiness, aim and recoil");
+        }
+        app.world_mut().resource_mut::<Time>().advance_by(Duration::from_secs(1));
+        app.update();
+        let state = app.world().resource::<ViewModelState>();
+        assert_eq!(state.activity, "ACT_VM_IDLE");
+        assert!(state.elite_fire.is_none());
+        let idle_started = state.started;
+        for _ in 0..3 {
+            app.world_mut().resource_mut::<Time>().advance_by(Duration::from_millis(20));
+            app.update();
+            let state = app.world().resource::<ViewModelState>();
+            assert!(state.elite_fire.is_none());
+            assert_eq!(state.started, idle_started);
+            assert_eq!(state.last_attack_seen, previous_serial);
+        }
+    }
+
     #[test]
     #[ignore = "requires the player's installed CS:GO Legacy; no GPU required"]
     fn installed_knife_inspect_requires_reload_for_one_active_restart() {
@@ -1542,6 +1636,137 @@ struct WeaponView {
     grenade_hold: Option<grenade_hold::HoldPoses>,
 }
 
+/// Elite's installed left/right attacks are full-weight absolute clips, with
+/// no authored autolayers or pose controls. Replacing the entire clip resets
+/// the other pistol. Keep each arm subtree on its own playback clock instead.
+/// Decoding all 16 frames at 18fps confirms the opposite forearm, hand and
+/// foretwist stay at idle; the shared weapon/spine roots are unchanged too.
+struct EliteFire {
+    masks: [Arc<Vec<f32>>; 2],
+    hands: [Option<EliteHand>; 2],
+}
+
+struct EliteHand {
+    clip: Arc<Clip>,
+    weights: Arc<Vec<f32>>,
+    started: f32,
+    transition: inspection::Inspection,
+}
+
+impl EliteFire {
+    fn new(bones: &[mdl::skeleton::Bone]) -> Option<Self> {
+        // The installed skeleton has separate forearm/foretwist roots and
+        // clavicle branches. Descendants include each gun, slide and muzzle;
+        // naming only the pistol bones would still reset the outgoing wrist.
+        for side in ["L", "R"] {
+            for part in ["Forearm", "Hand"] {
+                let name = format!("v_weapon.Bip01_{side}_{part}");
+                if !bones.iter().any(|bone| bone.name == name) { return None; }
+            }
+        }
+        let mut sides = vec![None; bones.len()];
+        for (i, bone) in bones.iter().enumerate() {
+            sides[i] = if bone.name.starts_with("v_weapon.Bip01_L_") { Some(0) }
+                else if bone.name.starts_with("v_weapon.Bip01_R_") { Some(1) }
+                else { usize::try_from(bone.parent).ok()
+                    .and_then(|parent| sides.get(parent)).copied().flatten() };
+        }
+        Some(Self {
+            masks: std::array::from_fn(|side| Arc::new(sides.iter()
+                .map(|bone| if *bone == Some(side) { 1. } else { 0. }).collect())),
+            hands: [None, None],
+        })
+    }
+
+    fn begin(&mut self, seq: &SeqClip, now: f32, displayed: &[(glam::Vec3, glam::Quat)]) {
+        let side = usize::from(!seq.left_muzzle);
+        let weights = Arc::new(self.masks[side].iter().enumerate()
+            .map(|(bone, mask)| mask * seq.weights.get(bone).copied().unwrap_or(1.)).collect());
+        let outgoing = self.hands[side].take().map(|hand| inspection::Playback {
+            clip: hand.clip, weights: hand.weights, time: (now - hand.started).max(0.),
+        });
+        let mut transition = inspection::Inspection::default();
+        // Repeated shots in the same hand use the declared 0.08s fade-in,
+        // continuing its outgoing recoil during the transition. The other
+        // hand is neither restarted nor included in this blend.
+        transition.begin(Some(now), seq.fade_in, displayed, outgoing, 0, "Elite fire");
+        self.hands[side] = Some(EliteHand { clip: seq.clip.clone(), weights, started: now, transition });
+    }
+
+    fn sample(&mut self, now: f32, pose: &mut [(glam::Vec3, glam::Quat)]) {
+        for (side, hand) in self.hands.iter_mut().enumerate() {
+            let Some(hand) = hand else { continue };
+            let mut sampled = pose.to_vec();
+            hand.transition.sample_base(&mut sampled);
+            sequence_pose::sample(&hand.clip, (now - hand.started).max(0.), &mut sampled,
+                |bone| hand.weights.get(bone).copied().unwrap_or(0.));
+            hand.transition.apply(now, &mut sampled);
+            for (bone, (target, value)) in pose.iter_mut().zip(sampled).enumerate() {
+                if self.masks[side][bone] > 0. { *target = value; }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod elite_fire_tests {
+    use super::*;
+
+    #[test]
+    fn independent_hands_continue_and_same_hand_restarts_blend_moving_recoil() {
+        let bones: Vec<_> = [("shared", -1), ("v_weapon.Bip01_L_Forearm", -1),
+            ("v_weapon.Bip01_L_Hand", 1), ("left gun", 2),
+            ("v_weapon.Bip01_R_Forearm", -1), ("v_weapon.Bip01_R_Hand", 4),
+            ("right gun", 5), ("v_weapon.Bip01_L_ForeTwist", -1)]
+            .into_iter().map(|(name, parent)| mdl::skeleton::Bone {
+                name: name.into(), parent, pos: glam::Vec3::ZERO, quat: glam::Quat::IDENTITY,
+                rot: glam::Vec3::ZERO, pos_scale: glam::Vec3::ONE, rot_scale: glam::Vec3::ONE,
+                pose_to_bone: glam::Mat4::IDENTITY, flags: 0,
+            }).collect();
+        let clips = [true, false].map(|left| SeqClip {
+            clip: Arc::new(Clip {
+                name: "full-body attack with an idle opposite hand".into(), fps: 1.,
+                looping: false, delta: false,
+                frames: [0., 10.].map(|x| (0..bones.len()).map(|bone|
+                    (glam::Vec3::X * if (left && [1, 2, 3, 7].contains(&bone))
+                        || (!left && [4, 5, 6].contains(&bone)) { x } else { 0. }, glam::Quat::IDENTITY)
+                ).collect()).to_vec(),
+                animated: vec![true; bones.len()],
+            }), weights: Arc::new(vec![1.; bones.len()]), activity_weight: 1,
+            fade_in: 0.08, left_muzzle: left, sounds: Arc::new(Vec::new()),
+        });
+        let mut fire = EliteFire::new(&bones).unwrap();
+        let mut pose = mdl::skeleton::rest_pose(&bones);
+        fire.begin(&clips[0], 0., &pose);
+        fire.sample(0.12, &mut pose);
+        let outgoing = pose.clone();
+        fire.begin(&clips[1], 0.12, &pose);
+        clips[1].clip.sample(0., &mut pose); // ordinary full-body dispatch resets the left
+        fire.sample(0.12, &mut pose);
+        assert_eq!(pose, outgoing, "switching hands must preserve the outgoing motion");
+        fire.sample(0.24, &mut pose);
+        let displayed = pose.clone();
+        fire.begin(&clips[0], 0.24, &pose);
+        fire.sample(0.24, &mut pose);
+        assert_eq!(pose, displayed, "same-hand restart begins at its displayed pose");
+        fire.sample(0.28, &mut pose);
+        // Half the authored fade: old left at 0.28s and new left at 0.04s.
+        // Freezing the outgoing hand would instead give 1.4, not 1.6.
+        assert!((pose[3].0.x - 1.6).abs() < 0.0001);
+        assert!((pose[6].0.x - 1.6).abs() < 0.0001, "right continues its own original clock");
+        assert_eq!(pose[7], pose[3], "independent foretwist root follows its hand");
+        assert_eq!(pose[0], (glam::Vec3::ZERO, glam::Quat::IDENTITY));
+        let once = pose.clone();
+        fire.sample(0.28, &mut pose);
+        assert_eq!(pose, once, "empty render frames cannot feed the blend back into itself");
+        assert_eq!(fire.hands.each_ref().map(|hand| hand.as_ref().map(|hand| hand.started)), [Some(0.24), Some(0.12)]);
+        let mut state = ViewModelState { elite_fire: Some(fire), ..Default::default() };
+        state.begin_life(1, &bones, 1., 9, 0);
+        assert!(state.elite_fire.is_none(), "a new deployment/life cannot inherit either hand");
+        assert!(EliteFire::new(&bones[..4]).is_none(), "unknown skeletons retain ordinary playback");
+    }
+}
+
 #[derive(Resource, Default)]
 pub struct ViewModels {
     weapons: HashMap<String, WeaponView>,
@@ -1674,6 +1899,7 @@ pub struct ViewModelState {
     pose: Vec<(glam::Vec3, glam::Quat)>,
     inspection: inspection::Inspection,
     knife_attack: Option<inspection::Playback>,
+    elite_fire: Option<EliteFire>,
 }
 
 impl ViewModelState {
@@ -1740,6 +1966,7 @@ impl ViewModelState {
         self.light_timer = 0.0;
         self.inspection = inspection::Inspection::default();
         self.knife_attack = None;
+        self.elite_fire = None;
         // Masked clips deliberately preserve zero-weight bones within one life.
         // They must never inherit the reload/inspect pose of a previous life.
         self.pose = mdl::skeleton::rest_pose(bones);
@@ -2128,6 +2355,7 @@ pub fn update(
     let Some(p) = world.0.player(local.view_target()) else {
         state.knife_inspect = None;
         state.knife_reinspect = None;
+        state.elite_fire = None;
         state.look_motion.clear();
         state.air_lowering.clear();
         return;
@@ -2243,7 +2471,11 @@ pub fn update(
     }
     let (name, gun, arms) = (name.clone(), gun.clone(), arms.clone());
     let entities: Vec<Entity> = gun.meshes.iter().chain(arms.iter().flat_map(|a| a.meshes.iter())).copied().collect();
-    if !p.alive || local.noclip { state.look_motion.clear(); return; }
+    if !p.alive || local.noclip {
+        state.look_motion.clear();
+        state.elite_fire = None;
+        return;
+    }
     let Some(view) = models.weapons.get(&name) else {
         state.knife_inspect = None;
         state.knife_reinspect = None;
@@ -2448,6 +2680,18 @@ pub fn update(
     if state.pose.len() != model.bones.len() {
         state.pose = mdl::skeleton::rest_pose(&model.bones);
     }
+    let elite_attack = matches!(state.activity.as_str(), "ACT_VM_PRIMARYATTACK" | "ACT_VM_SECONDARYATTACK");
+    if name == "weapon_elite" && elite_attack && !reloading {
+        if attack.is_some() {
+            let mut fire = state.elite_fire.take().or_else(|| EliteFire::new(&model.bones));
+            if let Some(fire) = &mut fire { fire.begin(&seq, now, &state.pose); }
+            state.elite_fire = fire;
+        }
+    } else {
+        // Reload/inspect/deployment own both arms. Completion returns to the
+        // ordinary idle; subsequent idle frames must not create new attacks.
+        state.elite_fire = None;
+    }
     let weights = seq.weights.clone();
     // Restart inspection, or its incoming magazine reload, from what was
     // actually displayed, including an interrupted earlier inspect. Sampling against last frame repeatedly
@@ -2466,6 +2710,10 @@ pub fn update(
     sequence_pose::sample(&clip, t, &mut state.pose, |b| weights.get(b).copied().unwrap_or(1.0));
     inspection.apply(now, &mut state.pose);
     state.inspection = inspection;
+    if let Some(mut fire) = state.elite_fire.take() {
+        fire.sample(now, &mut state.pose);
+        state.elite_fire = Some(fire);
+    }
     state.knife_attack = (knife && knife_attack_activity(&state.activity)).then(|| inspection::Playback {
         clip: clip.clone(), weights: weights.clone(), time: t,
     });
