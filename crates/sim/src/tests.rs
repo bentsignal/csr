@@ -1004,7 +1004,7 @@ fn bolt_action_resume_precedes_a_ready_shot_and_never_the_primary_deadline() {
 }
 
 #[test]
-fn scoped_non_bolt_action_retains_alternate_cycle_policy() {
+fn scoped_non_bolt_action_retains_primary_firing_cycle() {
     let (mut world, id) = scoped_world();
     let w = &mut world.player_mut(id).unwrap().weapons[0];
     Arc::make_mut(&mut w.def).attributes.insert("unzoom after shot".into(), "0".into());
@@ -1012,7 +1012,7 @@ fn scoped_non_bolt_action_retains_alternate_cycle_policy() {
     world.step(&[(id, TickInput { buttons: buttons::ATTACK, ..Default::default() })]);
     let w = world.player(id).unwrap().active_weapon().unwrap();
     assert_eq!((w.zoom_level, w.resume_zoom, w.clip), (1, None, 4));
-    assert_eq!(w.next_attack, 0.3);
+    assert_eq!(w.next_attack, w.def.cycle_time);
 }
 
 #[test]
