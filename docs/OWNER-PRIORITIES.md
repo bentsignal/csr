@@ -30,7 +30,10 @@ original scoreboard. Follow-up captures confirm visible M4 muzzle flashes and co
 directional damage arcs. The CT heading moves above its roster; keep scoreboard
 scaling consistent between small and large rosters. Optional scoreboard panels
 and exact decorative layout remain outside this first pass. Scout/Negev curves and visual balance remain practical first
-passes. The owner launcher/profile has not been replaced.
+passes. A further input correction preserves release/repress sequences seen
+between simulation ticks; the ordinary sampler emits an up tick before the
+retained fresh press. Held automatic fire and sim cadence stay unchanged.
+The owner launcher/profile has not been replaced.
 
 Accepted for now: airborne weapon presentation (explicitly stop polishing),
 Molotov visuals/damage, positional audio, HUD scale, visible loading progress,
