@@ -28,7 +28,7 @@ pub struct Flashes {
     names: HashMap<String, HashMap<String, String>>,
     styles: HashMap<String, Option<Style>>,
     textures: crate::textures::TextureCache,
-    reported_selections: HashSet<(String, bool, bool)>,
+    reported_selections: HashSet<(String, bool, bool, bool)>,
 }
 #[derive(Clone)]
 struct Style {
@@ -518,14 +518,14 @@ pub fn draw(
             .and_then(|name| flashes.styles.get(name))
             .and_then(Option::as_ref)
             .cloned();
-        // One receipt per weapon/view/mode, bounded independently of Fire rate.
+        // One receipt per weapon/view/mode/attachment state, bounded independently of Fire rate.
         // The effect's spelling alone does not identify its camera: installed
         // Legacy assigns the unsuffixed rifle effect to both views. Record the
         // actual first-person selection and attachment before deciding to omit.
         if flashes.reported_selections.len() < LIMIT
             && flashes
                 .reported_selections
-                .insert((shot.weapon.clone(), first, shot.suppressed))
+                .insert((shot.weapon.clone(), first, shot.suppressed, muzzle.is_some()))
         {
             info!("Muzzle selection: weapon={} first_person={first} suppressed={} effect={} style={} attachment={}",
                 shot.weapon, shot.suppressed, name.as_deref().unwrap_or("<undeclared>"), style.is_some(), muzzle.is_some());
