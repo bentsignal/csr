@@ -14,18 +14,38 @@ const BLUR_STEPS: usize = 32;
 const RETICLE_SIZE: usize = 96;
 
 #[derive(Resource)]
-pub struct ReticleImages { horizontal: Vec<Handle<Image>>, vertical: Vec<Handle<Image>>, dot: Vec<Handle<Image>> }
+pub struct ReticleImages {
+    horizontal: Vec<Handle<Image>>, vertical: Vec<Handle<Image>>, dot: Vec<Handle<Image>>,
+    dot_pixels: Vec<Vec<u8>>, clipped_dot: Handle<Image>,
+}
+
+/// This frame's posed rear lens in physical viewport pixels. Viewmodel update
+/// clears it before early returns so a dot cannot outlive its rendered optic.
+#[derive(Resource, Default)]
+pub struct OpticAperture(pub Vec4);
 
 #[derive(Default)]
-pub struct ScopeBlur { key: Option<(String, u8)>, sigma: f32 }
+pub struct ScopeBlur { key: Option<String>, sigma: f32 }
 
 fn blur_target(inaccuracy: f32, resting: f32, fov: f32) -> f32 {
-    let focal = 540.0 / (fov.clamp(1.0, 179.0).to_radians() * 0.5).tan();
+    let focal = 540.0 / (crate::viewmodel::vertical_fov(fov.clamp(1.0, 179.0)) * 0.5).tan();
     ((inaccuracy - resting).max(0.0) * 0.001 * focal * 0.08).clamp(0.0, MAX_BLUR)
 }
 
 fn smooth_blur(current: f32, target: f32, dt: f32) -> f32 {
     current + (target - current) * (1.0 - (-dt.max(0.0) / 0.06).exp())
+}
+
+fn clip_dot(source: &[u8], origin: Vec2, texel: f32, aperture: Vec4) -> Vec<u8> {
+    let mut clipped = source.to_vec();
+    for (index, pixel) in clipped.chunks_exact_mut(4).enumerate() {
+        if pixel[3] == 0 { continue; }
+        let point = origin + Vec2::new((index % RETICLE_SIZE) as f32 + 0.5,
+            (index / RETICLE_SIZE) as f32 + 0.5) * texel;
+        let coverage = ((aperture.z - point.distance(aperture.truncate().truncate())) / texel + 0.5).clamp(0.0, 1.0);
+        pixel[3] = (pixel[3] as f32 * coverage).round() as u8;
+    }
+    clipped
 }
 
 // Separable, normalized coverage convolution. Transparent padding prevents
@@ -81,7 +101,11 @@ pub fn setup(commands: Commands, level: Res<crate::LoadedLevel>, mut images: Res
             }}
             Some(coverage)
         });
-    let mut reticles = ReticleImages { horizontal: Vec::new(), vertical: Vec::new(), dot: Vec::new() };
+    let clipped_dot = coverage_image(&mut images, &vec![0.0; RETICLE_SIZE * RETICLE_SIZE], RETICLE_SIZE, RETICLE_SIZE);
+    images.get_mut(&clipped_dot).unwrap().asset_usage |= bevy::asset::RenderAssetUsages::MAIN_WORLD;
+    let mut reticles = ReticleImages {
+        horizontal: Vec::new(), vertical: Vec::new(), dot: Vec::new(), dot_pixels: Vec::new(), clipped_dot,
+    };
     let mut line = vec![0.0; RETICLE_SIZE + 1];
     line[RETICLE_SIZE / 2] = 1.0;
     for step in 0..=BLUR_STEPS {
@@ -90,7 +114,9 @@ pub fn setup(commands: Commands, level: Res<crate::LoadedLevel>, mut images: Res
         reticles.horizontal.push(coverage_image(&mut images, &blurred, 1, line.len()));
         reticles.vertical.push(coverage_image(&mut images, &blurred, line.len(), 1));
         if let Some(dot) = &dot {
-            reticles.dot.push(coverage_image(&mut images, &blur_coverage(dot, RETICLE_SIZE, RETICLE_SIZE, sigma), RETICLE_SIZE, RETICLE_SIZE));
+            let image = coverage_image(&mut images, &blur_coverage(dot, RETICLE_SIZE, RETICLE_SIZE, sigma), RETICLE_SIZE, RETICLE_SIZE);
+            reticles.dot_pixels.push(images.get(&image).unwrap().data.as_ref().unwrap().clone());
+            reticles.dot.push(image);
         }
     }
     spawn_parts(commands, arc, reticles);
@@ -118,11 +144,14 @@ fn spawn_parts(mut commands: Commands, arc: Option<Handle<Image>>, reticles: Ret
         } else { entity.insert(BackgroundColor(Color::BLACK)); }
     }
     commands.insert_resource(reticles);
+    commands.init_resource::<OpticAperture>();
 }
 
 pub fn update(
     settings: Res<crate::settings::Settings>,
-    time: Res<Time>, reticles: Res<ReticleImages>, mut blur: Local<ScopeBlur>,
+    (time, fixed): (Res<Time>, Res<Time<Fixed>>),
+    (reticles, optic, ui_scale): (Res<ReticleImages>, Res<OpticAperture>, Res<UiScale>),
+    mut images: ResMut<Assets<Image>>, mut blur: Local<ScopeBlur>,
     local: Res<LocalPlayer>, world: Res<SimWorld>, window: Single<&Window, With<PrimaryWindow>>,
     mut parts: Query<(&ScopePart, &mut Node, &mut Visibility, Option<&mut ImageNode>)>,
     mut crosshair: Query<(&crate::hud::Crosshair, &mut Visibility, &mut Node, &mut BackgroundColor), (With<crate::hud::Crosshair>, Without<ScopePart>)>,
@@ -131,27 +160,46 @@ pub fn update(
     let weapon = p.and_then(|p| p.active_weapon());
     let zoomed = weapon.is_some_and(|w| w.zoom_level > 0);
     let sniper = weapon.is_some_and(|w| w.hides_viewmodel());
-    let key = weapon.filter(|_| zoomed).map(|w| (w.def.class_name.clone(), w.zoom_level));
+    let key = weapon.map(|w| w.def.class_name.clone());
     let target = p.zip(weapon).filter(|_| zoomed).map_or(0.0, |(p, w)| {
         let ctx = sim::weapon::AccuracyContext { speed: p.movement.speed_2d(), vertical_speed: p.movement.velocity.z, on_ground: p.movement.on_ground, ducked: p.movement.ducked };
         let resting = if ctx.ducked { w.alt_stat("inaccuracy crouch", w.def.accuracy.inaccuracy_crouch) }
             else { w.alt_stat("inaccuracy stand", w.def.accuracy.inaccuracy_stand) };
-        blur_target(sim::weapon::inaccuracy(w, ctx), resting, w.rendered_fov(world.0.time()))
+        blur_target(sim::weapon::inaccuracy(w, ctx), resting,
+            w.rendered_fov(world.0.time() + fixed.overstep_fraction() * world.0.dt()))
     });
-    if blur.key != key { blur.key = key; blur.sigma = target; }
-    else { blur.sigma = smooth_blur(blur.sigma, target, time.delta_secs()); }
+    if blur.key != key { blur.key = key; blur.sigma = 0.0; }
+    blur.sigma = smooth_blur(blur.sigma, target, time.delta_secs());
     let blur_step = (blur.sigma / MAX_BLUR * BLUR_STEPS as f32).round().clamp(0.0, BLUR_STEPS as f32) as usize;
     let regular = p.is_some() && !zoomed && !weapon.is_some_and(|w| w.def.class == weapons::WeaponClass::Sniper);
     for (part,mut v,mut node,mut color) in &mut crosshair { *v = if regular && (part.0 != 4 || settings.cross_dot) { Visibility::Inherited } else { Visibility::Hidden }; let (x,y,w,h)=crate::menu::cross_bar(&settings,part.0);node.left=px(x);node.top=px(y);node.width=px(w);node.height=px(h);color.0=settings.crosshair_color(); }
-    let (width, height) = (window.width(), window.height());
+    let (width, height) = (window.width() / ui_scale.0, window.height() / ui_scale.0);
     let size = width.min(height);
     let radius = size * 0.5;
-    let scale = size / 1080.0;
+    let scale = height / 1080.0;
     let line_width = (RETICLE_SIZE + 1) as f32 * scale;
     let dot_width = RETICLE_SIZE as f32 * scale;
+    let dot_origin = Vec2::new((width - dot_width) * 0.5, (height - dot_width) * 0.5);
+    let aperture = optic.0 / (window.scale_factor() * ui_scale.0);
+    let dot_image = reticles.dot.get(blur_step).map(|image| {
+        // The dot stays on the aim ray. Crop its bloom against the same moving
+        // lens as the weapon cutout instead of painting over the housing during
+        // firing/zoom. Fully contained dots keep the precomputed GPU image.
+        let center = aperture.truncate().truncate();
+        let contained = [dot_origin, dot_origin + Vec2::X * dot_width,
+            dot_origin + Vec2::Y * dot_width, dot_origin + Vec2::splat(dot_width)]
+            .iter().all(|corner| corner.distance(center) <= aperture.z);
+        if contained || aperture.z <= 0.0 { return image.clone(); }
+        let clipped = clip_dot(&reticles.dot_pixels[blur_step], dot_origin, scale, aperture);
+        if clipped == reticles.dot_pixels[blur_step] { return image.clone(); }
+        if images.get(&reticles.clipped_dot).is_some_and(|image| image.data.as_ref() != Some(&clipped)) {
+            if let Some(image) = images.get_mut(&reticles.clipped_dot) { image.data = Some(clipped); }
+        }
+        reticles.clipped_dot.clone()
+    });
     let (left, top) = ((width - size) * 0.5, (height - size) * 0.5);
     for (part, mut node, mut visibility, image) in &mut parts {
-        let shown = if part.0 == 10 { zoomed && !sniper } else { sniper };
+        let shown = if part.0 == 10 { zoomed && !sniper && aperture.z > 0.0 && dot_image.is_some() } else { sniper };
         *visibility = if shown { Visibility::Inherited } else { Visibility::Hidden };
         let (x, y, w, h) = match part.0 {
             n @ 0..=3 => (left + (n % 2) as f32 * radius, top + (n / 2) as f32 * radius, radius, radius),
@@ -161,14 +209,14 @@ pub fn update(
             7 => (left, top + size, size, top),
             8 => (left, height * 0.5 - line_width * 0.5, size, line_width),
             9 => (width * 0.5 - line_width * 0.5, top, line_width, size),
-            _ => (width * 0.5 - dot_width * 0.5, height * 0.5 - dot_width * 0.5, dot_width, dot_width),
+            _ => (dot_origin.x, dot_origin.y, dot_width, dot_width),
         };
         node.left = px(x); node.top = px(y); node.width = px(w); node.height = px(h);
         if let Some(mut image) = image {
             if part.0 == 8 { image.image = reticles.horizontal[blur_step].clone(); }
             if part.0 == 9 { image.image = reticles.vertical[blur_step].clone(); }
             if part.0 == 10 {
-                if let Some(dot) = reticles.dot.get(blur_step) { image.image = dot.clone(); }
+                if let Some(dot) = &dot_image { image.image = dot.clone(); }
                 image.color = if weapon.is_some_and(|w| w.def.class_name == "weapon_aug") { Color::srgb(0.1, 1.0, 0.1) } else { Color::srgb(1.0, 0.1, 0.1) };
             }
         }
@@ -180,6 +228,22 @@ mod tests {
     use super::*;
 
     #[test]
+    fn moving_lens_clips_dot_bloom_without_relocating_aim_or_changing_with_dpi() {
+        let source = vec![255; RETICLE_SIZE * RETICLE_SIZE * 4];
+        let origin = Vec2::new(912., 492.);
+        // The aim stays at (960, 540), while the posed optic has moved left.
+        let aperture = Vec4::new(938., 540., 16., 0.);
+        let clipped = clip_dot(&source, origin, 1., aperture);
+        let alpha = |x: usize, y: usize| clipped[(y * RETICLE_SIZE + x) * 4 + 3];
+        assert_eq!(alpha(48, 48), 0, "aim outside the glass must not paint the housing");
+        assert_eq!(alpha(26, 48), 255, "coverage inside the moving glass survives");
+        assert_eq!(alpha(0, 48), 0);
+        assert_eq!(alpha(26, 0), 0);
+        assert!(clipped.chunks_exact(4).any(|pixel| pixel[3] > 0 && pixel[3] < 255));
+        assert_eq!(clipped, clip_dot(&source, origin / 2., 0.5, aperture / 2.));
+    }
+
+    #[test]
     fn spawned_sniper_lines_stretch_the_coverage_strips_across_the_scope() {
         use bevy::ecs::system::RunSystemOnce;
 
@@ -189,6 +253,7 @@ mod tests {
                 horizontal: vec![Handle::default()],
                 vertical: vec![Handle::default()],
                 dot: vec![Handle::default()],
+                dot_pixels: Vec::new(), clipped_dot: Handle::default(),
             });
         }).unwrap();
         let mut lines = 0;
