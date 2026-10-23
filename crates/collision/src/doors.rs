@@ -82,17 +82,20 @@ impl Door {
                     let length = normal.length();
                     if length < 1e-6 { return None; }
                     normal /= length;
-                    let dist = points.iter().map(|p| normal.dot(*p)).fold(f32::MIN, f32::max);
-                    Some((normal, dist, *surface))
+                    let local_dist = points.iter().map(|p| normal.dot(*p - self.origin)).fold(f32::MIN, f32::max);
+                    Some((normal, local_dist, *surface))
                 }).collect();
                 // Derive face planes from the same posed points as the hull
                 // builder: analytically rotating the BSP normal/distance can
                 // differ at distant hinges due to f32 vertex rounding. Match
-                // its deduplication tolerances in authored side/triangle order.
+                // its direction tolerance in authored side/triangle order. Compare
+                // support distances in the hinge frame, where small normal
+                // roundoff cannot be magnified by a distant world origin.
                 // Only annotate the existing planes; never replace/reorder them.
                 solid.plane_surfaces = solid.planes.iter().map(|plane| {
                     faces.iter().find(|(normal, dist, _)|
-                        plane.normal.dot(*normal) > 0.9999 && (plane.dist - dist).abs() < 0.01)
+                        plane.normal.dot(*normal) > 0.9999
+                            && (plane.dist - plane.normal.dot(self.origin) - dist).abs() < 0.01)
                         .map_or(u32::MAX, |(_, _, surface)| *surface)
                 }).collect();
             }
