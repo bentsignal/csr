@@ -245,7 +245,8 @@ function emblem(parent, name, depth, y) {
 }
 function emblemCenter(clip, panel) {
     var bounds = clip.getBounds(panel);
-    return (bounds.yMin + bounds.yMax) / 2;
+    var center = (bounds.yMin + bounds.yMax) / 2;
+    return center;
 }
 function checkScoreboardLayout() {
     var api = _global.csrScoreboard;
