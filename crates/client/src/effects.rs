@@ -305,7 +305,11 @@ pub fn process(
                     effects.last_hit_headshot = group == sim::weapon::HitGroup::Head;
                 }
             }
-            GameEvent::Kill { attacker, weapon, headshot, death, .. } => {
+            GameEvent::Kill { attacker, victim, weapon, headshot, death } => {
+                // End only this life's presentation. Captured shot barrels and
+                // immutable death poses remain owned by their existing queues.
+                effects.attacks.remove(&victim);
+                effects.last_fire.remove(&victim);
                 if effects.deaths.len() < 128 { effects.deaths.push(death.clone()); }
                 let suppressed = shot_modes.get(&attacker)
                     .filter(|(fired_weapon, _)| fired_weapon == &weapon).map(|(_, mode)| *mode);
@@ -389,6 +393,9 @@ pub fn process(
                 effects.banner = Some(("Halftime - switching sides".into(), Color::WHITE, now));
             }
             GameEvent::RoundStart { .. } => {
+                // Keep the global cursor and this frame's captured Fire indices.
+                effects.attacks.clear();
+                effects.last_fire.clear();
                 effects.deaths.clear();
                 effects.utility_detonations.clear();
                 effects.banner = None;
@@ -441,6 +448,10 @@ pub fn draw(effects: Res<Effects>, time: Res<Time>, mut gizmos: Gizmos) {
 
 }
 
+
+#[cfg(test)]
+#[path = "effects/firing_life_tests.rs"]
+mod firing_life_tests;
 
 #[cfg(test)]
 mod attack_tests {
