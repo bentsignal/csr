@@ -1955,8 +1955,15 @@ impl World {
                             // Query the intact current geometry before breakable damage
                             // can replace this simulation copy's collision overlay.
                             let continuation = if slab < penetration::MAX_SLABS {
-                                penetration::through(&self.collision, segment_start, end, &tr, def.penetration)
+                                penetration::through_exit(&self.collision, segment_start, end, &tr, def.penetration)
                             } else { None };
+                            // Retain the actual exit receiver before breakable
+                            // damage can remove its current collision owner.
+                            let exit_door = continuation.as_ref().and_then(|(exit, _)| {
+                                let (back, owner) = self.collision.trace_owned_ray(exit.next_start,
+                                    exit.position - dir * 0.125, contents::MASK_SHOT);
+                                self.door_impact(owner, &back)
+                            });
                             let door = self.door_impact(owner, &tr);
                             self.damage_breakable(owner.and_then(collision::HitOwner::breakable), &tr,
                                 def.damage * damage_scale * def.range_modifier.powf((traveled + world_dist) / 500.0), breakables::DamageKind::Bullet);
@@ -1968,13 +1975,17 @@ impl World {
                                 surface: tr.surface,
                                 door,
                             });
-                            if let Some((next_start, retention)) = continuation {
+                            if let Some((exit, retention)) = continuation {
                                 let next_scale = damage_scale * retention;
-                                let distance = (next_start - eye).dot(dir);
+                                let distance = (exit.next_start - eye).dot(dir);
                                 // apply_damage has a one-health minimum; do not let
                                 // an exhausted pellet acquire damage through rounding.
                                 if def.damage * next_scale * def.range_modifier.powf(distance / 500.) >= 1. {
-                                    segment_start = next_start;
+                                    self.events.push(GameEvent::Impact {
+                                        player: id, pos: exit.position, normal: exit.normal,
+                                        surface: exit.surface, door: exit_door,
+                                    });
+                                    segment_start = exit.next_start;
                                     damage_scale = next_scale;
                                     continue;
                                 }

@@ -27,8 +27,14 @@ fn supported(surface: BulletSurface) -> bool {
         && surface.damage_modifier.is_finite() && (0. ..=1.).contains(&surface.damage_modifier)
 }
 
+#[cfg(test)]
 pub(super) fn through(world: &CollisionWorld, start: Vec3, end: Vec3, hit: &Trace,
     weapon_power: f32) -> Option<(Vec3, f32)> {
+    through_exit(world, start, end, hit, weapon_power).map(|(exit, retention)| (exit.next_start, retention))
+}
+
+pub(super) fn through_exit(world: &CollisionWorld, start: Vec3, end: Vec3, hit: &Trace,
+    weapon_power: f32) -> Option<(collision::bullet_exit::BulletExit, f32)> {
     if world.is_sky(hit.surface) || !weapon_power.is_finite() || weapon_power <= 0. { return None; }
     let entry = world.bullet_surface(hit.surface)?;
     if !supported(entry) { return None; }
@@ -38,7 +44,7 @@ pub(super) fn through(world: &CollisionWorld, start: Vec3, end: Vec3, hit: &Trac
     let mut modifier = entry.penetration_modifier;
     let mut damage_modifier = entry.damage_modifier;
     let mut calibrated_wood = observed_wood(entry);
-    for surface in exit.crossed_surfaces {
+    for &surface in &exit.crossed_surfaces {
         if world.is_sky(surface) { return None; }
         let crossed = world.bullet_surface(surface)?;
         if !supported(crossed) { return None; }
@@ -50,5 +56,5 @@ pub(super) fn through(world: &CollisionWorld, start: Vec3, end: Vec3, hit: &Trac
     if exit.thickness >= budget { return None; }
     let prefactor = if calibrated_wood { 0.925 } else { damage_modifier };
     let retention = prefactor * (1. - exit.thickness / budget);
-    (retention > 0.).then_some((exit.next_start, retention))
+    (retention > 0.).then_some((exit, retention))
 }
