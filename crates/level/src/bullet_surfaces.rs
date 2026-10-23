@@ -20,13 +20,19 @@ fn lookup<'a>(raw: &'a Definitions, name: &str, key: &str, seen: &mut Vec<String
 fn resolve(raw: &Definitions, name: &str) -> Option<BulletSurface> {
     let name = name.to_ascii_lowercase();
     let get = |key| lookup(raw, &name, key, &mut Vec::new());
-    let material = get("gamematerial")?.as_bytes();
-    if material.len() != 1 { return None; }
+    let material = get("gamematerial")?;
+    // Legacy extends the letter material codes with decimal byte IDs, e.g.
+    // Wood_Dense = 13 on Dust II's mid doors. Keep them distinct from W and
+    // from ASCII digits; an unknown/invalid declaration is still opaque.
+    let material = material.parse::<u8>().ok().or_else(|| {
+        (material.len() == 1 && material.as_bytes()[0].is_ascii_alphabetic())
+            .then(|| material.as_bytes()[0].to_ascii_uppercase())
+    })?;
     let penetration_modifier: f32 = get("penetrationmodifier")?.parse().ok()?;
     let damage_modifier: f32 = get("damagemodifier")?.parse().ok()?;
     if !penetration_modifier.is_finite() || penetration_modifier <= 0.
         || !damage_modifier.is_finite() || !(0. ..=1.).contains(&damage_modifier) { return None; }
-    Some(BulletSurface { material: material[0].to_ascii_uppercase(), penetration_modifier, damage_modifier })
+    Some(BulletSurface { material, penetration_modifier, damage_modifier })
 }
 
 pub(super) fn load(world: &mut CollisionWorld, fs: &vfs::Vfs) {
@@ -46,9 +52,11 @@ pub(super) fn load(world: &mut CollisionWorld, fs: &vfs::Vfs) {
             fs.read(surface).and_then(|bytes| mdl::Model::load_header(&bytes).ok()).map(|model| model.surface_prop)
         } else {
             vmt::Material::load(surface, &|path| fs.read_string(path))
-                .and_then(|material| material.surface_prop().map(str::to_string))
+                .map(|material| material.surface_prop().unwrap_or("default").to_string())
         }?;
-        // Unknown assets/properties are opaque; never infer wood from a path.
+        // A successfully loaded VMT without $surfaceprop uses the mounted
+        // default declaration. Missing assets and explicit unknown properties
+        // remain opaque; neither model names nor texture names imply material.
         resolve(&raw, &prop)
     }).collect();
 }
@@ -60,9 +68,10 @@ pub(super) fn bind(world: &CollisionWorld, previous: Option<[u8; 20]>) -> Option
     previous.map(|previous| {
         let mut hash = Sha1::new();
         hash.update(previous);
-        // Bind the observed Wood prefactor and prior exit/exhaustion guards.
+        // Bind cover admission and actual exit events, retaining the observed
+        // Wood prefactor and prior sealed-void/exhaustion guards.
         // Earlier continuation policies must not share a catalog identity.
-        hash.update(b"csr-practical-thin-slab-penetration-v7\0");
+        hash.update(b"csr-practical-thin-slab-penetration-v8\0");
         hash.update((world.bullet_surfaces.len() as u64).to_le_bytes());
         for surface in &world.bullet_surfaces {
             if let Some(surface) = surface {
@@ -74,6 +83,10 @@ pub(super) fn bind(world: &CollisionWorld, previous: Option<[u8; 20]>) -> Option
         hash.finalize().into()
     })
 }
+
+#[cfg(test)]
+#[path = "bullet_surfaces_installed.rs"]
+mod installed;
 
 #[cfg(test)]
 mod tests {
@@ -93,6 +106,31 @@ mod tests {
         assert_eq!(resolve(&raw, "BOX"), resolve(&raw, "wood"));
         assert_eq!(resolve(&raw, "glass").unwrap().damage_modifier, 0.5);
         for name in ["missing", "bad", "cycle"] { assert!(resolve(&raw, name).is_none()); }
+    }
+
+    #[test]
+    fn legacy_numeric_material_ids_are_bytes_not_ascii_or_wood_aliases() {
+        let doc = kv::parse(r#"
+            "default" { "gamematerial" "C" "penetrationmodifier" "1" "damagemodifier" "0.5" }
+            "wood" { "gamematerial" "w" "penetrationmodifier" "0.9" "damagemodifier" "0.6" }
+            "dense" { "gamematerial" "13" "penetrationmodifier" "0.5" "damagemodifier" "0.3" }
+            "plaster" { "gamematerial" "2" }
+            "sheetrock" { "gamematerial" "5" }
+            "negative" { "gamematerial" "-1" }
+            "overflow" { "gamematerial" "256" }
+            "fraction" { "gamematerial" "1.3" }
+            "unknown" { "gamematerial" "wood" }
+        "#).unwrap();
+        let raw = doc.iter().filter_map(|(name, value)| value.as_block().map(|b| (name.to_string(), b.clone()))).collect();
+        assert_eq!(resolve(&raw, "wood").unwrap().material, b'W');
+        assert_eq!(resolve(&raw, "dense"), Some(BulletSurface {
+            material: 13, penetration_modifier: 0.5, damage_modifier: 0.3,
+        }));
+        assert_eq!(resolve(&raw, "plaster").unwrap().material, 2);
+        assert_eq!(resolve(&raw, "sheetrock").unwrap().material, 5);
+        for name in ["negative", "overflow", "fraction", "unknown"] {
+            assert!(resolve(&raw, name).is_none(), "{name}");
+        }
     }
 
     #[test]
@@ -119,15 +157,26 @@ mod tests {
             ("scripts/override.txt", r#""wood" { "gamematerial" "W" "penetrationmodifier" "0.8" "damagemodifier" "0.4" }"#),
             ("materials/base.vmt", r#""LightmappedGeneric" { "$surfaceprop" "wood" }"#),
             ("materials/patch.vmt", r#""patch" { "include" "materials/base.vmt" }"#),
+            ("materials/plain.vmt", r#""LightmappedGeneric" { "$basetexture" "test/plain" }"#),
+            ("materials/unknown.vmt", r#""LightmappedGeneric" { "$surfaceprop" "unknown" }"#),
+            ("materials/badpatch.vmt", r#""patch" { "include" "materials/unmounted.vmt" }"#),
+            ("materials/malformed.vmt", "broken"),
         ].into_iter().map(|(path, text)| (path.to_string(), Arc::<[u8]>::from(text.as_bytes()))).collect();
         let mut fs = vfs::Vfs::new();
         fs.push_front("pack:fixture", vfs::Mount::Memory(files));
         let mut world = CollisionWorld::new();
         let id = world.surface_id("patch");
         let unknown = world.surface_id("unmounted");
+        let plain = world.surface_id("plain");
+        let guarded: Vec<_> = ["unknown", "badpatch", "malformed", "missing.mdl"]
+            .map(|name| world.surface_id(name)).into();
         load(&mut world, &fs);
         assert_eq!(world.bullet_surface(id), Some(BulletSurface { material: b'W', penetration_modifier: 0.8, damage_modifier: 0.4 }));
         assert!(world.bullet_surface(unknown).is_none());
+        assert_eq!(world.bullet_surface(plain), Some(BulletSurface {
+            material: b'C', penetration_modifier: 1., damage_modifier: 0.5,
+        }));
+        for id in guarded { assert!(world.bullet_surface(id).is_none()); }
         drop(fs);
         assert_eq!(world.bullet_surface(id).unwrap().damage_modifier, 0.4);
     }
@@ -187,7 +236,7 @@ mod tests {
         installed_cover_case("de_nuke", b'M');
     }
 
-    fn installed_nonsolid_player_space(map: &bsp::Bsp, eye: glam::Vec3) -> bool {
+    pub(super) fn installed_nonsolid_player_space(map: &bsp::Bsp, eye: glam::Vec3) -> bool {
         use glam::Vec3;
         let feet = eye - Vec3::Z * 64.;
         let mut points = vec![eye, feet];
@@ -269,7 +318,7 @@ mod tests {
         }
     }
 
-    fn installed_tick_fire_control(level: &crate::Level, from: glam::Vec3, to: glam::Vec3,
+    pub(super) fn installed_tick_fire_control(level: &crate::Level, from: glam::Vec3, to: glam::Vec3,
         expected_damage: bool, opaque: bool) {
         use glam::Vec3;
         use sim::{GameEvent, Team, TickInput, World, weapon::WeaponState};

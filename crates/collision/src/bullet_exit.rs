@@ -1,4 +1,4 @@
-//! Conservative exact exits for connected convex cover. No sampled stepping,
+//! Exact exits for connected convex cover. No sampled stepping,
 //! inferred thickness for triangles, or changes to ordinary movement traces.
 use super::*;
 
@@ -268,7 +268,7 @@ mod tests {
     }
 
     #[test]
-    fn ties_triangle_startsolid_range_and_clearance_fail_closed() {
+    fn triangle_startsolid_range_and_clearance_fail_closed() {
         for case in 0..9 {
             let mut world = CollisionWorld::new();
             world.add_convex(slab(20., 28.));
@@ -288,11 +288,58 @@ mod tests {
             world.finalize();
             let start = if case == 2 { Vec3::X * 24. } else { Vec3::ZERO };
             let end = if case == 3 { Vec3::X * 26. } else { Vec3::X * 100. };
-            if case == 4 {
+            if [0, 6, 7].contains(&case) {
+                let result = exit(&world, start, end).expect("exact coincident convex intervals");
+                assert_eq!(result.thickness, if case == 6 { 12. } else { 8. });
+                assert_eq!(result.crossed_surfaces.len(), 4);
+                if case == 6 { assert!(result.crossed_surfaces.contains(&9)); }
+            } else if case == 4 {
                 let hit = world.trace_ray(start, end, contents::MASK_SHOT);
                 assert!(world.bullet_exit(start, end, &hit, 4.).is_none());
             } else { assert!(exit(&world, start, end).is_none(), "case {case}"); }
         }
+    }
+
+    #[test]
+    fn coincident_faces_keep_all_materials_in_both_plane_orders() {
+        for reverse in [false, true] {
+            let mut solid = slab(20., 28.);
+            solid.mins.y = 20.; solid.maxs.y = 28.;
+            solid.planes[2].dist = 28.; solid.planes[3].dist = -20.;
+            solid.plane_surfaces[2] = 9; solid.plane_surfaces[3] = 8;
+            if reverse {
+                solid.planes.reverse(); solid.plane_surfaces.reverse();
+            }
+            let mut world = CollisionWorld::new();
+            world.add_convex(solid);
+            world.finalize();
+            let result = exit(&world, Vec3::ZERO, Vec3::new(100., 100., 0.)).unwrap();
+            assert!((result.thickness - 8. * 2f32.sqrt()).abs() < 0.001);
+            let mut surfaces = result.crossed_surfaces;
+            surfaces.sort_unstable();
+            assert_eq!(surfaces, vec![1, 2, 8, 9]);
+            assert!(!world.trace_ray(result.next_start, Vec3::new(100., 100., 0.), contents::MASK_SHOT).hit());
+        }
+    }
+
+    #[test]
+    fn duplicate_solids_with_different_materials_never_hide_backing() {
+        let mut world = CollisionWorld::new();
+        let front = slab(20., 28.);
+        let mut backing = front.clone();
+        backing.plane_surfaces[0] = 9;
+        backing.plane_surfaces[1] = 8;
+        world.add_convex(front);
+        world.add_convex(backing);
+        world.finalize();
+        let result = exit(&world, Vec3::ZERO, Vec3::X * 100.).unwrap();
+        assert_eq!(result.thickness, 8.);
+        let mut surfaces = result.crossed_surfaces;
+        surfaces.sort_unstable();
+        assert_eq!(surfaces, vec![1, 2, 8, 9]);
+        // Unknown declarations still reach the caller's material guard.
+        assert!(world.bullet_surface(8).is_none());
+        assert!(world.bullet_surface(9).is_none());
     }
 
     #[test]
@@ -324,8 +371,8 @@ pub struct BulletExit {
     pub normal: Vec3,
     pub surface: u32,
     pub thickness: f32,
-    /// Entry/exit faces of EVERY convex in the connected ray interval, even
-    /// solids wholly inside another. Callers must validate all of these;
+    /// All entry/exit faces of EVERY convex in the connected ray interval,
+    /// including tied faces and solids wholly inside another. Callers must validate all of these;
     /// validating only the visible first/last faces can hide opaque backing.
     pub crossed_surfaces: Vec<u32>,
 }
@@ -337,10 +384,10 @@ impl CollisionWorld {
     }
 
     /// Find the exact exit of the touching/overlapping convex ray intervals
-    /// connected to the unique convex that produced `hit` on this same ray.
+    /// connected to a convex that produced `hit` on this same ray.
     /// Material eligibility belongs to the caller and must cover every ID in
-    /// `crossed_surfaces`. Ambiguous ties, triangles, unknown backends,
-    /// start-solid rays and exits beyond the finite budget fail closed.
+    /// `crossed_surfaces`, including coincident faces and solids. Triangles,
+    /// unknown backends, start-solid rays and exits beyond the finite budget fail closed.
     /// `start`/`end` must be the endpoints used to obtain `hit`.
     pub fn bullet_exit(&self, start: Vec3, end: Vec3, hit: &Trace, max_thickness: f32) -> Option<BulletExit> {
         if !hit.hit() || hit.start_solid || hit.all_solid || self.dynamic.is_some()
@@ -358,12 +405,12 @@ impl CollisionWorld {
             let mut candidate = Trace::empty(end);
             clip_convex_surfaces(&solid.planes, start, end, Vec3::ZERO,
                 solid.contents, solid.surface, &solid.plane_surfaces, &mut candidate);
-            // Exact clipper result, not a proximity/owner guess. Multiple
-            // indistinguishable winners are unsupported rather than skipped.
+            // Exact clipper result, not a proximity/owner guess. Coincident
+            // winners share this ray interval; retain every component below.
             if candidate.fraction == hit.fraction && candidate.normal == hit.normal
                 && candidate.plane_dist == hit.plane_dist && candidate.surface == hit.surface
                 && candidate.contents == hit.contents && !candidate.start_solid {
-                if winner.replace(index).is_some() { return None; }
+                winner.get_or_insert(index);
             }
         }
         let index = winner?;
@@ -373,12 +420,12 @@ impl CollisionWorld {
                 intervals.push((other, interval));
             }
         }
-        let entry = intervals.iter().find(|(other, _)| *other == index)?.1;
-        if entry.enter < 0.0 || entry.ambiguous { return None; }
+        let entry = intervals.iter().find(|(other, _)| *other == index)?.1.clone();
+        if entry.enter < 0.0 { return None; }
         intervals.sort_by(|a, b| a.1.enter.total_cmp(&b.1.enter));
         let mut leave = entry.leave;
         let mut last = index;
-        let mut exit_face = entry.exit_face;
+        let mut exit_face = entry.exit_faces[0];
         let mut members = vec![false; convexes.len()];
         let mut crossed_surfaces = Vec::new();
         for (other, interval) in intervals {
@@ -387,18 +434,17 @@ impl CollisionWorld {
             // exact trace winner, including an earlier grazing interval.
             if interval.enter < entry.enter { return None; }
             if interval.enter > leave { break; }
-            if interval.ambiguous || (other != index
-                && (interval.enter == entry.enter || interval.leave == leave)) {
-                return None;
-            }
             members[other] = true;
             let solid = convexes[other];
-            crossed_surfaces.extend([face_surface(solid, interval.entry_face),
-                face_surface(solid, interval.exit_face)]);
+            // A ray through a shared edge can cross several material faces.
+            // Ties do not make the interval uncertain: check all declarations,
+            // including hidden or unknown backing, in the caller's policy.
+            crossed_surfaces.extend(interval.entry_faces.iter().chain(&interval.exit_faces)
+                .map(|&face| face_surface(solid, face)));
             if interval.leave > leave {
                 leave = interval.leave;
                 last = other;
-                exit_face = interval.exit_face;
+                exit_face = interval.exit_faces[0];
             }
         }
         let thickness = leave - entry.enter;
@@ -474,24 +520,22 @@ fn face_surface(solid: &Convex, face: usize) -> u32 {
     solid.plane_surfaces.get(face).copied().filter(|id| *id != u32::MAX).unwrap_or(solid.surface)
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct RayInterval {
     enter: f32,
     leave: f32,
-    entry_face: usize,
-    exit_face: usize,
-    ambiguous: bool,
+    entry_faces: Vec<usize>,
+    exit_faces: Vec<usize>,
 }
 
 /// Physical distances along the ray, without the trace clipper's contact
-/// epsilon. A miss is distinct from invalid/ambiguous geometry.
+/// epsilon. A miss is distinct from invalid geometry. Equal endpoint planes
+/// are retained so material validation never depends on their storage order.
 fn ray_interval(solid: &Convex, start: Vec3, direction: Vec3) -> Option<Option<RayInterval>> {
     let mut enter = f32::NEG_INFINITY;
     let mut leave = f32::INFINITY;
-    let mut entry_face = None;
-    let mut exit_face = None;
-    let mut entry_tie = false;
-    let mut exit_tie = false;
+    let mut entry_faces = Vec::new();
+    let mut exit_faces = Vec::new();
     for (face, plane) in solid.planes.iter().enumerate() {
         let speed = plane.normal.dot(direction);
         let distance = plane.dist - plane.normal.dot(start);
@@ -503,18 +547,18 @@ fn ray_interval(solid: &Convex, start: Vec3, direction: Vec3) -> Option<Option<R
             if !t.is_finite() { return None; }
             if speed < 0.0 {
                 if t > enter {
-                    enter = t; entry_face = Some(face); entry_tie = false;
+                    enter = t; entry_faces.clear(); entry_faces.push(face);
                 } else if t == enter {
-                    entry_tie |= face_surface(solid, face) != face_surface(solid, entry_face?);
+                    entry_faces.push(face);
                 }
             } else if t < leave {
-                leave = t; exit_face = Some(face); exit_tie = false;
+                leave = t; exit_faces.clear(); exit_faces.push(face);
             } else if t == leave {
-                exit_tie |= face_surface(solid, face) != face_surface(solid, exit_face?);
+                exit_faces.push(face);
             }
         }
     }
     if enter >= leave || leave < 0.0 { return Some(None); }
-    Some(Some(RayInterval { enter, leave, entry_face: entry_face?, exit_face: exit_face?,
-        ambiguous: entry_tie || exit_tie }))
+    if entry_faces.is_empty() || exit_faces.is_empty() { return None; }
+    Some(Some(RayInterval { enter, leave, entry_faces, exit_faces }))
 }
