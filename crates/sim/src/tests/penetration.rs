@@ -28,8 +28,9 @@ fn declared_surface(material: u8) -> BulletSurface {
     let (penetration_modifier, damage_modifier) = match material {
         b'C' => (0.5, 0.25),
         b'M' => (0.4, 0.3),
-        b'2' => (0.7, 0.6), // plaster
-        b'5' => (0.85, 0.6), // sheetrock
+        2 => (0.7, 0.6), // plaster
+        5 => (0.85, 0.6), // sheetrock
+        13 => (0.5, 0.3), // dense wood, including current Dust II doors
         b'T' => (0.7, 0.3), // tile
         _ => (0.9, 0.6),
     };
@@ -264,7 +265,7 @@ fn range_falloff_after_exit_cannot_revive_exhausted_pellets() {
 
 #[test]
 fn every_supported_material_and_separated_cover_layers() {
-    for material in [b'W', b'U', b'L', b'Y', b'G', b'C', b'M', b'2', b'5', b'T'] {
+    for material in [b'W', b'U', b'L', b'Y', b'G', b'C', b'M', 2, 5, 13, b'T'] {
         let (mut world, _, victim) = pair();
         // C/M retain less damage; keep both exits above the existing
         // sub-one-damage cutoff without changing the original wood fixtures.

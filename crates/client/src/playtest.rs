@@ -280,6 +280,10 @@ fn draw(
         }
         button(&mut commands, row, name, action.clone(), art.regular.clone());
     }
+    let hint = commands.spawn((Persistent, Text::new("Scroll to see all choices  |  Mouse wheel, Page Up / Down, Home / End"),
+        TextFont { font: art.regular.clone().into(), font_size: FontSize::Px(14.), ..default() },
+        TextColor(Color::srgb(0.65, 0.75, 0.82)))).id();
+    commands.entity(root).add_children(&[hint]);
     button(&mut commands, root, "Resume match", Action::Toggle, art.regular.clone());
 }
 
