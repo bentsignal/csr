@@ -267,6 +267,47 @@ fn every_supported_material_and_separated_cover_layers() {
 }
 
 #[test]
+fn known_wood_matches_original_thin_post_reference_without_boosting_other_faces() {
+    let (mut world, shooter, _) = pair();
+    slab(&mut world, 50., 4., b'W');
+    let start = world.player(shooter).unwrap().eye();
+    let end = start + Vec3::X * 140.;
+    let trace = world.collision.trace_ray(start, end, contents::MASK_SHOT);
+    // Original Legacy 1.38.8.1 native entry/loss labels; entry damage is
+    // displayed rounded. These are raw material losses, before player armor
+    // and hit-group multiplication, not final health damage.
+    for (entry, power, lost) in [(36., 2., 7.8), (33., 2., 7.3), (115., 3., 20.1)] {
+        let (_, retained) = penetration::through(&world.collision, start, end, &trace, power).unwrap();
+        assert!((entry * (1. - retained) - lost).abs() < 0.5,
+            "entry={entry}, power={power}, observed_loss={lost}, retained={retained}");
+    }
+    let (_, thin) = penetration::through(&world.collision, start, end, &trace, 2.).unwrap();
+    let (mut adjacent, shooter, _) = pair();
+    slab(&mut adjacent, 50., 4.1, b'W');
+    let adjacent_start = adjacent.player(shooter).unwrap().eye();
+    let adjacent_end = adjacent_start + Vec3::X * 140.;
+    let adjacent_trace = adjacent.collision.trace_ray(adjacent_start, adjacent_end, contents::MASK_SHOT);
+    let (_, thicker) = penetration::through(&adjacent.collision, adjacent_start, adjacent_end, &adjacent_trace, 2.).unwrap();
+    assert!(thicker < thin && thin - thicker < 0.01, "calibration must not introduce a thickness cliff");
+    // A hidden face with another declaration must disable the empirical
+    // wood prefactor even when both visible endpoints retain the known Wood.
+    for surface in [
+        BulletSurface { material: b'U', ..declared_surface(b'W') },
+        BulletSurface { penetration_modifier: 0.8, ..declared_surface(b'W') },
+        BulletSurface { damage_modifier: 0.5, ..declared_surface(b'W') },
+    ] {
+        let (mut backed, shooter, _) = pair();
+        slab(&mut backed, 50., 4., b'W');
+        slab_with_surface(&mut backed, 51., 2., surface);
+        let start = backed.player(shooter).unwrap().eye();
+        let end = start + Vec3::X * 140.;
+        let trace = backed.collision.trace_ray(start, end, contents::MASK_SHOT);
+        let (_, retained) = penetration::through(&backed.collision, start, end, &trace, 2.).unwrap();
+        assert!(retained < 0.52, "hidden nonmatching declaration received wood calibration");
+    }
+}
+
+#[test]
 fn range_falloff_and_armor_remain_in_the_existing_damage_path() {
     let (mut near, _, _) = pair();
     slab(&mut near, 50., 8., b'W');

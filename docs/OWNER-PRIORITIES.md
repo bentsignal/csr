@@ -135,11 +135,20 @@ pellet through the shared one-health minimum. Normal direct hits and the
 approximate cover coefficients are preserved. The compatibility policy salt is
 v5. All 1,333 workspace tests, the normal Release build and immutable Dust II
 probe/sim pass. The inspected ordinary ten-player Nuke capture retains protected
-userdata and binary hashes. CI for this continuation correction is pending.
+userdata and binary hashes. Both CI checks passed and PR #314 merged.
 One ordinary original AK shot through
 the valid four-unit post now has readable side-on labels: thickness 10.3cm and
 lost damage 7.8, with entry damage 36 at 3.2m. The observer camera moved only
 after the shot. This is a concrete native sample, not a general loss law.
+
+The same post now has genuinely selected M4A4 and AWP references: 33/7.3 and
+115/20.1 entry/lost damage, respectively. The existing known-Wood curve now uses
+a measured 0.91 prefactor, fitting all three thin-post samples within 0.5 raw
+damage. Every crossed face must match the exact W/0.9/0.6 declaration; mixed
+backing and other declarations keep the previous policy. The linear curve,
+thickness budget and exit/exhaustion guards remain intact. Other thicknesses
+remain extrapolations, not native-validated losses. Policy salt is v6. See
+[calibration and boundaries](research/thin-wood-loss.md). Execution is pending.
 
 The owner launcher/profile has not been replaced.
 

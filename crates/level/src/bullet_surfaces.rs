@@ -60,9 +60,9 @@ pub(super) fn bind(world: &CollisionWorld, previous: Option<[u8; 20]>) -> Option
     previous.map(|previous| {
         let mut hash = Sha1::new();
         hash.update(previous);
-        // Bind post-exit range exhaustion along with BSP solid-leaf exits.
+        // Bind the observed Wood prefactor and prior exit/exhaustion guards.
         // Earlier continuation policies must not share a catalog identity.
-        hash.update(b"csr-practical-thin-slab-penetration-v5\0");
+        hash.update(b"csr-practical-thin-slab-penetration-v6\0");
         hash.update((world.bullet_surfaces.len() as u64).to_le_bytes());
         for surface in &world.bullet_surfaces {
             if let Some(surface) = surface {
