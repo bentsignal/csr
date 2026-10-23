@@ -1168,7 +1168,7 @@ fn dynamic_mob_hits_preserve_bullet_and_knife_contact_positions() {
     assert!((point-from-Vec3::X*MELEE_RANGE*0.5).length()<0.001);
     w.give_weapon(w.players[0].id,"weapon_hkp2000");
     w.players[0].active=w.players[0].weapons.iter().position(|w|w.def.class==WeaponClass::Pistol).unwrap();
-    w.fire(0,2.,None);
+    w.fire(0,2.,None, None);
     let hits=creature.0.lock().unwrap();assert_eq!(hits.len(),2);
     let (from,point)=hits[1];
     assert!(point.is_finite() && (point-from).length()>100.);

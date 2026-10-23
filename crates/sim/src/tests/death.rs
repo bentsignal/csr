@@ -215,7 +215,7 @@ fn lagged_hit_keeps_current_death_pose_instead_of_historical_hull() {
             .as_mut()
             .unwrap()
             .capture(1, w.round.round, &w.players, &w.character_hitboxes);
-        w.fire(0, 1., Some(0));
+        w.fire(0, 1., Some(0), None);
         let death = receipt(&w, victim);
         assert_eq!(death.key.tick, 1);
         assert_eq!(death.pose.origin, current.origin);

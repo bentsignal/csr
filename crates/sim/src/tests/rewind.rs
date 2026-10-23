@@ -30,14 +30,14 @@ fn capture(w: &mut World, tick: u64) {
 fn historical_hits_damage_current_life_without_moving_live_players() {
     let (mut authority, _, victim) = fixture();
     let mut current = authority.clone();
-    current.fire(0, 1., None);
+    current.fire(0, 1., None, None);
     assert_eq!(current.player(victim).unwrap().health, 100);
     let positions: Vec<_> = authority
         .players
         .iter()
         .map(|p| p.movement.origin)
         .collect();
-    authority.fire(0, 1., Some(0));
+    authority.fire(0, 1., Some(0), None);
     assert!(authority.player(victim).unwrap().health < 100);
     assert_eq!(
         authority
@@ -74,7 +74,7 @@ fn authoritative_tick_input_selects_history_but_prediction_uses_current_targets(
 fn historical_hits_respect_current_map_walls() {
     let (mut w, _, victim) = fixture();
     wall_at(&mut w, 50.);
-    w.fire(0, 1., Some(0));
+    w.fire(0, 1., Some(0), None);
     assert_eq!(w.player(victim).unwrap().health, 100);
     assert!(w
         .events
@@ -106,7 +106,7 @@ fn future_expired_life_team_round_and_teleport_requests_use_current_hulls() {
                 w.players[1].alive = true;
             }
         }
-        w.fire(0, 1., Some(requested));
+        w.fire(0, 1., Some(requested), None);
         assert_eq!(w.player(victim).unwrap().health, 100, "case {case}");
     }
 }
