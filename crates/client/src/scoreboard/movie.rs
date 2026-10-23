@@ -18,11 +18,13 @@ impl Engine for Bridge {
         match method {
             "RootReady" => calls.call(API, "load", vec![]),
             "ScoreboardReady" => {
+                info!("Original scoreboard ready: {:?}", args.first());
                 self.0.ready.store(if matches!(args.first(), Some(Value::Bool(true))) { 1 } else { 2 }, Ordering::Release);
             }
             "ScoreboardResult" => {
                 let [Value::String(stamp), Value::Bool(success), ..] = args else { return None };
                 let stamp = stamp.parse().ok()?;
+                info!("Original scoreboard receipt: revision={stamp} success={success} reason={:?}", args.get(2));
                 let fence = if *success { calls.require_raster() } else { 0 };
                 *self.0.result.lock().unwrap() = Some((stamp, *success, fence));
             }

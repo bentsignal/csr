@@ -26,9 +26,10 @@ October 23 implementation status: the combined pass implements the firing,
 impact, head-cue, scope and HUD changes above. Workspace tests (1288), sound
 decoding (1425 entries), Release build and Dust II probe/sim pass. Final Release
 captures show wall marks, corrected AUG eye relief, dark Scout glass and the
-original scoreboard. Keep scoreboard heading placement, damage-indicator size
-and visible muzzle-flash confirmation open; do not call these complete from
-source tests. Scout/Negev curves and visual balance remain practical first
+original scoreboard. Follow-up captures confirm visible M4 muzzle flashes and compact, softened
+directional damage arcs. The CT heading moves above its roster; keep scoreboard
+scaling consistent between small and large rosters. Optional scoreboard panels
+and exact decorative layout remain outside this first pass. Scout/Negev curves and visual balance remain practical first
 passes. The owner launcher/profile has not been replaced.
 
 Accepted for now: airborne weapon presentation (explicitly stop polishing),

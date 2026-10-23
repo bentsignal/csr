@@ -704,9 +704,24 @@ pub fn update(
         if let Some(mut image) = image {
             // Preserve the installed segment's alpha gradient and aspect ratio.
             // Direction/lifetime still come from the same simulation damage cue.
-            if edge.0 < 2 { node.height = Val::Auto; } else { node.width = Val::Auto; }
+            // This is one curved direction segment, not a screen-wide border.
+            // Keep it centered on its edge with a modest inset; full-width
+            // scaling made the authored arc cover the entire lower third.
+            if edge.0 < 2 {
+                node.width = percent(32);
+                node.height = Val::Auto;
+                node.left = percent(34);
+                if edge.0 == 0 { node.top = percent(12); }
+                else { node.bottom = percent(12); }
+            } else {
+                node.height = percent(32);
+                node.width = Val::Auto;
+                node.top = percent(34);
+                if edge.0 == 2 { node.left = percent(12); }
+                else { node.right = percent(12); }
+            }
             color.0 = Color::NONE;
-            image.color = Color::srgba(1.0, 1.0, 1.0, strength * weights[edge.0 as usize]);
+            image.color = Color::srgba(1.0, 1.0, 1.0, 0.5 * strength * weights[edge.0 as usize]);
             continue;
         }
         color.0 = Color::srgba(
