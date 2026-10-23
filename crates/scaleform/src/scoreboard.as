@@ -121,7 +121,11 @@ _global.csrScoreboard.present = function(stamp, title, teams) {
         // roster. Position the existing clips in the unused top header band;
         // retain the original typography, score badge and row geometry.
         panel.CT_TeamName._y = panel.CT_Headers._y - panel.CT_TeamName._height - 8;
-        panel.CT_Score._y = panel.CT_Headers._y - panel.CT_Score._height - 8;
+        // Score clips include hidden timeline children in their bounds. Align
+        // the visible number's baseline, not the full clip's inflated height.
+        var scoreBounds = panel.CT_Score.CT_Score.getBounds(panel);
+        var teamBounds = panel.CT_TeamName.CT_TeamNameText.getBounds(panel);
+        panel.CT_Score._y += teamBounds.yMax - scoreBounds.yMax;
         // Fit original background bounds; invisible awards/vote clips do not
         // affect the viewport. No replacement geometry or synthetic font.
         panel._xscale = 100; panel._yscale = 100; panel._x = 0; panel._y = 0;
