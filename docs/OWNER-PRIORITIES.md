@@ -39,7 +39,11 @@ original scoreboard during same-view stat updates instead of flashing fallback.
 The arsenal follow-through restores previously missing R8 secondary fire using
 the installed alternate cycle/spread/inaccuracy and shared ammo/readiness. The
 instant 0.55s primary is preserved; no new cocking behavior is added. Alternate
-recoil and animation parity remain outside this bounded firing correction.
+recoil parity remains outside this bounded firing correction. Shot events now retain
+the admitted mode through protocol v32, selecting the installed R8 secondary
+activity and its three alternate clips. A normal PLAY capture confirms secondary
+animation with four shots/four rounds remaining at 1.5s; primary cadence and
+shared ammo are unchanged. Exact blend/recoil parity is not claimed.
 The owner launcher/profile has not been replaced.
 
 October 23 recovery instruction: an hourly T3 scheduled check resumes approved
