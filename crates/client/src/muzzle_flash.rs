@@ -763,7 +763,7 @@ mod tests {
                         player: 1,
                         weapon: "weapon_test".into(),
                         origin: glam::Vec3::ZERO,
-                        suppressed: true,
+                        secondary: false, suppressed: true,
                     })
                     .collect(),
             ));

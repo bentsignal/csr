@@ -126,7 +126,7 @@ impl Effects {
         self.attacks.insert(player, (self.attack_serial, weapon, activity));
     }
 
-    fn firearm_attack(&mut self, player: sim::PlayerId, weapon: String, now: f32) {
+    fn firearm_attack(&mut self, player: sim::PlayerId, weapon: String, now: f32, secondary: bool) {
         // The installed Elite model assigns the two pistols to distinct
         // activities, not variants of PRIMARYATTACK. Advance for every Fire
         // receipt even if several shots arrive before a render frame.
@@ -134,7 +134,7 @@ impl Effects {
             .is_some_and(|(_, previous, activity)| previous == &weapon
                 && *activity == "ACT_VM_PRIMARYATTACK");
         self.attack(player, weapon,
-            if right { "ACT_VM_SECONDARYATTACK" } else { "ACT_VM_PRIMARYATTACK" }, now);
+            if secondary || right { "ACT_VM_SECONDARYATTACK" } else { "ACT_VM_PRIMARYATTACK" }, now);
     }
 
     /// Only consume attacks produced after deployment, for this held weapon.
@@ -180,9 +180,9 @@ pub fn process(
         play_combat_cue(&event, &local, &mut commands, &mut sounds, &mut sources, fs);
         if matches!(event, GameEvent::Damage {..} | GameEvent::Impact {..} | GameEvent::RoundStart {..}) { effects.feedback.push(event.clone()); }
         match event {
-            GameEvent::Fire { player, weapon, origin, suppressed } => {
+            GameEvent::Fire { player, weapon, origin, suppressed, secondary } => {
                 shot_modes.insert(player, (weapon.clone(), suppressed));
-                effects.firearm_attack(player, weapon.clone(), now);
+                effects.firearm_attack(player, weapon.clone(), now, secondary);
                 // These installed attack sequences declare separate bolt/pump
                 // sounds, not another gunshot. Classic shot replacement does
                 // not deliver those handling events. Use the same confirmed
@@ -430,11 +430,38 @@ pub fn draw(effects: Res<Effects>, time: Res<Time>, mut gizmos: Gizmos) {
 mod attack_tests {
     use super::*;
     #[test]
+    fn admitted_shot_mode_selects_its_own_animation_receipt() {
+        let mut effects = Effects::default();
+        let mut seen = 0;
+        for (n, secondary) in [true, false, true, true, false].into_iter().enumerate() {
+            effects.firearm_attack(1, "weapon_revolver".into(), n as f32, secondary);
+            let activity = if secondary { "ACT_VM_SECONDARYATTACK" } else { "ACT_VM_PRIMARYATTACK" };
+            assert_eq!(effects.consume_attack(1, "weapon_revolver", &mut seen), Some(activity));
+            assert_eq!(effects.consume_attack(1, "weapon_revolver", &mut seen), None);
+        }
+    }
+
+    #[test]
+    fn installed_revolver_binds_the_authored_primary_and_fan_fire_clips() {
+        let Some(game) = vfs::find_csgo_dir() else { return; };
+        let mut fs = vfs::Vfs::new();
+        fs.mount_game_dir(&game).unwrap();
+        let bytes = fs.read("models/weapons/v_pist_revolver.mdl").unwrap();
+        let model = mdl::Model::load_header(&bytes).unwrap();
+        for (activity, names) in [("ACT_VM_PRIMARYATTACK", &["fire"][..]),
+            ("ACT_VM_SECONDARYATTACK", &["alt1", "alt2", "alt3"][..])] {
+            for name in names {
+                assert!(model.sequences.iter().any(|seq| seq.activity == activity && seq.name == *name));
+            }
+        }
+    }
+
+    #[test]
     fn dual_pistol_fire_receipts_alternate_independently_of_render_consumption() {
         let mut effects = Effects::default();
         let mut seen = 0;
         for n in 0..8 {
-            effects.firearm_attack(1, "weapon_elite".into(), n as f32 * 0.12);
+            effects.firearm_attack(1, "weapon_elite".into(), n as f32 * 0.12, false);
             let expected = if n % 2 == 0 { "ACT_VM_PRIMARYATTACK" } else { "ACT_VM_SECONDARYATTACK" };
             assert_eq!(effects.attacks[&1].2, expected);
             if n % 3 == 0 {
@@ -442,9 +469,9 @@ mod attack_tests {
                 assert_eq!(effects.consume_attack(1, "weapon_elite", &mut seen), None);
             }
         }
-        effects.firearm_attack(2, "weapon_elite".into(), 1.);
+        effects.firearm_attack(2, "weapon_elite".into(), 1., false);
         assert_eq!(effects.attacks[&2].2, "ACT_VM_PRIMARYATTACK");
-        effects.firearm_attack(1, "weapon_ak47".into(), 2.);
+        effects.firearm_attack(1, "weapon_ak47".into(), 2., false);
         assert_eq!(effects.attacks[&1].2, "ACT_VM_PRIMARYATTACK");
     }
 

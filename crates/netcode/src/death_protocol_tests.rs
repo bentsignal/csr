@@ -125,9 +125,9 @@ fn tracked_receipt_must_already_satisfy_existing_admission_limits() {
 }
 
 #[test]
-fn older_protocol_versions_cannot_admit_a_peer_to_pending_trigger_state_v31() {
-    assert_eq!(VERSION, 31);
-    assert_eq!(PROTOCOL_ID, 0x4353_5257_0000_001f);
+fn older_protocol_versions_cannot_admit_a_peer_to_shot_mode_events_v32() {
+    assert_eq!(VERSION, 32);
+    assert_eq!(PROTOCOL_ID, 0x4353_5257_0000_0020);
     let content = ContentManifest {
         map_id: "csgo_map_test".into(),
         map_name: "test".into(),

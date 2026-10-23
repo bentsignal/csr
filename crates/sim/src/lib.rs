@@ -403,7 +403,8 @@ pub enum GameEvent {
     UtilityDetonated { player: PlayerId, kind: utility::Kind, pos: Vec3 },
     Melee { player: PlayerId, weapon: String, origin: Vec3, secondary: bool, hit: MeleeHit },
     Scope { player: PlayerId, weapon: String, origin: Vec3, level: u8 },
-    Fire { player: PlayerId, weapon: String, origin: Vec3, suppressed: bool },
+    /// Shot-time mode for presentation; later input or weapon state may differ.
+    Fire { player: PlayerId, weapon: String, origin: Vec3, suppressed: bool, secondary: bool },
     Tracer { player: PlayerId, start: Vec3, end: Vec3 },
     /// A bullet hit the world. `player` fired it.
     Impact { player: PlayerId, pos: Vec3, normal: Vec3, surface: u32, door: Option<doors::Impact> },
@@ -1851,6 +1852,7 @@ impl World {
             weapon: def.class_name.clone(),
             origin: eye,
             suppressed,
+            secondary,
         });
 
         // Seeded by the shooter's shot count, not the tick, so a predicting

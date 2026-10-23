@@ -721,7 +721,11 @@ lightmaps, props and sun, HUD, and the weapon catalog.
 - [x] Weapon deployment consumes old attack events instead of replaying them
 - [ ] Exact knife sweep volume, impact timing, and model animation-event dispatch
 - [ ] Original rifle-optic refraction, lens effects and transition parity
-- [ ] Burst modes, suppressor toggling, revolver alternate fire/cocking, weapon inspection
+- [x] R8 alternate fire uses authored cadence/accuracy and secondary animation,
+  with admitted shot mode retained through protocol v32. Instant primary is
+  preserved; exact alternate recoil remains unmeasured.
+- [ ] Complete burst/suppressor/inspection fidelity and original revolver cocking
+  (owner currently requests instant primary)
 - [ ] Wall penetration (`penetration`, surface props)
 - [ ] Hit groups from the character models' hitboxes
 - [x] Sounds: soundscripts and WAV/MP3 playback (weapons)
