@@ -631,7 +631,7 @@ mod tests {
         assert_eq!(header.surface_prop, full.surface_prop);
         data[308..312].copy_from_slice(&0i32.to_le_bytes());
         assert!(Model::load_header(&data).unwrap().surface_prop.is_empty());
-        data[308..312].copy_from_slice(&432i32.to_le_bytes());
+        data[308..312].copy_from_slice(&433i32.to_le_bytes());
         assert!(Model::load_header(&data).is_err());
     }
 
