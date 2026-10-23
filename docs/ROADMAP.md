@@ -69,6 +69,10 @@
   Geometry/cancellation tests and rendered match/home controls passed. Heavy-map
   preparation remains slower than the old blocking path; indivisible model
   phases and total loading speed still need work.
+- [x] Carry authored CROUCH departures through qualified ladder-cap mounts,
+  preserving the same human movement solver and blocked-access recovery.
+  Increase the soft prop work window while keeping per-update cancellation;
+  focused traversal, workspace, Release and rendered cancellation checks passed.
 - [ ] Finish unresolved player outcomes in the approved order; an increment or
   first pass does not finish its backlog category.
 
