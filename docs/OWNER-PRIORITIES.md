@@ -1,5 +1,34 @@
 # Current owner priorities
 
+## October 22 evening playtest: active owner-approved follow-up
+
+This latest feedback supersedes the older queue below. Continue useful combined
+batches until interrupted; multiplayer is explicitly deferred.
+
+1. Fix firing across the arsenal: skipped semi-auto clicks (Glock, P250, Tec-9
+   and peers), AUG automatic fire, alternating Dual Berettas. Check Negev spray
+   rise and Scout airborne accuracy against available original data. Preserve
+   instant R8 firing; owner requests a modest cadence reduction.
+2. Restore missing bullet marks (M4A4/Deagle examples) and correct oversized,
+   fast impact dust with material-appropriate selection, especially wood.
+3. Lower excessively loud attacker headshot feedback without losing range.
+   Owner retracts earlier gun-recording complaints: retain accepted recordings.
+4. Scope presentation: smooth inaccuracy blur for movement/jumping/firing;
+   correct AUG/Scout white or grey optic backs and AUG scoped motion. Fact-check
+   original muzzle flashes before adding effects.
+5. HUD: repair R8 center-left white fallback kills and normal kill-feed flicker;
+   replace placeholder bot portraits, soften incorrect damage indicators, restore
+   classic scoreboard. Preserve accepted HUD size and kill-feed background (owner
+   retracted opacity request). F8 orders all guns before grenades; catalog is
+   present, owner found subsequent pages.
+
+Accepted for now: airborne weapon presentation (explicitly stop polishing),
+Molotov visuals/damage, positional audio, HUD scale, visible loading progress,
+and improved bot movement. Do not reopen these as general research projects.
+Preserve one launcher/F8 workflow and latest owner profile in
+playtest-progress-20261022-f83cfba/userdata. No unsolicited new testing handoff.
+
+
 Status: **resumed October 21 for continuous work until every approved item is
 finished or the owner explicitly stops it**. Root owns integration/builds/CI/staging; parallel source
 work is authorized. VISION defines the final target. The owner explicitly

@@ -741,6 +741,15 @@ impl SoundLibrary {
         name: &str,
         emit: Emit,
     ) {
+        self.play_with_gain(commands, fs, sources, name, emit, 1.0);
+    }
+
+    /// Per-event balance without changing shared sound declarations or routing.
+    pub(crate) fn play_with_gain(
+        &mut self, commands: &mut Commands, fs: &vfs::Vfs,
+        sources: &mut Assets<AudioSource>, name: &str, emit: Emit, gain: f32,
+    ) {
+        let gain = if gain.is_finite() { gain.clamp(0.0, 1.0) } else { 1.0 };
         let key = name.to_ascii_lowercase();
         let Some(entry) = self.entries.get(&key).cloned() else { return };
         let defer_limit = entry.category == Category::Weapon && matches!(entry.channel, 0 | 6) && entry.limit.is_some();
@@ -749,7 +758,7 @@ impl SoundLibrary {
             return;
         }
         if let Some(distant) = entry.distant.as_deref().filter(|_| emit.at.is_some()) {
-            self.play_with(commands, fs, sources, distant, emit);
+            self.play_with_gain(commands, fs, sources, distant, emit, gain);
         }
         let pick = ((self.random() * entry.waves.len() as f32) as usize).min(entry.waves.len() - 1);
         let audio = if let Some(wave) = &entry.frozen_wave {
@@ -763,7 +772,7 @@ impl SoundLibrary {
         };
         let Some((handle, channels)) = audio else { return };
         let mut lerp = |(low, high): (f32, f32)| low + (high - low) * self.random();
-        let volume = lerp(entry.volume).clamp(0.0, 1.0);
+        let volume = lerp(entry.volume).clamp(0.0, 1.0) * gain;
         let speed = (lerp(entry.pitch) / 100.0).clamp(0.25, 4.0);
 
         if let Some(owner) = emit.owner {
@@ -809,7 +818,7 @@ impl SoundLibrary {
             }
             None => {
                 // Measured gains top out at lvol 20 (1.07 of the AK shot).
-                let gain = (if emit.local { self.classic.local_gain(&key) } else { None })
+                let gain = (if emit.local { self.classic.local_gain(&key).map(|value| value * gain) } else { None })
                     .unwrap_or_else(|| volume * entry.category.near(emit.local)).min(1.07);
                 initial_gain = gain * self.master_volume;
                 commands
@@ -1537,11 +1546,11 @@ mod tests {
                 let voice = sounds.playing.iter().find(|voice| voice.entry == feedback).unwrap();
                 assert_eq!(voice.owner, 2, "Feedback remains owned by the struck player");
                 assert!(app.world().get::<Emitter>(voice.entity).is_none());
-                assert_eq!(app.world().get::<SoundGain>(voice.entity).unwrap().0, 0.7);
+                assert_eq!(app.world().get::<SoundGain>(voice.entity).unwrap().0, 0.7 * crate::effects::ATTACKER_HEAD_GAIN);
                 if fatal {
                     let voice = sounds.playing.iter().find(|voice| voice.entry == "player.damageheadshot").unwrap();
                     assert!(app.world().get::<Emitter>(voice.entity).is_none());
-                    assert_eq!(app.world().get::<SoundGain>(voice.entity).unwrap().0, 1.0);
+                    assert_eq!(app.world().get::<SoundGain>(voice.entity).unwrap().0, crate::effects::ATTACKER_HEAD_GAIN);
                 }
             }
         }
