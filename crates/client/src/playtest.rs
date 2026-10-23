@@ -387,6 +387,21 @@ mod tests {
             configure(&mut panel, &mut ecs.resource_mut::<crate::player::SimWorld>().0, local);
         });
     }
+    #[test]
+    fn maps_beyond_the_old_page_limit_are_immediately_selectable() {
+        let (world, local, _) = pause_world();
+        let mut app = panel_app(crate::ClientOptions { playtest: true, ..default() }, world, local);
+        app.world_mut().resource_mut::<crate::menu::Menu>().maps =
+            (0..30).map(|n| format!("de_fixture_{n:02}")).collect();
+        click_panel(&mut app, |action| matches!(action, Action::Page(Page::Maps)));
+        let mut actions = app.world_mut().query::<&Action>();
+        assert_eq!(actions.iter(app.world()).filter(|a| matches!(a, Action::Map(_))).count(), 30);
+        let mut scrolls = app.world_mut().query_filtered::<&Node, With<Picker>>();
+        assert_eq!(scrolls.single(app.world()).unwrap().overflow, Overflow::scroll_y());
+        click_panel(&mut app, |action| matches!(action, Action::Map(name) if name == "de_fixture_29"));
+        assert_eq!(app.world().resource::<crate::menu::LoadRequest>().0.lock().unwrap()
+            .as_ref().unwrap().options.map, "de_fixture_29");
+    }
     fn assert_bot_settings(app: &App, count: usize, expected: &sim::bots::Bots, terrorist: bool) {
         let world = &app.world().resource::<crate::player::SimWorld>().0;
         let bots: Vec<_> = world.players.iter().filter(|p| p.is_bot).collect();
