@@ -198,7 +198,7 @@ impl WeaponState {
 
     /// Called after every ordinary authoritative bullet. Recovery is measured
     /// from the first bullet; native final-shot recovery remains unverified.
-    pub(crate) fn shot_cooldown(&mut self, time: f32, dt: f32, continued_trigger: bool) {
+    pub(crate) fn shot_cooldown(&mut self, time: f32, dt: f32, continued_trigger: bool, secondary_cycle: Option<f32>) {
         if self.burst_mode {
             if let Some(profile) = self.burst_profile() {
                 self.burst = if let Some(burst) = self.burst {
@@ -217,16 +217,16 @@ impl WeaponState {
         // Legacy's shared prefab supplies a 0.3s `cycletime alt`: using it
         // while zoomed slows AUG/SG and speeds up bolt-action snipers.
         // Keep the primary cadence for every scoped weapon.
-        let cycle = if self.zoom_levels() > 0 || self.def.attr_f32("unzoom after shot").is_some_and(|v| v != 0.0) {
+        let cycle = secondary_cycle.unwrap_or_else(|| if self.zoom_levels() > 0 || self.def.attr_f32("unzoom after shot").is_some_and(|v| v != 0.0) {
             self.def.cycle_time
-        } else { self.alt_stat("cycletime", self.def.cycle_time) }.max(0.01);
+        } else { self.alt_stat("cycletime", self.def.cycle_time) }).max(0.01);
         let overdue = time - self.next_attack;
         // A fixed tick may observe a deadline slightly late. Re-anchoring
         // every held automatic shot at that tick accumulates the rounding
         // error across the magazine. Carry only this one-tick overrun; an
         // admitted new press or stale deadline starts a fresh interval.
         // Keep one bullet per tick, including faster custom-pack weapons.
-        let carry = self.def.full_auto && continued_trigger && cycle >= dt
+        let carry = (secondary_cycle.is_some() || self.def.full_auto) && continued_trigger && cycle >= dt
             && (0.0..=dt + 0.00001).contains(&overdue);
         self.next_attack = if carry { self.next_attack + cycle } else { time + cycle };
     }
@@ -388,7 +388,7 @@ impl WeaponState {
         let mut velocity = [0.; 2];
         let mut impulses = Vec::with_capacity(profile.bullet_angles.len());
         for index in 0..profile.bullet_angles.len() - 1 {
-            clock.shot_cooldown(tick as f32 * dt, dt, true);
+            clock.shot_cooldown(tick as f32 * dt, dt, true, None);
             let previous = tick;
             // A definition's admitted cycle is bounded by its ordinary
             // fire policy. This loop is at most one magazine of deadlines.
@@ -445,7 +445,21 @@ impl WeaponState {
     }
 
     pub fn alt_stat(&self, key: &str, base: f32) -> f32 {
-        if self.zoom_level > 0 || self.burst_mode { self.def.attr_f32(&format!("{key} alt")).unwrap_or(base) } else { base }
+        self.shot_stat(key, base, false)
+    }
+
+    /// R8 fan-fire is an authored shot option, not a persistent weapon mode.
+    /// Do not infer a cycle for content that lacks a valid alternate value.
+    pub(crate) fn secondary_fire_cycle(&self) -> Option<f32> {
+        if self.def.class != WeaponClass::Pistol || !self.uses_ammo()
+            || self.def.attr_f32("is revolver") != Some(1.) { return None; }
+        self.def.attr_f32("cycletime alt").filter(|cycle| cycle.is_finite() && (0.01..=30.).contains(cycle))
+    }
+
+    pub(crate) fn shot_stat(&self, key: &str, base: f32, secondary: bool) -> f32 {
+        if secondary || self.zoom_level > 0 || self.burst_mode {
+            self.def.attr_f32(&format!("{key} alt")).unwrap_or(base)
+        } else { base }
     }
 
     pub fn max_speed(&self) -> f32 { self.alt_stat("max player speed", self.def.max_player_speed) }
@@ -703,14 +717,19 @@ pub struct AccuracyContext {
 
 /// Total inaccuracy (milliradians) for the next shot.
 pub fn inaccuracy(w: &WeaponState, ctx: AccuracyContext) -> f32 {
+    inaccuracy_for_shot(w, ctx, false)
+}
+
+pub(crate) fn inaccuracy_for_shot(w: &WeaponState, ctx: AccuracyContext, secondary: bool) -> f32 {
     let a = &w.def.accuracy;
-    let base = if ctx.ducked { w.alt_stat("inaccuracy crouch", a.inaccuracy_crouch) } else { w.alt_stat("inaccuracy stand", a.inaccuracy_stand) };
-    let max_speed = w.max_speed().max(1.0);
+    let stat = |key, base| w.shot_stat(key, base, secondary);
+    let base = if ctx.ducked { stat("inaccuracy crouch", a.inaccuracy_crouch) } else { stat("inaccuracy stand", a.inaccuracy_stand) };
+    let max_speed = stat("max player speed", w.def.max_player_speed).max(1.0);
     let lo = max_speed * 0.34;
     let hi = max_speed * 0.95;
     let move_frac = ((ctx.speed - lo) / (hi - lo)).clamp(0.0, 1.0);
     let air = if ctx.on_ground { 0.0 } else {
-        let jump = w.alt_stat("inaccuracy jump", a.inaccuracy_jump);
+        let jump = stat("inaccuracy jump", a.inaccuracy_jump);
         if w.def.attr_f32("csr vertical jump inaccuracy") == Some(1.) {
             let initial = w.def.attr_f32("inaccuracy jump initial").filter(|x| x.is_finite()).unwrap_or(jump).max(jump);
             let apex = w.def.attr_f32("inaccuracy jump apex").filter(|x| x.is_finite()).unwrap_or(0.).max(0.);
@@ -721,7 +740,7 @@ pub fn inaccuracy(w: &WeaponState, ctx: AccuracyContext) -> f32 {
             jump + apex + (initial - jump) * fraction
         } else { jump }
     };
-    base + w.alt_stat("inaccuracy move", a.inaccuracy_move) * move_frac + air + w.accuracy_penalty
+    base + stat("inaccuracy move", a.inaccuracy_move) * move_frac + air + w.accuracy_penalty
 }
 
 /// Advances timers every tick. `firing` includes a loaded automatic trigger
