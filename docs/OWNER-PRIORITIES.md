@@ -80,11 +80,11 @@ unconditional material-code rejection. The loss formula is unchanged and
 approximate. The combined 1,328-test workspace, normal PLAY build, Dust II
 probe/sim and ordinary ten-player Nuke render pass. Both CI checks passed;
 PR #311 merged the connected-cover increment.
-Installed-data controls now pass through an actual 16-unit Inferno wooden panel
-and 8-unit Nuke concrete/corrugated-metal panels at 64/128 Hz. Identical opaque
-controls retain the original collision/weapon data and block each shot when
-the ballistic definitions are removed. This is functional coverage, not measured
-native damage parity.
+Early brush-only controls passed a 16-unit Inferno frame and 8-unit Nuke
+concrete/metal panels at 64/128 Hz. The later native check below invalidates
+the old wood target and replaces that case. Removing ballistic definitions
+from otherwise identical valid controls still blocks the shot; these controls
+establish functionality rather than measured native damage parity.
 
 Dualies follow-through now reuses the accepted alternating fire receipt for
 third-person `muzzle_flash` / `muzzle_flash2` attachments. First-person numbering
@@ -106,7 +106,11 @@ positive/opaque and sealed-void controls pass at 64/128 Hz. A replacement
 4-unit Inferno wooden post has nonsolid space on both sides; two ordinary native
 AK shots confirm passage from both sides. The native reverse eye settled lower
 than the planned height, so this establishes passable geometry, not matched
-damage. Native damage/thickness parity remains unfinished.
+damage. Native damage/thickness parity remains unfinished. The final normal Release build,
+immutable Dust II probe/sim and inspected ten-player Nuke client capture pass.
+The strict repeat capture retains protected userdata and binary hashes; the
+first capture caught only Steam changing its AppInfoChangeNumber metadata.
+CI remains pending.
 
 The owner launcher/profile has not been replaced.
 
