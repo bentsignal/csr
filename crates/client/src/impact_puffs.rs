@@ -220,7 +220,7 @@ impl Puff {
         pose
     }
     pub(super) fn fade(&self, age: f32, life: f32, meshes: &mut Assets<Mesh>) {
-        if let Some(mesh) = meshes.get_mut(&self.mesh) {
+        if let Some(mut mesh) = meshes.get_mut(&self.mesh) {
             let mut color = self.color;
             color[3] *= opacity(age, life);
             mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, vec![color; 4]);
