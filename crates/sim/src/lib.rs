@@ -1678,6 +1678,7 @@ impl World {
                     // a shell is in, as in the game.
                     if attack && (pressed || w.def.full_auto) && w.reload_end.is_some() && w.shell_reload().is_some() && w.clip > 0 {
                         w.reload_end = None;
+                        w.primary_pending = pressed;
                     }
                     if w.burst_due(time) {
                         fire = true;
