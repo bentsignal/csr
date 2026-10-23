@@ -1,10 +1,21 @@
 //! Practical thin-cover policy, NOT the native CS:GO penetration formula.
 //! Installed modifiers provide material ordering; the inch budget and linear
 //! retention curve below are deliberate bounded gameplay approximations.
+//! The known Wood declaration uses a prefactor fitted to original thin-post
+//! shots; this calibrates the existing curve, not the native damage algorithm.
 use collision::{bullet_exit::BulletSurface, CollisionWorld, Trace};
 use glam::Vec3;
 
 pub(super) const MAX_SLABS: usize = 4;
+
+// Three original Legacy shots through the same ~4-unit wood post: AK
+// 36 entry / 7.8 lost, M4A4 33 / 7.3, AWP 115 / 20.1. A 0.91 prefactor
+// before the existing thickness factor fits these rounded labels within 0.5
+// damage. Other thicknesses still use the existing practical linear curve.
+fn observed_wood(surface: BulletSurface) -> bool {
+    surface.material == b'W' && surface.penetration_modifier == 0.9
+        && surface.damage_modifier == 0.6
+}
 
 fn supported(surface: BulletSurface) -> bool {
     // Installed concrete/metal declarations may admit thin cover under this
@@ -24,15 +35,18 @@ pub(super) fn through(world: &CollisionWorld, start: Vec3, end: Vec3, hit: &Trac
     // inside wood. Visible endpoint materials cannot authorize that backing.
     let mut modifier = entry.penetration_modifier;
     let mut damage_modifier = entry.damage_modifier;
+    let mut calibrated_wood = observed_wood(entry);
     for surface in exit.crossed_surfaces {
         if world.is_sky(surface) { return None; }
         let crossed = world.bullet_surface(surface)?;
         if !supported(crossed) { return None; }
+        calibrated_wood &= observed_wood(crossed);
         modifier = modifier.min(crossed.penetration_modifier);
         damage_modifier = damage_modifier.min(crossed.damage_modifier);
     }
     let budget = (16. * weapon_power * modifier).min(64.);
     if exit.thickness >= budget { return None; }
-    let retention = damage_modifier * (1. - exit.thickness / budget);
+    let prefactor = if calibrated_wood { 0.91 } else { damage_modifier };
+    let retention = prefactor * (1. - exit.thickness / budget);
     (retention > 0.).then_some((exit.next_start, retention))
 }
