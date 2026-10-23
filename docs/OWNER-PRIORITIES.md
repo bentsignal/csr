@@ -148,7 +148,10 @@ damage. Every crossed face must match the exact W/0.9/0.6 declaration; mixed
 backing and other declarations keep the previous policy. The linear curve,
 thickness budget and exit/exhaustion guards remain intact. Other thicknesses
 remain extrapolations, not native-validated losses. Policy salt is v6. See
-[calibration and boundaries](research/thin-wood-loss.md). Execution is pending.
+[calibration and boundaries](research/thin-wood-loss.md). All 1,334 workspace
+tests, installed Inferno firing/opaque controls at 64/128, normal PLAY,
+immutable Dust II probe/sim and the inspected ten-player Nuke capture pass.
+Protected userdata and binary hashes remain unchanged. CI is pending.
 
 The owner launcher/profile has not been replaced.
 

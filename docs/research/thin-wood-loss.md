@@ -32,4 +32,9 @@ Labels display rounded entry damage, and material loss is separate from final
 player health after range, hit-group and armor processing. All native sessions
 restored twelve exact preference snapshots. Private captures remain outside git.
 
-Execution checks are pending.
+All 1,334 workspace tests pass, including the three measured raw-loss vectors,
+continuity across four units, hidden nonmatching faces, existing thickness
+limits and snapshot/prediction checks. The installed Inferno positive/opaque
+TickInput control passes at 64/128 Hz. The normal PLAY build, immutable Dust II
+probe/sim and inspected ordinary ten-player Nuke client capture pass. Protected
+userdata and executable hashes remain unchanged. CI is pending.
