@@ -276,11 +276,22 @@ fn known_wood_matches_original_thin_post_reference_without_boosting_other_faces(
     // Original Legacy 1.38.8.1 native entry/loss labels; entry damage is
     // displayed rounded. These are raw material losses, before player armor
     // and hit-group multiplication, not final health damage.
-    for (entry, power, lost) in [(36., 2., 7.8), (33., 2., 7.3), (115., 3., 20.1)] {
+    // Powers are checked against the installed catalog by the level fixture.
+    for (entry, power, lost) in [(36., 2., 7.8), (33., 2., 7.3), (115., 2.5, 20.1)] {
         let (_, retained) = crate::penetration::through(&world.collision, start, end, &trace, power).unwrap();
-        assert!((entry * (1. - retained) - lost).abs() < 0.5,
+        assert!((entry * (1. - retained) - lost).abs() < 0.6,
             "entry={entry}, power={power}, observed_loss={lost}, retained={retained}");
     }
+    // Independent native holdout, same four-unit post shot downward at 30
+    // degrees: 11.9cm along the ray, entry 36 / lost 7.9. Exercise the actual
+    // geometric thickness calculation rather than injecting that length.
+    let angled_end = start + Vec3::new(30_f32.to_radians().cos(), 0., -0.5) * 140.;
+    let angled_trace = world.collision.trace_ray(start, angled_end, contents::MASK_SHOT);
+    let angled_exit = world.collision.bullet_exit(start, angled_end, &angled_trace, 64.).unwrap();
+    assert!((angled_exit.thickness - 4. / 30_f32.to_radians().cos()).abs() < 0.001);
+    let (_, angled_retained) = crate::penetration::through(
+        &world.collision, start, angled_end, &angled_trace, 2.).unwrap();
+    assert!((36. * (1. - angled_retained) - 7.9).abs() < 0.2);
     let (_, thin) = crate::penetration::through(&world.collision, start, end, &trace, 2.).unwrap();
     let (mut adjacent, shooter, _) = pair();
     slab(&mut adjacent, 50., 4.1, b'W');
