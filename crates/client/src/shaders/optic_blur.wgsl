@@ -35,10 +35,10 @@ fn sigma_at(uv: vec2<f32>) -> f32 {
     let size = vec2<f32>(textureDimensions(scene));
     if settings.params.x > 0.0 {
         let radial = length((uv - vec2<f32>(0.5)) * size) / (size.y * 0.4217);
-        // Keep a settled aim clear, with increasing optical defocus toward
-        // the glass edge. Motion also defocuses the scene near the aim point.
-        return (settings.params.y * 0.45 + pow(clamp(radial, 0.0, 1.0), 4.0)
-            * (1.6 + settings.params.y * 0.6)) * size.y / 1080.0;
+        // Keep the central 60% of the opening completely sharp at every
+        // inaccuracy. Reticle defocus belongs to the mounted line sprite;
+        // scene defocus is only the outer optical transition.
+        return smoothstep(0.6, 1.0, radial) * (1.6 + settings.params.y * 0.6) * size.y / 1080.0;
     }
     let depth = depth_at(uv);
     if depth <= 0.0 || in_lens(uv) { return 0.0; }
@@ -79,8 +79,9 @@ fn horizontal(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
 fn composite(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
     let original = textureSampleLevel(scene, scene_sampler, in.uv, 0.0);
     let sigma = sigma_at(in.uv);
-    // Exact world/aim preservation through rifle glass and beside the gun.
-    if settings.params.x <= 0.0 && sigma < 0.05 { return original; }
+    // Exact world preservation at sniper aim, through rifle glass and beside
+    // the gun. Do not replace reticle blur with a blurred center scene.
+    if sigma < 0.05 { return original; }
     let step = vec2<f32>(0.0, max(sigma, 0.01) * 0.25 / f32(textureDimensions(scene).y));
     var result = vec4<f32>(0.0);
     for (var i = -12; i <= 12; i++) {

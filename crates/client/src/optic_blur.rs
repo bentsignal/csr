@@ -54,8 +54,8 @@ fn configure_camera(
         let mut next = state.0;
         if let Projection::Perspective(projection) = projection { next.params.w = projection.near; }
         // Bounded render-only controls for identical still/motion captures.
-        // Zero DOF removes only weapon defocus; zero scope blur removes the
-        // scene/vignette pass while leaving the accepted reticle bloom alone.
+        // Zero DOF removes only weapon defocus; scope blur selects the sniper
+        // line width and edge defocus together, without changing dot bloom.
         if next.params.x > 0.0 {
             if let Some(sigma) = control("CSR_TEST_SCOPE_BLUR") {
                 next.params.y = sigma;
@@ -70,7 +70,7 @@ fn configure_camera(
     }
 }
 
-fn control(name: &str) -> Option<f32> {
+pub(super) fn control(name: &str) -> Option<f32> {
     std::env::var(name).ok()?.parse::<f32>().ok()
         .filter(|value| value.is_finite()).map(|value| value.clamp(0.0, 16.0))
 }
