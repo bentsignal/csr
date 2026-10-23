@@ -1,5 +1,28 @@
 # Current owner priorities
 
+## October 23 playtest follow-up: current ordered backlog
+
+The owner resumed implementation after testing PR #317. Complete these player
+outcomes in order; continue through commits and PRs until the approved queue is
+finished or the owner interrupts. Do not stage another test unless requested.
+
+1. F8: replace weapon and map Next/Previous pages with tall scrollable lists;
+   group weapons by type and keep the whole catalog accessible.
+2. Wall penetration: cover wallbangable spots across the maps, including Dust II
+   mid doors. Check actual passage and damage separately from exit marks.
+3. Scopes: convincing sniper blur; correct unscoped AUG/SG lens artifacts;
+   close-focus weapon blur and restrained scoped firing motion, especially SG.
+4. Dualies: preserve ongoing firing motion instead of snapping the other pistol
+   back to its starting pose on every shot.
+5. Headshot feedback: increase slightly from the latest quieter build.
+6. R8: slow instant primary slightly and tune torso damage toward Deagle-like
+   two-hit kills, preserving lethal headshots and the faster right-click.
+
+Accepted by the owner: wall-impact presentation, Glock/Tec-9 cadence, AUG
+automatic firing, improved Negev recovery, visible muzzle flashes and normal R8
+kill-feed placement. Preserve previously accepted grenade, knife, fire, audio,
+HUD sizing and airborne weapon-motion scopes. Multiplayer stays deferred.
+
 ## October 22 evening playtest: active owner-approved follow-up
 
 This latest feedback supersedes the older queue below. Continue useful combined

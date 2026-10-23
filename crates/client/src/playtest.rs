@@ -18,19 +18,22 @@ pub(crate) struct Panel {
     bots_paused: bool,
     respawn: bool,
     page: Page,
-    offset: usize,
+    scroll: f32,
     root: Option<Entity>,
     dirty: bool,
 }
 #[derive(Component, Clone)]
-enum Action { Toggle, Page(Page), Weapon(u32, String), Bots(u32), PauseBots, Respawn, Map(String), Previous, Next }
+enum Action { Toggle, Page(Page), Weapon(u32, String), Bots(u32), PauseBots, Respawn, Map(String) }
+
+#[derive(Component)]
+struct Picker;
 
 pub(crate) fn install(app: &mut App) {
     app.init_resource::<Panel>()
         .add_systems(OnEnter(AppState::Match), enter)
         .add_systems(PreUpdate, input.after(bevy::input::InputSystems).after(bevy::ui::UiSystems::Focus)
             .run_if(in_state(AppState::Match)))
-        .add_systems(Update, draw.after(crate::frontend::update));
+        .add_systems(Update, (draw.after(crate::frontend::update), scroll_picker.after(draw)));
 }
 fn enter(mut panel: ResMut<Panel>, opts: Res<crate::Options>, remote: Option<Res<crate::remote::RemoteClient>>) {
     panel.enter_match(opts.0.playtest, remote.is_some());
@@ -107,9 +110,7 @@ fn input(
         if *interaction != Interaction::Pressed || !mouse.just_pressed(MouseButton::Left) { continue; }
         match action {
             Action::Toggle => panel.open = !panel.open,
-            Action::Page(page) => { panel.page = *page; panel.offset = 0; }
-            Action::Previous => panel.offset = panel.offset.saturating_sub(12),
-            Action::Next => panel.offset += 12,
+            Action::Page(page) => { panel.page = *page; panel.scroll = 0.; }
             Action::Weapon(index, name) => {
                 panel.weapon = Some(*index);
                 panel.selected_weapon = Some(name.clone());
@@ -166,7 +167,37 @@ fn button(commands: &mut Commands, parent: Entity, text: &str, action: Action, f
     }, TextColor(Color::WHITE))); }).id();
     commands.entity(parent).add_children(&[id]);
 }
-fn utility_last(class: weapons::WeaponClass) -> bool { class == weapons::WeaponClass::Grenade }
+fn weapon_group(class: weapons::WeaponClass) -> (u8, &'static str) {
+    use weapons::WeaponClass::*;
+    match class {
+        Pistol => (0, "Pistols"), Smg => (1, "SMGs"), Rifle => (2, "Rifles"),
+        Sniper => (3, "Sniper rifles"), Shotgun => (4, "Shotguns"),
+        MachineGun => (5, "Machine guns"), Knife => (6, "Classic knives"),
+        _ => (7, "Grenades"),
+    }
+}
+
+fn scroll_picker(
+    mut panel: ResMut<Panel>, mut wheel: MessageReader<bevy::input::mouse::MouseWheel>,
+    keys: Res<ButtonInput<KeyCode>>,
+    mut areas: Query<(&ComputedNode, &mut ScrollPosition), With<Picker>>,
+) {
+    let dy: f32 = wheel.read().map(|e| e.y *
+        if e.unit == bevy::input::mouse::MouseScrollUnit::Line { 42. } else { 1. }).sum();
+    if !panel.open { return; }
+    for (node, mut position) in &mut areas {
+        if node.size().y <= 0. { continue; }
+        let maximum = ((node.content_size().y - node.size().y) * node.inverse_scale_factor()).max(0.);
+        let page = node.size().y * node.inverse_scale_factor() * 0.8;
+        position.y -= dy;
+        if keys.just_pressed(KeyCode::PageDown) { position.y += page; }
+        if keys.just_pressed(KeyCode::PageUp) { position.y -= page; }
+        if keys.just_pressed(KeyCode::Home) { position.y = 0.; }
+        if keys.just_pressed(KeyCode::End) { position.y = maximum; }
+        position.y = position.y.clamp(0., maximum);
+        panel.scroll = position.y;
+    }
+}
 
 fn draw(
     mut commands: Commands, mut panel: ResMut<Panel>, state: Res<State<AppState>>,
@@ -186,9 +217,10 @@ fn draw(
     let root = commands.spawn((Persistent, GlobalZIndex(25000), Node {
         position_type: PositionType::Absolute,
         left: if panel.open { percent(8) } else { percent(43) },
-        top: if panel.open { percent(10) } else { auto() },
+        top: if panel.open { percent(4) } else { auto() },
         bottom: if panel.open { auto() } else { px(12) },
         width: if panel.open { percent(84) } else { auto() },
+        height: if panel.open { percent(92) } else { auto() },
         max_width: px(1100), padding: UiRect::all(px(if panel.open { 20 } else { 6 })),
         flex_direction: FlexDirection::Column, row_gap: px(14), ..default()
     }, BackgroundColor(Color::srgba(0.035, 0.055, 0.07, if panel.open { 0.97 } else { 0.75 })))).id();
@@ -211,35 +243,42 @@ fn draw(
     for (text, page) in [("Weapons", Page::Weapons), ("Classic knives", Page::Knives), ("Match", Page::Match), ("Maps", Page::Maps)] {
         button(&mut commands, tabs, text, Action::Page(page), art.regular.clone());
     }
-    let body = commands.spawn((Persistent, Node { flex_wrap: FlexWrap::Wrap, column_gap: px(10), row_gap: px(10), ..default() })).id();
+    let body = commands.spawn((Persistent, Picker, ScrollPosition(Vec2::new(0., panel.scroll)), Node {
+        flex_direction: FlexDirection::Column, flex_grow: 1., min_height: px(0),
+        overflow: Overflow::scroll_y(), row_gap: px(16), ..default()
+    })).id();
     commands.entity(root).add_children(&[body]);
-    let entries: Vec<(String, Action)> = match panel.page {
+    let entries: Vec<(&str, String, Action)> = match panel.page {
         Page::Weapons | Page::Knives => world.as_ref().map(|world| {
             let mut weapons: Vec<_> = world.0.catalog.weapons.iter().filter(|d| {
                 use weapons::WeaponClass::*;
                 if panel.page == Page::Knives { d.class == Knife && crate::classic_cosmetics::item_available(&d.class_name, 0) }
                 else { matches!(d.class, Pistol|Smg|Rifle|Sniper|Shotgun|MachineGun|Grenade) }
             }).collect();
-            // Stable partition preserves catalog order within guns and utility.
-            weapons.sort_by_key(|d| utility_last(d.class));
-            weapons.into_iter().map(|d| (loc.weapon_name(d), Action::Weapon(d.def_index, d.class_name.clone()))).collect()
+            weapons.sort_by_cached_key(|d| (weapon_group(d.class).0, loc.weapon_name(d)));
+            weapons.into_iter().map(|d| (weapon_group(d.class).1, loc.weapon_name(d), Action::Weapon(d.def_index, d.class_name.clone()))).collect()
         }).unwrap_or_default(),
         Page::Maps => menu.maps.iter().map(|name| (
-            workshop::find(name).map(|m| m.title.to_owned()).unwrap_or_else(|| name.clone()), Action::Map(name.clone())
+            "Maps", workshop::find(name).map(|m| m.title.to_owned()).unwrap_or_else(|| name.clone()), Action::Map(name.clone())
         )).collect(),
-        Page::Match => vec![("Solo / explore".into(), Action::Bots(0)), ("Ten-player match".into(), Action::Bots(9)),
-            ((if panel.bots_paused { "Resume bots" } else { "Pause bots" }).into(), Action::PauseBots),
-            ("Respawn and refill".into(), Action::Respawn)],
+        Page::Match => vec![("Match", "Solo / explore".into(), Action::Bots(0)), ("Match", "Ten-player match".into(), Action::Bots(9)),
+            ("Match", (if panel.bots_paused { "Resume bots" } else { "Pause bots" }).into(), Action::PauseBots),
+            ("Match", "Respawn and refill".into(), Action::Respawn)],
     };
-    panel.offset = panel.offset.min(entries.len().saturating_sub(1) / 12 * 12);
-    for (name, action) in entries.iter().skip(panel.offset).take(12) {
-        button(&mut commands, body, name, action.clone(), art.regular.clone());
-    }
-    if entries.len() > 12 {
-        let row = commands.spawn((Persistent, Node { column_gap: px(10), ..default() })).id();
-        commands.entity(root).add_children(&[row]);
-        if panel.offset > 0 { button(&mut commands, row, "Previous", Action::Previous, art.regular.clone()); }
-        if panel.offset + 12 < entries.len() { button(&mut commands, row, "Next", Action::Next, art.regular.clone()); }
+    let mut section = "";
+    let mut row = body;
+    for (group, name, action) in &entries {
+        if *group != section {
+            section = group;
+            let heading = commands.spawn((Persistent, Text::new(*group), TextFont {
+                font: art.bold.clone().into(), font_size: FontSize::Px(20.), ..default()
+            }, TextColor(Color::srgb(0.65, 0.82, 0.93)))).id();
+            row = commands.spawn((Persistent, Node {
+                flex_wrap: FlexWrap::Wrap, flex_shrink: 0., column_gap: px(10), row_gap: px(10), ..default()
+            })).id();
+            commands.entity(body).add_children(&[heading, row]);
+        }
+        button(&mut commands, row, name, action.clone(), art.regular.clone());
     }
     button(&mut commands, root, "Resume match", Action::Toggle, art.regular.clone());
 }
@@ -707,7 +746,7 @@ mod ordering_tests {
     fn guns_precede_grenades_without_losing_or_reordering_either_group() {
         use weapons::WeaponClass::*;
         let mut rows = [(Grenade, 1), (Pistol, 2), (Grenade, 3), (Rifle, 4), (Sniper, 5)];
-        rows.sort_by_key(|(class, _)| super::utility_last(*class));
+        rows.sort_by_key(|(class, _)| super::weapon_group(*class).0);
         assert_eq!(rows.map(|(_, id)| id), [2, 4, 5, 1, 3]);
     }
 }
