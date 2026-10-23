@@ -12,6 +12,12 @@ pub struct ScopePart(u8);
 const MAX_BLUR: f32 = 8.0;
 const BLUR_STEPS: usize = 32;
 const RETICLE_SIZE: usize = 96;
+// Native stationary first-zoom captures at 1600x900 / 1920x1080 have visible
+// openings of 757.5 / 907px, independent of hud_scaling 0.85 versus its 0.95
+// maximum. Our mounted quarter arc at full height exposes 881px at 900h.
+// This measured layout fit narrows that opening; it is not a HUD/FOV scale or
+// a claim about the original's movement-dependent vignette deformation.
+const SNIPER_MASK_SCALE: f32 = 0.86;
 
 #[derive(Resource)]
 pub struct ReticleImages {
@@ -174,7 +180,7 @@ pub fn update(
     let regular = p.is_some() && !zoomed && !weapon.is_some_and(|w| w.def.class == weapons::WeaponClass::Sniper);
     for (part,mut v,mut node,mut color) in &mut crosshair { *v = if regular && (part.0 != 4 || settings.cross_dot) { Visibility::Inherited } else { Visibility::Hidden }; let (x,y,w,h)=crate::menu::cross_bar(&settings,part.0);node.left=px(x);node.top=px(y);node.width=px(w);node.height=px(h);color.0=settings.crosshair_color(); }
     let (width, height) = (window.width() / ui_scale.0, window.height() / ui_scale.0);
-    let size = width.min(height);
+    let size = width.min(height) * SNIPER_MASK_SCALE;
     let radius = size * 0.5;
     let scale = height / 1080.0;
     let line_width = (RETICLE_SIZE + 1) as f32 * scale;

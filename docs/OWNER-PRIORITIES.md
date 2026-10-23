@@ -110,7 +110,17 @@ damage. Native damage/thickness parity remains unfinished. The final normal Rele
 immutable Dust II probe/sim and inspected ten-player Nuke client capture pass.
 The strict repeat capture retains protected userdata and binary hashes; the
 first capture caught only Steam changing its AppInfoChangeNumber metadata.
-CI remains pending.
+Both CI checks passed and PR #312 merged.
+
+A focused native scope comparison at 1600x900 and 1920x1080 confirms a
+stationary opening about 84% of viewport height, unchanged by HUD scaling
+0.85 versus its clamped 0.95 maximum. The client quarter-arc layout exposed
+about 98%. A measured 0.86 mask-layout factor corrects that excess while
+preserving the centered aim ray, zoom/FOV and existing blur. This is a bounded
+presentation fit; native movement-dependent vignette deformation and exact
+blur/refraction parity remain unmeasured. The resize-in-session 1080p capture
+was unusable and excluded; the admitted 1080p control launched at that size.
+All native sessions restored twelve exact preference snapshots.
 
 The owner launcher/profile has not been replaced.
 
