@@ -22,6 +22,15 @@ batches until interrupted; multiplayer is explicitly deferred.
    retracted opacity request). F8 orders all guns before grenades; catalog is
    present, owner found subsequent pages.
 
+October 23 implementation status: the combined pass implements the firing,
+impact, head-cue, scope and HUD changes above. Workspace tests (1288), sound
+decoding (1425 entries), Release build and Dust II probe/sim pass. Final Release
+captures show wall marks, corrected AUG eye relief, dark Scout glass and the
+original scoreboard. Keep scoreboard heading placement, damage-indicator size
+and visible muzzle-flash confirmation open; do not call these complete from
+source tests. Scout/Negev curves and visual balance remain practical first
+passes. The owner launcher/profile has not been replaced.
+
 Accepted for now: airborne weapon presentation (explicitly stop polishing),
 Molotov visuals/damage, positional audio, HUD scale, visible loading progress,
 and improved bot movement. Do not reopen these as general research projects.

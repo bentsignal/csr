@@ -888,3 +888,10 @@ parity and the gameplay gaps listed above remain unfinished.
   support this bounded fix; exact lifetime, cadence and replicated orientation
   remain open. [Evidence](research/deployed-decoy-body.md),
   [PR #145](https://github.com/bentsignal/global-offensive/pull/145).
+
+- [x] Implement the October 22 evening weapon-feedback pass: held semi-auto
+  cooldown presses, scoped automatic cadence, alternating Dualies, bounded
+  Negev recoil, apex-sensitive Scout accuracy, quieter attacker head cues,
+  material-selected smaller puffs, restored marks, scope glass/blur, feed icons
+  and original scoreboard adapter. Presentation refinements remain tracked in
+  [owner priorities](OWNER-PRIORITIES.md); this is not full fidelity acceptance.
