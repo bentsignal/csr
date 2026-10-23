@@ -43,6 +43,9 @@ pub struct LocalPlayer {
     pub(crate) pointer_attacks: u32,
     /// Keyboard attack taps are independent of pointer-capture suppression.
     pub(crate) keyboard_attacks: u32,
+    /// Aggregate attack releases observed between authoritative input samples.
+    released_attacks: u32,
+    sampled_attacks: u32,
     /// Inventory slot requested since the last tick (0 = none).
     pub pending_slot: u8,
     /// Device edges and explicit console actions have separate capture admission.
@@ -75,6 +78,8 @@ impl LocalPlayer {
             latched: 0,
             pointer_attacks: 0,
             keyboard_attacks: 0,
+            released_attacks: 0,
+            sampled_attacks: 0,
             pending_slot: 0,
             pending_utility: 0,
             console_utility: 0,
@@ -101,6 +106,8 @@ impl LocalPlayer {
         self.latched = 0;
         self.pointer_attacks = 0;
         self.keyboard_attacks = 0;
+        self.released_attacks = 0;
+        self.sampled_attacks = 0;
         self.pending_slot = 0;
         self.clear_utility_requests();
         self.pending_drop = false;
@@ -237,6 +244,8 @@ pub fn focus_input(
             local.latched = 0;
             local.pointer_attacks = 0;
             local.keyboard_attacks = 0;
+            local.released_attacks = 0;
+            local.sampled_attacks = 0;
             local.pending_slot = 0;
             local.pending_utility = 0;
             local.pending_drop = false;
@@ -376,6 +385,20 @@ pub fn look(
             inspect.cancel();
         }
     }
+    // Preserve an aggregate up state even when the next fixed tick runs only
+    // after a new press. Another bound device still holding the same command
+    // must not manufacture a release.
+    if grabbed && alive {
+        for (binding, action, bit) in [
+            (crate::settings::KEY_ATTACK, crate::settings::MouseAction::Attack, buttons::ATTACK),
+            (crate::settings::KEY_ATTACK2, crate::settings::MouseAction::Attack2, buttons::ATTACK2),
+        ] {
+            if !settings.mouse_pressed(action, &mouse, blocked_mouse)
+                && !settings.binds[binding].is_some_and(|key| keys.pressed(key)) {
+                local.released_attacks |= bit;
+            }
+        }
+    }
     // The shared sampler also guards held attacks after grab_cursor captures.
     if grabbed && alive && settings.mouse_just_pressed(crate::settings::MouseAction::Attack, &mouse, blocked_mouse) {
         local.pointer_attacks |= buttons::ATTACK;
@@ -484,12 +507,23 @@ pub fn sample_tick_input(local: &mut LocalPlayer, controls: &Controls<'_>) -> Ti
     }
     let keyboard_attacks = std::mem::take(&mut local.keyboard_attacks);
     let pointer_attacks = std::mem::take(&mut local.pointer_attacks);
+    // A release/repress observed between ticks needs one ordinary up input
+    // before its new down edge. Keep the press for the following tick instead
+    // of collapsing both clicks into a continuous hold. No gameplay state or
+    // firing cadence is changed here; the sim still consumes only TickInput.
+    let released = std::mem::take(&mut local.released_attacks) & local.sampled_attacks;
+    let attacks = if attack_allowed {
+        local.pointer_attacks |= pointer_attacks & released;
+        local.keyboard_attacks |= keyboard_attacks & released;
+        (held | pointer_attacks | keyboard_attacks) & !released
+    } else { held };
+    local.sampled_attacks = attacks & (buttons::ATTACK | buttons::ATTACK2);
     let device_utility = std::mem::take(&mut local.pending_utility);
     let console_utility = std::mem::take(&mut local.console_utility);
     TickInput {
         view_angles: glam::Vec3::new(local.pitch, local.yaw, 0.),
         forward_move, side_move,
-        buttons: held | (if attack_allowed { pointer_attacks | keyboard_attacks } else { 0 })
+        buttons: attacks
             | (std::mem::take(&mut local.latched) & !local.capture_attack_mask(controls.settings)),
         weapon_slot: std::mem::take(&mut local.pending_slot),
         // An explicit console command is not a device edge. It can select
@@ -1084,6 +1118,30 @@ mod remote_input_tests {
         app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Right);
         app.world_mut().run_system_cached(sample_after_capture).unwrap();
         assert_eq!(app.world().resource::<Sampled>().0.buttons & buttons::ATTACK2, 0);
+    }
+
+    #[test]
+    fn release_and_repress_between_ticks_preserves_a_new_attack_edge() {
+        let mut app = capture_app();
+        app.world_mut().query::<&mut CursorOptions>().single_mut(app.world_mut()).unwrap().grab_mode = CursorGrabMode::Locked;
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Left);
+        app.world_mut().run_system_cached(look).unwrap();
+        app.world_mut().run_system_cached(sample_after_capture).unwrap();
+        assert_ne!(app.world().resource::<Sampled>().0.buttons & buttons::ATTACK, 0);
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().clear();
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().release(MouseButton::Left);
+        app.world_mut().run_system_cached(look).unwrap();
+        // No authoritative sample during the up render frame.
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().clear();
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Left);
+        app.world_mut().run_system_cached(look).unwrap();
+        app.world_mut().run_system_cached(sample_after_capture).unwrap();
+        assert_eq!(app.world().resource::<Sampled>().0.buttons & buttons::ATTACK, 0);
+        app.world_mut().run_system_cached(sample_after_capture).unwrap();
+        assert_ne!(app.world().resource::<Sampled>().0.buttons & buttons::ATTACK, 0);
+        // A held button remains held; it is not turned into repeated clicks.
+        app.world_mut().run_system_cached(sample_after_capture).unwrap();
+        assert_ne!(app.world().resource::<Sampled>().0.buttons & buttons::ATTACK, 0);
     }
 
     #[test]
