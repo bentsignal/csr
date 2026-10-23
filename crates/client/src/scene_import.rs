@@ -169,9 +169,12 @@ impl SceneImport {
                 }
                 let world = self.world.as_mut().unwrap();
                 let props = self.props.as_mut().unwrap();
+                // Amortize frontend/render overhead over more prop work while
+                // still yielding every Update for loading presentation/input.
+                // This is a soft CPU window; indivisible work can overrun it.
                 if props.step(commands, level, meshes, materials, images, &mut world.textures,
                     &world.shared, opts.exposure, props::Sun::from_bsp(&level.bsp), level.bsp.sky_camera(),
-                    std::time::Duration::from_millis(4)) {
+                    std::time::Duration::from_millis(8)) {
                     let stats = &props.stats;
                     info!("props: {} instances, {} tris, {} draws ({} in 3D skybox), {} materials, {} failed models",
                         stats.instances, stats.triangles, stats.draws, stats.sky_draws, stats.materials, stats.failed_models);
