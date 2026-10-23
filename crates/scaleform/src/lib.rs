@@ -12,6 +12,7 @@
 //! The player runs on its own thread ([`Menu::spawn`]); the game sends
 //! [`Input`] and reads finished frames and [`Event`]s.
 
+mod death_icons;
 mod defaults;
 mod capture;
 pub mod diff;

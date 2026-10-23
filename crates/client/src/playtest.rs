@@ -166,6 +166,8 @@ fn button(commands: &mut Commands, parent: Entity, text: &str, action: Action, f
     }, TextColor(Color::WHITE))); }).id();
     commands.entity(parent).add_children(&[id]);
 }
+fn utility_last(class: weapons::WeaponClass) -> bool { class == weapons::WeaponClass::Grenade }
+
 fn draw(
     mut commands: Commands, mut panel: ResMut<Panel>, state: Res<State<AppState>>,
     opts: Res<crate::Options>,
@@ -212,11 +214,16 @@ fn draw(
     let body = commands.spawn((Persistent, Node { flex_wrap: FlexWrap::Wrap, column_gap: px(10), row_gap: px(10), ..default() })).id();
     commands.entity(root).add_children(&[body]);
     let entries: Vec<(String, Action)> = match panel.page {
-        Page::Weapons | Page::Knives => world.as_ref().map(|world| world.0.catalog.weapons.iter().filter(|d| {
-            use weapons::WeaponClass::*;
-            if panel.page == Page::Knives { d.class == Knife && crate::classic_cosmetics::item_available(&d.class_name, 0) }
-            else { matches!(d.class, Pistol|Smg|Rifle|Sniper|Shotgun|MachineGun|Grenade) }
-        }).map(|d| (loc.weapon_name(d), Action::Weapon(d.def_index, d.class_name.clone()))).collect()).unwrap_or_default(),
+        Page::Weapons | Page::Knives => world.as_ref().map(|world| {
+            let mut weapons: Vec<_> = world.0.catalog.weapons.iter().filter(|d| {
+                use weapons::WeaponClass::*;
+                if panel.page == Page::Knives { d.class == Knife && crate::classic_cosmetics::item_available(&d.class_name, 0) }
+                else { matches!(d.class, Pistol|Smg|Rifle|Sniper|Shotgun|MachineGun|Grenade) }
+            }).collect();
+            // Stable partition preserves catalog order within guns and utility.
+            weapons.sort_by_key(|d| utility_last(d.class));
+            weapons.into_iter().map(|d| (loc.weapon_name(d), Action::Weapon(d.def_index, d.class_name.clone()))).collect()
+        }).unwrap_or_default(),
         Page::Maps => menu.maps.iter().map(|name| (
             workshop::find(name).map(|m| m.title.to_owned()).unwrap_or_else(|| name.clone()), Action::Map(name.clone())
         )).collect(),
@@ -692,4 +699,15 @@ mod tests {
         }
     }
 
+}
+
+#[cfg(test)]
+mod ordering_tests {
+    #[test]
+    fn guns_precede_grenades_without_losing_or_reordering_either_group() {
+        use weapons::WeaponClass::*;
+        let mut rows = [(Grenade, 1), (Pistol, 2), (Grenade, 3), (Rifle, 4), (Sniper, 5)];
+        rows.sort_by_key(|(class, _)| super::utility_last(*class));
+        assert_eq!(rows.map(|(_, id)| id), [2, 4, 5, 1, 3]);
+    }
 }

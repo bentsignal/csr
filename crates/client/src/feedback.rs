@@ -227,8 +227,11 @@ pub fn setup(
     }
     commands.insert_resource(assets);
     commands.init_resource::<Hurt>();
+    let damage = level.0.vfs.read("materials/panorama/images/hud/damageindicator/damage-segment.png")
+        .and_then(|bytes| image::load_from_memory_with_format(&bytes, image::ImageFormat::Png).ok())
+        .map(|image| image.to_rgba8());
     for side in 0..4 {
-        commands.spawn((
+        let mut edge = commands.spawn((
             Node {
                 position_type: PositionType::Absolute,
                 ..default()
@@ -237,6 +240,18 @@ pub fn setup(
             BackgroundColor(Color::NONE),
             HurtEdge(side),
         ));
+        if let Some(original) = &damage {
+            use bevy::{asset::RenderAssetUsages, render::render_resource::{Extent3d, TextureDimension, TextureFormat}};
+            let pixels = match side {
+                1 => image::imageops::rotate180(original),
+                2 => image::imageops::rotate270(original),
+                3 => image::imageops::rotate90(original),
+                _ => original.clone(),
+            };
+            let image = images.add(Image::new(Extent3d { width: pixels.width(), height: pixels.height(), depth_or_array_layers: 1 },
+                TextureDimension::D2, pixels.into_raw(), TextureFormat::Rgba8UnormSrgb, RenderAssetUsages::RENDER_WORLD));
+            edge.insert(ImageNode { color: Color::NONE, ..ImageNode::new(image) });
+        }
     }
 }
 
@@ -506,7 +521,7 @@ pub fn update(
     time: Res<Time>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut particles: Query<(Entity, &mut Transform, &mut ImpactFx, Option<&DoorImpactMark>, Option<&mut impact_puffs::Puff>)>,
-    mut edges: Query<(&HurtEdge, &mut Node, &mut BackgroundColor)>,
+    mut edges: Query<(&HurtEdge, &mut Node, &mut BackgroundColor, Option<&mut ImageNode>)>,
 ) {
     let _frame_scope = crate::input_latency::frame_scope("feedback");
     let now = time.elapsed_secs();
@@ -659,7 +674,7 @@ pub fn update(
         (-d.dot(r)).max(0.0),
         d.dot(r).max(0.0),
     ];
-    for (edge, mut node, mut color) in &mut edges {
+    for (edge, mut node, mut color, image) in &mut edges {
         *node = Node {
             position_type: PositionType::Absolute,
             ..default()
@@ -685,6 +700,14 @@ pub fn update(
                 node.width = px(18.0);
                 node.height = percent(100);
             }
+        }
+        if let Some(mut image) = image {
+            // Preserve the installed segment's alpha gradient and aspect ratio.
+            // Direction/lifetime still come from the same simulation damage cue.
+            if edge.0 < 2 { node.height = Val::Auto; } else { node.width = Val::Auto; }
+            color.0 = Color::NONE;
+            image.color = Color::srgba(1.0, 1.0, 1.0, strength * weights[edge.0 as usize]);
+            continue;
         }
         color.0 = Color::srgba(
             0.65,

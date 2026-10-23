@@ -97,6 +97,15 @@ impl Files {
             tracing::debug!("scaleform: no file {rel}");
             return None;
         };
+        let raw = if rel == "huddeathnotification.swf" {
+            let icons: Vec<_> = ["revolver", "cz75a", "mp5sd"].into_iter()
+                .filter_map(|name| self.engine.borrow_mut().image(&format!("img://death-icon/{name}"))
+                    .map(|png| (format!("icon-{name}.png"), png))).collect();
+            match crate::death_icons::complete(&raw, &icons) {
+                Ok(movie) => movie,
+                Err(error) => { tracing::warn!("scaleform: death icon completion: {error}"); raw }
+            }
+        } else { raw };
         // This movie embeds only the eleven glyphs in its placeholder token.
         // The missing localized characters match that subset's omissions.
         // A Scaleform library fallback is inferred, not yet independently

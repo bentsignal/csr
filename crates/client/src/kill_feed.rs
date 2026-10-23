@@ -45,6 +45,15 @@ pub(crate) struct Presentation {
 }
 
 impl Presentation {
+    fn begin_present(&mut self, resized: bool) {
+        self.revision = self.revision.checked_add(1).expect("kill-feed revision limit");
+        // Retain the last admitted raster until its replacement arrives.
+        if resized {
+            self.presented = false;
+            self.notice_extent = None;
+        }
+    }
+
     fn admit_frame(
         &mut self,
         frame: &scaleform::Frame,
@@ -149,8 +158,13 @@ struct Bridge {
     combat_enabled: bool,
     notice_enabled: bool,
     rejected: Arc<Mutex<Vec<sim::death::DeathKey>>>,
+    icons: std::collections::HashMap<String, Vec<u8>>,
 }
 impl Engine for Bridge {
+    fn image(&mut self, url: &str) -> Option<Vec<u8>> {
+        self.icons.get(url.strip_prefix("img://death-icon/")?).cloned()
+    }
+
     fn call(
         &mut self,
         object: &str,
@@ -377,6 +391,7 @@ fn update(
                 combat_enabled: feed.combat.enabled,
                 notice_enabled,
                 rejected: feed.rejected.clone(),
+                icons: crate::ui_assets::death_notice_icons(&data.vfs),
             }),
             "classic-hud".into(),
         );
@@ -460,20 +475,13 @@ fn update(
         }
         feed.entries = keys;
     }
-    let notice_changed = !batch.is_empty();
     batch.extend(
         feed.combat
             .commands(snapshot.as_ref(), next_revision, resized),
     );
     let has_commands = !batch.is_empty();
     if has_commands {
-        feed.revision = feed
-            .revision
-            .checked_add(1)
-            .expect("kill-feed revision limit");
-        if notice_changed {
-            feed.presented = false;
-        }
+        feed.begin_present(resized);
         if std::env::var_os("CSR_KILL_FEED_TRACE").is_some() {
             info!(revision = feed.revision, notices = feed.entries.len(), keys = ?feed.entries,
                 "Classic kill feed receipts updated");
@@ -690,6 +698,26 @@ mod tests {
     }
 
     #[test]
+    fn pending_receipts_keep_the_admitted_feed_until_replacement_or_resize() {
+        let (mut app, mut feed, frame) = notice_fixture();
+        admit_notice(&mut app, &mut feed, &frame, (3, 5), true);
+        let extent = feed.notice_extent;
+        feed.begin_present(false);
+        assert!(feed.presented);
+        assert_eq!(feed.notice_extent, extent);
+        // An old worker result cannot replace the retained raster.
+        assert_eq!(admit_notice(&mut app, &mut feed, &frame, (3, 5), true), 0);
+        assert!(feed.presented);
+        let mut replacement = frame;
+        replacement.presentation_revision = feed.revision;
+        replacement.rgba[0] ^= 1;
+        assert_eq!(admit_notice(&mut app, &mut feed, &replacement, (3, 5), true), 1);
+        feed.begin_present(true);
+        assert!(!feed.presented);
+        assert_eq!(feed.notice_extent, None);
+    }
+
+    #[test]
     fn fresh_notice_frames_only_notify_bevy_when_top_pixels_or_layout_change() {
         let (mut app, mut feed, mut frame) = notice_fixture();
         assert_eq!(modified_count(&mut app, &feed.image), 0);
@@ -867,6 +895,7 @@ mod tests {
             combat_enabled: true,
             notice_enabled: true,
             rejected: Arc::default(),
+            icons: Default::default(),
         };
         let mut calls = Calls::default();
         let rejected = sim::death::DeathKey {
