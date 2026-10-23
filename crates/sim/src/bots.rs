@@ -1147,6 +1147,7 @@ fn clear_route_attack(world: &World, bot: &Player, input: &TickInput, index: usi
     let (forward, right, up) = movement::angle_vectors(input.view_angles
         + Vec3::new(punch[0], punch[1], 0.0) * crate::weapon::RECOIL_SCALE);
     let inaccuracy = crate::weapon::inaccuracy(&w, crate::weapon::AccuracyContext {
+        vertical_speed: movement.velocity.z,
         speed: movement.speed_2d(), on_ground: movement.on_ground, ducked: movement.ducked,
     }) * 0.001;
     let spread = w.alt_stat("spread", w.def.accuracy.spread) * 0.001;

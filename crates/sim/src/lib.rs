@@ -1827,6 +1827,7 @@ impl World {
         let punch = w.aim_punch();
         let ctx = AccuracyContext {
             speed: p.movement.speed_2d(),
+            vertical_speed: p.movement.velocity.z,
             on_ground: p.movement.on_ground,
             ducked: p.movement.ducked,
         };

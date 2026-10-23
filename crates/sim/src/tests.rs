@@ -874,7 +874,7 @@ fn scope_taps_cycle_and_use_scoped_stats() {
     let w = world.player(id).unwrap().active_weapon().unwrap();
     assert_eq!((w.zoom_level, w.fov(), w.max_speed(), w.clip), (1, 40.0, 100.0, 5));
     assert!(w.hides_viewmodel());
-    assert_eq!(weapon::inaccuracy(w, AccuracyContext { speed: 0.0, on_ground: true, ducked: false }), 2.0);
+    assert_eq!(weapon::inaccuracy(w, AccuracyContext { vertical_speed: 0., speed: 0.0, on_ground: true, ducked: false }), 2.0);
     for (level, fov) in [(2, 10.0), (0, 90.0)] {
         run(&mut world, 0.4, &[(id, TickInput::default())]);
         world.step(&[(id, right)]);
