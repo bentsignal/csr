@@ -123,7 +123,7 @@ pub struct WeaponState {
     /// Position in the recoil pattern (shots, fractional while recovering).
     pub recoil_index: f32,
     /// Angle and angular velocity evolve independently of the spray phase.
-    /// Present only for a content profile with separate recovery evidence.
+    /// Used by observed profiles and the explicitly admitted bounded fallback.
     pub recoil_motion: Option<crate::recoil_motion::RecoilMotion>,
     /// Cumulative recoil offsets (pitch, yaw) in degrees, computed from
     /// `def` on first use (not replicated: both sides derive it).
@@ -317,7 +317,15 @@ impl WeaponState {
             && crate::recoil_motion::valid(profile)).then_some(profile)
     }
 
-    pub fn has_recoil_response(&self) -> bool { self.motion_profile().is_some() }
+    fn bounded_response(&self) -> Option<&'static weapons::RecoilResponse> {
+        // Authored observations retain priority. The fallback is only admitted
+        // for the ordinary mode, just like its current installed Negev policy.
+        (self.def.recoil_trajectory.is_none() && !self.burst_mode && self.zoom_level == 0
+            && self.def.attr_f32("csr bounded sustained recoil") == Some(1.))
+            .then(bounded_sustained_response)
+    }
+
+    pub fn has_recoil_response(&self) -> bool { self.motion_profile().is_some() || self.bounded_response().is_some() }
 
     fn phase_recovery(&self) -> Option<&weapons::RecoilPhaseRecovery> {
         self.motion_profile()?.response.as_ref()?.phase_recovery.as_ref()
@@ -330,8 +338,10 @@ impl WeaponState {
 
     /// Called for all carried and ground weapons, including a holstered gun.
     pub(crate) fn advance_recoil_motion(&mut self, tick: u64) {
-        if let (Some(profile), Some(mut state)) = (self.motion_profile(), self.recoil_motion) {
-            state.advance(profile.response.as_ref().unwrap(), tick);
+        let response = self.motion_profile().and_then(|profile| profile.response.as_ref())
+            .or_else(|| self.bounded_response());
+        if let (Some(response), Some(mut state)) = (response, self.recoil_motion) {
+            state.advance(response, tick);
             self.recoil_motion = Some(state);
         }
     }
@@ -349,6 +359,16 @@ impl WeaponState {
 
     /// An impulse is added after sampling the actual authoritative ray.
     pub(crate) fn recoil_shot(&mut self, tick: u64, rate: u32) {
+        if let Some(response) = self.bounded_response() {
+            let impulses = self.impulses.0.get_or_init(|| Some(Arc::new(bounded_sustained_impulses(&self.def))))
+                .as_ref().unwrap();
+            let index = (self.recoil_index.max(0.).floor() as usize).min(impulses.len() - 1);
+            let impulse = impulses[index];
+            let motion = self.recoil_motion.get_or_insert_with(|| crate::recoil_motion::RecoilMotion::new(tick, rate));
+            motion.advance(response, tick);
+            for axis in 0..2 { motion.velocity[axis] += impulse[axis]; }
+            return;
+        }
         if self.motion_profile().is_none() { return; }
         let discrete_phase = self.phase_recovery().is_some();
         if self.recoil_motion.is_none() {
@@ -527,7 +547,7 @@ impl WeaponState {
     /// Current aim punch (pitch, yaw) in degrees from the recoil pattern,
     /// interpolated at the fractional recoil index. Negative pitch is up.
     pub fn aim_punch(&self) -> [f32; 2] {
-        if self.motion_profile().is_some() {
+        if self.has_recoil_response() {
             return self.recoil_motion.map_or([0.; 2], |state| state.angle);
         }
         if self.recoil_index <= 0.0 {
@@ -592,18 +612,21 @@ pub fn recoil_pattern(def: &WeaponDefinition) -> Vec<[f32; 2]> {
 /// Owner-requested bounded fallback, explicitly admitted by the content loader.
 /// Reuses our independently observed angle/velocity decay law; the generated
 /// impulses and sideways motion are a first pass, not measured Negev parity.
-fn bounded_sustained_pattern(def: &WeaponDefinition) -> Vec<[f32; 2]> {
-    let response = weapons::RecoilResponse {
+fn bounded_sustained_response() -> &'static weapons::RecoilResponse {
+    static RESPONSE: OnceLock<weapons::RecoilResponse> = OnceLock::new();
+    RESPONSE.get_or_init(|| weapons::RecoilResponse {
         reference: "owner-bounded-sustained-fallback-v1".into(), reference_hz: 128,
         angle_decay: 8., angle_linear: 18., velocity_decay: 4.5,
         first_impulse: [0.; 2], final_impulse: [0.; 2],
         held_tolerance_degrees: 0., phase_recovery: None,
-    };
+    })
+}
+
+fn bounded_sustained_impulses(def: &WeaponDefinition) -> Vec<[f32; 2]> {
+    let response = bounded_sustained_response();
     let cycle = def.cycle_time.clamp(0.01, 1.);
     let mut rng = Rng::from_parts(&[def.recoil.seed as u64, def.def_index as u64]);
-    let mut angle = [0.; 2];
-    let mut velocity = [0.; 2];
-    let mut out = vec![angle];
+    let mut out = Vec::new();
     let mut lateral = 0.;
     // One velocity-decay time per lateral segment avoids independent per-shot
     // jitter. Variance and seed come from the installed weapon, not a new RNG.
@@ -615,9 +638,18 @@ fn bounded_sustained_pattern(def: &WeaponDefinition) -> Vec<[f32; 2]> {
         // climb settles. No lateral noise is added to the opening shot.
         if shot % segment == 0 { lateral = rng.range(-def.recoil.magnitude_variance, def.recoil.magnitude_variance); }
         let settled = 1. - (-response.velocity_decay * shot as f32 * cycle).exp();
-        velocity[0] -= magnitude * direction.cos();
-        velocity[1] += magnitude * direction.sin() + lateral * settled;
-        crate::recoil_motion::advance(&mut angle, &mut velocity, &response, cycle as f64);
+        out.push([-magnitude * direction.cos(), magnitude * direction.sin() + lateral * settled]);
+    }
+    out
+}
+
+fn bounded_sustained_pattern(def: &WeaponDefinition) -> Vec<[f32; 2]> {
+    let mut angle = [0.; 2];
+    let mut velocity = [0.; 2];
+    let mut out = vec![angle];
+    for impulse in bounded_sustained_impulses(def) {
+        for axis in 0..2 { velocity[axis] += impulse[axis]; }
+        crate::recoil_motion::advance(&mut angle, &mut velocity, bounded_sustained_response(), def.cycle_time.clamp(0.01, 1.) as f64);
         out.push(angle);
     }
     out
@@ -743,18 +775,31 @@ pub(crate) fn inaccuracy_for_shot(w: &WeaponState, ctx: AccuracyContext, seconda
     base + stat("inaccuracy move", a.inaccuracy_move) * move_frac + air + w.accuracy_penalty
 }
 
+/// The schema supplies both early/final recovery and the transition bullets.
+/// Interpolating at the current spray phase is a practical content-driven
+/// policy; the transition's exact native boundary remains unmeasured.
+fn accuracy_recovery(w: &WeaponState, ducked: bool) -> f32 {
+    let (key, base) = if ducked {
+        ("recovery time crouch", w.def.accuracy.recovery_time_crouch)
+    } else { ("recovery time stand", w.def.accuracy.recovery_time_stand) };
+    let initial = w.alt_stat(key, base).max(0.05);
+    let Some(final_time) = w.def.attr_f32(&format!("{key} final"))
+        .filter(|value| value.is_finite() && *value > 0.) else { return initial; };
+    let start = w.def.attr_f32("recovery transition start bullet");
+    let end = w.def.attr_f32("recovery transition end bullet");
+    let (Some(start), Some(end)) = (start, end) else { return initial; };
+    if !start.is_finite() || !end.is_finite() || start < 0. || end <= start { return initial; }
+    let fraction = ((w.recoil_index - start) / (end - start)).clamp(0., 1.);
+    initial + (final_time.max(0.05) - initial) * fraction
+}
+
 /// Advances timers every tick. `firing` includes a loaded automatic trigger
 /// held through its shot cooldown, not just a shot emitted on this tick.
 pub fn think(w: &mut WeaponState, time: f32, dt: f32, ducked: bool, firing: bool) {
     if time >= w.next_attack && w.reload_end.is_none() {
         if let Some(level) = w.resume_zoom.take() { w.set_zoom(level, time); }
     }
-    let recovery = if ducked {
-        w.alt_stat("recovery time crouch", w.def.accuracy.recovery_time_crouch)
-    } else {
-        w.alt_stat("recovery time stand", w.def.accuracy.recovery_time_stand)
-    }
-    .max(0.05);
+    let recovery = accuracy_recovery(w, ducked);
     // Decays to 10 % over the recovery time.
     w.accuracy_penalty *= 0.1f32.powf(dt / recovery);
     if !firing {
@@ -1076,5 +1121,43 @@ mod tests {
         assert!(tail.windows(2).any(|p| p[1][1] < p[0][1] - 0.001));
         def.attributes.remove("csr bounded sustained recoil");
         assert_eq!(recoil_pattern(&def), old);
+    }
+
+    #[test]
+    fn accuracy_recovery_uses_authored_spray_transition_stance_and_disabled_final() {
+        let mut def = ak();
+        def.accuracy.recovery_time_stand = 0.3;
+        def.accuracy.recovery_time_crouch = 0.25;
+        // Installed Legacy Negev recovery endpoints, not new tuning.
+        for (key, value) in [("recovery time stand final", "0.1"),
+            ("recovery time crouch final", "0.08"),
+            ("recovery transition start bullet", "9"), ("recovery transition end bullet", "12"),
+            ("zoom levels", "2"), ("recovery time stand alt", "0.4")] {
+            def.attributes.insert(key.into(), value.into());
+        }
+        let mut w = WeaponState::new(Arc::new(def));
+        for (phase, standing, crouched) in [(0., 0.3, 0.25), (9., 0.3, 0.25),
+            (10.5, 0.2, 0.165), (12., 0.1, 0.08), (150., 0.1, 0.08)] {
+            w.recoil_index = phase;
+            for (ducked, expected) in [(false, standing), (true, crouched)] {
+                w.accuracy_penalty = 10.;
+                think(&mut w, 0., expected, ducked, true);
+                assert!((w.accuracy_penalty - 1.).abs() < 0.00001,
+                    "phase={phase} crouched={ducked}: recovery must remove 90% over its declared time");
+            }
+        }
+        w.set_zoom(1, 0.);
+        w.recoil_index = 10.5;
+        assert!((accuracy_recovery(&w, false) - 0.25).abs() < 0.00001,
+            "scope retains its authored initial recovery through the transition");
+        w.reset_zoom(0.);
+        for disabled in ["-1", "NaN", "0"] {
+            Arc::make_mut(&mut w.def).attributes.insert("recovery time stand final".into(), disabled.into());
+            assert_eq!(accuracy_recovery(&w, false), 0.3);
+        }
+        let attributes = &mut Arc::make_mut(&mut w.def).attributes;
+        attributes.insert("recovery time stand final".into(), "0.1".into());
+        attributes.insert("recovery transition end bullet".into(), "9".into());
+        assert_eq!(accuracy_recovery(&w, false), 0.3, "empty transition must retain initial recovery");
     }
 }

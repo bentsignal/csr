@@ -2,6 +2,62 @@
 //! Native comparisons are separate installed-data diagnostics.
 use super::*;
 
+#[test]
+fn bounded_negev_recovers_after_release_with_a_large_phase_and_survives_snapshot_prediction() {
+    for rate in [64, 128] {
+        let mut world = world();
+        world.set_tick_rate(rate);
+        let id = world.add_player("bounded recoil", Team::Terrorist);
+        let mut gun = def("weapon_negev", 28, WeaponClass::MachineGun, Side::Both, 1700, 150);
+        gun.cycle_time = 0.075;
+        gun.recoil = weapons::Recoil { angle: 0., angle_variance: 0., magnitude: 20., magnitude_variance: 2., seed: 57966 };
+        gun.attributes.insert("csr bounded sustained recoil".into(), "1".into());
+        let mut definitions = world.catalog.weapons.clone();
+        definitions.push(gun.clone());
+        world.catalog = Arc::new(weapons::Catalog { weapons: definitions });
+        world.player_mut(id).unwrap().weapons = vec![WeaponState::new(Arc::new(gun))];
+        world.player_mut(id).unwrap().active = 0;
+        let mut tail = Vec::new();
+        for _ in 0..rate * 12 {
+            world.step(&[(id, input(true))]);
+            if world.player(id).unwrap().shots > 30 {
+                if let Some(angle) = ray(&world) { tail.push(angle[0]); }
+            }
+            if world.player(id).unwrap().shots == 120 { break; }
+        }
+        assert_eq!(world.player(id).unwrap().shots, 120);
+        assert!(!tail.is_empty());
+        let low = tail.iter().copied().fold(f32::INFINITY, f32::min);
+        let high = tail.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+        assert!(low > -30. && high < -1. && high - low < 2., "held spray remains bounded: {low}..{high}");
+
+        let snapshot: Snapshot = world.decode(&state::encode(&world.snapshot())).unwrap();
+        let mut predicted = world.clone();
+        predicted.restore(snapshot.state);
+        let mut holstered = world.clone();
+        let knife = WeaponState::new(Arc::new(world.catalog.get("weapon_knife").unwrap().clone()));
+        holstered.player_mut(id).unwrap().weapons.push(knife);
+        holstered.player_mut(id).unwrap().active = 1;
+        for _ in 0..rate * 2 {
+            world.step(&[(id, input(false))]);
+            predicted.step_prediction(&[(id, input(false))]);
+            holstered.step(&[(id, input(false))]);
+            assert_eq!(world.state_hash(), predicted.state_hash());
+            assert_eq!(world.player(id).unwrap().weapons[0].recoil_motion,
+                holstered.player(id).unwrap().weapons[0].recoil_motion);
+        }
+        let w = world.player(id).unwrap().active_weapon().unwrap();
+        assert!(w.recoil_index > 90., "fixture retains the old long pattern walk-back");
+        assert!(w.aim_punch().iter().all(|angle| angle.abs() < 0.002),
+            "release must recover the live angle without waiting for 120 pattern steps");
+        world.step(&[(id, input(true))]);
+        predicted.step_prediction(&[(id, input(true))]);
+        assert_eq!(world.state_hash(), predicted.state_hash());
+        assert!(ray(&world).unwrap().iter().all(|angle| angle.abs() < 0.004),
+            "resuming after recovery must not jump back to the old spray plateau");
+    }
+}
+
 fn fixture(rate: u32) -> (World, PlayerId, Vec<[f32; 2]>) {
     let mut world = world();
     world.set_tick_rate(rate);
