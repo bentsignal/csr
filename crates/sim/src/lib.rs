@@ -37,6 +37,7 @@ pub mod weapon;
 pub mod recoil_motion;
 pub mod utility;
 pub mod tactics;
+mod penetration;
 
 use collision::{contents, CollisionWorld};
 use glam::Vec3;
@@ -1867,78 +1868,108 @@ impl World {
             let oy = a1.sin() * r1 * inacc + a2.sin() * r2 * spread;
             let dir = (fwd + right * ox + up * oy).normalize();
             let end = eye + dir * range;
-            let (tr, owner) = self.collision.trace_owned_ray(eye, end, contents::MASK_SHOT);
-            let world_dist = tr.fraction * range;
+            let mut segment_start = eye;
+            let mut damage_scale = 1.0;
+            for slab in 0..=penetration::MAX_SLABS {
+                let traveled = (segment_start - eye).dot(dir).max(0.0);
+                let segment_range = (range - traveled).max(0.0);
+                let (tr, owner) = self.collision.trace_owned_ray(segment_start, end, contents::MASK_SHOT);
+                let world_dist = tr.fraction * segment_range;
 
-            // The movement hull is broad phase only when authored shapes exist.
-            let mut best: Option<(usize, f32, Option<HitGroup>)> = None;
-            for (j, other) in self.players.iter().enumerate() {
-                if j == shooter || !other.alive || !team.enemy_of(other.team) { continue; }
-                let hull = self.target_hull(other, rewind_tick);
-                if ray_box(eye, dir, hull.mins, hull.maxs).is_none_or(|d| d > world_dist) { continue; }
-                let candidate = if let Some(shapes) = &hull.hitboxes {
-                    let mut intersections = shapes.iter().filter_map(|shape|
-                        shape.ray_intersection(eye, dir, world_dist).map(|d| (d, shape.group)))
-                        .collect::<Vec<_>>();
-                    intersections.sort_by(|a,b| a.0.total_cmp(&b.0));
-                    intersections.first().copied().map(|(distance, raw)| {
-                        // Valve's May 2018 notes explicitly admit neck -> head.
-                        // Do not invent neck-only damage or skip an intervening body part.
-                        if raw == 8 {
-                            if let Some(&(d, 1)) = intersections.iter().find(|(_,group)| *group != 8) {
-                                return (d, Some(HitGroup::Head));
+                // The movement hull is broad phase only when authored shapes exist.
+                let mut best: Option<(usize, f32, Option<HitGroup>)> = None;
+                for (j, other) in self.players.iter().enumerate() {
+                    if j == shooter || !other.alive || !team.enemy_of(other.team) { continue; }
+                    let hull = self.target_hull(other, rewind_tick);
+                    if ray_box(segment_start, dir, hull.mins, hull.maxs).is_none_or(|d| d > world_dist) { continue; }
+                    let candidate = if let Some(shapes) = &hull.hitboxes {
+                        let mut intersections = shapes.iter().filter_map(|shape|
+                            shape.ray_intersection(segment_start, dir, world_dist).map(|d| (d, shape.group)))
+                            .collect::<Vec<_>>();
+                        intersections.sort_by(|a,b| a.0.total_cmp(&b.0));
+                        intersections.first().copied().map(|(distance, raw)| {
+                            // Valve's May 2018 notes explicitly admit neck -> head.
+                            // Do not invent neck-only damage or skip an intervening body part.
+                            if raw == 8 {
+                                if let Some(&(d, 1)) = intersections.iter().find(|(_,group)| *group != 8) {
+                                    return (d, Some(HitGroup::Head));
+                                }
+                            }
+                            (distance, HitGroup::from_model(raw))
+                        })
+                    } else { ray_box(segment_start, dir, hull.mins, hull.maxs).map(|d| (d,None)) };
+                    if let Some((distance, group)) = candidate {
+                        if distance <= world_dist && best.is_none_or(|(_,d,_)| distance < d) {
+                            best = Some((j,distance,group));
+                        }
+                    }
+                }
+                if let Some(dynamic)=&self.collision.dynamic {
+                    if let Some((key,fraction))=dynamic.hit_target(segment_start,tr.end) {
+                        let distance=fraction*world_dist;
+                        if best.is_none_or(|(_,t,_)|distance<t) {
+                            let hit=segment_start+dir*distance;
+                            dynamic.damage_target_at(key,def.damage * damage_scale * def.range_modifier.powf((traveled+distance)/500.0),eye,hit);
+                            self.events.push(GameEvent::Tracer{player:id,start:segment_start,end:hit});
+                            break;
+                        }
+                    }
+                }
+                match best {
+                    Some((j, t, authored_group)) => {
+                        let hit = segment_start + dir * t;
+                        self.events.push(GameEvent::Tracer { player: id, start: segment_start, end: hit });
+                        let victim = &self.players[j];
+                        let hull = self.target_hull(victim, rewind_tick);
+                        let (mn, mx) = (hull.movement_mins, hull.movement_maxs);
+                        let frac = ((hit.z - mn.z) / (mx.z - mn.z)).clamp(0.0, 1.0);
+                        let (_, vright, _) = movement::angle_vectors(Vec3::new(0.0, hull.yaw, 0.0));
+                        let center = (mn + mx) * 0.5;
+                        let side = ((hit - center).dot(vright) / 16.0).clamp(-1.0, 1.0);
+                        let group = authored_group.unwrap_or_else(|| HitGroup::from_height(frac, side));
+                        if damage_scale == 1.0 {
+                            self.apply_damage(shooter, j, &def, traveled + t, group, hit, Some(dir));
+                        } else {
+                            let mut attenuated = (*def).clone();
+                            attenuated.damage *= damage_scale;
+                            self.apply_damage(shooter, j, &attenuated, traveled + t, group, hit, Some(dir));
+                        }
+                        break;
+                    }
+                    None => {
+                        self.events.push(GameEvent::Tracer { player: id, start: segment_start, end: tr.end });
+                        if tr.fraction < 1.0 && !self.collision.is_sky(tr.surface) {
+                            // Query the intact current geometry before breakable damage
+                            // can replace this simulation copy's collision overlay.
+                            let continuation = if slab < penetration::MAX_SLABS {
+                                penetration::through(&self.collision, segment_start, end, &tr, def.penetration)
+                            } else { None };
+                            let door = self.door_impact(owner, &tr);
+                            self.damage_breakable(owner.and_then(collision::HitOwner::breakable), &tr,
+                                def.damage * damage_scale * def.range_modifier.powf((traveled + world_dist) / 500.0), breakables::DamageKind::Bullet);
+                            if let Some(dynamic)=&self.collision.dynamic {dynamic.damage_block(tr.end,tr.normal,def.damage * damage_scale * def.range_modifier.powf((traveled+world_dist)/500.0));}
+                            self.events.push(GameEvent::Impact {
+                                player: id,
+                                pos: tr.end,
+                                normal: tr.normal,
+                                surface: tr.surface,
+                                door,
+                            });
+                            if let Some((next_start, retention)) = continuation {
+                                let next_scale = damage_scale * retention;
+                                let distance = (next_start - eye).dot(dir);
+                                // apply_damage has a one-health minimum; do not let
+                                // an exhausted pellet acquire damage through rounding.
+                                if def.damage * next_scale * def.range_modifier.powf(distance / 500.) >= 1. {
+                                    segment_start = next_start;
+                                    damage_scale = next_scale;
+                                    continue;
+                                }
                             }
                         }
-                        (distance, HitGroup::from_model(raw))
-                    })
-                } else { ray_box(eye, dir, hull.mins, hull.maxs).map(|d| (d,None)) };
-                if let Some((distance, group)) = candidate {
-                    if distance <= world_dist && best.is_none_or(|(_,d,_)| distance < d) {
-                        best = Some((j,distance,group));
                     }
                 }
-            }
-            if let Some(dynamic)=&self.collision.dynamic {
-                if let Some((key,fraction))=dynamic.hit_target(eye,tr.end) {
-                    let distance=fraction*world_dist;
-                    if best.is_none_or(|(_,t,_)|distance<t) {
-                        let hit=eye+dir*distance;
-                        dynamic.damage_target_at(key,def.damage as f32 * def.range_modifier.powf(distance/500.0),eye,hit);
-                        self.events.push(GameEvent::Tracer{player:id,start:eye,end:hit});
-                        continue;
-                    }
-                }
-            }
-            match best {
-                Some((j, t, authored_group)) => {
-                    let hit = eye + dir * t;
-                    self.events.push(GameEvent::Tracer { player: id, start: eye, end: hit });
-                    let victim = &self.players[j];
-                    let hull = self.target_hull(victim, rewind_tick);
-                    let (mn, mx) = (hull.movement_mins, hull.movement_maxs);
-                    let frac = ((hit.z - mn.z) / (mx.z - mn.z)).clamp(0.0, 1.0);
-                    let (_, vright, _) = movement::angle_vectors(Vec3::new(0.0, hull.yaw, 0.0));
-                    let center = (mn + mx) * 0.5;
-                    let side = ((hit - center).dot(vright) / 16.0).clamp(-1.0, 1.0);
-                    let group = authored_group.unwrap_or_else(|| HitGroup::from_height(frac, side));
-                    self.apply_damage(shooter, j, &def, t, group, hit, Some(dir));
-                }
-                None => {
-                    self.events.push(GameEvent::Tracer { player: id, start: eye, end: tr.end });
-                    if tr.fraction < 1.0 && !self.collision.is_sky(tr.surface) {
-                        let door = self.door_impact(owner, &tr);
-                        self.damage_breakable(owner.and_then(collision::HitOwner::breakable), &tr,
-                            def.damage * def.range_modifier.powf(world_dist / 500.0), breakables::DamageKind::Bullet);
-                        if let Some(dynamic)=&self.collision.dynamic {dynamic.damage_block(tr.end,tr.normal,def.damage as f32 * def.range_modifier.powf(world_dist/500.0));}
-                        self.events.push(GameEvent::Impact {
-                            player: id,
-                            pos: tr.end,
-                            normal: tr.normal,
-                            surface: tr.surface,
-                            door,
-                        });
-                    }
-                }
+                break;
             }
         }
 

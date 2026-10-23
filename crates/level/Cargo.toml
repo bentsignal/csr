@@ -13,6 +13,7 @@ content.workspace = true
 kv.workspace = true
 glam.workspace = true
 vfs.workspace = true
+vmt.workspace = true
 bsp.workspace = true
 mdl.workspace = true
 collision.workspace = true

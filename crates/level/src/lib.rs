@@ -4,6 +4,7 @@ pub mod maps;
 pub mod bot_profiles;
 mod character_profiles;
 mod breakable_digest;
+mod bullet_surfaces;
 mod empty_trigger;
 mod grenade_animations;
 mod historical_awp;
@@ -235,6 +236,7 @@ impl Level {
             // model's inherited base; brush presets retain their existing order.
             for def in defs { if def.studio.is_none() { def.apply_prop_data(root); } }
         }
+        bullet_surfaces::load(&mut collision, &fs);
         timings.push(("collision", t.elapsed().as_secs_f32()));
 
         let t = Instant::now();
@@ -315,6 +317,7 @@ impl Level {
         // Peers must agree on the resolved mounted breakable damage data,
         // which can differ between packs even when the BSP/items schema match.
         let catalog_sha1 = breakable_digest::bind(&collision, catalog_sha1);
+        let catalog_sha1 = bullet_surfaces::bind(&collision, catalog_sha1);
         timings.push(("weapons", t.elapsed().as_secs_f32()));
         let t = Instant::now();
         let (character_profiles, catalog_sha1) = character_profiles::load(&fs, catalog_sha1)?;
