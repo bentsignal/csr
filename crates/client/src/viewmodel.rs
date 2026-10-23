@@ -2708,6 +2708,23 @@ pub fn update(
     );
     inspection.sample_base(&mut state.pose);
     sequence_pose::sample(&clip, t, &mut state.pose, |b| weights.get(b).copied().unwrap_or(1.0));
+    // Close eye relief magnifies SG's authored arm travel. Restrain the local
+    // scoped presentation while retaining the full unscoped clip and aim ray.
+    if name == "weapon_sg556" && state.activity == "ACT_VM_PRIMARYATTACK" {
+        if let (Some(w), Some(idle)) = (w, view.clips.get("ACT_VM_IDLE").and_then(|clips| clips.first())) {
+            let zoom = ((90. - w.rendered_fov(sim_now))
+                / (90. - w.def.attr_f32("zoom fov 1").unwrap_or(45.))).clamp(0., 1.);
+            if zoom > 0. {
+                let mut neutral = mdl::skeleton::rest_pose(&model.bones);
+                sequence_pose::sample(&idle.clip, 0., &mut neutral,
+                    |b| idle.weights.get(b).copied().unwrap_or(1.));
+                let amount = 1. - 0.65 * zoom;
+                for (pose, idle) in state.pose.iter_mut().zip(neutral) {
+                    *pose = (idle.0.lerp(pose.0, amount), idle.1.slerp(pose.1, amount));
+                }
+            }
+        }
+    }
     inspection.apply(now, &mut state.pose);
     state.inspection = inspection;
     if let Some(mut fire) = state.elite_fire.take() {

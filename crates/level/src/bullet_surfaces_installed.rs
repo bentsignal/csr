@@ -20,19 +20,21 @@ fn installed_dust2_mid_doors_pass_actual_rays_and_tick_fire() {
         ("de_dust2_2017", b'M', "dust_metal_door2.mdl"),
     ] {
         let mut level = local_level(map);
+        let floor = sim::World::with_catalog(level.collision.clone(), level.catalog.clone());
         // Actual mid-door leaves, found from mounted BSP prop placement and PHY
         // ledges. Both lanes cross a leaf away from its edge and center gap.
         // These coordinates are controls, never runtime map-specific policy.
         let mut lanes = Vec::new();
         for x in [-470., -380.] {
-            let front = Vec3::new(x, 1450., -63.);
-            let back = Vec3::new(x, 1800., -63.);
+            let eye_at = |y| floor.drop_to_floor(Vec3::new(x, y, -96.), false) + Vec3::Z * 64.;
+            let front = eye_at(1450.);
+            let back = eye_at(1800.);
             for (from, to) in [(front, back), (back, front)] {
                 for point in [from, to] {
                     assert!(tests::installed_nonsolid_player_space(&level.bsp, point), "{map} {point:?}");
                     let feet = point - Vec3::Z * 64.;
                     assert!(!level.collision.trace_box(feet, feet, movement::STAND_MINS,
-                        movement::STAND_MAXS, contents::MASK_PLAYERSOLID).start_solid);
+                        movement::STAND_MAXS, contents::MASK_PLAYERSOLID).start_solid, "{map} eye={point:?}");
                 }
                 let hit = level.collision.trace_ray(from, to, contents::MASK_SHOT);
                 assert!(hit.hit() && !hit.start_solid && !hit.all_solid, "{map}: {hit:?}");
@@ -49,6 +51,7 @@ fn installed_dust2_mid_doors_pass_actual_rays_and_tick_fire() {
                 lanes.push((from, to));
             }
         }
+        drop(floor);
         // Exact same world and weapon with declarations removed must block.
         Arc::get_mut(&mut level.collision).unwrap().bullet_surfaces.fill(None);
         for (from, to) in lanes { tests::installed_tick_fire_control(&level, from, to, false, true); }
