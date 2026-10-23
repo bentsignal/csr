@@ -207,12 +207,14 @@ pub fn update(
     for (part, mut node, mut visibility, image) in &mut parts {
         let shown = if part.0 == 10 { zoomed && !sniper && aperture.z > 0.0 && dot_image.is_some() } else { sniper };
         *visibility = if shown { Visibility::Inherited } else { Visibility::Hidden };
+        // Overlap every outer edge by a pixel: linear sampling of the
+        // quarter arc can otherwise wrap a transparent texel into a seam.
         let (x, y, w, h) = match part.0 {
             n @ 0..=3 => (left + (n % 2) as f32 * radius, top + (n / 2) as f32 * radius, radius, radius),
             4 => (0.0, 0.0, left + 1.0, height),
             5 => (left + size - 1.0, 0.0, left + 1.0, height),
-            6 => (left, 0.0, size, top),
-            7 => (left, top + size, size, top),
+            6 => (left, 0.0, size, top + 1.0),
+            7 => (left, top + size - 1.0, size, top + 1.0),
             8 => (left, height * 0.5 - line_width * 0.5, size, line_width),
             9 => (width * 0.5 - line_width * 0.5, top, line_width, size),
             _ => (dot_origin.x, dot_origin.y, dot_width, dot_width),
