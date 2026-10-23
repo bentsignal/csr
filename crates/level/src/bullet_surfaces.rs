@@ -62,7 +62,7 @@ pub(super) fn bind(world: &CollisionWorld, previous: Option<[u8; 20]>) -> Option
         hash.update(previous);
         // Bind the observed Wood prefactor and prior exit/exhaustion guards.
         // Earlier continuation policies must not share a catalog identity.
-        hash.update(b"csr-practical-thin-slab-penetration-v6\0");
+        hash.update(b"csr-practical-thin-slab-penetration-v7\0");
         hash.update((world.bullet_surfaces.len() as u64).to_le_bytes());
         for surface in &world.bullet_surfaces {
             if let Some(surface) = surface {
@@ -135,6 +135,13 @@ mod tests {
     #[test]
     #[ignore = "requires read-only installed Legacy Inferno geometry/materials; no native game"]
     fn installed_thin_wood_uses_mounted_definitions_and_actual_tick_fire() {
+        let level = crate::Level::load("de_inferno", None).expect("installed Legacy Inferno");
+        // Bind the empirical raw-loss fixture to real definitions: assuming
+        // AWP power 3 instead of its authored 2.5 previously overstated fit.
+        for (name, power) in [("weapon_ak47", 2.), ("weapon_m4a1", 2.), ("weapon_awp", 2.5)] {
+            assert_eq!(level.catalog.get(name).expect("mounted calibration weapon").penetration, power, "{name}");
+        }
+        drop(level);
         installed_cover_case("de_inferno", b'W');
     }
 

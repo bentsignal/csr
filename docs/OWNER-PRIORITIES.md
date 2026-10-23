@@ -141,17 +141,19 @@ the valid four-unit post now has readable side-on labels: thickness 10.3cm and
 lost damage 7.8, with entry damage 36 at 3.2m. The observer camera moved only
 after the shot. This is a concrete native sample, not a general loss law.
 
-The same post now has genuinely selected M4A4 and AWP references: 33/7.3 and
-115/20.1 entry/lost damage, respectively. The existing known-Wood curve now uses
-a measured 0.91 prefactor, fitting all three thin-post samples within 0.5 raw
-damage. Every crossed face must match the exact W/0.9/0.6 declaration; mixed
-backing and other declarations keep the previous policy. The linear curve,
-thickness budget and exit/exhaustion guards remain intact. Other thicknesses
-remain extrapolations, not native-validated losses. Policy salt is v6. See
-[calibration and boundaries](research/thin-wood-loss.md). All 1,334 workspace
-tests, installed Inferno firing/opaque controls at 64/128, normal PLAY,
-immutable Dust II probe/sim and the inspected ten-player Nuke capture pass.
-Protected userdata and binary hashes remain unchanged. CI is pending.
+The same post has genuinely selected M4A4 and AWP references: 33/7.3 and
+115/20.1 entry/lost damage. PR #315 merged after green checks, but its AWP
+synthetic fixture incorrectly used power 3 instead of the mounted 2.5, so the
+reported 0.5-damage fit was overstated. The follow-up corrects that parameter
+and fits the same practical curve across all three guns: prefactor 0.925 gives
+loss errors below 0.6. A separate 30-degree AK shot through 11.9cm wood reports
+7.9 loss; the corrected curve predicts 8.04. Every crossed face still must
+match W/0.9/0.6. Other material and geometry guards remain intact; thicker
+cover remains an extrapolation. Policy salt is v7. The installed-data fixture
+now checks weapon powers as well as actual firing/opaque controls. Correction
+checks pass: all 1,334 workspace tests, installed Inferno firing/opaque controls
+at 64/128, normal PLAY and immutable Dust II probe/sim. CI is pending. See
+[calibration and boundaries](research/thin-wood-loss.md).
 
 The owner launcher/profile has not been replaced.
 

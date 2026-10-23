@@ -9,9 +9,11 @@ use glam::Vec3;
 pub(super) const MAX_SLABS: usize = 4;
 
 // Three original Legacy shots through the same ~4-unit wood post: AK
-// 36 entry / 7.8 lost, M4A4 33 / 7.3, AWP 115 / 20.1. A 0.91 prefactor
-// before the existing thickness factor fits these rounded labels within 0.5
-// damage. Other thicknesses still use the existing practical linear curve.
+// 36 entry / 7.8 lost, M4A4 33 / 7.3, AWP 115 / 20.1. Using their mounted
+// powers (2, 2, 2.5), least squares gives 0.925315; rounded to 0.925, the
+// existing thickness curve fits these labels within 0.6 raw damage. A separate
+// 30-degree AK shot (11.9cm / 7.9 lost) differs by 0.15. This remains an
+// approximation; other thicknesses extrapolate the same linear curve.
 fn observed_wood(surface: BulletSurface) -> bool {
     surface.material == b'W' && surface.penetration_modifier == 0.9
         && surface.damage_modifier == 0.6
@@ -46,7 +48,7 @@ pub(super) fn through(world: &CollisionWorld, start: Vec3, end: Vec3, hit: &Trac
     }
     let budget = (16. * weapon_power * modifier).min(64.);
     if exit.thickness >= budget { return None; }
-    let prefactor = if calibrated_wood { 0.91 } else { damage_modifier };
+    let prefactor = if calibrated_wood { 0.925 } else { damage_modifier };
     let retention = prefactor * (1. - exit.thickness / budget);
     (retention > 0.).then_some((exit.next_start, retention))
 }
