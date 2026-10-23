@@ -264,13 +264,12 @@ function checkScoreboardLayout() {
         i += 1;
     }
     var ok = api.layout(panel);
-    var ct = panel.CT_Score.CT_Score.getBounds(panel);
-    var ctName = panel.CT_TeamName.CT_TeamNameText.getBounds(panel);
-    var t = panel.T_Score.T_Score.getBounds(panel);
-    var tName = panel.T_TeamName.T_TeamNameText.getBounds(panel);
+    var ct = panel.CT_Score._y + panel.CT_Score.CT_Score._y + panel.CT_Score.CT_Score._height / 2;
+    var ctName = panel.CT_TeamName._y + panel.CT_TeamName.CT_TeamNameText._y + panel.CT_TeamName.CT_TeamNameText._height / 2;
+    var t = panel.T_Score._y + panel.T_Score.T_Score._y + panel.T_Score.T_Score._height / 2;
+    var tName = panel.T_TeamName._y + panel.T_TeamName.T_TeamNameText._y + panel.T_TeamName.T_TeamNameText._height / 2;
     csrEI.call("csr.HudLayoutFixture", ok,
-        near(ct.yMin + ct.yMax, ctName.yMin + ctName.yMax),
-        near(t.yMin + t.yMax, tName.yMin + tName.yMax),
+        near(ct, ctName), near(t, tName),
         panel.csrTHeaders._visible, near(panel.csrTHeaders._x, 214),
         near(panel.csrTHeaders._y, 364), !panel.csrTHeaders.CT_Ping_Header._visible,
         panel.CT_Headers.Player_Label.Text.textColor == 0x8acaff,

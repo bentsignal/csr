@@ -96,10 +96,16 @@ _global.csrScoreboard.alignScore = function(clip, field, heading) {
         || typeof heading.getTextFormat != "function") { return false; }
     // The two score symbols have different registration points. Align their
     // visible text fields, moving the original emblem with the score clip.
-    var scoreBounds = field.getBounds(clip._parent);
-    var headingBounds = heading.getBounds(clip._parent);
-    if (!(scoreBounds.yMax > scoreBounds.yMin && headingBounds.yMax > headingBounds.yMin)) { return false; }
-    clip._y += (headingBounds.yMin + headingBounds.yMax - scoreBounds.yMin - scoreBounds.yMax) / 2;
+    // AS2 TextField has no getBounds; transform each text box through its
+    // owning MovieClip into the common scoreboard coordinates instead.
+    if (!(field._height > 0 && heading._height > 0)) { return false; }
+    var scoreCenter = {x:field._x, y:field._y + field._height / 2};
+    var headingCenter = {x:heading._x, y:heading._y + heading._height / 2};
+    field._parent.localToGlobal(scoreCenter);
+    heading._parent.localToGlobal(headingCenter);
+    clip._parent.globalToLocal(scoreCenter);
+    clip._parent.globalToLocal(headingCenter);
+    clip._y += headingCenter.y - scoreCenter.y;
     return true;
 };
 _global.csrScoreboard.layout = function(panel) {
