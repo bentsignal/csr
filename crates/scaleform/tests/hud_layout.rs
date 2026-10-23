@@ -236,6 +236,18 @@ function header(parent, name, depth) {
         i += 1;
     }
 }
+function emblem(parent, name, depth, y) {
+    var clip = parent.createEmptyMovieClip(name, depth);
+    clip.beginFill(0xffffff);
+    clip.moveTo(0, 0); clip.lineTo(30, 0); clip.lineTo(30, 30);
+    clip.lineTo(0, 30); clip.lineTo(0, 0); clip.endFill();
+    clip._x = 77.6; clip._y = y;
+}
+function emblemCenter(clip, panel) {
+    var bounds = clip.getBounds(panel);
+    var center = (bounds.yMin + bounds.yMax) / 2;
+    return center;
+}
 function checkScoreboardLayout() {
     var api = _global.csrScoreboard;
     var panel = _root.createEmptyMovieClip("layoutFixture", 402);
@@ -252,6 +264,17 @@ function checkScoreboardLayout() {
     // Visible text has different local offsets from the clip origins.
     panel.CT_Score.CT_Score._y = -40;
     panel.T_Score.T_Score._y = 12;
+    var bg = panel.createEmptyMovieClip("bg_scoreboard", 8);
+    bg._x = 327.1; bg._y = 0.8;
+    // The installed Standard background's unnamed depth-8 group is separate
+    // from both score clips and has a non-unit vertical scale.
+    var logos = bg.createEmptyMovieClip("fixtureUnnamedLogos", 8);
+    logos._x = -70.3; logos._y = 70.25; logos._yscale = 98.35052490234375;
+    emblem(logos, "DefaultIconCT", 1, 251.5);
+    emblem(logos, "DefaultIconT", 3, 287.8);
+    emblem(logos, "CTLogo", 5, 249.35);
+    emblem(logos, "TLogo", 7, 285.3);
+    var decoration = bg.createEmptyMovieClip("fixtureDecoration", 5);
     var sides = ["CT", "T"];
     var i = 0;
     while (i < 2) {
@@ -270,6 +293,10 @@ function checkScoreboardLayout() {
     var tName = panel.T_TeamName._y + panel.T_TeamName.T_TeamNameText._y + panel.T_TeamName.T_TeamNameText._height / 2;
     csrEI.call("csr.HudLayoutFixture", ok,
         near(ct, ctName), near(t, tName),
+        near(emblemCenter(logos.DefaultIconCT, panel), ctName),
+        near(emblemCenter(logos.DefaultIconT, panel), tName),
+        logos.DefaultIconCT._visible, logos.DefaultIconT._visible,
+        !logos.CTLogo._visible, !logos.TLogo._visible, decoration._visible,
         panel.csrTHeaders._visible, near(panel.csrTHeaders._x, 214),
         near(panel.csrTHeaders._y, 364), !panel.csrTHeaders.CT_Ping_Header._visible,
         panel.CT_Headers.Player_Label.Text.textColor == 0x8acaff,
@@ -279,7 +306,9 @@ function checkScoreboardLayout() {
     ok = api.layout(panel);
     csrEI.call("csr.HudLayoutFixture", ok, panel.csrTHeaders == strip,
         near(panel.CT_Score._y, scoreY), near(panel.CT_Scoretable._y, 83),
-        near(panel.T_Scoretable._y, 388));
+        near(panel.T_Scoretable._y, 388),
+        near(emblemCenter(logos.DefaultIconCT, panel), ctName),
+        near(emblemCenter(logos.DefaultIconT, panel), tName));
 }
 checkScoreboardLayout();
 "#, 1920, 1080);

@@ -59,10 +59,18 @@ release; accuracy recovery uses authored final times and transition bullets.
 Optic bloom stays inside the posed lens and no longer resets on zoom cycling;
 the scoreboard labels both rosters and aligns visible score text to headings.
 The combined 1307-test workspace, installed arsenal at 64/128 Hz, PLAY build,
-Dust II probe/sim and seven rendered controls pass. Original background emblem
-placement still needs correction. The original M3 bullet-penetration task is
-also active: a bounded thin-cover source candidate awaits integration and checks;
-this is not completion of the core-gun backlog.
+Dust II probe/sim and seven rendered controls pass. PR #309 merged these changes.
+The next increment aligns the original background emblems with their team
+headings. Thin-cover penetration now continues ordinary authoritative shots
+through up to four isolated wood, cardboard, plastic, glass or grate slabs.
+Mounted material modifiers feed a bounded approximate thickness/damage policy;
+unknown materials and overlapping geometry stay opaque. Workspace checks and an
+actual installed Inferno wood-panel firing/opaque control pass at 64/128 Hz.
+The final PLAY build and Dust II probe/sim pass; small/full scoreboard captures
+confirm aligned original emblems and all twelve rows per team. CI remains pending.
+Penetrating pellets emit one completed tracer path with separate entry impacts.
+The original M3 task stays unchecked:
+native damage/thickness parity and broader cover geometry are unfinished.
 
 The owner launcher/profile has not been replaced.
 

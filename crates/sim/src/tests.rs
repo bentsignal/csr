@@ -1196,6 +1196,7 @@ mod scope_hold;
 
 #[path = "tests/model_hitboxes.rs"]
 mod model_hitboxes;
+mod penetration;
 
 #[test]
 fn damage_keeps_contact_protection_after_depletion_and_later_player_changes() {

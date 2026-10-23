@@ -23,6 +23,7 @@ mod ladders;
 pub use ladders::REACH as LADDER_REACH;
 pub mod doors;
 pub mod breakables;
+pub mod bullet_exit;
 
 /// Distance kept between a sweep's end position and the surface it hit.
 pub const DIST_EPSILON: f32 = 0.03125;
@@ -241,6 +242,9 @@ pub struct CollisionWorld {
     pub convexes: Vec<Convex>,
     pub triangles: Vec<Triangle>,
     pub surfaces: Vec<String>,
+    /// Mounted, resolved ballistic definitions, indexed by surface ID.
+    /// Runtime pose overlays read these from their immutable base world.
+    pub bullet_surfaces: Vec<Option<bullet_exit::BulletSurface>>,
     /// Authored prop doors, separate from the immutable map solids.
     pub doors: std::sync::Arc<[doors::Door]>,
     pub breakables: std::sync::Arc<[breakables::Breakable]>,
