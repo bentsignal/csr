@@ -200,3 +200,73 @@ fn rewound_target_can_be_hit_after_cover_without_moving_live_target() {
     assert!(world.player(victim).unwrap().health < 100);
     assert_eq!(world.players[1].movement.origin.y, 64.);
 }
+
+#[test]
+fn connected_wood_matches_one_slab_and_keeps_tick_replay_at_both_rates() {
+    for rate in [64, 128] {
+        for overlap in [false, true] {
+            let (mut joined, shooter, victim) = pair();
+            joined.set_tick_rate(rate);
+            slab(&mut joined, 50., 8., b'W');
+            slab(&mut joined, if overlap { 54. } else { 58. }, if overlap { 12. } else { 8. }, b'W');
+            let (mut single, single_shooter, _) = pair();
+            single.set_tick_rate(rate);
+            slab(&mut single, 50., 16., b'W');
+            let mut prediction = joined.clone();
+            let mut replay = joined.clone();
+            replay.restore(joined.snapshot().state);
+            let input = [(shooter, TickInput { buttons: buttons::ATTACK, ..Default::default() })];
+            joined.step(&input);
+            prediction.step_prediction(&input);
+            replay.step(&input);
+            single.step(&[(single_shooter, input[0].1)]);
+            assert!(joined.player(victim).unwrap().health < 100);
+            assert_eq!(damage(&joined), damage(&single), "rate={rate}, overlap={overlap}");
+            assert_eq!(joined.state(), prediction.state());
+            assert_eq!(joined.state(), replay.state());
+            assert!(prediction.events.is_empty());
+            assert_eq!(joined.events.iter().filter(|e| matches!(e, GameEvent::Impact { .. })).count(), 1);
+            assert_eq!(joined.events.iter().filter(|e| matches!(e, GameEvent::Tracer { .. })).count(), 1);
+            assert_eq!(joined.players[0].weapons[0].clip, 29);
+        }
+    }
+}
+
+#[test]
+fn hidden_inner_faces_are_validated_and_can_limit_connected_cover() {
+    let (mut ordinary, _, _) = pair();
+    slab(&mut ordinary, 50., 16., b'W');
+    ordinary.fire(0, 1., None, None);
+    let ordinary_damage = damage(&ordinary);
+    assert!(ordinary_damage > 0);
+    for case in 0..7 {
+        let (mut world, _, victim) = pair();
+        slab(&mut world, 50., 16., b'W');
+        slab(&mut world, 54., 4., b'W');
+        let collision = Arc::get_mut(&mut world.collision).unwrap();
+        let hidden = collision.convexes.last_mut().unwrap();
+        // Both endpoints visible from outside stay wood. Change just one
+        // hidden face, without changing the fallback or opposite face.
+        hidden.plane_surfaces = vec![hidden.surface; 6];
+        let internal = collision.bullet_surfaces.len() as u32;
+        hidden.plane_surfaces[case % 2] = internal;
+        let mut material = BulletSurface { material: b'W', penetration_modifier: 0.9, damage_modifier: 0.6 };
+        match case {
+            0 => material.material = b'C',
+            1 => material.material = b'M',
+            3 => material.penetration_modifier = f32::NAN,
+            4 => material.penetration_modifier = 0.25,
+            5 => material.damage_modifier = 0.2,
+            6 => material.penetration_modifier = 0.6,
+            _ => {}
+        }
+        collision.bullet_surfaces.push(if case == 2 { None } else { Some(material) });
+        world.fire(0, 1., None, None);
+        if case >= 5 {
+            assert!(damage(&world) > 0 && damage(&world) < ordinary_damage, "case {case}");
+        } else {
+            assert_eq!(world.player(victim).unwrap().health, 100, "case {case}");
+        }
+        assert_eq!(world.players[0].weapons[0].clip, 29);
+    }
+}
