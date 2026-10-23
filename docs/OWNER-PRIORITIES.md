@@ -77,7 +77,8 @@ counts their physical thickness once and checks every crossed component face.
 Hidden opaque/unknown backing must still block the shot. Positive mounted
 concrete/metal declarations now use that same bounded policy rather than an
 unconditional material-code rejection. The loss formula is unchanged and
-approximate; combined execution checks are pending.
+approximate. The combined 1,328-test workspace, normal PLAY build, Dust II
+probe/sim and ordinary ten-player Nuke render pass. CI remains pending.
 Installed-data controls now pass through an actual 16-unit Inferno wooden panel
 and 8-unit Nuke concrete/corrugated-metal panels at 64/128 Hz. Identical opaque
 controls retain the original collision/weapon data and block each shot when
