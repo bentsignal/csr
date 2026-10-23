@@ -60,9 +60,9 @@ pub(super) fn bind(world: &CollisionWorld, previous: Option<[u8; 20]>) -> Option
     previous.map(|previous| {
         let mut hash = Sha1::new();
         hash.update(previous);
-        // Bind connected cover and declared concrete/metal admission. Peers
+        // Bind BSP solid-leaf exits as well as the previous cover policy. Peers
         // using either earlier policy must not share a catalog identity.
-        hash.update(b"csr-practical-thin-slab-penetration-v3\0");
+        hash.update(b"csr-practical-thin-slab-penetration-v4\0");
         hash.update((world.bullet_surfaces.len() as u64).to_le_bytes());
         for surface in &world.bullet_surfaces {
             if let Some(surface) = surface {

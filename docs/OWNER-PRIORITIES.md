@@ -86,13 +86,23 @@ controls retain the original collision/weapon data and block each shot when
 the ballistic definitions are removed. This is functional coverage, not measured
 native damage parity.
 
-Dualies follow-through: the third-person model exports separate
-`muzzle_flash` and `muzzle_flash2` attachments. Reuse the accepted alternating
-fire receipt for that choice so world flashes/tracers follow the firing hand;
-first-person numbering and single-barrel fallbacks stay intact. Validation
-is pending for this follow-through. Native penetration damage/thickness parity
-remains unfinished; the attempted original-game comparison could not start
-because Legacy could not connect to a running Steam client.
+Dualies follow-through now reuses the accepted alternating fire receipt for
+third-person `muzzle_flash` / `muzzle_flash2` attachments. First-person numbering
+and single-barrel fallbacks stay intact. The 1,329-test workspace, normal PLAY,
+Dust II probe/sim and two left/right client captures passed before the exit fix.
+The Dualies first-person particle is still unsupported: its main layer omits a
+radius and the core selects atlas sequences absent from the installed texture.
+No replacement radius, sequence or generic flash was invented.
+
+After the owner opened Steam, a real Inferno AK comparison exposed a false
+positive in the old wood control: the target stood inside sealed BSP world
+space. Native `setpos` warned "into world"; the original front shot stopped.
+The installed BSP confirms the exit and target occupy SOLID leaf 387.
+Ballistic exits now consult an immutable, validated copy of the world BSP
+partition. The old lane becomes a blocking regression; positive controls must
+put both players in nonsolid leaves. Brush/movement geometry and the approximate
+damage formula remain unchanged. Combined validation is pending. Native damage
+and thickness parity remain unfinished.
 
 The owner launcher/profile has not been replaced.
 
