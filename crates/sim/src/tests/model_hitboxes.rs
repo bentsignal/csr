@@ -52,7 +52,7 @@ fn bullet_between_authored_shapes_misses_even_inside_movement_hull() {
         );
         // Both the old movement hull and the union AABB enclose this ray.
         // Neither authored shape does: broad phase cannot award damage.
-        w.fire(0, 1., None);
+        w.fire(0, 1., None, None);
         assert_eq!(w.player(target).unwrap().health, 100, "rate {rate}");
         assert!(!w.events.iter().any(|event| matches!(
             event, GameEvent::Damage { victim, .. } if *victim == target
@@ -72,7 +72,7 @@ fn exposed_arm_outside_movement_hull_takes_authored_arm_damage() {
         w.set_test_hitboxes(target, vec![capsule(0, 4, Vec3::new(100., 26., height))]);
         // The target's movement hull extends only 16 units sideways. An
         // exposed limb must participate in broad phase and retain its group.
-        w.fire(0, 1., None);
+        w.fire(0, 1., None, None);
         assert!(w.player(target).unwrap().health < 100, "rate {rate}");
         assert!(w.events.iter().any(|event| matches!(
             event,
@@ -96,7 +96,7 @@ fn historical_model_hit_uses_old_shapes_without_moving_live_target_or_crossing_l
         capture(&mut w, 1);
 
         let mut current = w.clone();
-        current.fire(0, 1., None);
+        current.fire(0, 1., None, None);
         assert_eq!(
             current.player(target).unwrap().health,
             100,
@@ -104,7 +104,7 @@ fn historical_model_hit_uses_old_shapes_without_moving_live_target_or_crossing_l
         );
 
         let mut historical = w.clone();
-        historical.fire(0, 1., Some(0));
+        historical.fire(0, 1., Some(0), None);
         assert!(
             historical.player(target).unwrap().health < 100,
             "old pose rate {rate}"
@@ -144,7 +144,7 @@ fn historical_model_hit_uses_old_shapes_without_moving_live_target_or_crossing_l
                     capture(&mut invalid, 2);
                 }
             }
-            invalid.fire(0, 1., Some(0));
+            invalid.fire(0, 1., Some(0), None);
             assert_eq!(
                 invalid.player(target).unwrap().health,
                 100,

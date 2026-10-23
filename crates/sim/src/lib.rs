@@ -1641,6 +1641,7 @@ impl World {
             let secondary_pressed = secondary && self.players[i].last_input.buttons & buttons::ATTACK2 == 0;
             let mut fire = false;
             let mut stab = false;
+            let mut secondary_cycle = None;
             {
                 let p = &mut self.players[i];
                 let ducked = p.movement.ducked;
@@ -1680,14 +1681,17 @@ impl World {
                         w.reload_end = None;
                         w.primary_pending = pressed;
                     }
+                    // Authored R8 fan-fire shares primary readiness and ammo;
+                    // resolve its mode only for the admitted shot below.
+                    let fan_cycle = if secondary && time >= w.next_secondary_attack { w.secondary_fire_cycle() } else { None };
                     if w.burst_due(time) {
                         fire = true;
-                    } else if can_fire && (attack || stab) && w.reload_end.is_none() && time >= w.next_attack
-                        && ((w.def.full_auto && !w.burst_mode) || w.primary_pending || w.is_melee()) {
-                        let primary_press = w.primary_pending;
+                    } else if can_fire && (attack || stab || fan_cycle.is_some()) && w.reload_end.is_none() && time >= w.next_attack
+                        && ((w.def.full_auto && !w.burst_mode) || w.primary_pending || w.is_melee() || fan_cycle.is_some()) {
+                        let trigger_press = if fan_cycle.is_some() { secondary_pressed } else { w.primary_pending };
                         w.primary_pending = false;
                         if w.uses_ammo() && w.clip <= 0 {
-                            if primary_press && w.can_reload() {
+                            if trigger_press && w.can_reload() {
                                 w.reset_zoom(time);
                                 w.begin_reload(time);
                                 self.events.push(GameEvent::Reload { player: id });
@@ -1705,6 +1709,7 @@ impl World {
                             }
                         } else {
                             fire = true;
+                            secondary_cycle = fan_cycle;
                         }
                     }
                     // Native AK and Glock/FAMAS burst cases wait while an
@@ -1722,7 +1727,7 @@ impl World {
                     // would recover the entire recoil step between AK shots.
                     // Reloads, dry weapons and a held semiautomatic trigger
                     // still recover normally when they cannot sustain fire.
-                    let recoil_firing = fire || w.burst.is_some() || (attack && can_fire && w.def.full_auto && !w.burst_mode
+                    let recoil_firing = fire || w.burst.is_some() || (can_fire && ((attack && w.def.full_auto && !w.burst_mode) || fan_cycle.is_some())
                         && w.reload_end.is_none() && w.clip > 0);
                     weapon::think(w, time, dt, ducked, recoil_firing);
                 }
@@ -1732,12 +1737,12 @@ impl World {
                 if self.players[i].active_weapon().is_some_and(|w| w.is_melee()) {
                     self.melee_attack(i, time, stab);
                 } else {
-                    self.fire(i, time, input.rewind_tick);
+                    self.fire(i, time, input.rewind_tick, secondary_cycle);
                     // At low tick rates several imported intervals can become
                     // due together. A burst has at most two follow-up bullets.
                     for _ in 0..2 {
                         if !self.players[i].active_weapon().is_some_and(|w| w.burst_due(time)) { break; }
-                        self.fire(i, time, input.rewind_tick);
+                        self.fire(i, time, input.rewind_tick, None);
                     }
                 }
             }
@@ -1814,10 +1819,12 @@ impl World {
         };
     }
 
-    fn fire(&mut self, shooter: usize, time: f32, rewind_tick: Option<u64>) {
+    fn fire(&mut self, shooter: usize, time: f32, rewind_tick: Option<u64>, secondary_cycle: Option<f32>) {
         let dt = self.dt();
         let p = &self.players[shooter];
-        let continued_trigger = p.last_input.buttons & buttons::ATTACK != 0;
+        let secondary = secondary_cycle.is_some();
+        let trigger = if secondary { buttons::ATTACK2 } else { buttons::ATTACK };
+        let continued_trigger = p.last_input.buttons & trigger != 0;
         let id = p.id;
         let team = p.team;
         let (eye, aim_angles) = p.aim_origin_angles();
@@ -1831,8 +1838,8 @@ impl World {
             on_ground: p.movement.on_ground,
             ducked: p.movement.ducked,
         };
-        let inacc = weapon::inaccuracy(w, ctx) * 0.001;
-        let spread = w.alt_stat("spread", def.accuracy.spread) * 0.001;
+        let inacc = weapon::inaccuracy_for_shot(w, ctx, secondary) * 0.001;
+        let spread = w.shot_stat("spread", def.accuracy.spread, secondary) * 0.001;
         let angles = aim_angles
             + Vec3::new(punch[0] * weapon::RECOIL_SCALE, punch[1] * weapon::RECOIL_SCALE, 0.0);
         let (fwd, right, up) = movement::angle_vectors(angles);
@@ -1939,8 +1946,8 @@ impl World {
             if w.uses_ammo() {
                 w.clip -= 1;
             }
-            w.shot_cooldown(time, dt, continued_trigger);
-            w.accuracy_penalty += w.alt_stat("inaccuracy fire", def.accuracy.inaccuracy_fire);
+            w.shot_cooldown(time, dt, continued_trigger, secondary_cycle);
+            w.accuracy_penalty += w.shot_stat("inaccuracy fire", def.accuracy.inaccuracy_fire, secondary);
             w.recoil_shot(self.tick, self.tick_rate);
             w.recoil_index += 1.0;
             if w.zoom_level > 0 && def.attr_f32("unzoom after shot").is_some_and(|v| v != 0.0) {

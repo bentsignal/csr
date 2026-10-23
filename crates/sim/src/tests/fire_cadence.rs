@@ -64,6 +64,102 @@ fn normal_ak_and_m4_reload_released_empty_magazines_and_replay_from_snapshot() {
 fn held() -> TickInput { TickInput { buttons: buttons::ATTACK, ..Default::default() } }
 
 #[test]
+fn revolver_secondary_fires_authored_shots_without_changing_instant_primary() {
+    // Installed Legacy weapon_revolver_prefab (schema SHA1
+    // c1361d351802b7be5f55245c331f5f1d6b36ad35); owner primary policy is 0.55s.
+    for rate in [64, 128] {
+        let mut gun = def("weapon_revolver", 64, WeaponClass::Pistol, Side::Both, 600, 8);
+        gun.cycle_time = 0.55; gun.reserve_ammo = 0; gun.max_player_speed = 180.; gun.range = 4096.;
+        gun.accuracy.spread = 0.52; gun.accuracy.inaccuracy_stand = 2.; gun.accuracy.inaccuracy_crouch = 1.;
+        gun.accuracy.inaccuracy_move = 6.5; gun.accuracy.inaccuracy_jump = 53.23; gun.accuracy.inaccuracy_fire = 50.;
+        for (key, value) in [("is revolver", "1"), ("cycletime alt", "0.4"), ("spread alt", "68"),
+            ("inaccuracy stand alt", "12"), ("inaccuracy crouch alt", "5"), ("inaccuracy move alt", "36"),
+            ("inaccuracy jump alt", "53.23"), ("inaccuracy fire alt", "55"), ("max player speed alt", "220")] {
+            gun.attributes.insert(key.into(), value.into());
+        }
+        let (mut world, id) = equipped(rate, gun);
+        world.collision = super::world().collision;
+        teleport(&mut world, id, Vec3::new(0., 0., 1.));
+        for _ in 0..4 { world.step(&[]); }
+        assert!(world.players[0].movement.on_ground);
+        let alternate = TickInput { buttons: buttons::ATTACK2, ..Default::default() };
+        let first = world.time();
+
+        // The same weapon still fires primary immediately, without cocking,
+        // and ATTACK2 cannot bypass its accepted longer primary cooldown.
+        let mut primary = world.clone();
+        primary.step(&[(id, held())]);
+        assert_eq!(primary.players[0].shots, 1);
+        let w = &primary.players[0].weapons[0];
+        assert!((w.next_attack - first - 0.55).abs() < 0.00001);
+        assert_eq!(w.accuracy_penalty, 50.);
+        let ready = w.next_attack;
+        while primary.time() < ready {
+            primary.step(&[(id, alternate)]);
+            assert_eq!(primary.players[0].shots, 1);
+        }
+        primary.step(&[(id, alternate)]);
+        assert_eq!(primary.players[0].shots, 2);
+
+        // An unrelated gun or absent/invalid authored cycle cannot fan-fire.
+        for (key, value) in [("is revolver", "0"), ("cycletime alt", "NaN"), ("cycletime alt", "0")] {
+            let mut unsupported = world.clone();
+            Arc::make_mut(&mut unsupported.players[0].weapons[0].def).attributes.insert(key.into(), value.into());
+            unsupported.step(&[(id, alternate)]);
+            assert_eq!(unsupported.players[0].shots, 0);
+        }
+        let mut missing = world.clone();
+        Arc::make_mut(&mut missing.players[0].weapons[0].def).attributes.remove("cycletime alt");
+        missing.step(&[(id, alternate)]);
+        assert_eq!(missing.players[0].shots, 0);
+
+        let w = &world.players[0].weapons[0];
+        let moving = weapon::AccuracyContext { speed: 220., vertical_speed: 0., on_ground: true, ducked: false };
+        assert_eq!(weapon::inaccuracy_for_shot(w, moving, true), 48.);
+        assert_eq!(weapon::inaccuracy_for_shot(w, weapon::AccuracyContext { speed: 0., ducked: true, ..moving }, true), 5.);
+        assert!((weapon::inaccuracy_for_shot(w, weapon::AccuracyContext { speed: 0., on_ground: false, ..moving }, true) - 65.23).abs() < 0.00001);
+
+        world.step(&[(id, alternate)]);
+        assert_eq!(world.players[0].shots, 1);
+        assert_eq!(world.players[0].weapons[0].accuracy_penalty, 55.);
+        // Assert the actual emitted ray uses alternate standing inaccuracy
+        // AND spread, independently of the stat-selection helper.
+        let mut rng = crate::rng::Rng::from_parts(&[id as u64, 0]);
+        let r1 = rng.next_f32(); let a1 = rng.range(0., std::f32::consts::TAU);
+        let r2 = rng.next_f32(); let a2 = rng.range(0., std::f32::consts::TAU);
+        let (fwd, right, up) = movement::angle_vectors(Vec3::ZERO);
+        let expected = (fwd + right * (a1.cos() * r1 * 0.012 + a2.cos() * r2 * 0.068)
+            + up * (a1.sin() * r1 * 0.012 + a2.sin() * r2 * 0.068)).normalize();
+        let actual = world.events.iter().find_map(|event| match event {
+            GameEvent::Tracer { player, start, end } if *player == id => Some((*end - *start).normalize()), _ => None,
+        }).expect("secondary must trace an ordinary authoritative bullet");
+        assert!(actual.distance(expected) < 0.000001, "{actual:?} != {expected:?}");
+
+        let snapshot = world.decode::<Snapshot>(&state::encode(&world.snapshot())).unwrap();
+        let mut restored = world.clone(); restored.restore(snapshot.state);
+        let mut predicted = world.clone();
+        let mut times = vec![first];
+        for _ in 0..rate * 4 {
+            let time = world.time();
+            world.step(&[(id, alternate)]);
+            restored.step(&[(id, alternate)]);
+            predicted.step_prediction(&[(id, alternate)]);
+            assert_eq!(world.state_hash(), restored.state_hash());
+            assert_eq!(world.state_hash(), predicted.state_hash());
+            let count = world.events.iter().filter(|event| matches!(event, GameEvent::Fire { player, .. } if *player == id)).count();
+            assert!(count <= 1);
+            if count == 1 { times.push(time); }
+        }
+        assert_eq!(times.len(), 8);
+        for (shot, time) in times.iter().enumerate() {
+            let deadline = first + shot as f32 * 0.4;
+            assert!(*time >= deadline - 0.00001 && *time < deadline + world.dt() + 0.00001, "{rate}Hz: {times:?}");
+        }
+        assert_eq!((world.players[0].weapons[0].clip, world.players[0].weapons[0].reserve), (0, 0));
+    }
+}
+
+#[test]
 fn semiauto_press_during_cooldown_fires_once_when_ready_and_replays() {
     // Installed Legacy primary cycles; no pistol-specific speed boost.
     for rate in [64, 128] { for cycle in [0.12, 0.15, 0.2, 0.225] {

@@ -36,6 +36,10 @@ retained fresh press. Held automatic fire and sim cadence stay unchanged.
 Follow-through also preserves a complete release/repress delivered in one render
 frame, stretches the sniper reticle strips across the scope, and retains the
 original scoreboard during same-view stat updates instead of flashing fallback.
+The arsenal follow-through restores previously missing R8 secondary fire using
+the installed alternate cycle/spread/inaccuracy and shared ammo/readiness. The
+instant 0.55s primary is preserved; no new cocking behavior is added. Alternate
+recoil and animation parity remain outside this bounded firing correction.
 The owner launcher/profile has not been replaced.
 
 October 23 recovery instruction: an hourly T3 scheduled check resumes approved
