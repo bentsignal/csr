@@ -66,7 +66,10 @@ through up to four isolated wood, cardboard, plastic, glass or grate slabs.
 Mounted material modifiers feed a bounded approximate thickness/damage policy;
 unknown materials and overlapping geometry stay opaque. Workspace checks and an
 actual installed Inferno wood-panel firing/opaque control pass at 64/128 Hz.
-Final client rendering/CI remain pending. The original M3 task stays unchecked:
+The final PLAY build and Dust II probe/sim pass; small/full scoreboard captures
+confirm aligned original emblems and all twelve rows per team. CI remains pending.
+Penetrating pellets emit one completed tracer path with separate entry impacts.
+The original M3 task stays unchecked:
 native damage/thickness parity and broader cover geometry are unfinished.
 
 The owner launcher/profile has not been replaced.
