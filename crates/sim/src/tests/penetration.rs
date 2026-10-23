@@ -55,7 +55,9 @@ fn thin_wood_reaches_target_with_loss_entry_feedback_and_one_ammo() {
     assert_eq!(covered.players[0].shots, 1);
     assert_eq!(covered.events.iter().filter(|e| matches!(e, GameEvent::Fire { .. })).count(), 1);
     assert_eq!(covered.events.iter().filter(|e| matches!(e, GameEvent::Impact { .. })).count(), 1);
-    assert_eq!(covered.events.iter().filter(|e| matches!(e, GameEvent::Tracer { .. })).count(), 2);
+    assert_eq!(covered.events.iter().filter(|e| matches!(e, GameEvent::Tracer { .. })).count(), 1);
+    assert!(covered.events.iter().any(|e| matches!(e, GameEvent::Tracer { start, end, .. }
+        if start.x.abs() < 0.001 && end.x > 100.)));
 }
 
 #[test]
@@ -128,6 +130,7 @@ fn every_supported_material_and_separated_cover_layers() {
         world.fire(0, 1., None, None);
         assert!(world.player(victim).unwrap().health < 100);
         assert_eq!(world.events.iter().filter(|e| matches!(e, GameEvent::Impact { .. })).count(), 2);
+        assert_eq!(world.events.iter().filter(|e| matches!(e, GameEvent::Tracer { .. })).count(), 1);
     }
 }
 

@@ -1878,7 +1878,7 @@ impl World {
                 // still marked start-solid. It must not admit a target beyond
                 // that wall as if the whole segment were clear.
                 if tr.start_solid || tr.all_solid {
-                    self.events.push(GameEvent::Tracer { player: id, start: segment_start, end: segment_start });
+                    self.events.push(GameEvent::Tracer { player: id, start: eye, end: segment_start });
                     break;
                 }
                 let world_dist = tr.fraction * segment_range;
@@ -1917,7 +1917,7 @@ impl World {
                         if best.is_none_or(|(_,t,_)|distance<t) {
                             let hit=segment_start+dir*distance;
                             dynamic.damage_target_at(key,def.damage * damage_scale * def.range_modifier.powf((traveled+distance)/500.0),eye,hit);
-                            self.events.push(GameEvent::Tracer{player:id,start:segment_start,end:hit});
+                            self.events.push(GameEvent::Tracer{player:id,start:eye,end:hit});
                             break;
                         }
                     }
@@ -1925,7 +1925,7 @@ impl World {
                 match best {
                     Some((j, t, authored_group)) => {
                         let hit = segment_start + dir * t;
-                        self.events.push(GameEvent::Tracer { player: id, start: segment_start, end: hit });
+                        self.events.push(GameEvent::Tracer { player: id, start: eye, end: hit });
                         let victim = &self.players[j];
                         let hull = self.target_hull(victim, rewind_tick);
                         let (mn, mx) = (hull.movement_mins, hull.movement_maxs);
@@ -1944,7 +1944,6 @@ impl World {
                         break;
                     }
                     None => {
-                        self.events.push(GameEvent::Tracer { player: id, start: segment_start, end: tr.end });
                         if tr.fraction < 1.0 && !self.collision.is_sky(tr.surface) {
                             // Query the intact current geometry before breakable damage
                             // can replace this simulation copy's collision overlay.
@@ -1974,6 +1973,10 @@ impl World {
                                 }
                             }
                         }
+                        // Presentation anchors tracers to the rendered muzzle.
+                        // Emit only the completed pellet path, not a new muzzle
+                        // trail for every segment behind penetrated cover.
+                        self.events.push(GameEvent::Tracer { player: id, start: eye, end: tr.end });
                     }
                 }
                 break;
