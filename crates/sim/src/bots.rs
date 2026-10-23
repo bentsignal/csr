@@ -1532,6 +1532,14 @@ fn follow_ladder(mesh: &NavMesh, world: &World, bot: &Player, brain: &mut Brain,
     brain.ladder_navigation = true;
     let pos = bot.movement.origin;
     let Some(destination) = mesh.area(to) else { brain.path.clear(); return };
+    // Ladder traversal returns before follow_path's ordinary CROUCH handling.
+    // Keep the authored stance through approach, climbing and dismount: the
+    // upper opening can require it on either arrival or departure, even when
+    // no raised-cap jump is involved. Human movement still owns hull clearance.
+    if destination.flags & nav::attr::CROUCH != 0
+        || mesh.area(from).is_some_and(|a| a.flags & nav::attr::CROUCH != 0) {
+        input.buttons |= buttons::DUCK;
+    }
     let normal = ladder.normal();
     let (mins, maxs) = bot.movement.hull();
     let extent = (maxs - mins) * 0.5;
@@ -2007,6 +2015,133 @@ mod tests {
             Vec3::new(160., 64., ceiling + 16.), collision::contents::SOLID));
         collision.finalize();
         (world, bots, id)
+    }
+
+    fn ordinary_low_ladder_fixture(rate: u32, up: bool, flags: u32) -> (World, Bots, PlayerId) {
+        let (mut world, mut bots, id) = ladder_route_fixture(rate, up, true, 256.);
+        bots.nav = Some(Arc::new(ladder_nav_with_departure_flags(flags)));
+        let collision = Arc::get_mut(&mut world.collision).unwrap();
+        // A flush cap, not a raised jump mount. The upper floor has 64 units
+        // of clearance; both spawn positions are outside this low opening.
+        collision.add_convex(ladder_box(Vec3::new(-64., -64., 320.),
+            Vec3::new(64., 64., 336.), collision::contents::SOLID));
+        collision.finalize();
+        (world, bots, id)
+    }
+
+    // UNRUN: independent human inputs establish that crouch, not a different
+    // hull, jump impulse or bot-only movement, makes this ordinary route work.
+    #[test]
+    fn human_crouch_traverses_ordinary_low_ladder_opening_at_both_rates() {
+        for rate in [64, 128] {
+            for up in [false, true] {
+                for crouch in [false, true] {
+                    let (mut world, _, id) = ordinary_low_ladder_fixture(rate, up, nav::attr::CROUCH);
+                    let mut attached = false;
+                    let mut detached = false;
+                    let mut arrived = false;
+                    for _ in 0..rate * 8 {
+                        let before = world.player(id).unwrap().movement;
+                        let mut buttons = if crouch { buttons::DUCK } else { 0 };
+                        let forward_move = if up { 450. }
+                            else if before.ladder_normal.is_some() {
+                                if before.origin.z <= 18. { buttons |= buttons::JUMP; }
+                                -450.
+                            } else if attached { -450. }
+                            else if before.origin.x <= -17.5 { 450. }
+                            else if before.origin.x < -8. { -24. }
+                            else { -450. };
+                        // Level forward climbs. For descent, walk across the
+                        // lip slowly, press into the face to catch it, then
+                        // back down and jump away at the bottom. No bot helper
+                        // or injected attachment/stance/route state is used.
+                        world.step_prediction(&[(id, TickInput { forward_move, buttons,
+                            view_angles: Vec3::ZERO, ..Default::default() })]);
+                        let pm = &world.player(id).unwrap().movement;
+                        let (mins, maxs) = pm.hull();
+                        let tr = world.collision.trace_box(pm.origin, pm.origin, mins, maxs,
+                            collision::contents::MASK_PLAYERSOLID);
+                        assert!(!tr.start_solid && !tr.all_solid, "human hull must respect the low opening: {pm:?}");
+                        attached |= pm.ladder_normal == Some(-Vec3::X);
+                        detached |= attached && pm.ladder_normal.is_none();
+                        arrived = pm.on_ground && pm.ladder_normal.is_none()
+                            && if up { pm.origin.x > 32. && pm.origin.z > 248. }
+                                else { pm.origin.x < -40. && pm.origin.z < 8. };
+                        if arrived { break; }
+                    }
+                    let pm = &world.player(id).unwrap().movement;
+                    assert_eq!(arrived, crouch, "{rate} Hz up={up}: only crouched human traversal fits: {pm:?}");
+                    if crouch {
+                        assert!(attached && detached, "human must use and leave the ladder: {pm:?}");
+                    } else if up {
+                        assert!(attached && !detached && pm.origin.z < 256., "standing ascent stalls below the cap: {pm:?}");
+                    } else {
+                        assert!(!attached && pm.on_ground && pm.origin.x > 64., "standing approach cannot enter: {pm:?}");
+                    }
+                }
+            }
+        }
+    }
+
+    // UNRUN: parsed NAV -> actual think -> TickInput -> World, with no seeded
+    // brain state. The same opening without authored CROUCH must fail boundedly.
+    #[test]
+    fn authored_crouch_covers_ordinary_ladder_ascent_and_descent_at_both_rates() {
+        for rate in [64, 128] {
+            for up in [false, true] {
+                for authored in [false, true] {
+                    let flags = if authored { nav::attr::CROUCH } else { 0 };
+                    let (mut world, mut bots, id) = ordinary_low_ladder_fixture(rate, up, flags);
+                    assert_eq!(bots.nav.as_ref().unwrap().area(2).unwrap().flags, flags);
+                    let mut attached = false;
+                    let mut detached = false;
+                    let mut arrived = false;
+                    let mut failed = false;
+                    let mut approach_duck = false;
+                    let mut climb_duck = false;
+                    for _ in 0..rate * 8 {
+                        let before = world.player(id).unwrap().movement;
+                        let inputs = bots.think(&world);
+                        assert_eq!(world.player(id).unwrap().movement, before, "think emits input only");
+                        let input = &inputs[0].1;
+                        assert_eq!(input.buttons & buttons::ATTACK, 0);
+                        if bots.brains[&id].ladder_navigation {
+                            let duck = input.buttons & buttons::DUCK != 0;
+                            assert_eq!(duck, authored, "only authored stance authorizes ducking");
+                            approach_duck |= duck && !attached;
+                            climb_duck |= duck && before.ladder_normal == Some(-Vec3::X);
+                        }
+                        assert!(bots.brains[&id].ladder_route.as_ref().is_none_or(|r| r.top_mount.is_none()),
+                            "flush cap must not invoke raised-cap mounting");
+                        if !attached { assert_eq!(input.buttons & buttons::JUMP, 0, "ordinary approach needs no jump"); }
+                        world.step_prediction(&inputs);
+                        let pm = &world.player(id).unwrap().movement;
+                        let (mins, maxs) = pm.hull();
+                        let tr = world.collision.trace_box(pm.origin, pm.origin, mins, maxs,
+                            collision::contents::MASK_PLAYERSOLID);
+                        assert!(!tr.start_solid && !tr.all_solid, "bot hull must respect the low opening: {pm:?}");
+                        attached |= pm.ladder_normal == Some(-Vec3::X)
+                            && ladder_contact(&world, world.player(id).unwrap(),
+                                bots.nav.as_ref().unwrap().ladder(7).unwrap()).1;
+                        detached |= attached && pm.ladder_normal.is_none();
+                        arrived = pm.on_ground && pm.ladder_normal.is_none()
+                            && if up { pm.origin.x > 32. && pm.origin.z > 248. }
+                                else { pm.origin.x < -40. && pm.origin.z < 8. };
+                        failed = bots.brains[&id].failed_transitions.iter()
+                            .any(|e| (e.from, e.to) == if up { (1, 2) } else { (2, 1) });
+                        if arrived || failed { break; }
+                    }
+                    let pm = &world.player(id).unwrap().movement;
+                    assert_eq!(arrived, authored, "{rate} Hz up={up}: authored ordinary traversal: {pm:?}");
+                    assert_eq!(failed, !authored, "unflagged low opening retains bounded failure");
+                    if authored {
+                        assert!(approach_duck && climb_duck && attached && detached,
+                            "{rate} Hz up={up}: require held authored stance and selected-ladder traversal: {pm:?}");
+                        assert!(bots.brains[&id].failed_transitions.is_empty());
+                    }
+                }
+            }
+        }
     }
 
     // UNRUN: independent human commands establish the supported input before
