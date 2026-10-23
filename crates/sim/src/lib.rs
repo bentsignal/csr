@@ -1874,6 +1874,13 @@ impl World {
                 let traveled = (segment_start - eye).dot(dir).max(0.0);
                 let segment_range = (range - traveled).max(0.0);
                 let (tr, owner) = self.collision.trace_owned_ray(segment_start, end, contents::MASK_SHOT);
+                // A ray leaving an enclosing solid can have fraction=1 while
+                // still marked start-solid. It must not admit a target beyond
+                // that wall as if the whole segment were clear.
+                if tr.start_solid || tr.all_solid {
+                    self.events.push(GameEvent::Tracer { player: id, start: segment_start, end: segment_start });
+                    break;
+                }
                 let world_dist = tr.fraction * segment_range;
 
                 // The movement hull is broad phase only when authored shapes exist.
