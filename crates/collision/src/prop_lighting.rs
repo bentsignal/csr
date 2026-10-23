@@ -19,15 +19,29 @@ struct Node {
 
 /// Prepared exact static-prop lighting queries, borrowing an immutable map.
 /// Storage is linear in shape count and reused for every ray. No geometry or
-/// triangle planes are duplicated. This object is released after prop baking.
+/// triangle planes are duplicated. Forks share immutable acceleration and own
+/// independent scratch. This object is released after prop baking.
 pub struct PropLightingQuery<'a> {
-    world: &'a CollisionWorld,
-    shapes: Vec<Shape>,
-    nodes: Vec<Node>,
+    world: LightingWorld<'a>,
+    shapes: std::sync::Arc<Vec<Shape>>,
+    nodes: std::sync::Arc<Vec<Node>>,
     seen: Vec<u32>,
     generation: u32,
     candidates: Vec<usize>,
     planes: Vec<Plane>,
+}
+
+#[derive(Clone)]
+enum LightingWorld<'a> {
+    Borrowed(&'a CollisionWorld),
+    Owned(std::sync::Arc<CollisionWorld>),
+}
+
+impl std::ops::Deref for LightingWorld<'_> {
+    type Target = CollisionWorld;
+    fn deref(&self) -> &CollisionWorld {
+        match self { Self::Borrowed(world) => world, Self::Owned(world) => world }
+    }
 }
 
 fn key(shape: Shape) -> (u8, u32) {
@@ -99,6 +113,25 @@ fn build(world: &CollisionWorld, shapes: &mut [Shape], first: usize, nodes: &mut
 
 impl<'a> PropLightingQuery<'a> {
     pub(super) fn new(world: &'a CollisionWorld) -> Self {
+        Self::with_world(LightingWorld::Borrowed(world))
+    }
+
+    /// Retain the immutable map and exact query scratch across loading frames.
+    pub fn owned(world: std::sync::Arc<CollisionWorld>) -> PropLightingQuery<'static> {
+        PropLightingQuery::with_world(LightingWorld::Owned(world))
+    }
+
+    /// Independent scratch for scoped parallel lighting of the same map.
+    pub fn fork(&self) -> Self {
+        Self {
+            world: self.world.clone(), shapes: self.shapes.clone(), nodes: self.nodes.clone(),
+            seen: vec![0; self.shapes.len()], generation: 0,
+            candidates: Vec::with_capacity(self.shapes.len()),
+            planes: Vec::with_capacity(26),
+        }
+    }
+
+    fn with_world(world: LightingWorld<'a>) -> Self {
         // Dynamic worlds keep their existing backend and exclusion behavior.
         let static_map = world.dynamic.is_none() && world.grid.dims[0] != 0;
         let count = if static_map {
@@ -140,14 +173,14 @@ impl<'a> PropLightingQuery<'a> {
             node_count(shapes.len())
         });
         if !shapes.is_empty() {
-            build(world, &mut shapes, 0, &mut nodes);
+            build(&world, &mut shapes, 0, &mut nodes);
         }
         Self {
             world,
             seen: vec![0; shapes.len()],
             candidates: Vec::with_capacity(shapes.len()),
-            shapes,
-            nodes,
+            shapes: std::sync::Arc::new(shapes),
+            nodes: std::sync::Arc::new(nodes),
             generation: 0,
             // triangle_planes emits at most 2 + 2 * (3 + 3 * 3) planes.
             planes: Vec::with_capacity(26),
@@ -208,7 +241,7 @@ impl<'a> PropLightingQuery<'a> {
                                 continue;
                             }
                         }
-                        let (mins, maxs) = bounds(self.world, shape);
+                        let (mins, maxs) = bounds(&self.world, shape);
                         if overlaps(mins, maxs, low, high) {
                             self.seen[index] = self.generation;
                             self.candidates.push(index);
@@ -261,3 +294,33 @@ impl<'a> PropLightingQuery<'a> {
 #[cfg(test)]
 #[path = "prop_lighting_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod ownership_tests {
+    use super::*;
+
+    #[test]
+    fn owned_forks_keep_the_same_map_and_acceleration_with_independent_ray_scratch() {
+        let mut world = CollisionWorld::new();
+        let surface = world.surface_id("synthetic");
+        assert!(world.add_convex(Convex {
+            planes: vec![Plane { normal: Vec3::Z, dist: 4. }, Plane { normal: -Vec3::Z, dist: 4. }],
+            mins: Vec3::splat(-4.), maxs: Vec3::splat(4.), contents: contents::SOLID, surface,
+        }));
+        world.finalize();
+        let world = std::sync::Arc::new(world);
+        let borrowed = world.prepare_prop_lighting();
+        let mut owned = PropLightingQuery::owned(world.clone());
+        let mut fork = owned.fork();
+        assert!(std::ptr::eq(&*borrowed.world, &*owned.world));
+        assert!(std::sync::Arc::ptr_eq(&owned.nodes, &fork.nodes));
+        assert!(std::sync::Arc::ptr_eq(&owned.shapes, &fork.shapes));
+        tests::exact(&mut owned, Vec3::Z * 8., -Vec3::Z * 8., usize::MAX);
+        assert_eq!(fork.generation, 0);
+        tests::exact(&mut fork, Vec3::Z * 8., -Vec3::Z * 8., usize::MAX);
+        drop(borrowed);
+        drop(world);
+        drop(owned);
+        tests::exact(&mut fork, -Vec3::Z * 8., Vec3::Z * 8., usize::MAX);
+    }
+}

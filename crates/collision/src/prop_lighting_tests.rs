@@ -37,7 +37,7 @@ fn add_box(w: &mut CollisionWorld, low: Vec3, high: Vec3, contents: i32, name: &
 }
 
 /// Compare every observable field, including tie metadata and float bits.
-fn exact(query: &mut PropLightingQuery<'_>, start: Vec3, end: Vec3, owner: usize) -> Trace {
+pub(super) fn exact(query: &mut PropLightingQuery<'_>, start: Vec3, end: Vec3, owner: usize) -> Trace {
     let expected = query.world.trace_prop_lighting_ray(start, end, owner);
     let actual = query.trace_prop_lighting_ray(start, end, owner);
     let context = || format!("{start:?} -> {end:?}, owner={owner}: {actual:?} != {expected:?}");

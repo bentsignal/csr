@@ -224,12 +224,11 @@ fn surface_key(position: glam::Vec3, normal: glam::Vec3) -> SurfaceKey {
 fn prepare_surface_lighting<'a, T: Copy + Send, F>(
     cache: &mut HashMap<SurfaceKey, T>,
     pending: &mut Vec<PendingSurface<T>>,
-    mesh: &mdl::Mesh,
+    vertices: &[mdl::Vertex],
     prop: &bsp::StaticProp,
     rot: glam::Mat3,
     scale: f32,
     initial: T,
-    collision: &'a CollisionWorld,
     queries: &mut Vec<collision::PropLightingQuery<'a>>,
     pool: Option<&TaskPool>,
     calculate: F,
@@ -241,9 +240,9 @@ fn prepare_surface_lighting<'a, T: Copy + Send, F>(
     // Leave small meshes and callers without a parallel pool on the original
     // single-pass path. Query workspaces are allocated lazily and die with spawn.
     let Some(pool) = pool.filter(|p| p.thread_num() > 1) else { return; };
-    if mesh.vertices.len() < MIN_SAMPLES_PER_TASK * 2 { return; }
+    if vertices.len() < MIN_SAMPLES_PER_TASK * 2 { return; }
     pending.clear();
-    for v in &mesh.vertices {
+    for v in vertices {
         let position = prop.origin + rot * (v.position * scale);
         let normal = (rot * v.normal).normalize_or_zero();
         let key = surface_key(position, normal);
@@ -262,7 +261,7 @@ fn prepare_surface_lighting<'a, T: Copy + Send, F>(
         }
     } else {
         while queries.len() < tasks {
-            queries.push(collision.prepare_prop_lighting());
+            queries.push(queries[0].fork());
         }
         let chunk_size = pending.len().div_ceil(tasks);
         let calculate = &calculate;
@@ -324,6 +323,7 @@ pub fn needs_flip(mesh: &mdl::Mesh) -> bool {
     agree < 0
 }
 
+#[derive(Default)]
 pub struct PropStats {
     pub instances: usize,
     pub draws: usize,
@@ -347,21 +347,101 @@ pub fn spawn(
     sun: Option<Sun>,
     sky: Option<bsp::SkyCamera>,
 ) -> PropStats {
+    let mut import = PropImport::new(level, collision.prepare_prop_lighting());
+    while !import.step(commands, level, meshes, materials, images, textures, shared,
+        exposure, sun, sky, std::time::Duration::MAX) {}
+    import.stats
+}
+
+type BatchKey = (AssetId<WorldMaterial>, bool, [i32; 3], bool);
+
+/// Purpose-built loading continuation. GPU assets stay on the main thread.
+/// Cache keys, per-instance lighting scope and batch append order match spawn.
+pub(crate) struct PropImport<'a> {
+    models: HashMap<u16, Option<(mdl::Model, Vec<bool>)>>,
+    model_cursor: usize,
+    tangent_cursor: (usize, usize),
+    tangent_done: std::collections::HashSet<u16>,
+    tangent_cache: HashMap<(u16, usize), Vec<[f32; 4]>>,
+    material_cache: HashMap<String, Option<Handle<WorldMaterial>>>,
+    model_materials: HashMap<(u16, usize), Option<Handle<WorldMaterial>>>,
+    batches: HashMap<BatchKey, (Handle<WorldMaterial>, Batch)>,
+    uploads: Option<std::collections::hash_map::IntoIter<BatchKey, (Handle<WorldMaterial>, Batch)>>,
+    light_data: Vec<u8>,
+    lighting_queries: Vec<collision::PropLightingQuery<'a>>,
+    surface_cache: HashMap<SurfaceKey, glam::Vec3>,
+    directional_cache: HashMap<SurfaceKey, DirectionalSample>,
+    surface_pending: Vec<PendingSurface<glam::Vec3>>,
+    directional_pending: Vec<PendingSurface<DirectionalSample>>,
+    instance: Option<InstanceImport>,
+    prop_cursor: usize,
+    mesh_cursor: usize,
+    vertex_cursor: usize,
+    index_cursor: usize,
+    mesh_base: u32,
+    authored_meshes: usize,
+    authored_vertices: usize,
+    surface_vertices: usize,
+    directional_vertices: usize,
+    detail_meshes: usize,
+    tinted_instances: usize,
+    pub stats: PropStats,
+}
+
+struct InstanceImport {
+    authored: Option<Vec<Option<Vec<glam::Vec3>>>>,
+    light: PropLight,
+}
+
+const PROP_TEXELS: usize = 9;
+// Both limits are render preparation policy, independent of simulation ticks.
+// Keep enough samples for the existing eight 256-sample lighting workers.
+// Smaller chunks halve parallelism on large props and lengthen map loads.
+const VERTICES_PER_CHUNK: usize = 2048;
+const INDICES_PER_CHUNK: usize = 3072;
+
+impl<'a> PropImport<'a> {
+    pub fn new(level: &level::Level, query: collision::PropLightingQuery<'a>) -> Self {
+        Self {
+            models: HashMap::new(), model_cursor: 0, tangent_cursor: (0, 0),
+            tangent_done: Default::default(),
+            tangent_cache: HashMap::new(), material_cache: HashMap::new(),
+            model_materials: HashMap::new(), batches: HashMap::new(), uploads: None,
+            light_data: vec![0; level.bsp.static_props.props.len().max(1) * PROP_TEXELS * 8],
+            lighting_queries: vec![query], surface_cache: HashMap::new(),
+            directional_cache: HashMap::new(), surface_pending: Vec::new(),
+            directional_pending: Vec::new(), instance: None, prop_cursor: 0,
+            mesh_cursor: 0, vertex_cursor: 0, index_cursor: 0, mesh_base: 0,
+            authored_meshes: 0, authored_vertices: 0, surface_vertices: 0,
+            directional_vertices: 0, detail_meshes: 0, tinted_instances: 0,
+            stats: PropStats::default(),
+        }
+    }
+
+    pub fn progress(&self, level: &level::Level) -> String {
+        format!("Preparing props — {} / {}", self.prop_cursor, level.bsp.static_props.props.len())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn step(
+        &mut self, commands: &mut Commands, level: &level::Level,
+        meshes: &mut Assets<Mesh>, materials: &mut Assets<WorldMaterial>,
+        images: &mut Assets<Image>, textures: &mut TextureCache,
+        shared: &SharedHandles, exposure: f32, sun: Option<Sun>,
+        sky: Option<bsp::SkyCamera>, budget: std::time::Duration,
+    ) -> bool {
+    let started = std::time::Instant::now();
     let fs = &level.vfs;
     let bsp = &level.bsp;
     let read = |p: &str| fs.read_string(p);
-    let mut stats = PropStats {
-        instances: 0,
-        draws: 0,
-        materials: 0,
-        failed_models: 0,
-        sky_draws: 0,
-        triangles: 0,
-    };
+    let Self { models, model_cursor, tangent_cursor, tangent_done, tangent_cache, material_cache,
+        model_materials, batches, uploads, light_data, lighting_queries, surface_cache,
+        directional_cache, surface_pending, directional_pending, instance, prop_cursor,
+        mesh_cursor, vertex_cursor, index_cursor, mesh_base, authored_meshes, authored_vertices,
+        surface_vertices, directional_vertices, detail_meshes, tinted_instances, stats } = self;
 
     // Load every referenced model once, with per-mesh winding fixes.
-    let mut models: HashMap<u16, Option<(mdl::Model, Vec<bool>)>> = HashMap::new();
-    for prop in &bsp.static_props.props {
+    while let Some(prop) = bsp.static_props.props.get(*model_cursor) {
         models.entry(prop.model).or_insert_with(|| {
             let name = bsp.static_props.models.get(prop.model as usize)?;
             let base = name.trim_end_matches(".mdl");
@@ -372,15 +452,25 @@ pub fn spawn(
             let flips = model.meshes.iter().map(needs_flip).collect();
             Some((model, flips))
         });
+        *model_cursor += 1;
+        if started.elapsed() >= budget { return false; }
     }
     // Calculate tangents once per unique model mesh, then rotate per instance.
     // Doing MikkTSpace on all six million placed vertices stalls map loading.
-    let mut tangent_cache = HashMap::new();
-    for (&id, loaded) in &models {
-        let Some((model, flips)) = loaded else { continue; };
-        for (index, (mesh, flip)) in model.meshes.iter().zip(flips).enumerate() {
+    // Visit first references in BSP order; repeated model IDs reuse tangents.
+    while let Some(prop) = bsp.static_props.props.get(tangent_cursor.0) {
+        let id = prop.model;
+        if tangent_done.contains(&id) { tangent_cursor.0 += 1; continue; }
+        let Some(Some((model, flips))) = models.get(&id) else {
+            tangent_cursor.0 += 1; tangent_cursor.1 = 0; continue;
+        };
+        while let Some((mesh, flip)) = model.meshes.get(tangent_cursor.1).zip(flips.get(tangent_cursor.1)) {
+            let index = tangent_cursor.1;
+            tangent_cursor.1 += 1;
+            if tangent_cache.contains_key(&(id, index)) { continue; }
             if let Some(tangents) = mesh.vertices.iter().map(|v| v.tangent).collect::<Option<Vec<_>>>() {
                 tangent_cache.insert((id, index), tangents);
+                if started.elapsed() >= budget { return false; }
                 continue;
             }
             let mut m = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::MAIN_WORLD);
@@ -395,40 +485,26 @@ pub fn spawn(
                     tangent_cache.insert((id, index), t.clone());
                 }
             }
+            if started.elapsed() >= budget { return false; }
         }
+        tangent_done.insert(id);
+        tangent_cursor.0 += 1; tangent_cursor.1 = 0;
     }
     stats.failed_models = models.values().filter(|m| m.is_none()).count();
 
-    // One material per resolved VMT, shared by every prop that uses it.
-    let mut material_cache: HashMap<String, Option<Handle<WorldMaterial>>> = HashMap::new();
-    // Resolve search paths only once per model texture, including rejected VMTs.
-    let mut model_materials: HashMap<(u16, usize), Option<Handle<WorldMaterial>>> = HashMap::new();
-    let mut batches: HashMap<(AssetId<WorldMaterial>, bool, [i32; 3], bool), (Handle<WorldMaterial>, Batch)> = HashMap::new();
-
-    // Six ambient faces, Sun direction/color, then per-instance diffuse tint.
-    const PROP_TEXELS: usize = 9;
-    let mut light_data = vec![0u8; bsp.static_props.props.len().max(1) * PROP_TEXELS * 8];
-    let mut authored_meshes = 0usize;
-    let mut authored_vertices = 0usize;
-    let mut surface_vertices = 0usize;
-    let mut directional_vertices = 0usize;
-    let mut detail_meshes = 0usize;
-    let mut tinted_instances = 0usize;
-    // Bounded map-load query workspaces; gameplay keeps the normal grid.
-    let mut lighting_queries = vec![collision.prepare_prop_lighting()];
     let lighting_pool = ComputeTaskPool::try_get().map(|pool| &**pool);
     // Retain peak-instance/mesh capacity only until this map's spawn finishes.
     // Clear both caches per instance: positions alone do not encode the owner
     // excluded from occlusion or the instance's missing-leaf fallback cube.
-    let mut surface_cache = HashMap::<SurfaceKey, glam::Vec3>::new();
-    let mut directional_cache = HashMap::<SurfaceKey, DirectionalSample>::new();
-    let mut surface_pending = Vec::new();
-    let mut directional_pending = Vec::new();
-    for (prop_index, prop) in bsp.static_props.props.iter().enumerate() {
-        let Some(Some((model, flips))) = models.get(&prop.model) else { continue };
-        let authored = vertex_lighting::load(level, prop_index, model);
+    while let Some(prop) = bsp.static_props.props.get(*prop_cursor) {
+        let prop_index = *prop_cursor;
+        let Some(Some((model, flips))) = models.get(&prop.model) else {
+            *prop_cursor += 1; continue;
+        };
         let rot = mdl::angles_to_mat3(prop.angles);
         let scale = if prop.scale > 0.0 { prop.scale } else { 1.0 };
+        if instance.is_none() {
+        let authored = vertex_lighting::load(level, prop_index, model);
         let center = prop.origin + rot * ((model.hull_min + model.hull_max) * 0.5 * scale);
         let light = prop_light(bsp, &mut lighting_queries[0], sun, center, prop, prop_index);
         // Exact geometric duplicates at UV/material seams share the query.
@@ -443,7 +519,7 @@ pub fn spawn(
         let tint = match prop.diffuse_modulation {
             Some([r, g, b, 255]) => {
                 if [r, g, b] != [255; 3] {
-                    tinted_instances += 1;
+                    *tinted_instances += 1;
                     debug!("Authored prop diffuse tint: instance={prop_index} rgb_bytes={r},{g},{b} alpha=255");
                 }
                 glam::Vec3::new(r as f32, g as f32, b as f32) / 255.0
@@ -456,6 +532,10 @@ pub fn spawn(
                 light_data[offset..offset + 2].copy_from_slice(&crate::textures::f32_to_f16(value).to_le_bytes());
             }
         }
+        *instance = Some(InstanceImport { authored, light });
+        if started.elapsed() >= budget { return false; }
+        }
+        let InstanceImport { authored, light } = instance.as_ref().unwrap();
 
         let in_sky = sky.filter(|s| bsp.point_area(prop.origin + glam::Vec3::Z * 4.0) == s.area);
         let mut transform = Transform {
@@ -468,7 +548,8 @@ pub fn spawn(
         }
         let affine = transform.compute_affine();
 
-        for (mesh_index, (mesh, &flip)) in model.meshes.iter().zip(flips).enumerate() {
+        while let Some((mesh, &flip)) = model.meshes.get(*mesh_cursor).zip(flips.get(*mesh_cursor)) {
+            let mesh_index = *mesh_cursor;
             let tex = model.skin_texture(prop.skin.max(0) as usize, mesh.material);
             let material = model_materials.entry((prop.model, tex)).or_insert_with(|| {
                 let candidates = model.material_candidates(tex);
@@ -485,9 +566,10 @@ pub fn spawn(
                     Some(materials.add(material_from_vmt(vmt.as_ref(), fs, textures, images, shared, exposure, false)))
                 }).clone()
             }).clone();
-            let Some(material) = material else { continue; };
-            if let Some(m) = materials.get(&material).filter(|m| m.params.flags & crate::material::flags::DETAIL != 0) {
-                detail_meshes += 1;
+            let Some(material) = material else { *mesh_cursor += 1; continue; };
+            if let Some(m) = materials.get(&material).filter(|m|
+                *vertex_cursor == 0 && *index_cursor == 0 && m.params.flags & crate::material::flags::DETAIL != 0) {
+                *detail_meshes += 1;
                 debug!("Authored prop detail: instance={prop_index} mesh={mesh_index} flags={} scale={},{} factor={} model={}", m.params.flags, m.params.detail.x, m.params.detail.y, m.params.detail.z, bsp.static_props.models[prop.model as usize]);
             }
             let authored_colors = materials.get(&material)
@@ -511,26 +593,32 @@ pub fn spawn(
                 // The scoped candidate checked mesh identity/counts; its
                 // individual hardware-order interpretation still needs native
                 // spatial admission. Never index the source VVD vector here.
-                authored_meshes += 1;
-                authored_vertices += colors.len();
-                debug!("Authored equal-group prop: instance={prop_index} mesh={mesh_index} vertices={} model={}",
-                    colors.len(), bsp.static_props.models[prop.model as usize]);
+                if *vertex_cursor == 0 && *index_cursor == 0 {
+                    *authored_meshes += 1;
+                    *authored_vertices += colors.len();
+                    debug!("Authored equal-group prop: instance={prop_index} mesh={mesh_index} vertices={} model={}",
+                        colors.len(), bsp.static_props.models[prop.model as usize]);
+                }
             }
+            let end = (*vertex_cursor + VERTICES_PER_CHUNK).min(mesh.vertices.len());
+            let vertices = &mesh.vertices[*vertex_cursor..end];
             if spatial_fallback {
-                prepare_surface_lighting(&mut surface_cache, &mut surface_pending, mesh, prop, rot, scale, glam::Vec3::ZERO,
-                    collision, &mut lighting_queries, lighting_pool, |query, position, normal|
-                        surface_light(bsp, query, sun, &light, position, normal, prop_index));
+                prepare_surface_lighting(surface_cache, surface_pending, vertices, prop, rot, scale, glam::Vec3::ZERO,
+                    lighting_queries, lighting_pool, |query, position, normal|
+                        surface_light(bsp, query, sun, light, position, normal, prop_index));
             } else if directional_fallback {
-                prepare_surface_lighting(&mut directional_cache, &mut directional_pending, mesh, prop, rot, scale, DirectionalSample::default(),
-                    collision, &mut lighting_queries, lighting_pool, |query, position, normal|
-                        DirectionalSample::new(surface_directional_light(bsp, query, sun, &light, position, normal, prop_index), normal));
+                prepare_surface_lighting(directional_cache, directional_pending, vertices, prop, rot, scale, DirectionalSample::default(),
+                    lighting_queries, lighting_pool, |query, position, normal|
+                        DirectionalSample::new(surface_directional_light(bsp, query, sun, light, position, normal, prop_index), normal));
             }
             let (_, batch) = batches
                 .entry((material.id(), in_sky.is_some(), crate::world_mesh::spatial_cell(prop.origin), directional_fallback))
                 .or_insert_with(|| (material.clone(), Batch::default()));
-            let base = batch.positions.len() as u32;
+            if *vertex_cursor == 0 && *index_cursor == 0 { *mesh_base = batch.positions.len() as u32; }
+            let base = *mesh_base;
             let tangents = tangent_cache.get(&(prop.model, mesh_index));
-            for (vertex_index, v) in mesh.vertices.iter().enumerate() {
+            for (offset, v) in vertices.iter().enumerate() {
+                let vertex_index = *vertex_cursor + offset;
                 let n_source = (rot * v.normal).normalize_or_zero();
                 let tangent = tangents.and_then(|t| t.get(vertex_index)).copied().unwrap_or([1.0,0.0,0.0,1.0]);
                 let t = to_bevy(rot * glam::Vec3::new(tangent[0], tangent[1], tangent[2]));
@@ -538,17 +626,17 @@ pub fn spawn(
                 let lit = if let Some(colors) = authored_colors {
                     colors[vertex_index]
                 } else if spatial_fallback {
-                    surface_vertices += 1;
+                    *surface_vertices += 1;
                     let position = prop.origin + rot * (v.position * scale);
                     let key = surface_key(position, n_source);
                     *surface_cache.entry(key).or_insert_with(||
-                        surface_light(bsp, &mut lighting_queries[0], sun, &light, position, n_source, prop_index))
+                        surface_light(bsp, &mut lighting_queries[0], sun, light, position, n_source, prop_index))
                 } else if directional_fallback {
-                    directional_vertices += 1;
+                    *directional_vertices += 1;
                     let position = prop.origin + rot * (v.position * scale);
                     let key = surface_key(position, n_source);
                     let surface = directional_cache.entry(key).or_insert_with(||
-                        DirectionalSample::new(surface_directional_light(bsp, &mut lighting_queries[0], sun, &light, position, n_source, prop_index), n_source));
+                        DirectionalSample::new(surface_directional_light(bsp, &mut lighting_queries[0], sun, light, position, n_source, prop_index), n_source));
                     for (values, packed) in batch.irradiance.iter_mut().zip(surface.packed) {
                         values.push(packed);
                     }
@@ -564,30 +652,46 @@ pub fn spawn(
                 batch.light_ids.push([prop_index as f32, 0.0]);
                 batch.colors.push([lit.x, lit.y, lit.z, 1.0]);
             }
-            for tri in mesh.indices.chunks_exact(3) {
+            *vertex_cursor = end;
+            if end < mesh.vertices.len() {
+                if started.elapsed() >= budget { return false; }
+                continue;
+            }
+            let index_end = (*index_cursor + INDICES_PER_CHUNK).min(mesh.indices.len() / 3 * 3);
+            for tri in mesh.indices[*index_cursor..index_end].chunks_exact(3) {
                 if flip {
                     batch.indices.extend_from_slice(&[base + tri[0], base + tri[2], base + tri[1]]);
                 } else {
                     batch.indices.extend_from_slice(&[base + tri[0], base + tri[1], base + tri[2]]);
                 }
             }
+            *index_cursor = index_end;
+            if index_end < mesh.indices.len() / 3 * 3 {
+                if started.elapsed() >= budget { return false; }
+                continue;
+            }
             stats.triangles += mesh.indices.len() / 3;
+            *mesh_cursor += 1; *vertex_cursor = 0; *index_cursor = 0;
+            if started.elapsed() >= budget { return false; }
         }
         stats.instances += 1;
+        *instance = None; *prop_cursor += 1; *mesh_cursor = 0;
+        if started.elapsed() >= budget { return false; }
     }
 
-    drop(lighting_queries);
-    drop((surface_cache, directional_cache, surface_pending, directional_pending));
-
+    if uploads.is_none() {
     use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
     let lighting = images.add(Image::new(
         Extent3d { width: PROP_TEXELS as u32, height: bsp.static_props.props.len().max(1) as u32, depth_or_array_layers: 1 },
-        TextureDimension::D2, light_data, TextureFormat::Rgba16Float, RenderAssetUsages::RENDER_WORLD,
+        TextureDimension::D2, std::mem::take(light_data), TextureFormat::Rgba16Float, RenderAssetUsages::RENDER_WORLD,
     ));
     for handle in material_cache.values().flatten() {
         if let Some(mut mat) = materials.get_mut(handle) { mat.prop_light = lighting.clone(); }
     }
-    for ((_, in_sky, _, _), (material, batch)) in batches {
+    *uploads = Some(std::mem::take(batches).into_iter());
+    if started.elapsed() >= budget { return false; }
+    }
+    for ((_, in_sky, _, _), (material, batch)) in uploads.as_mut().unwrap() {
         if batch.indices.is_empty() {
             continue;
         }
@@ -603,12 +707,14 @@ pub fn spawn(
             stats.sky_draws += 1;
         } else { e.insert(clusters); }
         stats.draws += 1;
+        if started.elapsed() >= budget { return false; }
     }
     info!("Authored equal-group prop lighting: meshes={authored_meshes} vertices={authored_vertices}; unsupported meshes use ambient/Sun fallback");
-    info!("Spatial ambient/Sun prop fallback: plain_vertices={surface_vertices} directional_vertices={directional_vertices} directional_attribute_bytes={}; special-mode props retain instance lighting", directional_vertices * 48);
+    info!("Spatial ambient/Sun prop fallback: plain_vertices={surface_vertices} directional_vertices={directional_vertices} directional_attribute_bytes={}; special-mode props retain instance lighting", *directional_vertices * 48);
     info!("Authored static-prop diffuse tint: nonwhite_instances={tinted_instances}");
     info!("Authored ordinary static-prop detail: meshes={detail_meshes}; unsupported layers retain base material");
-    stats
+    true
+    }
 }
 
 #[cfg(test)]
@@ -682,6 +788,127 @@ mod lighting_tests {
     }
 
     #[test]
+    fn chunked_prop_streams_match_serial_lighting_transforms_and_winding() {
+        let mut level = crate::scene_import::fixture_level();
+        let (mut map, mut collision) = fixture(true);
+        map.static_props.props[1].angles.z = 30.;
+        map.static_props.props[1].scale = 1.25;
+        map.static_props.props[1].diffuse_modulation = Some([127, 191, 255, 255]);
+        add_world_bounds(&mut collision, SourceVec3::new(-256., -256., 33.),
+            SourceVec3::new(32., 256., 44.), "partial_cover");
+        collision.finalize();
+        level.bsp = map;
+        level.collision = std::sync::Arc::new(collision);
+        let mut mesh = mdl::Mesh::default();
+        // Cross multiple vertex and index chunks, with seam duplicates across
+        // the chunk boundary. Authored tangents must retain their handedness.
+        for i in 0..2307 {
+            mesh.vertices.push(mdl::Vertex {
+                position: SourceVec3::new((i % 1000) as f32 * 0.25 - 128., 0., 1.),
+                normal: SourceVec3::Z, uv: glam::Vec2::new(i as f32 / 2307., 0.5),
+                tangent: Some([1., 0., 0., -1.]), ..Default::default()
+            });
+        }
+        mesh.indices = (0..mesh.vertices.len() as u32).collect();
+        mesh.indices.extend(mesh.indices.clone());
+        let mut bumped = mesh.clone();
+        bumped.material = 1;
+        let model = mdl::Model { meshes: vec![mesh, bumped], ..Default::default() };
+        let mut images = Assets::<Image>::default();
+        let mut textures = TextureCache::new(&mut images);
+        let shared = SharedHandles { lightmap: textures.white.clone() };
+        let vmt = vmt::Material::parse_with("VertexLitGeneric {}", &|_| None, 0).unwrap();
+        let plain = material_from_vmt(Some(&vmt), &level.vfs, &mut textures, &mut images, &shared, 1., false);
+        let mut bumped = plain.clone();
+        bumped.params.flags |= crate::material::flags::NORMAL;
+        let mut materials = Assets::<WorldMaterial>::default();
+        let handles = [materials.add(plain), materials.add(bumped)];
+        let mut import = PropImport::new(&level, collision::PropLightingQuery::owned(level.collision.clone()));
+        import.models.insert(0, Some((model.clone(), vec![false, true])));
+        for (index, handle) in handles.iter().enumerate() {
+            import.material_cache.insert(index.to_string(), Some(handle.clone()));
+            import.model_materials.insert((0, index), Some(handle.clone()));
+        }
+        import.stats.materials = 2;
+        let mut world = World::new();
+        let mut queue = bevy::ecs::world::CommandQueue::default();
+        let mut meshes = Assets::<Mesh>::default();
+        let mut commands = Commands::new(&mut queue, &world);
+        let mut slices = 0;
+        let mut split_vertices = false;
+        let mut split_indices = false;
+        while import.prop_cursor < level.bsp.static_props.props.len() {
+            assert!(!import.step(&mut commands, &level, &mut meshes, &mut materials,
+                &mut images, &mut textures, &shared, 1., Some(SUN), None, std::time::Duration::ZERO));
+            split_vertices |= import.vertex_cursor > 0 && import.vertex_cursor < model.meshes[0].vertices.len();
+            split_indices |= import.index_cursor > 0 && import.index_cursor < model.meshes[0].indices.len();
+            slices += 1;
+            assert!(slices < 100, "cursor must advance without restarting a mesh");
+        }
+        assert!(split_vertices && split_indices);
+        assert_eq!(import.stats.instances, 2);
+        assert_eq!(import.stats.triangles, 2 * 2 * 2 * 769);
+        assert_eq!((import.stats.materials, import.stats.failed_models), (2, 0));
+        assert_eq!(import.tangent_cache.len(), 2);
+        let mut offsets = HashMap::new();
+        let mut query = level.collision.prepare_prop_lighting();
+        for (ordinal, prop) in level.bsp.static_props.props.iter().enumerate() {
+            let rot = mdl::angles_to_mat3(prop.angles);
+            let scale = if prop.scale > 0. { prop.scale } else { 1. };
+            let center = prop.origin + rot * ((model.hull_min + model.hull_max) * 0.5 * scale);
+            let light = prop_light(&level.bsp, &mut query, Some(SUN), center, prop, ordinal);
+            for (index, mesh) in model.meshes.iter().enumerate() {
+                let key = (handles[index].id(), false, crate::world_mesh::spatial_cell(prop.origin), index == 1);
+                let (_, batch) = &import.batches[&key];
+                let base = *offsets.entry(key).or_insert(0usize);
+                let transform = Transform { translation: to_bevy(prop.origin), rotation: rotation_to_bevy(rot),
+                    scale: Vec3::splat(scale) }.compute_affine();
+                for (i, v) in mesh.vertices.iter().enumerate() {
+                    let normal = (rot * v.normal).normalize_or_zero();
+                    let position = prop.origin + rot * (v.position * scale);
+                    let serial = surface_directional_light(&level.bsp, &mut query, Some(SUN),
+                        &light, position, normal, ordinal);
+                    let color = if index == 0 { surface_light(&level.bsp, &mut query, Some(SUN),
+                        &light, position, normal, ordinal) } else { serial.eval(normal) };
+                    assert_eq!(batch.positions[base + i].map(f32::to_bits),
+                        transform.transform_point3(to_bevy(v.position)).to_array().map(f32::to_bits));
+                    assert_eq!(batch.normals[base + i].map(f32::to_bits), to_bevy(normal).to_array().map(f32::to_bits));
+                    assert_eq!(batch.uvs[base + i], v.uv.to_array());
+                    assert_eq!(batch.light_ids[base + i], [ordinal as f32, 0.]);
+                    assert_eq!(batch.colors[base + i].map(f32::to_bits), color.extend(1.).to_array().map(f32::to_bits));
+                    let tangent = to_bevy(rot * SourceVec3::X);
+                    assert_eq!(batch.tangents[base + i], [tangent.x, tangent.y, tangent.z, -1.]);
+                    if index == 1 {
+                        for (stream, expected) in batch.irradiance.iter().zip(irradiance::pack(&serial)) {
+                            assert_eq!(stream[base + i], expected);
+                        }
+                    }
+                }
+                for (tri_index, tri) in mesh.indices.chunks_exact(3).enumerate() {
+                    let expected = if index == 1 { [tri[0], tri[2], tri[1]] } else { [tri[0], tri[1], tri[2]] };
+                    assert_eq!(&batch.indices[base * 2 + tri_index * 3..base * 2 + tri_index * 3 + 3],
+                        &expected.map(|i| base as u32 + i));
+                }
+                *offsets.get_mut(&key).unwrap() += mesh.vertices.len();
+            }
+        }
+        for (key, count) in offsets {
+            let (_, batch) = &import.batches[&key];
+            assert_eq!(batch.positions.len(), count);
+            assert_eq!(batch.indices.len(), count * 2);
+        }
+        let expected_draws = import.batches.len();
+        while !import.step(&mut commands, &level, &mut meshes, &mut materials,
+            &mut images, &mut textures, &shared, 1., Some(SUN), None, std::time::Duration::ZERO) {}
+        drop(commands);
+        queue.apply(&mut world);
+        assert_eq!(import.stats.draws, expected_draws);
+        assert_eq!(world.query::<&Mesh3d>().iter(&world).count(), expected_draws);
+        let lighting = &materials.get(&handles[0]).unwrap().prop_light;
+        assert_eq!(images.get(lighting).unwrap().data.as_ref().unwrap().len(), 2 * PROP_TEXELS * 8);
+    }
+
+    #[test]
     fn parallel_surface_cache_matches_serial_queries_and_keeps_instance_scope() {
         use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -737,13 +964,13 @@ mod lighting_tests {
             let calls = AtomicUsize::new(0);
             // The second pass represents a later mesh of the same instance.
             for _ in 0..2 {
-                prepare_surface_lighting(&mut plain_cache, &mut plain_pending, &placed_mesh, prop, rot, scale, SourceVec3::ZERO,
-                    &w, &mut queries, Some(&pool), |query, position, normal| {
+                prepare_surface_lighting(&mut plain_cache, &mut plain_pending, &placed_mesh.vertices, prop, rot, scale, SourceVec3::ZERO,
+                    &mut queries, Some(&pool), |query, position, normal| {
                         calls.fetch_add(1, Ordering::Relaxed);
                         surface_light(&map, query, Some(SUN), &light, position, normal, ordinal)
                     });
-                prepare_surface_lighting(&mut directional_cache, &mut directional_pending, &placed_mesh, prop, rot, scale, DirectionalSample::default(),
-                    &w, &mut queries, Some(&pool), |query, position, normal| {
+                prepare_surface_lighting(&mut directional_cache, &mut directional_pending, &placed_mesh.vertices, prop, rot, scale, DirectionalSample::default(),
+                    &mut queries, Some(&pool), |query, position, normal| {
                         calls.fetch_add(1, Ordering::Relaxed);
                         DirectionalSample::new(surface_directional_light(&map, query, Some(SUN), &light, position, normal, ordinal), normal)
                     });

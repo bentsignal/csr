@@ -8,6 +8,7 @@ pub mod audio;
 pub mod audio_options;
 mod menu_music;
 pub mod session;
+mod scene_import;
 pub mod frontend;
 mod frontend_display;
 mod frontend_inventory;
@@ -239,10 +240,10 @@ impl Plugin for CsgoPlugin {
             .add_systems(PreUpdate, player::focus_input.after(bevy::input::InputSystems))
             .add_systems(OnEnter(AppState::Loading), session::begin_load)
             .add_systems(OnExit(AppState::Loading), session::cancel_load)
-            .add_systems(OnEnter(AppState::Match), (spawn_level, hud::setup, hud_art::setup, scope::setup, feedback::setup, utility_fx::setup, hud::mark_roots, session::match_ready).chain())
+            .add_systems(OnEnter(AppState::Match), (scene_import::admit, hud::setup, hud_art::setup, scope::setup, feedback::setup, utility_fx::setup, hud::mark_roots, session::match_ready).chain())
             .add_systems(OnExit(AppState::Match), session::clear_match)
             .add_systems(OnEnter(AppState::Menu), remote_join::home)
-            .add_systems(Update, (remote_join::request, hosting::request, remote::drive.run_if(resource_exists::<remote::RemoteClient>), hosting::update, remote_join::update, session::request_load, session::poll_load).chain().before(frontend::update).before(player::update_camera))
+            .add_systems(Update, (remote_join::request, hosting::request, remote::drive.run_if(resource_exists::<remote::RemoteClient>), hosting::update, remote_join::update, session::request_load, session::poll_load, scene_import::update).chain().before(frontend::update).before(player::update_camera))
             .add_systems(
                 RunFixedMainLoop,
                 (menu::input, buymenu::input, player::look, player::grab_cursor).chain()
@@ -430,20 +431,14 @@ pub fn run(opts: ClientOptions) -> i32 {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn spawn_level(
-    mut commands: Commands,
-    pending: Res<PendingLevel>,
-    options: Res<Options>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<WorldMaterial>>,
-    mut images: ResMut<Assets<Image>>,
-    mut bindposes: ResMut<Assets<bevy::mesh::skinning::SkinnedMeshInverseBindposes>>,
-) {
-    let Some(loaded) = pending.0.lock().unwrap().take() else { return };
-    let level = loaded.level;
-    let mut admission = loaded.remote;
-    let remote = admission.is_some();
-    let opts = &options.0;
+fn prepare_world(
+    mut commands: &mut Commands,
+    level: &level::Level,
+    opts: &ClientOptions,
+    mut meshes: &mut Assets<Mesh>,
+    mut materials: &mut Assets<WorldMaterial>,
+    mut images: &mut Assets<Image>,
+) -> scene_import::WorldPreparation {
     let t = Instant::now();
     let mut textures = textures::TextureCache::new(&mut images);
 
@@ -557,83 +552,28 @@ fn spawn_level(
     info!("overlays: {overlay_draws} draws, {} triangles, {} main-world records skipped (non-affine/invalid/unsupported receivers)", main_overlays.triangles + sky_overlays.triangles + breakable_overlay_builds.iter().map(|(_, _, build)| build.triangles).sum::<usize>(), main_overlays.skipped);
     let t_world = t.elapsed().as_secs_f32();
 
-    let sun = props::Sun::from_bsp(&level.bsp);
-    let skip_props = std::env::var_os("CSR_NO_PROPS").is_some();
-    let prop_stats = if skip_props {
-        props::PropStats { instances: 0, draws: 0, materials: 0, failed_models: 0, sky_draws: 0, triangles: 0 }
-    } else { props::spawn(
-        &mut commands,
-        &level,
-        &level.collision,
-        &mut meshes,
-        &mut materials,
-        &mut images,
-        &mut textures,
-        &world_shared,
-        opts.exposure,
-        sun,
-        sky,
-    ) };
     info!(
-        "world: {} tris ({} in 3D skybox) in {world_draws} batches ({t_world:.2}s); props: {} instances, {} tris, {} draws ({} in 3D skybox), {} materials, {} failed models; textures: {} compressed, {} decoded, {} missing ({:.2}s total); sun {:?}; sky {:?}",
+        "world: {} tris ({} in 3D skybox) in {world_draws} batches ({t_world:.2}s)",
         main.triangles + skybox.triangles + breakable_builds.iter().map(|(_, _, build)| build.triangles).sum::<usize>() + window_builds.iter().map(|build| build.triangles()).sum::<usize>(),
         skybox.triangles,
-        prop_stats.instances,
-        prop_stats.triangles,
-        prop_stats.draws,
-        prop_stats.sky_draws,
-        prop_stats.materials,
-        prop_stats.failed_models,
-        textures.stats_compressed,
-        textures.stats_decoded,
-        textures.stats_missing,
-        t.elapsed().as_secs_f32(),
-        sun,
-        sky
     );
+    scene_import::WorldPreparation { textures, shared: world_shared, moving_door_builds }
+}
 
-    // Characters and sounds.
-    let t_chars = Instant::now();
-    let character_models = characters::load(
-        &level,
-        &mut meshes,
-        &mut materials,
-        &mut images,
-        &mut textures,
-        &world_shared,
-        &mut bindposes,
-        opts.exposure,
-    );
-    let cosmetics=cosmetics::Catalog::load(&level.vfs).unwrap_or_else(|e|{error!("Cosmetics: {e}");default()});
-    let view_models = viewmodel::load(
-        &level,
-        &cosmetics,
-        &character_models.weapons,
-        &mut meshes,
-        &mut materials,
-        &mut images,
-        &mut textures,
-        &world_shared,
-        &mut bindposes,
-        opts.exposure,
-    );
+#[allow(clippy::too_many_arguments)]
+fn finish_level(
+    commands: &mut Commands,
+    loaded: session::LoadedMap,
+    opts: &ClientOptions,
+    character_models: characters::CharacterModels,
+    view_models: viewmodel::ViewModels,
+    ground_models: items::GroundModels,
+    cosmetics: cosmetics::Catalog,
+) {
+    let level = loaded.level;
+    let mut admission = loaded.remote;
+    let remote = admission.is_some();
     commands.insert_resource(cosmetics);
-    let ground_models = items::load(
-        &level,
-        &mut meshes,
-        &mut materials,
-        &mut images,
-        &mut textures,
-        &world_shared,
-        &mut bindposes,
-        opts.exposure,
-    );
-    doors::spawn(&mut commands, &level, &moving_door_builds, &mut meshes, &mut materials, &mut images,
-        &mut textures, &world_shared, &mut bindposes, opts.exposure);
-    prop_breakables::spawn(&mut commands, &level, &mut meshes, &mut materials, &mut images,
-        &mut textures, &world_shared, &mut bindposes, opts.exposure);
-    let ground_models = ground_models.with_load_context(textures, world_shared, opts.exposure);
-    info!("characters and viewmodels loaded in {:.2}s", t_chars.elapsed().as_secs_f32());
     let localization = localize::Localization::load(&level.vfs);
     let sounds = audio::SoundLibrary::load(&level.vfs);
     commands.insert_resource(surfaces::SurfaceProps::load(&level.vfs));
