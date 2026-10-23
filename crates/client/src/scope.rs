@@ -193,7 +193,7 @@ pub fn update(
         let clipped = clip_dot(&reticles.dot_pixels[blur_step], dot_origin, scale, aperture);
         if clipped == reticles.dot_pixels[blur_step] { return image.clone(); }
         if images.get(&reticles.clipped_dot).is_some_and(|image| image.data.as_ref() != Some(&clipped)) {
-            if let Some(image) = images.get_mut(&reticles.clipped_dot) { image.data = Some(clipped); }
+            if let Some(mut image) = images.get_mut(&reticles.clipped_dot) { image.data = Some(clipped); }
         }
         reticles.clipped_dot.clone()
     });
