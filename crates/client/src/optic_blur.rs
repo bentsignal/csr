@@ -43,15 +43,22 @@ pub(crate) struct OpticState(pub OpticSettings);
 fn configure_camera(
     mut commands: Commands,
     state: Res<OpticState>,
-    mut cameras: Query<(Entity, &mut Camera3d, &Projection, Option<&mut OpticSettings>),
-        With<crate::player::ViewModelCamera>>,
+    mut cameras: Query<(Entity, &mut Camera3d, &Projection,
+        Has<crate::player::WorldPlayerCamera>, Option<&mut OpticSettings>),
+        Or<(With<crate::player::WorldPlayerCamera>, With<crate::player::ViewModelCamera>)>>,
 ) {
-    for (entity, mut camera, projection, settings) in &mut cameras {
+    for (entity, mut camera, projection, world, settings) in &mut cameras {
         let usage = TextureUsages::from(camera.depth_texture_usages);
         if !usage.contains(TextureUsages::TEXTURE_BINDING) {
             camera.depth_texture_usages = (usage | TextureUsages::TEXTURE_BINDING).into();
         }
         let mut next = state.0;
+        // Sniper defocus belongs to the world camera, before the final camera
+        // composites the scope and HUD. Rifle close focus needs the separate
+        // viewmodel depth. Route each effect to its actual scene layer, and
+        // clear the other layer on every update (including weapon switches).
+        if world { next.params.z = 0.0; }
+        else { next.params.x = 0.0; next.params.y = 0.0; }
         if let Projection::Perspective(projection) = projection { next.params.w = projection.near; }
         // Bounded render-only controls for identical still/motion captures.
         // Zero DOF removes only weapon defocus; scope blur selects the sniper
@@ -67,6 +74,35 @@ fn configure_camera(
         }
         if let Some(mut settings) = settings { *settings = next; }
         else { commands.entity(entity).insert(next); }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sniper_and_rifle_defocus_follow_their_scene_layers_and_clear_on_switch() {
+        let mut app = App::new();
+        app.init_resource::<OpticState>().add_systems(Update, configure_camera);
+        let world = app.world_mut().spawn((Camera3d::default(), Projection::default(),
+            crate::player::WorldPlayerCamera)).id();
+        let weapon = app.world_mut().spawn((Camera3d::default(), Projection::default(),
+            crate::player::ViewModelCamera)).id();
+        app.world_mut().resource_mut::<OpticState>().0.params = Vec4::new(1., 6., 0., 1.);
+        app.update();
+        assert_eq!(app.world().get::<OpticSettings>(world).unwrap().params.truncate(), Vec3::new(1., 6., 0.));
+        assert_eq!(app.world().get::<OpticSettings>(weapon).unwrap().params.truncate(), Vec3::ZERO);
+        app.world_mut().resource_mut::<OpticState>().0.params = Vec4::new(0., 2., 7., 1.);
+        app.update();
+        assert_eq!(app.world().get::<OpticSettings>(world).unwrap().params.x, 0.);
+        assert_eq!(app.world().get::<OpticSettings>(world).unwrap().params.z, 0.);
+        assert_eq!(app.world().get::<OpticSettings>(weapon).unwrap().params.truncate(), Vec3::new(0., 0., 7.));
+        app.world_mut().resource_mut::<OpticState>().0 = OpticSettings::default();
+        app.update();
+        for entity in [world, weapon] {
+            assert_eq!(app.world().get::<OpticSettings>(entity).unwrap().params.truncate(), Vec3::ZERO);
+        }
     }
 }
 
