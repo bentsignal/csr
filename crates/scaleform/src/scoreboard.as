@@ -95,7 +95,7 @@ _global.csrScoreboard.alignScore = function(clip, field, heading) {
         || typeof field.getTextFormat != "function"
         || typeof heading.getTextFormat != "function") { return false; }
     // The two score symbols have different registration points. Align their
-    // visible text fields, moving the original emblem with the score clip.
+    // visible text fields. The emblems belong to the background, not these clips.
     // AS2 TextField has no getBounds; transform each text box through its
     // owning MovieClip into the common scoreboard coordinates instead.
     if (!(field._height > 0 && heading._height > 0)) { return false; }
@@ -106,6 +106,38 @@ _global.csrScoreboard.alignScore = function(clip, field, heading) {
     clip._parent.globalToLocal(scoreCenter);
     clip._parent.globalToLocal(headingCenter);
     clip._y += headingCenter.y - scoreCenter.y;
+    return true;
+};
+_global.csrScoreboard.alignEmblem = function(clip, heading) {
+    if (typeof clip != "movieclip" || typeof heading.getTextFormat != "function"
+        || !(heading._height > 0)) { return false; }
+    var bounds = clip.getBounds(clip._parent);
+    if (!(bounds.yMax > bounds.yMin)) { return false; }
+    var center = {x:heading._x, y:heading._y + heading._height / 2};
+    heading._parent.localToGlobal(center);
+    clip._parent.globalToLocal(center);
+    clip._y += center.y - (bounds.yMin + bounds.yMax) / 2;
+    clip._visible = true;
+    return true;
+};
+_global.csrScoreboard.emblems = function(panel) {
+    // Both admitted bg_scoreboard symbols place the same unnamed logo group
+    // (SWF depth 8). Resolve it by its authored children, not an auto instance name.
+    var group;
+    for (var name in panel.bg_scoreboard) {
+        var child = panel.bg_scoreboard[name];
+        if (typeof child == "movieclip" && child._parent == panel.bg_scoreboard
+            && typeof child.DefaultIconCT == "movieclip" && child.DefaultIconCT._parent == child
+            && typeof child.DefaultIconT == "movieclip" && child.DefaultIconT._parent == child) {
+            group = child;
+        }
+    }
+    if (typeof group != "movieclip") { return false; }
+    // Custom team-logo placeholders are unused; retain only the original defaults.
+    this.only(group, {DefaultIconCT:true, DefaultIconT:true});
+    var ctOk = this.alignEmblem(group.DefaultIconCT, panel.CT_TeamName.CT_TeamNameText);
+    var tOk = this.alignEmblem(group.DefaultIconT, panel.T_TeamName.T_TeamNameText);
+    if (ctOk !== true || tOk !== true) { return false; }
     return true;
 };
 _global.csrScoreboard.layout = function(panel) {
@@ -124,7 +156,8 @@ _global.csrScoreboard.layout = function(panel) {
     panel.CT_TeamName._y = panel.CT_Headers._y - panel.CT_TeamName._height - 8;
     var ctOk = this.alignScore(panel.CT_Score, panel.CT_Score.CT_Score, panel.CT_TeamName.CT_TeamNameText);
     var tOk = this.alignScore(panel.T_Score, panel.T_Score.T_Score, panel.T_TeamName.T_TeamNameText);
-    if (ctOk !== true || tOk !== true) { return false; }
+    var emblemsOk = this.emblems(panel);
+    if (ctOk !== true || tOk !== true || emblemsOk !== true) { return false; }
     return true;
 };
 _global.csrScoreboard.present = function(stamp, title, teams) {
