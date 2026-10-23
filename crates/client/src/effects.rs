@@ -109,6 +109,8 @@ pub struct Effects {
     /// Last time each player fired (drives fire animations).
     pub last_fire: std::collections::HashMap<sim::PlayerId, f32>,
     pub attack_serial: u64,
+    /// Barrel selected for each Fire in this frame, in capture order.
+    pub(crate) fire_muzzles: Vec<Option<bool>>,
     attacks: std::collections::HashMap<sim::PlayerId, (u64, String, &'static str)>,
     pub last_hit_headshot: bool,
     /// Announcer lines waiting to play (time, soundscript entry).
@@ -174,6 +176,7 @@ pub fn process(
     mut foley: ResMut<crate::foley::Foley>,
 ) {
     let now = time.elapsed_secs();
+    effects.fire_muzzles.clear();
     // Own sounds play at the listener; everyone else's in the world.
     let emit = |player: sim::PlayerId, at: glam::Vec3| {
         let own = player == local.view_target() && !local.noclip;
@@ -190,6 +193,10 @@ pub fn process(
             GameEvent::Fire { player, weapon, origin, suppressed, secondary } => {
                 shot_modes.insert(player, (weapon.clone(), suppressed));
                 effects.firearm_attack(player, weapon.clone(), now, secondary);
+                if effects.fire_muzzles.len() < crate::muzzle_flash::LIMIT {
+                    let left = (weapon == "weapon_elite").then(|| effects.left_muzzle(player, &weapon));
+                    effects.fire_muzzles.push(left);
+                }
                 // These installed attack sequences declare separate bolt/pump
                 // sounds, not another gunshot. Classic shot replacement does
                 // not deliver those handling events. Use the same confirmed
@@ -278,7 +285,9 @@ pub fn process(
                     "Weapon.AutoSemiAutoSwitch", emit(player, origin));
             }
             GameEvent::Tracer { player, start, end } => {
-                tracers.pending.push((player,start,end));
+                let left = shot_modes.get(&player).and_then(|(weapon, _)|
+                    (weapon == "weapon_elite").then(|| effects.left_muzzle(player, weapon)));
+                tracers.pending.push((player,start,end,left));
             }
             GameEvent::Impact { pos, surface, .. } => {
                 if !level.0.collision.is_sky(surface) {

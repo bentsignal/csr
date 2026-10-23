@@ -2112,6 +2112,7 @@ pub fn update(
 ) {
     let _frame_scope = crate::input_latency::frame_scope("viewmodel");
     muzzles.first=None;
+    muzzles.first_pair=None;
     // Clear before every early return, including death, noclip and switching.
     wick.sample = None;
     if let Some(optic) = optic.as_deref_mut() { optic.0 = Vec4::ZERO; }
@@ -2506,6 +2507,15 @@ pub fn update(
         let world_fov=vertical_fov(w.map_or(90.0,|w|w.rendered_fov(world.0.time())));
         muzzles.first=Some((p.id,crate::tracers::project_viewmodel_muzzle(muzzle,to_bevy(eye),to_bevy(movement::angle_vectors(local.render_angles).0),world_fov,vertical_fov(VIEWMODEL_FOV))));
     }}
+    if show && w.is_some_and(|w| w.def.class_name == "weapon_elite") {
+        let world_fov=vertical_fov(w.map_or(90.0,|w|w.rendered_fov(world.0.time())));
+        let pair = [false, true].map(|left| crate::tracers::muzzle_position(model, &pose, left).map(|point| {
+            let muzzle = world_from_model.transform_point3(to_bevy(point));
+            crate::tracers::project_viewmodel_muzzle(muzzle, to_bevy(eye),
+                to_bevy(movement::angle_vectors(local.render_angles).0), world_fov, vertical_fov(VIEWMODEL_FOV))
+        }));
+        muzzles.first_pair=Some((p.id, pair));
+    }
     if let Some(arms) = &arms {
         let arms_model = models.gloves.get(&format!("{}:{:?}",glove,p.team)).or_else(||match p.team {
             sim::Team::Terrorist => models.arms_t.as_ref(),

@@ -76,6 +76,9 @@
 - [x] Preserve authored crouching through ordinary ladder approach, climb and
   dismount. Independent human controls and parsed-NAV bot routes passed in
   both directions at 64/128 Hz; unflagged low openings retain bounded failure.
+- [x] Preserve each Dualies shot's muzzle side through batched render events,
+  retaining both posed attachments for tracers and live supported flash cards.
+  Unsupported first-person particle layers remain omitted.
 - [ ] Finish unresolved player outcomes in the approved order; an increment or
   first pass does not finish its backlog category.
 
