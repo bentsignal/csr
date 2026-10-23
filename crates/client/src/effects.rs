@@ -28,7 +28,7 @@ fn damage_sound(group: sim::weapon::HitGroup, protection: sim::weapon::HitProtec
 /// struck player still owns these voices for channel/instance accounting.
 // Owner-requested balance for full-range attacker confirmation. This is a
 // provisional mix adjustment, not a measured original-engine gain.
-pub(crate) const ATTACKER_HEAD_GAIN: f32 = 0.35;
+pub(crate) const ATTACKER_HEAD_GAIN: f32 = 0.42;
 
 pub(crate) fn play_combat_cue(
     event: &GameEvent, local: &LocalPlayer, commands: &mut Commands,
