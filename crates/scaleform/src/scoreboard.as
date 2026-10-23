@@ -17,7 +17,7 @@ _global.csrScoreboard.only = function(clip, names) {
     for (var name in clip) {
         var child = clip[name];
         if ((typeof child == "movieclip" || typeof child.getTextFormat == "function") && child._parent == clip) {
-            child._visible = names[":" + name] === true;
+            child._visible = names[name] === true;
         }
     }
 };
@@ -58,9 +58,9 @@ _global.csrScoreboard.row = function(clip, row) {
     var dead = row[1] == "DEAD";
     clip.Player_Name.gotoAndStop(row[5] ? (dead ? "DeadLocal" : "Local") : (dead ? "Dead" : "Normal"));
     this.freeze(clip, 0);
-    this.only(clip, {":bg_bar":true, ":Player_Name":true, ":Money":true,
-        ":Kills":true, ":Death":true, ":Skull":dead, ":DeadBG":dead,
-        ":PlayerOutline":row[5], ":Bomb":row[1] == "C4", ":defuser":row[1] == "KIT"});
+    this.only(clip, {bg_bar:true, Player_Name:true, Money:true,
+        Kills:true, Death:true, Skull:dead, DeadBG:dead,
+        PlayerOutline:row[5], Bomb:row[1] == "C4", defuser:row[1] == "KIT"});
     // Unsupported assists/ping/MVP/score are hidden rather than invented.
     return this.write(clip.Player_Name.Player_Name, row[0]) &&
         this.write(clip.Money, row[2]) && this.write(clip.Kills, row[3]) && this.write(clip.Death, row[4]);
@@ -76,13 +76,13 @@ _global.csrScoreboard.present = function(stamp, title, teams) {
         var panel = outer.InnerScoreBoard;
         panel.gotoAndStop(Math.max(teams[0][1].length, teams[1][1].length) <= 5 ? "StandardTenPlayer" : "Standard");
         this.freeze(this.root, 0);
-        this.only(this.root, {":ScoreBoard":true});
-        this.only(outer, {":InnerScoreBoard":true});
-        this.only(panel, {":bg_scoreboard":true, ":CT_TeamName":true, ":T_TeamName":true,
-            ":CT_Headers":true, ":CT_Scoretable":true, ":T_Scoretable":true, ":ServerName":true,
-            ":CT_Score":true, ":T_Score":true});
-        this.only(panel.CT_Headers, {":Player_Label":true, ":CT_money_header":true,
-            ":CT_Kills_Header":true, ":CT_Death_Header":true});
+        this.only(this.root, {ScoreBoard:true});
+        this.only(outer, {InnerScoreBoard:true});
+        this.only(panel, {bg_scoreboard:true, CT_TeamName:true, T_TeamName:true,
+            CT_Headers:true, CT_Scoretable:true, T_Scoretable:true, ServerName:true,
+            CT_Score:true, T_Score:true});
+        this.only(panel.CT_Headers, {Player_Label:true, CT_money_header:true,
+            CT_Kills_Header:true, CT_Death_Header:true});
         success = this.write(panel.ServerName.ServerName, title) &&
             this.write(panel.CT_TeamName.CT_TeamNameText, teams[0][0]) &&
             this.write(panel.T_TeamName.T_TeamNameText, teams[1][0]) &&
