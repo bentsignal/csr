@@ -140,7 +140,8 @@ while (i < widths.length) {
 #[test]
 fn scoreboard_rows_replace_template_values_and_hide_unowned_stats() {
     let calls = run(r#"
-var row = _root.createEmptyMovieClip("row", 400);
+function checkScoreboardRows() {
+var row = _root.createEmptyMovieClip("fixtureRow", 400);
 row.createEmptyMovieClip("Player_Name", 1);
 row.Player_Name.createTextField("Player_Name", 1, 0, 0, 300, 20);
 row.createTextField("Money", 2, 0, 0, 80, 20);
@@ -161,6 +162,8 @@ csrEI.call("csr.HudLayoutFixture", ok, row.Money.text == "", !row.Bomb._visible,
     row.Skull._visible, !row.PlayerOutline._visible);
 csrEI.call("csr.HudLayoutFixture", api.row(row, undefined), !row._visible,
     !api.row(undefined, ["Missing", "ALIVE", "", "0", "0", false]));
+}
+checkScoreboardRows();
 "#, 1920, 1080);
     assert_eq!(calls.len(), 3);
     assert!(calls.iter().flatten().all(|value| value == &Value::Bool(true)),
