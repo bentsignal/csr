@@ -726,6 +726,9 @@ lightmaps, props and sun, HUD, and the weapon catalog.
 - [x] Right-click zoom for all six scoped weapons, original item FOV/speed/accuracy data
 - [x] Weapon deployment consumes old attack events instead of replaying them
 - [ ] Exact knife sweep volume, impact timing, and model animation-event dispatch
+- [x] Correct the sniper mask's stationary viewport footprint against native
+  900p/1080p captures and remove exposed outer-edge sampling seams. This does
+  not close exact movement-dependent vignette or blur/refraction fidelity.
 - [ ] Original rifle-optic refraction, lens effects and transition parity
 - [x] R8 alternate fire uses authored cadence/accuracy and secondary animation,
   with admitted shot mode retained through protocol v32. Instant primary is
