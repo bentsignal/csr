@@ -99,10 +99,16 @@ fn declarations(text: &str) -> HashMap<String, HashMap<String, String>> {
                 collect(p, prefabs, out, depth + 1);
             }
         }
-        for (key, value) in &b.entries {
-            if key.to_ascii_lowercase().starts_with("muzzle_flash_effect_") {
-                if let Some(value) = value.as_str() {
-                    out.insert(key.to_ascii_lowercase(), value.into());
+        // Installed items_game declares these in each prefab's visuals block.
+        // Apply each ancestor's visuals before the descendant/item overrides;
+        // top-level fields remain accepted for existing content packs.
+        for fields in std::iter::once(b).chain(b.get_all("visuals").filter_map(kv::Value::as_block))
+        {
+            for (key, value) in &fields.entries {
+                if key.to_ascii_lowercase().starts_with("muzzle_flash_effect_") {
+                    if let Some(value) = value.as_str() {
+                        out.insert(key.to_ascii_lowercase(), value.into());
+                    }
                 }
             }
         }
@@ -245,6 +251,35 @@ fn quad(uv: [f32; 4]) -> Mesh {
     mesh
 }
 
+/// VTF 7.0-7.2 stores image bytes immediately after its legacy header and
+/// thumbnail, without the resource directory read by particle_data::sheets.
+/// In particular the installed rifle vent uses a single-frame VTF 7.1.
+/// Only a valid single 2D image can use full UVs; corrupt modern sheets must
+/// still fail closed instead of displaying an atlas as one enormous flash.
+fn sprite_sheets(bytes: &[u8]) -> Option<HashMap<usize, Sheet>> {
+    if bytes.get(..4)? != b"VTF\0" {
+        return None;
+    }
+    let major = u32::from_le_bytes(bytes.get(4..8)?.try_into().ok()?);
+    let minor = u32::from_le_bytes(bytes.get(8..12)?.try_into().ok()?);
+    if major == 7 && minor < 3 {
+        if bytes.len() < if minor == 2 { 65 } else { 64 } {
+            return None;
+        }
+        let texture = vtf::Vtf::parse(bytes).ok()?;
+        return (texture.frames == 1
+            && texture.faces == 1
+            && texture.depth == 1
+            && texture.width > 0
+            && texture.height > 0)
+            .then(HashMap::new);
+    }
+    if major != 7 || !(3..=5).contains(&minor) {
+        return None;
+    }
+    particle_data::sheets(bytes)
+}
+
 fn load_style(
     name: &str,
     all: &[Element],
@@ -254,7 +289,9 @@ fn load_style(
     materials: &mut Assets<StandardMaterial>,
     meshes: &mut Assets<Mesh>,
 ) -> Option<Style> {
-    let content_id: content::ContentId = format!("csgo_particle_{name}").parse().ok()?;
+    // Authored names such as ..._FP are case-sensitive PCF lookup keys;
+    // normalize only the content identity, never reject or rename that key.
+    let content_id = content::ContentId::csgo(content::ContentKind::Particle, name);
     let root = all
         .iter()
         .position(|e| e.kind == "DmeParticleSystemDefinition" && e.name == name)?;
@@ -312,11 +349,11 @@ fn load_style(
         let Some(bytes) = fs.read(&vmt::vtf_path(texture)) else {
             continue;
         };
-        let Some(sheets) = particle_data::sheets(&bytes) else {
+        let Some(sheets) = sprite_sheets(&bytes) else {
             continue;
         };
         let sheet = sheets.get(&seq).cloned();
-        if !sheets.is_empty() && sheet.is_none() {
+        if sheet.is_none() && (!sheets.is_empty() || seq != 0) {
             continue;
         }
         if sheet.as_ref().is_some_and(|s| s.frames.len() > 64) {
@@ -403,6 +440,19 @@ pub fn draw(
                 flashes.styles.insert(name, style);
             }
         }
+        let supported = flashes
+            .styles
+            .values()
+            .filter(|style| style.is_some())
+            .count();
+        info!(
+            "Muzzle library: {} weapon declarations, {supported}/{} supported effects",
+            flashes.names.len(),
+            flashes.styles.len()
+        );
+        if supported == 0 {
+            warn!("Muzzle library has no supported effects; inspect mounted items_game visuals and PCF/VMT/VTF data");
+        }
     }
     let pending = std::mem::take(&mut flashes.pending);
     let now = time.elapsed_secs();
@@ -480,6 +530,116 @@ pub fn draw(
 #[cfg(test)]
 mod tests {
     use super::*;
+    // Synthetic format fixture, not copied game content: one opaque RGBA pixel.
+    fn legacy_sprite() -> Vec<u8> {
+        let mut bytes = vec![0; 68];
+        bytes[..4].copy_from_slice(b"VTF\0");
+        bytes[4..8].copy_from_slice(&7u32.to_le_bytes());
+        bytes[8..12].copy_from_slice(&1u32.to_le_bytes());
+        bytes[12..16].copy_from_slice(&64u32.to_le_bytes());
+        bytes[16..18].copy_from_slice(&1u16.to_le_bytes());
+        bytes[18..20].copy_from_slice(&1u16.to_le_bytes());
+        bytes[24..26].copy_from_slice(&1u16.to_le_bytes());
+        bytes[56] = 1;
+        bytes[57..61].copy_from_slice(&(-1i32).to_le_bytes());
+        bytes[64..].fill(255);
+        bytes
+    }
+
+    #[test]
+    fn legacy_single_sprite_is_not_mistaken_for_a_resource_directory() {
+        let mut bytes = legacy_sprite();
+        assert!(sprite_sheets(&bytes).unwrap().is_empty());
+        assert!(sprite_sheets(&bytes[..64]).is_none()); // truncated pixel data
+        bytes[8..12].copy_from_slice(&3u32.to_le_bytes());
+        assert!(sprite_sheets(&bytes).is_none()); // no directory; not a legacy fallback
+        bytes[8..12].copy_from_slice(&1u32.to_le_bytes());
+        bytes[24..26].copy_from_slice(&2u16.to_le_bytes());
+        bytes.extend_from_slice(&[255; 4]);
+        assert!(sprite_sheets(&bytes).is_none()); // unsupported multi-frame image
+    }
+
+    #[test]
+    fn visuals_to_pcf_to_legacy_texture_produces_a_renderable_style() {
+        let names = declarations(
+            r#""items_game" {
+            "prefabs" { "gun" { "visuals" {
+                "muzzle_flash_effect_1st_person" "test_flash_FP"
+            } } }
+            "items" { "1" { "name" "weapon_test" "baseitem" "1" "prefab" "gun" } }
+        }"#,
+        );
+        let name = effect_name(&names["weapon_test"], true, false).unwrap();
+        let definition = Element {
+            kind: "DmeParticleSystemDefinition".into(),
+            name: name.into(),
+            attrs: HashMap::from([
+                ("material".into(), Value::Text("test/sprite.vmt".into())),
+                ("radius".into(), Value::Number(5.0)),
+                ("initializers".into(), Value::Array(vec![Value::Ref(1)])),
+                ("renderers".into(), Value::Array(vec![Value::Ref(2)])),
+                ("emitters".into(), Value::Array(vec![Value::Ref(3)])),
+            ]),
+        };
+        let operator = |name: &str| Element {
+            attrs: HashMap::from([("functionname".into(), Value::Text(name.into()))]),
+            ..Default::default()
+        };
+        let mut life = operator("Lifetime Random");
+        life.attrs
+            .insert("lifetime_min".into(), Value::Number(0.025));
+        let elements = [
+            definition,
+            life,
+            operator("render_animated_sprites"),
+            operator("emit_instantaneously"),
+        ];
+        let mut fs = vfs::Vfs::new();
+        fs.push_back(
+            "synthetic muzzle fixture",
+            vfs::Mount::Memory(std::collections::BTreeMap::from([
+                (
+                    "materials/test/sprite.vmt".into(),
+                    std::sync::Arc::<[u8]>::from(
+                        &br#""SpriteCard" { "$basetexture" "test/sprite" "$additive" "1" }"#[..],
+                    ),
+                ),
+                (
+                    "materials/test/sprite.vtf".into(),
+                    std::sync::Arc::<[u8]>::from(legacy_sprite()),
+                ),
+            ])),
+        );
+        let mut textures = crate::textures::TextureCache::default();
+        let mut images = Assets::<Image>::default();
+        let mut materials = Assets::<StandardMaterial>::default();
+        let mut meshes = Assets::<Mesh>::default();
+        let style = load_style(
+            name,
+            &elements,
+            &fs,
+            &mut textures,
+            &mut images,
+            &mut materials,
+            &mut meshes,
+        )
+        .expect(
+            "nested visuals, case-sensitive PCF name and legacy VTF must reach the sprite renderer",
+        );
+        assert_eq!(style.frames.len(), 1);
+        assert!(style.sheet.is_none());
+        assert_eq!(style.radius, 5.0);
+        assert_eq!(style.life, 0.025);
+        assert!(meshes.get(&style.frames[0]).is_some());
+        let texture = materials
+            .get(&style.material)
+            .unwrap()
+            .base_color_texture
+            .as_ref()
+            .unwrap();
+        assert!(images.get(texture).is_some());
+    }
+
     #[test]
     fn actual_fire_receipts_keep_serials_and_bound_the_render_queue() {
         use bevy::ecs::system::RunSystemOnce;
@@ -514,15 +674,16 @@ mod tests {
     fn prefab_modes_preserve_explicit_empty_and_missing_suppressed_effects() {
         let names = declarations(
             r#""items_game" {
-            "prefabs" { "base" { "muzzle_flash_effect_1st_person" "loud"
+            "prefabs" { "base" { "visuals" { "muzzle_flash_effect_1st_person" "loud"
                 "muzzle_flash_effect_3rd_person" "world"
-                "muzzle_flash_effect_1st_person_alt" "quiet" }
-                "derived" { "prefab" "base" "muzzle_flash_effect_3rd_person_alt" "" } }
-            "items" { "1" { "name" "weapon_test" "baseitem" "1" "prefab" "derived" } }
+                "muzzle_flash_effect_1st_person_alt" "quiet" } }
+                "derived" { "prefab" "base" "visuals" { "muzzle_flash_effect_3rd_person_alt" "" } } }
+            "items" { "1" { "name" "weapon_test" "baseitem" "1" "prefab" "derived"
+                "visuals" { "muzzle_flash_effect_1st_person" "item_loud" } } }
         }"#,
         );
         let f = &names["weapon_test"];
-        assert_eq!(effect_name(f, true, false), Some("loud"));
+        assert_eq!(effect_name(f, true, false), Some("item_loud"));
         assert_eq!(effect_name(f, true, true), Some("quiet"));
         assert_eq!(effect_name(f, false, false), Some("world"));
         assert_eq!(effect_name(f, false, true), None);
