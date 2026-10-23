@@ -1,12 +1,12 @@
 ﻿//! One short, material-specific sprite child from mounted Legacy impact PCFs.
 //! This is deliberately not the parent effect runtime: trails, fragments,
-//! surface/light tint, drag and native fade operators remain unsupported.
+//! surface/light tint and exact native operator laws remain unsupported.
 use crate::{coords::to_bevy, particle_data::Element};
 use bevy::prelude::*;
 use std::{collections::HashMap, sync::Arc};
 
 const PCF: &str = "particles/impact_fx.pcf";
-// Wood's child omits radius_end_scale; retain fallback rather than inventing
+// Wood's child omits radius_end_scale; omit its puff rather than inventing
 // the missing endpoint. Sand is N in Legacy SurfaceProps; S is water/slime.
 const CHILDREN: [(&str, &str); 5] = [
     ("C", "impact_concrete_child_base"),
@@ -15,6 +15,10 @@ const CHILDREN: [(&str, &str); 5] = [
     ("D", "impact_dirt_child_base"),
     ("N", "impact_sand_child_base"),
 ];
+
+// Bounded presentation correction for the owner's oversized impact clouds.
+// Keep authored family differences; this is not a measured native size law.
+const PUFF_SIZE_SCALE: f32 = 0.5;
 
 #[derive(Default)]
 pub(super) struct Catalog {
@@ -33,6 +37,7 @@ struct Profile {
     velocity: [Vec3; 2],
     scale: [f32; 2],
     spin: f32,
+    drag: f32,
 }
 
 #[derive(Component)]
@@ -44,6 +49,7 @@ pub(crate) struct Puff {
     offset: Vec3,
     velocity: Vec3,
     radius: f32,
+    color: [f32; 4],
 }
 
 fn op<'a>(ops: &[&'a Element], name: &str) -> Option<&'a Element> {
@@ -110,6 +116,9 @@ impl Catalog {
                 let position = op(&init, "Position Within Sphere Random")?;
                 let velocity = vectors(position, "speed_in_local_coordinate_system_min", "speed_in_local_coordinate_system_max")?;
                 let scale = range(op(&ops, "Radius Scale")?, "radius_start_scale", "radius_end_scale")?;
+                let movement = op(&ops, "Movement Basic")?;
+                let drag = movement.number("drag", 0.);
+                let fade = op(&ops, "Alpha Fade Out Random")?;
                 if !radius.iter().all(|v| (0. ..=16.).contains(v))
                     || !life.iter().all(|v| (0.01..=0.5).contains(v))
                     || !alpha.iter().all(|v| (0. ..=255.).contains(v))
@@ -117,7 +126,10 @@ impl Catalog {
                     || position.number("distance_max", 0.) != 0.
                     || offset.iter().any(|v| v.length() > 1.)
                     || velocity.iter().any(|v| v.length() > 100.)
-                    || op(&ops, "Movement Basic")?.vector("gravity", [0.; 3]) != [0.; 3]
+                    || !drag.is_finite() || !(0. ..=1.).contains(&drag)
+                    || movement.vector("gravity", [0.; 3]) != [0.; 3]
+                    || fade.number("fade out time min", 0.) != 1.
+                    || fade.number("fade out time max", 0.) != 1.
                 { return None; }
                 let color = op(&init, "Color Random")?;
                 let base = e.color("color", [255; 4]);
@@ -152,7 +164,7 @@ impl Catalog {
                     material: materials.add(StandardMaterial { base_color_texture: Some(image),
                         unlit: true, alpha_mode: AlphaMode::Blend, cull_mode: None, ..default() }),
                     radius, life, alpha, color: [color.color("color1", base), color.color("color2", base)],
-                    offset, velocity, scale,
+                    offset, velocity, scale, drag,
                     spin: op(&ops, "Rotation Spin Roll")?.number("spin_rate_degrees", 0.).to_radians(),
                 })
             })() else { continue; };
@@ -173,7 +185,7 @@ impl Catalog {
         let profile = self.profiles.get(&family.to_ascii_uppercase())?.clone();
         self.serial = self.serial.wrapping_add(1);
         let mut rng = Rng(self.serial);
-        let radius = rng.range(profile.radius);
+        let radius = rng.range(profile.radius) * PUFF_SIZE_SCALE;
         let life = rng.range(profile.life);
         if std::env::var_os("CSR_WEAPON_TRACE").is_some() {
             info!("impact puff: {} at {pos:?}; radius={radius} life={life}", profile.id);
@@ -187,7 +199,7 @@ impl Catalog {
         mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, vec![color; 4]);
         let puff = Puff { mesh: meshes.add(mesh), origin: to_bevy(pos), rotation,
             offset: rng.vector(profile.offset) * radius, velocity: rng.vector(profile.velocity),
-            radius, profile };
+            radius, color, profile };
         let entity = commands.spawn((Mesh3d(puff.mesh.clone()),
             MeshMaterial3d(puff.profile.material.clone()), puff.pose(0., life, eye),
             super::ImpactArtwork(puff.profile.id.clone()),
@@ -201,16 +213,37 @@ impl Puff {
         let scale = self.profile.scale[0] + (self.profile.scale[1] - self.profile.scale[0])
             * (age / life).clamp(0., 1.);
         let mut pose = Transform::from_translation(self.origin
-            + self.rotation * (self.offset + self.velocity * age))
+            + self.rotation * (self.offset + self.velocity * travel_time(age, self.profile.drag)))
             .with_scale(Vec3::splat(2. * self.radius * scale));
         pose.look_at(eye, Vec3::Y);
         pose.rotation *= Quat::from_rotation_z(self.profile.spin * age);
         pose
     }
+    pub(super) fn fade(&self, age: f32, life: f32, meshes: &mut Assets<Mesh>) {
+        if let Some(mut mesh) = meshes.get_mut(&self.mesh) {
+            let mut color = self.color;
+            color[3] *= opacity(age, life);
+            mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, vec![color; 4]);
+        }
+    }
     /// Feedback owns despawns, including round reset and oldest-FX eviction.
     pub(super) fn release_mesh(&self, meshes: &mut Assets<Mesh>) {
         meshes.remove(self.mesh.id());
     }
+}
+
+// Integrate exponential damping from birth, so frame cadence never changes
+// travel. The PCF drag is treated as damping per nominal 60 Hz interval; this
+// bounded approximation replaces unbounded linear drift, not a native proof.
+fn travel_time(age: f32, drag: f32) -> f32 {
+    let age = age.max(0.);
+    let rate = drag * 60.;
+    if rate < 1e-5 { age } else { -(-rate * age).exp_m1() / rate }
+}
+
+fn opacity(age: f32, life: f32) -> f32 {
+    // The supported installed children fade over their full short lifetime.
+    (1. - age / life).clamp(0., 1.)
 }
 
 // Presentation-local randomness never advances the simulation's RNG.
@@ -233,6 +266,52 @@ impl Rng {
 mod tests {
     use super::*;
     use crate::particle_data::Value;
+
+    #[test]
+    fn supported_impact_stays_compact_slows_and_fades_without_generic_materials() {
+        let mut catalog = Catalog::default();
+        catalog.profiles.insert("C".into(), Arc::new(Profile {
+            id: "csgo_particle_impact_concrete_child_base".parse().unwrap(),
+            material: default(), radius: [10.; 2], life: [0.25; 2],
+            alpha: [128.; 2], color: [[87, 87, 87, 255]; 2],
+            offset: [Vec3::Y; 2], velocity: [Vec3::Y * 50.; 2],
+            scale: [0.25, 2.], spin: 0., drag: 0.1,
+        }));
+        let mut world = World::new();
+        let mut queue = bevy::ecs::world::CommandQueue::default();
+        let mut meshes = Assets::<Mesh>::default();
+        let eye = Vec3::new(100., 20., 0.);
+        let (entity, life) = {
+            let mut commands = Commands::new(&mut queue, &world);
+            for family in ["W", "S", "F", "unknown"] {
+                assert!(catalog.spawn(&mut commands, &mut meshes, family,
+                    glam::Vec3::ZERO, glam::Vec3::X, eye).is_none());
+            }
+            catalog.spawn(&mut commands, &mut meshes, "C",
+                glam::Vec3::ZERO, glam::Vec3::X, eye).unwrap()
+        };
+        queue.apply(&mut world);
+        assert_eq!(world.query::<&Puff>().iter(&world).count(), 1);
+        let puff = world.get::<Puff>(entity).unwrap();
+        let start = puff.pose(0., life, eye);
+        let middle = puff.pose(life * 0.5, life, eye);
+        let end = puff.pose(life, life, eye);
+        assert_eq!(start.scale, Vec3::splat(2.5));
+        assert_eq!(end.scale, Vec3::splat(20.));
+        assert!((end.translation - start.translation).length() < 6.5);
+        assert!((end.translation - middle.translation).length()
+            < (middle.translation - start.translation).length());
+        for (age, fraction) in [(0., 1.), (life * 0.5, 0.5), (life, 0.)] {
+            puff.fade(age, life, &mut meshes);
+            let Some(bevy::mesh::VertexAttributeValues::Float32x4(colors)) =
+                meshes.get(&puff.mesh).unwrap().attribute(Mesh::ATTRIBUTE_COLOR)
+            else { panic!("puff must retain vertex alpha"); };
+            assert!(colors.iter().all(|c| (c[3] - 128. / 255. * fraction).abs() < 1e-6));
+        }
+        assert_eq!(travel_time(0.25, 0.), 0.25);
+        puff.release_mesh(&mut meshes);
+        assert!(meshes.get(&puff.mesh).is_none());
+    }
 
     #[test]
     fn installed_material_children_load_with_distinct_authored_profiles() {
@@ -262,7 +341,7 @@ mod tests {
             assert_eq!(code, family, "installed inherited material code: {prop}");
             assert!(catalog.profiles.contains_key(code));
         }
-        // Unsupported wood and liquid surfaces must still use feedback's fallback.
+        // Unsupported wood and liquid surfaces must not get generic dust.
         for (prop, family) in [("wood_plank", "W"), ("water", "S")] {
             let code = props.get_declared(prop).unwrap().game_material.as_deref().unwrap();
             assert_eq!(code, family, "installed inherited material code: {prop}");

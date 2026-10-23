@@ -207,7 +207,7 @@ pub(crate) fn import_symbols(data: &[u8], library: &str, names: &[&str]) -> Resu
     Ok(out)
 }
 
-fn symbol_metadata(data: &[u8], used: &mut std::collections::HashSet<u16>, imported: &mut std::collections::HashSet<String>) -> Result<()> {
+pub(crate) fn symbol_metadata(data: &[u8], used: &mut std::collections::HashSet<u16>, imported: &mut std::collections::HashSet<String>) -> Result<()> {
     for tag in split_tags(data)? {
         // Public SWF Define* records begin with their character ID.
         if matches!(tag.code, 2 | 6 | 7 | 10 | 11 | 14 | 20 | 21 | 22 | 32 | 33 | 34 | 35 | 36 | 37 | 39 | 46 | 48 | 60 | 75 | 83 | 84 | 87 | 90 | 91) {

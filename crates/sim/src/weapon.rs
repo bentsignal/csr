@@ -98,6 +98,9 @@ pub struct WeaponState {
     pub suppressor_transition: Option<SuppressorTransition>,
     pub burst_mode: bool,
     pub burst: Option<BurstState>,
+    /// An unconsumed primary press, valid only while the trigger stays held.
+    /// A press during shot cooldown may fire at readiness, once, not repeat.
+    pub primary_pending: bool,
     pub clip: i32,
     pub reserve: i32,
     /// Sim time at which the next shot may fire.
@@ -140,6 +143,7 @@ impl WeaponState {
             suppressor_transition: None,
             burst_mode: false,
             burst: None,
+            primary_pending: false,
             def,
             cosmetic: None,
             cosmetic_owner: None,
@@ -184,7 +188,8 @@ impl WeaponState {
         true
     }
 
-    pub fn cancel_burst(&mut self) { self.burst = None; }
+    /// Cancel outstanding trigger work on holster, drop, death or handling locks.
+    pub fn cancel_burst(&mut self) { self.burst = None; self.primary_pending = false; }
 
     pub fn burst_due(&self, time: f32) -> bool {
         self.burst_mode && self.burst.is_some_and(|burst| time >= burst.next_shot && burst.remaining > 0)
@@ -208,12 +213,11 @@ impl WeaponState {
             }
         }
         self.cancel_burst();
-        // A bolt-action scope is an aiming mode, not an alternate primary
-        // attack. Legacy's shared prefab also supplies a 0.3s `cycletime alt`;
-        // using that for a scoped AWP shortens both fire and resume-zoom to
-        // that inherited default. Keep the primary deadline across all zoom
-        // edges; other weapons retain their alternate attack policy.
-        let cycle = if self.def.attr_f32("unzoom after shot").is_some_and(|v| v != 0.0) {
+        // A scope is an aiming mode, not an alternate primary attack.
+        // Legacy's shared prefab supplies a 0.3s `cycletime alt`: using it
+        // while zoomed slows AUG/SG and speeds up bolt-action snipers.
+        // Keep the primary cadence for every scoped weapon.
+        let cycle = if self.zoom_levels() > 0 || self.def.attr_f32("unzoom after shot").is_some_and(|v| v != 0.0) {
             self.def.cycle_time
         } else { self.alt_stat("cycletime", self.def.cycle_time) }.max(0.01);
         let overdue = time - self.next_attack;
@@ -549,6 +553,9 @@ pub fn recoil_pattern(def: &WeaponDefinition) -> Vec<[f32; 2]> {
                 [angle[0] / RECOIL_SCALE, angle[1] / RECOIL_SCALE]).collect();
         }
     }
+    if def.attr_f32("csr bounded sustained recoil") == Some(1.) {
+        return bounded_sustained_pattern(def);
+    }
     let shots = (def.clip_size.max(1) as usize + 1).min(256);
     let mut rng = Rng::from_parts(&[def.recoil.seed as u64, def.def_index as u64]);
     let mut out = Vec::with_capacity(shots + 1);
@@ -564,6 +571,40 @@ pub fn recoil_pattern(def: &WeaponDefinition) -> Vec<[f32; 2]> {
         pitch -= deg * a.cos();
         yaw += deg * a.sin();
         out.push([pitch, yaw]);
+    }
+    out
+}
+
+/// Owner-requested bounded fallback, explicitly admitted by the content loader.
+/// Reuses our independently observed angle/velocity decay law; the generated
+/// impulses and sideways motion are a first pass, not measured Negev parity.
+fn bounded_sustained_pattern(def: &WeaponDefinition) -> Vec<[f32; 2]> {
+    let response = weapons::RecoilResponse {
+        reference: "owner-bounded-sustained-fallback-v1".into(), reference_hz: 128,
+        angle_decay: 8., angle_linear: 18., velocity_decay: 4.5,
+        first_impulse: [0.; 2], final_impulse: [0.; 2],
+        held_tolerance_degrees: 0., phase_recovery: None,
+    };
+    let cycle = def.cycle_time.clamp(0.01, 1.);
+    let mut rng = Rng::from_parts(&[def.recoil.seed as u64, def.def_index as u64]);
+    let mut angle = [0.; 2];
+    let mut velocity = [0.; 2];
+    let mut out = vec![angle];
+    let mut lateral = 0.;
+    // One velocity-decay time per lateral segment avoids independent per-shot
+    // jitter. Variance and seed come from the installed weapon, not a new RNG.
+    let segment = (1. / (response.velocity_decay * cycle)).ceil().max(1.) as usize;
+    for shot in 0..(def.clip_size.max(1) as usize + 1).min(256) {
+        let magnitude = (def.recoil.magnitude + rng.range(-def.recoil.magnitude_variance, def.recoil.magnitude_variance)).max(0.);
+        let direction = (def.recoil.angle + rng.range(-def.recoil.angle_variance, def.recoil.angle_variance)).to_radians();
+        // Ramp sideways contribution with the same decay timescale as the
+        // climb settles. No lateral noise is added to the opening shot.
+        if shot % segment == 0 { lateral = rng.range(-def.recoil.magnitude_variance, def.recoil.magnitude_variance); }
+        let settled = 1. - (-response.velocity_decay * shot as f32 * cycle).exp();
+        velocity[0] -= magnitude * direction.cos();
+        velocity[1] += magnitude * direction.sin() + lateral * settled;
+        crate::recoil_motion::advance(&mut angle, &mut velocity, &response, cycle as f64);
+        out.push(angle);
     }
     out
 }
@@ -654,6 +695,8 @@ pub fn slot(def: &WeaponDefinition) -> u8 {
 #[derive(Clone, Copy, Debug)]
 pub struct AccuracyContext {
     pub speed: f32,
+    /// Signed world-Z velocity in movement units per second.
+    pub vertical_speed: f32,
     pub on_ground: bool,
     pub ducked: bool,
 }
@@ -666,7 +709,18 @@ pub fn inaccuracy(w: &WeaponState, ctx: AccuracyContext) -> f32 {
     let lo = max_speed * 0.34;
     let hi = max_speed * 0.95;
     let move_frac = ((ctx.speed - lo) / (hi - lo)).clamp(0.0, 1.0);
-    let air = if ctx.on_ground { 0.0 } else { w.alt_stat("inaccuracy jump", a.inaccuracy_jump) };
+    let air = if ctx.on_ground { 0.0 } else {
+        let jump = w.alt_stat("inaccuracy jump", a.inaccuracy_jump);
+        if w.def.attr_f32("csr vertical jump inaccuracy") == Some(1.) {
+            let initial = w.def.attr_f32("inaccuracy jump initial").filter(|x| x.is_finite()).unwrap_or(jump).max(jump);
+            let apex = w.def.attr_f32("inaccuracy jump apex").filter(|x| x.is_finite()).unwrap_or(0.).max(0.);
+            // The authored jump term is the near-apex floor. Blend toward
+            // jump-initial at ordinary launch speed, symmetrically on descent.
+            // Retain horizontal movement and firing penalties at the apex.
+            let fraction = (ctx.vertical_speed.abs() / movement::MoveConfig::default().jump_impulse).clamp(0., 1.);
+            jump + apex + (initial - jump) * fraction
+        } else { jump }
+    };
     base + w.alt_stat("inaccuracy move", a.inaccuracy_move) * move_frac + air + w.accuracy_penalty
 }
 
@@ -938,9 +992,9 @@ mod tests {
     #[test]
     fn running_is_inaccurate() {
         let w = WeaponState::new(Arc::new(ak()));
-        let still = inaccuracy(&w, AccuracyContext { speed: 0.0, on_ground: true, ducked: false });
-        let walking = inaccuracy(&w, AccuracyContext { speed: 70.0, on_ground: true, ducked: false });
-        let running = inaccuracy(&w, AccuracyContext { speed: 215.0, on_ground: true, ducked: false });
+        let still = inaccuracy(&w, AccuracyContext { vertical_speed: 0., speed: 0.0, on_ground: true, ducked: false });
+        let walking = inaccuracy(&w, AccuracyContext { vertical_speed: 0., speed: 70.0, on_ground: true, ducked: false });
+        let running = inaccuracy(&w, AccuracyContext { vertical_speed: 0., speed: 215.0, on_ground: true, ducked: false });
         assert_eq!(still, walking);
         assert!(running > still * 20.0);
     }
@@ -951,5 +1005,57 @@ mod tests {
         let b = recoil_pattern(&ak());
         assert_eq!(a, b);
         assert!(a[10][0] < -3.0, "pitch after 10 shots {}", a[10][0]);
+    }
+
+    #[test]
+    fn scout_airborne_accuracy_only_recovers_near_apex_and_keeps_movement_penalty() {
+        let mut def = ak();
+        def.accuracy.inaccuracy_jump = 5.72;
+        def.accuracy.inaccuracy_stand = 31.7;
+        def.accuracy.inaccuracy_move = 123.45;
+        def.max_player_speed = 230.;
+        for (key, value) in [("csr vertical jump inaccuracy", "1"),
+            ("inaccuracy jump initial", "208.720001"), ("inaccuracy jump apex", "0"),
+            ("inaccuracy stand alt", "3"), ("inaccuracy jump alt", "5.72")] {
+            def.attributes.insert(key.into(), value.into());
+        }
+        let mut w = WeaponState::new(Arc::new(def));
+        w.zoom_level = 1;
+        let context = |speed, vertical_speed, on_ground| AccuracyContext { speed, vertical_speed, on_ground, ducked: false };
+        let apex = inaccuracy(&w, context(0., 0., false));
+        assert!((apex - 8.72).abs() < 0.001);
+        for velocity in [30., 100., 200., 301.99338] {
+            let rising = inaccuracy(&w, context(0., velocity, false));
+            assert!(rising > apex + 19., "accuracy window must stay close to apex");
+            assert_eq!(rising, inaccuracy(&w, context(0., -velocity, false)));
+        }
+        assert!(inaccuracy(&w, context(230., 0., false)) > apex + 120.);
+        assert_eq!(inaccuracy(&w, context(0., 300., true)), 3.);
+        // No global sniper/AK behavior change for unselected content.
+        Arc::make_mut(&mut w.def).attributes.remove("csr vertical jump inaccuracy");
+        assert_eq!(inaccuracy(&w, context(0., 300., false)), apex);
+    }
+
+    #[test]
+    fn negev_fallback_settles_and_moves_sideways_without_changing_other_patterns() {
+        let mut def = ak();
+        def.def_index = 28; def.clip_size = 150; def.cycle_time = 0.075;
+        def.recoil = weapons::Recoil { angle: 0., angle_variance: 0., magnitude: 20., magnitude_variance: 2., seed: 57966 };
+        let old = recoil_pattern(&def);
+        def.attributes.insert("csr bounded sustained recoil".into(), "1".into());
+        let bounded = recoil_pattern(&def);
+        assert_eq!(bounded, recoil_pattern(&def));
+        assert_eq!(bounded[0], [0.; 2]);
+        assert!(old[150][0] < -50., "fixture exposes cumulative climb");
+        assert!(bounded[5][0] < bounded[1][0]);
+        assert!(bounded.iter().all(|a| a[0].is_finite() && a[1].is_finite() && a[0].abs() < 15. && a[1].abs() < 3.));
+        let tail = &bounded[30..];
+        let pitch_min = tail.iter().map(|a| a[0]).fold(f32::INFINITY, f32::min);
+        let pitch_max = tail.iter().map(|a| a[0]).fold(f32::NEG_INFINITY, f32::max);
+        assert!(pitch_max - pitch_min < 1., "sustained pitch must plateau");
+        assert!(tail.windows(2).any(|p| p[1][1] > p[0][1] + 0.001));
+        assert!(tail.windows(2).any(|p| p[1][1] < p[0][1] - 0.001));
+        def.attributes.remove("csr bounded sustained recoil");
+        assert_eq!(recoil_pattern(&def), old);
     }
 }

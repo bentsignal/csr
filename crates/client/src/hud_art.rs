@@ -206,7 +206,7 @@ pub fn update(mut commands: Commands, art: Res<UiAssets>, world: Res<SimWorld>, 
             let inset = hu(layout::CENTER_WIDTH / 2.0 + layout::CENTER_GAP);
             root.spawn(Node { position_type: PositionType::Absolute, top: hu(0.0), left: if left { Val::Auto } else { percent(50) }, right: if left { percent(50) } else { Val::Auto }, margin: if left { UiRect::right(inset) } else { UiRect::left(inset) }, column_gap: hu(layout::PLAYER_GAP), ..default() }).with_children(|team| {
                 for player in w.players.iter().filter(|p| p.team == side) {
-                    if let Some(image) = art.image("avatar") {
+                    if let Some(image) = art.image(if left { "avatar-ct" } else { "avatar-t" }).or_else(|| art.image("avatar")) {
                         team.spawn((PlayerTile, ImageNode { color: if player.alive { Color::WHITE } else { Color::srgba(0.3,0.3,0.3,0.5) }, ..ImageNode::new(image) }, Node { width: hu(layout::PLAYER_WIDTH), height: hu(layout::PLAYER_HEIGHT), flex_shrink: 0.0, border: UiRect::bottom(hu(2.0)), ..default() }, BackgroundColor(if left { Color::srgb(0.23,0.36,0.48) } else { Color::srgb(0.46,0.39,0.24) })));
                     }
                 }

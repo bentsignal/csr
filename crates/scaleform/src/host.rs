@@ -97,6 +97,15 @@ impl Files {
             tracing::debug!("scaleform: no file {rel}");
             return None;
         };
+        let raw = if rel == "huddeathnotification.swf" {
+            let icons: Vec<_> = ["revolver", "cz75a", "mp5sd"].into_iter()
+                .filter_map(|name| self.engine.borrow_mut().image(&format!("img://death-icon/{name}"))
+                    .map(|png| (format!("icon-{name}.png"), png))).collect();
+            match crate::death_icons::complete(&raw, &icons) {
+                Ok(movie) => movie,
+                Err(error) => { tracing::warn!("scaleform: death icon completion: {error}"); raw }
+            }
+        } else { raw };
         // This movie embeds only the eleven glyphs in its placeholder token.
         // The missing localized characters match that subset's omissions.
         // A Scaleform library fallback is inferred, not yet independently
@@ -875,13 +884,14 @@ fn compile_shim() -> Result<Vec<u8>, Error> {
                 "shim.as" => Ok(include_str!("shim.as").to_string()),
                 "death_notice.as" => Ok(include_str!("death_notice.as").to_string()),
                 "combat_hud.as" => Ok(include_str!("combat_hud.as").to_string()),
+                "scoreboard.as" => Ok(include_str!("scoreboard.as").to_string()),
                 "hud_layout.as" => Ok(include_str!("hud_layout.as").to_string()),
                 "flow_probe.as" => Ok(include_str!("flow_probe.as").to_string()),
                 _ => Err(std::io::Error::new(std::io::ErrorKind::NotFound, path.to_string())),
             }
         }
         fn is_file(&self, path: &str) -> bool {
-            matches!(path, "shim.as" | "death_notice.as" | "combat_hud.as" | "hud_layout.as" | "flow_probe.as")
+            matches!(path, "shim.as" | "death_notice.as" | "combat_hud.as" | "scoreboard.as" | "hud_layout.as" | "flow_probe.as")
         }
     }
     // SWF 10: Ruffle turns empty strings crossing ExternalInterface into
@@ -892,6 +902,7 @@ fn compile_shim() -> Result<Vec<u8>, Error> {
     builder.add_script("hud_layout.as");
     builder.add_script("death_notice.as");
     builder.add_script("combat_hud.as");
+    builder.add_script("scoreboard.as");
     builder.add_script("flow_probe.as");
     let program = builder.build().map_err(|e| format!("compiling the bridge shim: {e:?}"))?;
     let swf_options = rascal::SwfOptions::default().with_frame_rate(30.0).with_stage_size(0.0, 0.0, 1280.0, 720.0);

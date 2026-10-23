@@ -142,6 +142,10 @@ pub fn load(mut commands: Commands, level: Res<crate::GameData>, mut fonts: ResM
     for (side, model) in [("ct", "ctm_sas"), ("t", "tm_phoenix")] {
         png(&format!("character-{side}"), &format!("resource/flash/econ/characters/customplayer_{model}.png"));
     }
+    // Actual installed team avatars, not Steam's generic user-head fallback.
+    // Both bots and offline local players have a team but no Steam profile image.
+    png("avatar-ct", "materials/panorama/images/icons/scoreboard/avatar-ct.png");
+    png("avatar-t", "materials/panorama/images/icons/scoreboard/avatar-terrorist.png");
     png("knife_default_t", "materials/panorama/images/hud/deathnotice/icon-knife_default_t.png");
     for weapon in &level.catalog.weapons {
         let name = weapon.class_name.trim_start_matches("weapon_");
@@ -260,4 +264,21 @@ mod tests {
         let at = encoded.len() - 7; encoded[at] = 255;
         assert!(decode_font(encoded).is_none());
     }
+}
+
+/// Later Legacy guns are absent from the retained classic movie's exports.
+/// Supply their installed silhouettes to the same authored notice panel.
+pub(crate) fn death_notice_icons(fs: &vfs::Vfs) -> HashMap<String, Vec<u8>> {
+    let mut icons = HashMap::new();
+    for name in ["revolver", "cz75a", "mp5sd"] {
+        let Some(image) = equipment_image(fs, name) else { continue };
+        let size = image.texture_descriptor.size;
+        let Some(rgba) = image.data else { continue };
+        let mut png = std::io::Cursor::new(Vec::new());
+        if image::write_buffer_with_format(&mut png, &rgba, size.width, size.height,
+            image::ExtendedColorType::Rgba8, image::ImageFormat::Png).is_ok() {
+            icons.insert(name.to_owned(), png.into_inner());
+        }
+    }
+    icons
 }

@@ -7,6 +7,64 @@ use crate::player::{LocalPlayer, SimWorld};
 #[derive(Component)]
 pub struct ScopePart(u8);
 
+// Provisional presentation coefficients, not measured native blur parity. The
+// input is the same milliradian inaccuracy used by the authoritative shot path.
+const MAX_BLUR: f32 = 8.0;
+const BLUR_STEPS: usize = 32;
+const RETICLE_SIZE: usize = 96;
+
+#[derive(Resource)]
+pub struct ReticleImages { horizontal: Vec<Handle<Image>>, vertical: Vec<Handle<Image>>, dot: Vec<Handle<Image>> }
+
+#[derive(Default)]
+pub struct ScopeBlur { key: Option<(String, u8)>, sigma: f32 }
+
+fn blur_target(inaccuracy: f32, resting: f32, fov: f32) -> f32 {
+    let focal = 540.0 / (fov.clamp(1.0, 179.0).to_radians() * 0.5).tan();
+    ((inaccuracy - resting).max(0.0) * 0.001 * focal * 0.08).clamp(0.0, MAX_BLUR)
+}
+
+fn smooth_blur(current: f32, target: f32, dt: f32) -> f32 {
+    current + (target - current) * (1.0 - (-dt.max(0.0) / 0.06).exp())
+}
+
+// Separable, normalized coverage convolution. Transparent padding prevents
+// cropping the bloom; normalization keeps motion from making the dot brighter.
+fn blur_coverage(input: &[f32], width: usize, height: usize, sigma: f32) -> Vec<f32> {
+    if sigma == 0.0 { return input.to_vec(); }
+    let radius = (sigma * 3.0).ceil() as isize;
+    let mut kernel: Vec<f32> = (-radius..=radius).map(|x| (-0.5 * (x as f32 / sigma).powi(2)).exp()).collect();
+    let sum: f32 = kernel.iter().sum();
+    for weight in &mut kernel { *weight /= sum; }
+    let mut result = input.to_vec();
+    for horizontal in [true, false] {
+        if (horizontal && width == 1) || (!horizontal && height == 1) { continue; }
+        let source = result.clone();
+        for y in 0..height { for x in 0..width {
+            result[y * width + x] = kernel.iter().enumerate().map(|(i, weight)| {
+                let offset = i as isize - radius;
+                let sx = x as isize + if horizontal { offset } else { 0 };
+                let sy = y as isize + if horizontal { 0 } else { offset };
+                if sx < 0 || sy < 0 || sx >= width as isize || sy >= height as isize { 0.0 }
+                else { source[sy as usize * width + sx as usize] * weight }
+            }).sum();
+        }}
+    }
+    result
+}
+
+fn coverage_image(images: &mut Assets<Image>, coverage: &[f32], width: usize, height: usize) -> Handle<Image> {
+    let rgba = coverage.iter().flat_map(|a| [255, 255, 255, (a.clamp(0.0, 1.0) * 255.0).round() as u8]).collect();
+    let mut image = Image::new(
+        bevy::render::render_resource::Extent3d { width: width as u32, height: height as u32, depth_or_array_layers: 1 },
+        bevy::render::render_resource::TextureDimension::D2, rgba,
+        bevy::render::render_resource::TextureFormat::Rgba8UnormSrgb,
+        bevy::asset::RenderAssetUsages::RENDER_WORLD,
+    );
+    image.sampler = bevy::image::ImageSampler::linear();
+    images.add(image)
+}
+
 pub fn setup(mut commands: Commands, level: Res<crate::LoadedLevel>, mut images: ResMut<Assets<Image>>) {
     let mut cache = crate::textures::TextureCache::default();
     let arc = cache.load(&level.0.vfs, &mut images, "sprites/scope_arc", true).map(|t| t.handle);
@@ -14,20 +72,27 @@ pub fn setup(mut commands: Commands, level: Res<crate::LoadedLevel>, mut images:
     // background is not an opaque rectangle. Decode only the base mip for UI.
     let dot = level.0.vfs.read("materials/models/weapons/shared/scope/scope_dot_white.vtf")
         .and_then(|bytes| vtf::Vtf::parse(&bytes).ok()).and_then(|vtf| {
-            let mut rgba = vtf.rgba8(0, 0, 0)?;
-            for pixel in rgba.chunks_exact_mut(4) {
-                let coverage = ((pixel[0] as f32 / 255.0 - 0.5) * 2.0).clamp(0.0, 1.0);
-                pixel.copy_from_slice(&[255, 255, 255, (coverage * 255.0) as u8]);
-            }
-            let mut image = Image::new(
-                bevy::render::render_resource::Extent3d { width: vtf.width as u32, height: vtf.height as u32, depth_or_array_layers: 1 },
-                bevy::render::render_resource::TextureDimension::D2, rgba,
-                bevy::render::render_resource::TextureFormat::Rgba8UnormSrgb,
-                bevy::asset::RenderAssetUsages::RENDER_WORLD,
-            );
-            image.sampler = bevy::image::ImageSampler::linear();
-            Some(images.add(image))
+            let rgba = vtf.rgba8(0, 0, 0)?;
+            let mut coverage = vec![0.0; RETICLE_SIZE * RETICLE_SIZE];
+            // Preserve the original 32px footprint with room for blur on all sides.
+            for y in 0..32 { for x in 0..32 {
+                let source = ((y * vtf.height as usize / 32) * vtf.width as usize + x * vtf.width as usize / 32) * 4;
+                coverage[(y + 32) * RETICLE_SIZE + x + 32] = ((rgba[source] as f32 / 255.0 - 0.5) * 2.0).clamp(0.0, 1.0);
+            }}
+            Some(coverage)
         });
+    let mut reticles = ReticleImages { horizontal: Vec::new(), vertical: Vec::new(), dot: Vec::new() };
+    let mut line = vec![0.0; RETICLE_SIZE + 1];
+    line[RETICLE_SIZE / 2] = 1.0;
+    for step in 0..=BLUR_STEPS {
+        let sigma = step as f32 * MAX_BLUR / BLUR_STEPS as f32;
+        let blurred = blur_coverage(&line, 1, line.len(), sigma);
+        reticles.horizontal.push(coverage_image(&mut images, &blurred, 1, line.len()));
+        reticles.vertical.push(coverage_image(&mut images, &blurred, line.len(), 1));
+        if let Some(dot) = &dot {
+            reticles.dot.push(coverage_image(&mut images, &blur_coverage(dot, RETICLE_SIZE, RETICLE_SIZE, sigma), RETICLE_SIZE, RETICLE_SIZE));
+        }
+    }
     for part in 0..11 {
         let mut entity = commands.spawn((
             Node { position_type: PositionType::Absolute, ..default() },
@@ -39,13 +104,18 @@ pub fn setup(mut commands: Commands, level: Res<crate::LoadedLevel>, mut images:
                 entity.insert(ImageNode { image: image.clone(), flip_x: part % 2 == 0, flip_y: part < 2, ..default() });
             }
         } else if part == 10 {
-            if let Some(image) = &dot { entity.insert(ImageNode::new(image.clone())); }
+            if let Some(image) = reticles.dot.first() { entity.insert(ImageNode::new(image.clone())); }
+        } else if part == 8 || part == 9 {
+            let image = if part == 8 { &reticles.horizontal[0] } else { &reticles.vertical[0] };
+            entity.insert(ImageNode { image: image.clone(), color: Color::BLACK, ..default() });
         } else { entity.insert(BackgroundColor(Color::BLACK)); }
     }
+    commands.insert_resource(reticles);
 }
 
 pub fn update(
     settings: Res<crate::settings::Settings>,
+    time: Res<Time>, reticles: Res<ReticleImages>, mut blur: Local<ScopeBlur>,
     local: Res<LocalPlayer>, world: Res<SimWorld>, window: Single<&Window, With<PrimaryWindow>>,
     mut parts: Query<(&ScopePart, &mut Node, &mut Visibility, Option<&mut ImageNode>)>,
     mut crosshair: Query<(&crate::hud::Crosshair, &mut Visibility, &mut Node, &mut BackgroundColor), (With<crate::hud::Crosshair>, Without<ScopePart>)>,
@@ -54,11 +124,24 @@ pub fn update(
     let weapon = p.and_then(|p| p.active_weapon());
     let zoomed = weapon.is_some_and(|w| w.zoom_level > 0);
     let sniper = weapon.is_some_and(|w| w.hides_viewmodel());
+    let key = weapon.filter(|_| zoomed).map(|w| (w.def.class_name.clone(), w.zoom_level));
+    let target = p.zip(weapon).filter(|_| zoomed).map_or(0.0, |(p, w)| {
+        let ctx = sim::weapon::AccuracyContext { speed: p.movement.speed_2d(), vertical_speed: p.movement.velocity.z, on_ground: p.movement.on_ground, ducked: p.movement.ducked };
+        let resting = if ctx.ducked { w.alt_stat("inaccuracy crouch", w.def.accuracy.inaccuracy_crouch) }
+            else { w.alt_stat("inaccuracy stand", w.def.accuracy.inaccuracy_stand) };
+        blur_target(sim::weapon::inaccuracy(w, ctx), resting, w.rendered_fov(world.0.time()))
+    });
+    if blur.key != key { blur.key = key; blur.sigma = target; }
+    else { blur.sigma = smooth_blur(blur.sigma, target, time.delta_secs()); }
+    let blur_step = (blur.sigma / MAX_BLUR * BLUR_STEPS as f32).round().clamp(0.0, BLUR_STEPS as f32) as usize;
     let regular = p.is_some() && !zoomed && !weapon.is_some_and(|w| w.def.class == weapons::WeaponClass::Sniper);
     for (part,mut v,mut node,mut color) in &mut crosshair { *v = if regular && (part.0 != 4 || settings.cross_dot) { Visibility::Inherited } else { Visibility::Hidden }; let (x,y,w,h)=crate::menu::cross_bar(&settings,part.0);node.left=px(x);node.top=px(y);node.width=px(w);node.height=px(h);color.0=settings.crosshair_color(); }
     let (width, height) = (window.width(), window.height());
     let size = width.min(height);
     let radius = size * 0.5;
+    let scale = size / 1080.0;
+    let line_width = (RETICLE_SIZE + 1) as f32 * scale;
+    let dot_width = RETICLE_SIZE as f32 * scale;
     let (left, top) = ((width - size) * 0.5, (height - size) * 0.5);
     for (part, mut node, mut visibility, image) in &mut parts {
         let shown = if part.0 == 10 { zoomed && !sniper } else { sniper };
@@ -69,15 +152,53 @@ pub fn update(
             5 => (left + size - 1.0, 0.0, left + 1.0, height),
             6 => (left, 0.0, size, top),
             7 => (left, top + size, size, top),
-            8 => (left, (height * 0.5).floor(), size, 1.0),
-            9 => ((width * 0.5).floor(), top, 1.0, size),
-            _ => (width * 0.5 - 16.0, height * 0.5 - 16.0, 32.0, 32.0),
+            8 => (left, height * 0.5 - line_width * 0.5, size, line_width),
+            9 => (width * 0.5 - line_width * 0.5, top, line_width, size),
+            _ => (width * 0.5 - dot_width * 0.5, height * 0.5 - dot_width * 0.5, dot_width, dot_width),
         };
         node.left = px(x); node.top = px(y); node.width = px(w); node.height = px(h);
-        if part.0 == 10 {
-            if let Some(mut image) = image {
+        if let Some(mut image) = image {
+            if part.0 == 8 { image.image = reticles.horizontal[blur_step].clone(); }
+            if part.0 == 9 { image.image = reticles.vertical[blur_step].clone(); }
+            if part.0 == 10 {
+                if let Some(dot) = reticles.dot.get(blur_step) { image.image = dot.clone(); }
                 image.color = if weapon.is_some_and(|w| w.def.class_name == "weapon_aug") { Color::srgb(0.1, 1.0, 0.1) } else { Color::srgb(1.0, 0.1, 0.1) };
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn accuracy_driven_blur_scales_and_recovers_independently_of_frame_rate() {
+        let resting = 2.0;
+        let targets = [resting, 12.0, 35.0, 140.0].map(|accuracy| blur_target(accuracy, resting, 40.0));
+        assert_eq!(targets[0], 0.0);
+        assert!(targets.windows(2).all(|pair| pair[1] > pair[0]));
+        let mut sigma = targets[3];
+        for _ in 0..120 {
+            let next = smooth_blur(sigma, targets[0], 1.0 / 120.0);
+            assert!(next >= 0.0 && next < sigma);
+            sigma = next;
+        }
+        assert!(sigma < 0.001);
+        let full = smooth_blur(0.0, targets[2], 1.0 / 30.0);
+        let half = smooth_blur(0.0, targets[2], 1.0 / 60.0);
+        assert!((full - smooth_blur(half, targets[2], 1.0 / 60.0)).abs() < 0.00001);
+        assert_eq!(blur_target(10000.0, resting, 15.0), MAX_BLUR);
+    }
+
+    #[test]
+    fn convolution_softens_reticle_without_brightening_or_losing_coverage() {
+        let mut point = vec![0.0; RETICLE_SIZE * RETICLE_SIZE];
+        point[48 * RETICLE_SIZE + 48] = 1.0;
+        assert_eq!(blur_coverage(&point, RETICLE_SIZE, RETICLE_SIZE, 0.0), point);
+        let soft = blur_coverage(&point, RETICLE_SIZE, RETICLE_SIZE, MAX_BLUR);
+        assert!(soft[48 * RETICLE_SIZE + 48] < 0.01);
+        assert!(soft[48 * RETICLE_SIZE + 52] > 0.0);
+        assert!((soft.iter().sum::<f32>() - 1.0).abs() < 0.0001);
     }
 }

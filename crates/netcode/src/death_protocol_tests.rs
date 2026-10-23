@@ -125,9 +125,9 @@ fn tracked_receipt_must_already_satisfy_existing_admission_limits() {
 }
 
 #[test]
-fn older_protocol_versions_cannot_admit_a_peer_to_ground_item_motion_state_v30() {
-    assert_eq!(VERSION, 30);
-    assert_eq!(PROTOCOL_ID, 0x4353_5257_0000_001e);
+fn older_protocol_versions_cannot_admit_a_peer_to_pending_trigger_state_v31() {
+    assert_eq!(VERSION, 31);
+    assert_eq!(PROTOCOL_ID, 0x4353_5257_0000_001f);
     let content = ContentManifest {
         map_id: "csgo_map_test".into(),
         map_name: "test".into(),

@@ -288,7 +288,9 @@ pub fn setup(mut commands: Commands) {
             position_type: PositionType::Absolute,
             top: hu(layout::NOTICE_TOP),
             right: hu(12.0),
-            width: percent(60),
+            // Intrinsic-width fallback stays against the same right edge even
+            // when NoWrap text layout does not expand its justification box.
+            width: Val::Auto,
             ..default()
         },
     );

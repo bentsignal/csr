@@ -15,6 +15,11 @@ pub(crate) const MARK_OFFSET: f32 = 0.12;
 // Nuke wall control differs by one unit. Retain that contact/mesh allowance,
 // the existing stand-off and trace roundoff. This is a clip slab, not a fade.
 const MAX_PLANE_DISTANCE: f32 = 1.0 + MARK_OFFSET + 2.0 * collision::DIST_EPSILON;
+// The owner reports missing bullet marks with the one-unit control.
+// Permit small collision/render-face gaps without admitting distant geometry
+// through holes. Provisional four-unit allowance; native projection is pending.
+// Blood retains its accepted default slab and attachment behavior.
+const BULLET_PLANE_DISTANCE: f32 = 4.0 + MARK_OFFSET + 2.0 * collision::DIST_EPSILON;
 
 #[derive(Asset, TypePath, AsBindGroup, Debug, Clone)]
 pub(crate) struct ImpactDecalExtension {
@@ -49,7 +54,7 @@ pub(crate) fn material(texture: Handle<Image>) -> ImpactDecalMaterial {
             depth_bias: 1.,
             ..default()
         },
-        extension: default(),
+        extension: ImpactDecalExtension { max_plane_distance: BULLET_PLANE_DISTANCE },
     }
 }
 
@@ -88,9 +93,19 @@ mod tests {
             // A real receiver can sit behind the collision contact. The old
             // trace-epsilon-only slab erased these ordinary Nuke wall marks.
             assert!(accepts(Some(contact - normal)));
-            assert!(!accepts(Some(contact - normal * 2.)));
-            assert!(!accepts(Some(contact + normal * 2.)));
+            assert!(accepts(Some(contact - normal * 2.)));
+            assert!(accepts(Some(contact - normal * 4.)));
+            assert!(!accepts(Some(contact - normal * 8.)));
+            assert!(!accepts(Some(contact + normal * 8.)));
             assert!(!accepts(None));
         }
+    }
+
+    #[test]
+    fn bullet_allowance_does_not_widen_surface_blood() {
+        let blood = ImpactDecalExtension::default();
+        assert_eq!(blood.max_plane_distance, MAX_PLANE_DISTANCE);
+        assert!(blood.max_plane_distance < 2.);
+        assert!(material(default()).extension.max_plane_distance > 4.);
     }
 }

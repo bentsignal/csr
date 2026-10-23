@@ -28,7 +28,8 @@ impl ExternalInterfaceProvider for Sink {
 fn run(body: &str, width: u32, height: u32) -> Vec<Vec<Value>> {
     let source = include_str!("../src/shim.as").to_owned()
         + include_str!("../src/hud_layout.as")
-        + include_str!("../src/death_notice.as") + body;
+        + include_str!("../src/death_notice.as")
+        + include_str!("../src/scoreboard.as") + body;
     let mut builder = rascal::ProgramBuilder::new(Source(source))
         .with_compile_options(rascal::CompileOptions::default().with_swf_version(10));
     builder.add_script("synthetic.as");
@@ -134,4 +135,84 @@ while (i < widths.length) {
 "#, 1920, 1080);
     assert_eq!(calls.len(), 4);
     for call in calls { assert!(call.iter().all(|value| value == &Value::Bool(true)), "{call:?}"); }
+}
+
+#[test]
+fn scoreboard_rows_replace_template_values_and_hide_unowned_stats() {
+    let calls = run(r#"
+function checkScoreboardRows() {
+var row = _root.createEmptyMovieClip("fixtureRow", 400);
+row.createEmptyMovieClip("Player_Name", 1);
+row.Player_Name.createTextField("Player_Name", 1, 0, 0, 300, 20);
+row.createTextField("Money", 2, 0, 0, 80, 20);
+row.createTextField("Kills", 3, 0, 0, 40, 20);
+row.createTextField("Death", 4, 0, 0, 40, 20);
+row.createTextField("Assists", 5, 0, 0, 40, 20);
+row.createEmptyMovieClip("Bomb", 6);
+row.createEmptyMovieClip("Skull", 7);
+row.createEmptyMovieClip("PlayerOutline", 8);
+row.Assists.text = "999";
+var api = _global.csrScoreboard;
+var ok = api.row(row, ["<literal & name>", "C4", "$800", "3", "2", true]);
+csrEI.call("csr.HudLayoutFixture", ok, row.Player_Name.Player_Name.text == "<literal & name>",
+    row.Money.text == "$800", row.Kills.text == "3", row.Death.text == "2",
+    row.Bomb._visible, !row.Skull._visible, row.PlayerOutline._visible, !row.Assists._visible);
+ok = api.row(row, ["Enemy", "DEAD", "", "4", "3", false]);
+csrEI.call("csr.HudLayoutFixture", ok, row.Money.text == "", !row.Bomb._visible,
+    row.Skull._visible, !row.PlayerOutline._visible);
+var removed = api.row(row, undefined);
+csrEI.call("csr.HudLayoutFixture", removed, !row._visible,
+    !api.row(undefined, ["Missing", "ALIVE", "", "0", "0", false]));
+}
+checkScoreboardRows();
+"#, 1920, 1080);
+    assert_eq!(calls.len(), 3);
+    assert!(calls.iter().flatten().all(|value| value == &Value::Bool(true)),
+        "scoreboard row receipts (local, enemy, remove/reject): {calls:?}");
+}
+
+/// Diagnose the actual return channel independently from text side effects.
+/// Keep exact Boolean expectations: undefined must never pass as success.
+#[test]
+fn scoreboard_helper_return_channel_preserves_callers_values() {
+    let calls = run(r#"
+function checkScoreboardReturnChannel() {
+    var api = _global.csrScoreboard;
+    var fixture = _root.createEmptyMovieClip("csrReturnFixture", 401);
+    fixture.createTextField("Money", 1, 0, 0, 100, 20);
+    fixture.createEmptyMovieClip("Nested", 2);
+    fixture.Nested.createEmptyMovieClip("Leaf", 1);
+    // The same declaration/call form as the failing row fixture, with no
+    // installed timeline, recursive traversal, or inline receipt expression.
+    var literal = function() { return true; };
+    var constantResult = literal();
+    var writeResult = api.write(fixture.Money, "$800");
+    var rejectedResult = api.write(undefined, "missing");
+    csrEI.call("csr.HudLayoutFixture", constantResult, writeResult,
+        rejectedResult === false, fixture.Money.text == "$800");
+    var afterTimeline = function() {
+        fixture.gotoAndStop("UnownedMissingLabel");
+        return true;
+    };
+    var timelineResult = afterTimeline();
+    csrEI.call("csr.HudLayoutFixture", timelineResult);
+    var afterFreeze = function() {
+        api.freeze(fixture, 0);
+        return true;
+    };
+    var freezeResult = afterFreeze();
+    csrEI.call("csr.HudLayoutFixture", freezeResult);
+    var afterOnly = function() {
+        api.only(fixture, {Money:true});
+        return true;
+    };
+    var onlyResult = afterOnly();
+    csrEI.call("csr.HudLayoutFixture", onlyResult, fixture.Money._visible,
+        !fixture.Nested._visible);
+}
+checkScoreboardReturnChannel();
+"#, 1920, 1080);
+    assert_eq!(calls.len(), 4, "missing helper receipt: {calls:?}");
+    assert!(calls.iter().flatten().all(|value| value == &Value::Bool(true)),
+        "scoreboard helper receipts (literal/write/reject, timeline, freeze, only): {calls:?}");
 }

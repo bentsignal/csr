@@ -117,3 +117,50 @@ Raw video, captures, bitmap bytes and account data stay private under
 and our bridge code ship. `CSR_KILL_FEED_TRACE=1` logs revision/receipt/raster
 admission; `CSR_NO_CLASSIC_KILL_FEED=1` isolates its presentation cost against
 the ordinary text feed. Neither switch changes simulation or weapon behavior.
+
+## October 22 source-only owner-feedback pass
+
+Public ExportAssets metadata in the installed death-notification movie lacks
+`icon-revolver.png`, `icon-cz75a.png`, and `icon-mp5sd.png`. All three equipment
+SVGs exist in Legacy's VPK. The host now adds missing bitmap exports in memory
+from the bounded client SVG decoder; existing authored/imported symbols win,
+and allocated IDs exclude both local definitions and imports. This keeps the
+same original notice panel for later guns without substituting another gun's
+icon. No asset bytes are committed. Background opacity and scale are unchanged.
+
+Receipt updates now retain the admitted raster until a replacement arrives,
+instead of alternating raster/text while the worker catches up. Resize still
+invalidates old geometry. Exceptional text uses intrinsic width at the right
+anchor. Narrow regression sources cover retention/resize and export completion,
+ID collisions, and idempotence. F8 has a stable guns-before-grenades partition
+with a source regression. None of these tests/builds were run by the source-only
+child; root owns the serial checks and ordinary-play visual acceptance.
+
+The same pass selects runtime `materials/vgui/avatar_default_64.vtf` and
+`avatar_default-t_64.vtf` for team tiles (existing bot image remains a missing-art
+fallback), and replaces opaque damage strips with Legacy's alpha-shaped
+`materials/panorama/images/hud/damageindicator/damage-segment.png`. Direction,
+strength and lifetime still use the existing damage receipt. Segment placement
+and avatar appearance need root's visual check; this is not a measured classic
+HUD parity claim.
+
+Scoreboard remains the custom renderer. `resource/flash/scoreboard.swf` exists;
+its public export table exposes Vote, Star, info_icon, superscript digits,
+DefaultLocalAvatar and library classes, but not a ready row-render adapter.
+The next concrete seam is a separate scoreboard movie worker following
+`kill_feed::Bridge`/`combat_hud::Presentation`, fed the existing privacy-filtered
+`scoreboard::board` snapshot. Establish its public runtime row/setter contract
+without reading bytecode, add a revision-fenced full-board surface, and switch
+Tab from the Bevy board only after successful raster admission. Do not feed
+scoreboard pixels through the kill feed's top-half crop. Source-only inspection
+cannot establish those runtime calls, so this pass leaves the working board.
+
+
+October 22 follow-up: the scoreboard adapter is now implemented in
+`scoreboard/movie.rs` and `scaleform/src/scoreboard.as`; see
+[authored-scoreboard.md](authored-scoreboard.md) for the declarative contract
+and remaining runtime checks. Root's capture rejected the generic user-head
+avatars above. Team tiles now select the actual installed scoreboard team
+avatars (`icons/scoreboard/avatar-ct.png`, `avatar-terrorist.png`), verified by
+offline image inspection as the original CT and T emblems. They apply to bots
+and offline local players alike; no generic Steam head is loaded.

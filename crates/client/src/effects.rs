@@ -26,6 +26,10 @@ fn damage_sound(group: sim::weapon::HitGroup, protection: sim::weapon::HitProtec
 /// feedback across the map; ordinary foley attenuation can bury or cut it off.
 /// Body hits and other listeners retain their positional damage sounds. The
 /// struck player still owns these voices for channel/instance accounting.
+// Owner-requested balance for full-range attacker confirmation. This is a
+// provisional mix adjustment, not a measured original-engine gain.
+pub(crate) const ATTACKER_HEAD_GAIN: f32 = 0.35;
+
 pub(crate) fn play_combat_cue(
     event: &GameEvent, local: &LocalPlayer, commands: &mut Commands,
     sounds: &mut SoundLibrary, sources: &mut Assets<AudioSource>, fs: &vfs::Vfs,
@@ -49,8 +53,9 @@ pub(crate) fn play_combat_cue(
         _ => return,
     };
     let own = feedback || (victim == local.view_target() && !local.noclip);
-    sounds.play_with(commands, fs, sources, sound,
-        Emit { at: (!own).then_some(pos), owner: Some(victim), local: own });
+    sounds.play_with_gain(commands, fs, sources, sound,
+        Emit { at: (!own).then_some(pos), owner: Some(victim), local: own },
+        if feedback { ATTACKER_HEAD_GAIN } else { 1.0 });
 }
 
 /// Events produced by fixed ticks since the last frame.
@@ -121,6 +126,17 @@ impl Effects {
         self.attacks.insert(player, (self.attack_serial, weapon, activity));
     }
 
+    fn firearm_attack(&mut self, player: sim::PlayerId, weapon: String, now: f32) {
+        // The installed Elite model assigns the two pistols to distinct
+        // activities, not variants of PRIMARYATTACK. Advance for every Fire
+        // receipt even if several shots arrive before a render frame.
+        let right = weapon == "weapon_elite" && self.attacks.get(&player)
+            .is_some_and(|(_, previous, activity)| previous == &weapon
+                && *activity == "ACT_VM_PRIMARYATTACK");
+        self.attack(player, weapon,
+            if right { "ACT_VM_SECONDARYATTACK" } else { "ACT_VM_PRIMARYATTACK" }, now);
+    }
+
     /// Only consume attacks produced after deployment, for this held weapon.
     pub fn consume_attack(&self, player: sim::PlayerId, weapon: &str, seen: &mut u64) -> Option<&'static str> {
         let (serial, fired_weapon, activity) = self.attacks.get(&player)?;
@@ -166,7 +182,7 @@ pub fn process(
         match event {
             GameEvent::Fire { player, weapon, origin, suppressed } => {
                 shot_modes.insert(player, (weapon.clone(), suppressed));
-                effects.attack(player, weapon.clone(), "ACT_VM_PRIMARYATTACK", now);
+                effects.firearm_attack(player, weapon.clone(), now);
                 // These installed attack sequences declare separate bolt/pump
                 // sounds, not another gunshot. Classic shot replacement does
                 // not deliver those handling events. Use the same confirmed
@@ -413,6 +429,38 @@ pub fn draw(effects: Res<Effects>, time: Res<Time>, mut gizmos: Gizmos) {
 #[cfg(test)]
 mod attack_tests {
     use super::*;
+    #[test]
+    fn dual_pistol_fire_receipts_alternate_independently_of_render_consumption() {
+        let mut effects = Effects::default();
+        let mut seen = 0;
+        for n in 0..8 {
+            effects.firearm_attack(1, "weapon_elite".into(), n as f32 * 0.12);
+            let expected = if n % 2 == 0 { "ACT_VM_PRIMARYATTACK" } else { "ACT_VM_SECONDARYATTACK" };
+            assert_eq!(effects.attacks[&1].2, expected);
+            if n % 3 == 0 {
+                assert_eq!(effects.consume_attack(1, "weapon_elite", &mut seen), Some(expected));
+                assert_eq!(effects.consume_attack(1, "weapon_elite", &mut seen), None);
+            }
+        }
+        effects.firearm_attack(2, "weapon_elite".into(), 1.);
+        assert_eq!(effects.attacks[&2].2, "ACT_VM_PRIMARYATTACK");
+        effects.firearm_attack(1, "weapon_ak47".into(), 2.);
+        assert_eq!(effects.attacks[&1].2, "ACT_VM_PRIMARYATTACK");
+    }
+
+    #[test]
+    fn installed_dual_pistols_bind_both_firing_hands() {
+        let Some(game) = vfs::find_csgo_dir() else { return; };
+        let mut fs = vfs::Vfs::new();
+        fs.mount_game_dir(&game).unwrap();
+        let bytes = fs.read("models/weapons/v_pist_elite.mdl").unwrap();
+        let model = mdl::Model::load_header(&bytes).unwrap();
+        for (activity, name) in [("ACT_VM_PRIMARYATTACK", "shoot_left1"),
+            ("ACT_VM_SECONDARYATTACK", "shoot_right1")] {
+            assert!(model.sequences.iter().any(|seq| seq.activity == activity && seq.name == name));
+        }
+    }
+
     // UNRUN by source-only child. Read installed app 4465480 declarations;
     // this checks event/sample routing, not historical PCM or audible parity.
     #[test]

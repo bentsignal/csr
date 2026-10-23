@@ -627,7 +627,26 @@ impl Bots {
             let finishing = world.bomb.and_then(|b| b.defuser).is_some_and(|(d, done)| d == bot.id && (done - time < 2.5 || world.smoke_occludes(eye,brain.target_pos) || world.bomb.is_some_and(|b|b.explode_at-done<2.0)));
             let turn_rate = (240.0 + 480.0 * self.skill) * dt;
             let mut holding_shot = false;
-            if brain.visible && !finishing {
+            // A firearm contact must not abandon a climb already selected and
+            // physically caught. Level traversal input owns this narrow case;
+            // aiming up/down or strafing can reverse it in human ladder physics.
+            // Pending weapon, utility and bomb work retain their usual priority.
+            let contact_ladder = if brain.visible && !finishing && brain.throw.is_none()
+                && brain.reload_cover.is_none() && bot.plant_start.is_none()
+                && !world.bomb.is_some_and(|b| b.defuser.is_some_and(|(id, _)| id == bot.id))
+                && bot.active_weapon().is_some_and(|w| {
+                    w.uses_ammo() && w.clip > 0 && w.def.class != weapons::WeaponClass::Grenade
+                        && w.reload_end.is_none() && w.burst.is_none() && w.suppressor_transition.is_none()
+                        && w.grenade_throw.is_none() && time >= w.next_attack && time >= w.next_secondary_attack
+                        && (input.weapon_slot == 0 || input.weapon_slot == crate::weapon::slot(&w.def))
+                }) {
+                nav.as_deref().and_then(|mesh| committed_contact_ladder(mesh, world, bot, brain))
+            } else { None };
+            if let Some((ladder, up, from, to)) = contact_ladder {
+                brain.last_navigation_tick = Some(world.tick);
+                follow_ladder(nav.as_deref().unwrap(), world, bot, brain, &mut input,
+                    ladder, up, from, to, time, turn_rate);
+            } else if brain.visible && !finishing {
                 let err = (1.0 - self.skill) * 3.0;
                 let (mut tp, mut ty) = look_angles(eye, brain.target_pos);
                 // Slowly drifting error preserves imperfect aim without a new
@@ -880,8 +899,8 @@ impl Bots {
             brain.yaw = smooth_angle(old_angles.y, brain.yaw, &mut brain.turn_velocity.y, dt, 420.0);
             // The surface converts level inward/outward input into climbing.
             // Keep that command independent of a previous search/contact pitch;
-            // combat and utility retain their existing aim ownership.
-            if brain.ladder_navigation && !brain.visible && brain.throw.is_none() {
+            // committed contact traversal also needs this level command.
+            if brain.ladder_navigation && (!brain.visible || contact_ladder.is_some()) && brain.throw.is_none() {
                 brain.pitch = 0.0;
                 brain.turn_velocity.x = 0.0;
             }
@@ -1128,6 +1147,7 @@ fn clear_route_attack(world: &World, bot: &Player, input: &TickInput, index: usi
     let (forward, right, up) = movement::angle_vectors(input.view_angles
         + Vec3::new(punch[0], punch[1], 0.0) * crate::weapon::RECOIL_SCALE);
     let inaccuracy = crate::weapon::inaccuracy(&w, crate::weapon::AccuracyContext {
+        vertical_speed: movement.velocity.z,
         speed: movement.speed_2d(), on_ground: movement.on_ground, ducked: movement.ducked,
     }) * 0.001;
     let spread = w.alt_stat("spread", w.def.accuracy.spread) * 0.001;
@@ -1429,6 +1449,50 @@ fn ladder_contact(world: &World, bot: &Player, ladder: &nav::Ladder) -> (Option<
         && (pos - line).dot(lateral).abs() <= ladder.width * 0.5 + extent.dot(lateral.abs())
         && pos.z + maxs.z >= ladder.bottom.z && pos.z <= ladder.top.z + maxs.z;
     (actual, matches)
+}
+
+/// Continue only the current, continuously followed selected mount. A remembered
+/// attachment alone cannot revive an interrupted route or substitute another face.
+fn committed_contact_ladder<'a>(mesh: &'a NavMesh, world: &World, bot: &Player,
+    brain: &Brain) -> Option<(&'a nav::Ladder, bool, u32, u32)>
+{
+    let last = brain.last_navigation_tick?;
+    if last != world.tick && last.checked_add(1) != Some(world.tick) { return None; }
+    let from = *brain.path.get(brain.path_index)?;
+    let to = *brain.path.get(brain.path_index + 1)?;
+    let (ladder, up) = mesh.ladder_transition(from, to)?;
+    let route = brain.ladder_route.as_ref()?;
+    if (route.from, route.to, route.id) != (from, to, ladder.id) { return None; }
+    let destination = mesh.area(to)?;
+    let pos = bot.movement.origin;
+    let floor = destination.z_at(pos.x, pos.y);
+    // Once safely on the destination floor, ordinary combat owns the tick.
+    if bot.movement.on_ground && bot.movement.ladder_normal.is_none()
+        && destination.contains_xy(pos, -2.0) && (-8.0..120.0).contains(&(pos.z - floor)) {
+        return None;
+    }
+    let (actual, on_mount) = ladder_contact(world, bot, ladder);
+    if on_mount && bot.movement.ladder_normal.is_some_and(|n| n.dot(ladder.normal()) > 0.7) {
+        return Some((ladder, up, from, to));
+    }
+    // Human movement drops contact at the cap or on the bottom jump-away.
+    // Admit only the adjacent endpoint departure of a real attached traversal,
+    // with its selected face still present. Lost mid-climb/wrong contact stops here.
+    let endpoint = if up { ladder.top } else { ladder.bottom };
+    let (mins, maxs) = bot.movement.hull();
+    let reach = ladder.width * 0.5 + ((maxs - mins) * 0.5).truncate().length()
+        + collision::LADDER_REACH;
+    // Use the existing contact ribbon's upper hull allowance: collision caps
+    // can sit above NAV top, and still determine when human climbing ends.
+    let at_exit_height = if up { (ladder.top.z..=ladder.top.z + maxs.z).contains(&pos.z) }
+        else { (pos.z - floor).abs() <= world.config.step_size };
+    if route.attached && actual.is_none() && bot.movement.ladder_normal.is_none()
+        && at_exit_height && (pos - endpoint).truncate().length() <= reach
+        && ladder_face(world, bot, ladder, endpoint + Vec3::Z * collision::DIST_EPSILON
+            * if up { -3.0 } else { 3.0 }).is_some() {
+        return Some((ladder, up, from, to));
+    }
+    None
 }
 
 /// Only a raised cap belonging to the selected front/back face pair qualifies.
@@ -1893,6 +1957,188 @@ mod tests {
             planted_at: 0., explode_at: 200., defuser: None });
         let bots = Bots::with_skill(1.).with_nav(Some(Arc::new(ladder_nav())));
         (world, bots, id)
+    }
+
+    fn firearm_ladder_fixture(rate: u32, up: bool, crouch: bool, cap: f32) -> (World, Bots, PlayerId) {
+        let (mut world, bots, id) = if crouch {
+            ordinary_low_ladder_fixture(rate, up, nav::attr::CROUCH)
+        } else { ladder_route_fixture(rate, up, true, cap) };
+        world.catalog = Arc::new(weapons::Catalog::from_items_game(r#"items_game { items {
+            7 { name weapon_ak47 baseitem 1 attributes {
+                "primary clip size" 30 "is full auto" 1 damage 1
+                "range modifier" 1 "recoil magnitude" 0 cycletime 0.1
+            } }
+        } }"#).unwrap());
+        let weapon = crate::WeaponState::new(Arc::new(world.catalog.get("weapon_ak47").unwrap().clone()));
+        let bot = world.player_mut(id).unwrap();
+        bot.weapons = vec![weapon]; bot.active = 0; bot.last_input.weapon_slot = 1;
+        (world, bots, id)
+    }
+
+    fn attached_firearm_ladder_fixture(rate: u32, up: bool, crouch: bool, cap: f32) -> (World, Bots, PlayerId) {
+        let (mut world, mut bots, id) = firearm_ladder_fixture(rate, up, crouch, cap);
+        // No brain/attachment seeding: ordinary decisions must approach and
+        // catch the parsed NAV's real collision face before contact is added.
+        for _ in 0..rate * 6 {
+            let bot = world.player(id).unwrap();
+            if bot.movement.ladder_normal == Some(-Vec3::X)
+                && ladder_contact(&world, bot, bots.nav.as_ref().unwrap().ladder(7).unwrap()).1
+                && if up { bot.movement.origin.z >= 48. } else { bot.movement.origin.z <= 80. } {
+                return (world, bots, id);
+            }
+            let before = bot.movement;
+            let inputs = bots.think(&world);
+            assert_eq!(world.player(id).unwrap().movement, before);
+            assert!(!bots.brains[&id].visible);
+            world.step_prediction(&inputs);
+        }
+        panic!("{rate} Hz up={up} crouch={crouch}: ordinary approach must attach");
+    }
+
+    fn reveal_ladder_enemy(world: &mut World) -> PlayerId {
+        let enemy = world.add_player("ladder contact", Team::Terrorist);
+        world.respawn(enemy);
+        let player = world.player_mut(enemy).unwrap();
+        player.movement = movement::PlayerMove::spawn_at(Vec3::new(-64., 80., 0.03125));
+        player.movement.on_ground = true;
+        enemy
+    }
+
+    // UNRUN 64/128: source-only slot; root owns combined execution.
+    #[test]
+    fn visible_firearm_contact_continues_selected_climb_and_dismount_at_both_rates() {
+        for rate in [64, 128] {
+            for up in [true, false] {
+                for (crouch, cap) in [(false, 256.), (false, if up { 280. } else { 286. }), (true, 256.)] {
+                    let (mut world, mut bots, id) = attached_firearm_ladder_fixture(rate, up, crouch, cap);
+                    let start = world.player(id).unwrap().movement.origin;
+                    reveal_ladder_enemy(&mut world);
+                    let mut visible_climb = false;
+                    let mut visible_exit = false;
+                    let mut arrived = false;
+                    for _ in 0..rate * 6 {
+                        let before = world.player(id).unwrap().movement;
+                        let inputs = bots.think(&world);
+                        assert_eq!(world.player(id).unwrap().movement, before, "think emits input only");
+                        let brain = &bots.brains[&id];
+                        let input = inputs.iter().find(|(actor, _)| *actor == id).unwrap().1;
+                        if brain.visible && before.ladder_normal == Some(-Vec3::X)
+                            && ladder_contact(&world, world.player(id).unwrap(), bots.nav.as_ref().unwrap().ladder(7).unwrap()).1 {
+                            assert!(brain.ladder_navigation, "visible enemy must not drop committed climbing input");
+                        }
+                        if brain.visible && brain.ladder_navigation {
+                            assert_eq!(input.view_angles.x, 0., "human climbing needs level input");
+                            assert_eq!(input.buttons & (buttons::ATTACK | buttons::ATTACK2 | buttons::RELOAD), 0);
+                            assert_eq!(input.buttons & buttons::DUCK != 0, crouch, "retain authored stance");
+                            visible_climb |= before.ladder_normal == Some(-Vec3::X)
+                                && if up { before.origin.z > start.z + 8. } else { before.origin.z < start.z - 8. };
+                            visible_exit |= brain.ladder_route.as_ref().is_some_and(|r| r.exiting);
+                        }
+                        world.step_prediction(&inputs);
+                        let bot = world.player(id).unwrap();
+                        let pm = &bot.movement;
+                        let (mins, maxs) = pm.hull();
+                        let tr = world.collision.trace_box(pm.origin, pm.origin, mins, maxs,
+                            collision::contents::MASK_PLAYERSOLID);
+                        assert!(!tr.start_solid && !tr.all_solid, "ordinary hull clearance: {pm:?}");
+                        let destination = bots.nav.as_ref().unwrap().area(if up { 2 } else { 1 }).unwrap();
+                        arrived = pm.on_ground && pm.ladder_normal.is_none()
+                            && destination.contains_xy(pm.origin, -2.0)
+                            && (pm.origin.z - destination.z_at(pm.origin.x, pm.origin.y)).abs() < 8.;
+                        if arrived { break; }
+                    }
+                    assert!(visible_climb && visible_exit && arrived,
+                        "{rate} Hz up={up} crouch={crouch} cap={cap}: contact must climb and dismount: {:?}", world.player(id).unwrap().movement);
+                    assert!(bots.brains[&id].failed_transitions.is_empty());
+                    let _ = bots.think(&world);
+                    assert!(!bots.brains[&id].ladder_navigation, "safe grounded arrival releases traversal ownership");
+                }
+            }
+        }
+    }
+
+    // UNRUN 64/128: invalidate normally acquired contact, never invent one.
+    #[test]
+    fn firearm_contact_rejects_missing_stale_and_pending_ladder_routes_at_both_rates() {
+        for rate in [64, 128] {
+            for case in 0..11 {
+                let (mut world, mut bots, id) = attached_firearm_ladder_fixture(rate, true, false, 256.);
+                let enemy = reveal_ladder_enemy(&mut world);
+                // Acquire visibility through perception at its ordinary cadence.
+                while (world.tick + id as u64) % interval(&world, PERCEPTION_RATE) != 0 {
+                    let inputs = bots.think(&world);
+                    world.step_prediction(&inputs);
+                }
+                let now = world.time();
+                let tick = world.tick;
+                match case {
+                    0 => {
+                        let mut collision = collision::CollisionWorld::new();
+                        collision.add_convex(ladder_box(Vec3::new(-512., -512., -16.),
+                            Vec3::new(512., 512., 0.), collision::contents::SOLID));
+                        collision.finalize(); world.collision = Arc::new(collision);
+                    }
+                    1 => world.step_prediction(&[(id, TickInput::default())]),
+                    2 => bots.nav = None,
+                    3 => world.player_mut(id).unwrap().weapons[0].reload_end = Some(now + 1.),
+                    4 => world.player_mut(id).unwrap().weapons[0].burst = Some(crate::weapon::BurstState {
+                        remaining: 2, next_shot: now + 1.,
+                    }),
+                    5 => world.player_mut(id).unwrap().weapons[0].suppressor_transition = Some(crate::weapon::SuppressorTransition {
+                        started_tick: tick, attached: true,
+                    }),
+                    6 => world.player_mut(id).unwrap().weapons[0].next_attack = now + 1.,
+                    7 => world.player_mut(id).unwrap().plant_start = Some(now),
+                    8 => world.bomb.as_mut().unwrap().defuser = Some((id, now + 8.)),
+                    9 => world.player_mut(id).unwrap().weapons[0].next_secondary_attack = now + 1.,
+                    10 => world.player_mut(id).unwrap().weapons[0].grenade_throw = Some(crate::utility::ThrowState {
+                        phase: crate::utility::ThrowPhase::PullingPin, mode: crate::utility::ThrowMode::Overhand,
+                        pull_started_tick: tick, throw_started_tick: None, release_requested: false, spawned: false,
+                    }),
+                    _ => unreachable!(),
+                }
+                // In the stale case, wait for perception without issuing a
+                // navigation decision; zero human input holds the real face.
+                while (world.tick + id as u64) % interval(&world, PERCEPTION_RATE) != 0 {
+                    world.step_prediction(&[(id, TickInput::default())]);
+                }
+                assert!(visible_target(&world, world.player(id).unwrap().eye(), world.player(enemy).unwrap()).is_some());
+                let before = world.player(id).unwrap().movement;
+                let weapon = world.player(id).unwrap().weapons[0].clone();
+                let inputs = bots.think(&world);
+                assert!(bots.brains[&id].visible, "{rate} Hz case={case}: real perception");
+                assert!(!bots.brains[&id].ladder_navigation, "{rate} Hz case={case}: no continuation");
+                assert_eq!(world.player(id).unwrap().movement, before);
+                assert_eq!(world.player(id).unwrap().weapons[0], weapon, "think preserves pending weapon state");
+                assert_eq!(inputs[0].1.buttons & buttons::JUMP, 0);
+            }
+        }
+    }
+
+    // UNRUN 64/128: nearby grounded firearm contact keeps ordinary combat.
+    #[test]
+    fn grounded_firearm_contact_does_not_commit_a_ladder_at_both_rates() {
+        for rate in [64, 128] {
+            let (mut world, mut bots, id) = firearm_ladder_fixture(rate, true, false, 256.);
+            let bot = world.player_mut(id).unwrap();
+            bot.movement = movement::PlayerMove::spawn_at(Vec3::new(-300., 0., 0.03125));
+            bot.movement.on_ground = true;
+            reveal_ladder_enemy(&mut world);
+            let mut visible = false;
+            for _ in 0..rate * 2 {
+                let inputs = bots.think(&world);
+                if bots.brains[&id].visible {
+                    visible = true;
+                    assert!(!bots.brains[&id].ladder_navigation);
+                    assert_eq!(inputs[0].1.buttons & (buttons::JUMP | buttons::DUCK), 0);
+                }
+                world.step_prediction(&inputs);
+                let bot = world.player(id).unwrap();
+                assert!(bot.movement.on_ground && bot.movement.ladder_normal.is_none());
+                if bot.shots > 0 { break; }
+            }
+            assert!(visible && world.player(id).unwrap().shots > 0, "{rate} Hz: retain grounded aim and fire");
+        }
     }
 
     // Raised-cap descent additions are UNRUN in this source-only slot.
