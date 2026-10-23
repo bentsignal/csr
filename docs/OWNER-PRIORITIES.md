@@ -67,10 +67,23 @@ Mounted material modifiers feed a bounded approximate thickness/damage policy;
 unknown materials and overlapping geometry stay opaque. Workspace checks and an
 actual installed Inferno wood-panel firing/opaque control pass at 64/128 Hz.
 The final PLAY build and Dust II probe/sim pass; small/full scoreboard captures
-confirm aligned original emblems and all twelve rows per team. CI remains pending.
+confirm aligned original emblems and all twelve rows per team. PR #310 merged
+after both CI checks passed.
 Penetrating pellets emit one completed tracer path with separate entry impacts.
 The original M3 task stays unchecked:
 native damage/thickness parity and broader cover geometry are unfinished.
+The active follow-through joins exact touching/overlapping convex intervals,
+counts their physical thickness once and checks every crossed component face.
+Hidden opaque/unknown backing must still block the shot. Positive mounted
+concrete/metal declarations now use that same bounded policy rather than an
+unconditional material-code rejection. The loss formula is unchanged and
+approximate. The combined 1,328-test workspace, normal PLAY build, Dust II
+probe/sim and ordinary ten-player Nuke render pass. CI remains pending.
+Installed-data controls now pass through an actual 16-unit Inferno wooden panel
+and 8-unit Nuke concrete/corrugated-metal panels at 64/128 Hz. Identical opaque
+controls retain the original collision/weapon data and block each shot when
+the ballistic definitions are removed. This is functional coverage, not measured
+native damage parity.
 
 The owner launcher/profile has not been replaced.
 
