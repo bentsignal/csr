@@ -127,7 +127,16 @@ probe/sim passed before the outer-bar-only seam correction. The final strict
 client capture preserves protected userdata and executable hashes. A preceding
 capture flagged two live Steam-file changes; that failed receipt is retained,
 without restoring Steam files or attributing the changes to this UI correction.
-CI for this scope increment remains pending.
+Both CI checks passed and PR #313 merged.
+
+Penetrated pellets now recheck their existing damage budget at the player
+contact: range falloff after an admitted exit can no longer revive an exhausted
+pellet through the shared one-health minimum. Normal direct hits and the
+approximate cover coefficients are preserved. The compatibility policy salt is
+v5. Focused/workspace execution is pending. One ordinary original AK shot through
+the valid four-unit post now has readable side-on labels: thickness 10.3cm and
+lost damage 7.8, with entry damage 36 at 3.2m. The observer camera moved only
+after the shot. This is a concrete native sample, not a general loss law.
 
 The owner launcher/profile has not been replaced.
 
