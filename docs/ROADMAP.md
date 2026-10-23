@@ -899,3 +899,7 @@ parity and the gameplay gaps listed above remain unfinished.
   material-selected smaller puffs, restored marks, scope glass/blur, feed icons
   and original scoreboard adapter. Presentation refinements remain tracked in
   [owner priorities](OWNER-PRIORITIES.md); this is not full fidelity acceptance.
+
+- [x] Select impact and step materials from the actual BSP brush contact face,
+  retaining face IDs through breakable overlays and rotating brush doors. Keep
+  uniform PHY-hull behavior and clip geometry unchanged.

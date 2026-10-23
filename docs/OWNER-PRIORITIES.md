@@ -50,6 +50,20 @@ the admitted mode through protocol v32, selecting the installed R8 secondary
 activity and its three alternate clips. A normal PLAY capture confirms secondary
 animation with four shots/four rounds remaining at 1.5s; primary cadence and
 shared ammo are unchanged. Exact blend/recoil parity is not claimed.
+The next combined increment fixes a concrete contact-material bug: BSP brushes
+previously reported their first face material for every hit. Contacts now retain
+the actual hit-face material, including breakable overlays and rotating brush
+doors, without changing clip geometry. Attached marks validate collision material
+rather than the visual door model. Negev recoil now recovers its live angle on
+release; accuracy recovery uses authored final times and transition bullets.
+Optic bloom stays inside the posed lens and no longer resets on zoom cycling;
+the scoreboard labels both rosters and aligns visible score text to headings.
+The combined 1307-test workspace, installed arsenal at 64/128 Hz, PLAY build,
+Dust II probe/sim and seven rendered controls pass. Original background emblem
+placement still needs correction. The original M3 bullet-penetration task is
+also active: a bounded thin-cover source candidate awaits integration and checks;
+this is not completion of the core-gun backlog.
+
 The owner launcher/profile has not been replaced.
 
 October 23 recovery instruction: an hourly T3 scheduled check resumes approved
