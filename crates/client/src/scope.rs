@@ -11,9 +11,6 @@ pub use optic_blur::OpticBlurPlugin;
 #[derive(Component)]
 pub struct ScopePart(u8);
 
-#[derive(Component)]
-struct SniperOverlayCamera;
-
 // Provisional presentation coefficients, not measured native blur parity. The
 // input is the same milliradian inaccuracy used by the authoritative shot path.
 const MAX_BLUR: f32 = 8.0;
@@ -189,27 +186,11 @@ pub fn setup(commands: Commands, level: Res<crate::LoadedLevel>, mut images: Res
 }
 
 fn spawn_parts(mut commands: Commands, arc: Option<Handle<Image>>, reticles: ReticleImages) {
-    // Resolve every 3D/MSAA camera before either UI pass. The mask and HUD
-    // share a transparent single-sample target, but separate ordered passes;
-    // a later 3D resolve must not replace their pixels. Publish the combined
-    // premultiplied overlay once, after the HUD has drawn over the mask.
-    let overlay = commands.spawn((Camera2d, Camera {
-        order: 4, clear_color: ClearColorConfig::Custom(Color::NONE),
-        output_mode: bevy::camera::CameraOutputMode::Skip, ..default()
-    }, Msaa::Off, bevy::camera::visibility::RenderLayers::none(), SniperOverlayCamera)).id();
-    commands.spawn((Camera2d, Camera {
-        order: 5, clear_color: ClearColorConfig::None,
-        output_mode: bevy::camera::CameraOutputMode::Write {
-            blend_state: Some(bevy::render::render_resource::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
-            clear_color: ClearColorConfig::None,
-        }, ..default()
-    }, Msaa::Off, bevy::camera::visibility::RenderLayers::none(), IsDefaultUiCamera));
     for part in 0..11 {
         let mut entity = commands.spawn((
             Node { position_type: PositionType::Absolute, ..default() },
             GlobalZIndex(-1), Visibility::Hidden, ScopePart(part),
         ));
-        if part < 10 { entity.insert(UiTargetCamera(overlay)); }
         if part < 4 {
             if let Some(image) = &arc {
                 // In the original quarter arc (0, 0) is the clear centre.
@@ -387,15 +368,6 @@ mod tests {
             }
         }
         assert_eq!(lines, 2);
-        let camera = world.query_filtered::<Entity, With<SniperOverlayCamera>>().single(&world).unwrap();
-        assert_eq!(world.get::<Camera>(camera).unwrap().order, 4);
-        assert!(matches!(world.get::<Camera>(camera).unwrap().output_mode, bevy::camera::CameraOutputMode::Skip));
-        let hud = world.query_filtered::<&Camera, With<IsDefaultUiCamera>>().single(&world).unwrap();
-        assert_eq!(hud.order, 5);
-        for (part, target) in world.query::<(&ScopePart, Option<&UiTargetCamera>)>().iter(&world) {
-            if part.0 < 10 { assert_eq!(target.unwrap().0, camera); }
-            else { assert!(target.is_none(), "rifle dot belongs above the weapon"); }
-        }
     }
 
     #[test]

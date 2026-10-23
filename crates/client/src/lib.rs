@@ -741,7 +741,7 @@ fn finish_level(
         Camera3d::default(),
         material::camera_clusters(),
         Camera {
-            order: 3,
+            order: 2,
             clear_color: ClearColorConfig::None,
             ..default()
         },
@@ -757,6 +757,7 @@ fn finish_level(
         PlayerCamera,
         player::ViewModelCamera,
         bevy::render::view::NoIndirectDrawing,
+        IsDefaultUiCamera,
         menu_blur::PostProcessSettings::default(),
     ));
     commands.insert_resource(local);

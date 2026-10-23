@@ -23,6 +23,31 @@ automatic firing, improved Negev recovery, visible muzzle flashes and normal R8
 kill-feed placement. Preserve previously accepted grenade, knife, fire, audio,
 HUD sizing and airborne weapon-motion scopes. Multiplayer stays deferred.
 
+### October 23 six-outcome implementation
+
+- F8 uses tall scrollable lists with named weapon groups and all map choices;
+  the old twelve-item pages and Next/Previous actions are removed.
+- Cover resolves numeric Legacy material IDs, loaded VMT defaults and header-only
+  MDL surface properties. Exact tied cover retains every crossed material;
+  admitted shots leave exit marks. Actual current/classic Dust II door damage
+  passes both directions at 64/128 Hz; coverage checks pass on 36 available maps.
+- Sniper lines use the mounted soft coverage sprite with a dark core. AUG/SG
+  lose invalid grey lens contributions and gain depth-aware close weapon blur;
+  SG scoped firing motion is restrained. Optical pixels outside the sniper
+  opening pass through unchanged, preserving the HUD.
+- Dualies preserve independent hand clocks and blend same-hand restarts instead
+  of resetting the other hand; firing presentation clears at life boundaries.
+- Attacker headshot feedback gain rises from .35 to .42; other feedback is kept.
+- Instant R8 primary uses a .65-second interval and mounted Deagle damage for
+  two close torso hits and lethal heads; the .4-second secondary is preserved.
+
+Local checks: 1,345 workspace tests, 1,425 sound decodes, installed map/door and
+rapid-Dualies controls, normal PLAY build, Dust II probe/sim and GPU comparisons.
+The penetration loss curve remains approximate; unknown definitions, sealed BSP
+space and unsupported exit geometry stay blocked. This does not close M3 native
+formula/geometry parity. Owner staging remains the last tested #317 build; do
+not replace it or prepare another owner playtest without a request.
+
 ## October 22 evening playtest: active owner-approved follow-up
 
 This latest feedback supersedes the older queue below. Continue useful combined
