@@ -39,7 +39,12 @@ fn installed_dust2_mid_doors_pass_actual_rays_and_tick_fire() {
                 let hit = level.collision.trace_ray(from, to, contents::MASK_SHOT);
                 assert!(hit.hit() && !hit.start_solid && !hit.all_solid, "{map}: {hit:?}");
                 assert!(level.collision.surface_name(hit.surface).ends_with(model), "{map}: {}", level.collision.surface_name(hit.surface));
-                let entry = level.collision.bullet_surface(hit.surface).expect("mounted actual door declaration");
+                let entry = level.collision.bullet_surface(hit.surface).unwrap_or_else(|| {
+                    let path = level.collision.surface_name(hit.surface);
+                    let prop = level.vfs.read(path).and_then(|bytes|
+                        mdl::Model::load_header(&bytes).ok().map(|model| model.surface_prop));
+                    panic!("{map}: unresolved actual door {path}, mdl surfaceprop={prop:?}")
+                });
                 assert_eq!(entry.material, material, "{map}");
                 let exit = level.collision.bullet_exit(from, to, &hit, 64.).expect("full-world mid-door exit");
                 assert!((8. ..12.).contains(&exit.thickness), "{map}: {exit:?}");
