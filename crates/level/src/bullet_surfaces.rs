@@ -131,13 +131,13 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires read-only installed Legacy Nuke geometry/materials; no native game"]
+    #[ignore = "requires read-only installed Legacy Inferno geometry/materials; no native game"]
     fn installed_thin_wood_uses_mounted_definitions_and_actual_tick_fire() {
         use glam::Vec3;
         use collision::contents;
         use sim::{GameEvent, Team, TickInput, World, weapon::WeaponState};
         use std::sync::Arc;
-        let mut level = crate::Level::load("de_nuke", None).expect("installed Legacy Nuke");
+        let mut level = crate::Level::load("de_inferno", None).expect("installed Legacy Inferno");
         let intact = World::with_catalog(level.collision.clone(), level.catalog.clone());
         let gun = Arc::new(level.catalog.get("weapon_ak47").unwrap().clone());
         // Find a real isolated wood slab with room for standing players on both
@@ -148,7 +148,7 @@ mod tests {
                 .any(|&id| intact.collision.bullet_surface(id).is_some_and(|s| s.material == b'W')) { continue; }
             let center = (solid.mins + solid.maxs) * 0.5;
             for dir in [Vec3::X, -Vec3::X, Vec3::Y, -Vec3::Y] {
-                let feet = intact.drop_to_floor(center - dir * 128. - Vec3::Z * 64., false);
+                let feet = intact.drop_to_floor(center - dir * 128. + Vec3::Z * 16., false);
                 let from = feet + Vec3::Z * 64.;
                 let to = from + dir * 256.;
                 if [feet, to - Vec3::Z * 64.].into_iter().any(|pos|
@@ -166,7 +166,7 @@ mod tests {
                 break 'solids;
             }
         }
-        let (from, to, surface, thickness) = lane.expect("reachable actual Nuke wood slab");
+        let (from, to, surface, thickness) = lane.expect("reachable actual Inferno wood slab");
         eprintln!("installed thin-cover: eye={from:?} target_eye={to:?} surface={} thickness={thickness}",
             intact.collision.surface_name(surface));
         drop(intact);
