@@ -194,7 +194,7 @@ fn spawn_parts(mut commands: Commands, arc: Option<Handle<Image>>, reticles: Ret
     // radar or combat-HUD rasters. The rifle dot stays with the final camera.
     let overlay = commands.spawn((Camera2d, Camera {
         order: 2, clear_color: ClearColorConfig::None, ..default()
-    }, bevy::camera::visibility::RenderLayers::none(), SniperOverlayCamera)).id();
+    }, Msaa::Off, bevy::camera::visibility::RenderLayers::none(), SniperOverlayCamera)).id();
     for part in 0..11 {
         let mut entity = commands.spawn((
             Node { position_type: PositionType::Absolute, ..default() },
@@ -380,7 +380,7 @@ mod tests {
         assert_eq!(lines, 2);
         let camera = world.query_filtered::<Entity, With<SniperOverlayCamera>>().single(&world).unwrap();
         assert_eq!(world.get::<Camera>(camera).unwrap().order, 2);
-        assert_eq!(world.get::<Camera>(camera).unwrap().clear_color, ClearColorConfig::None);
+        assert!(matches!(world.get::<Camera>(camera).unwrap().clear_color, ClearColorConfig::None));
         for (part, target) in world.query::<(&ScopePart, Option<&UiTargetCamera>)>().iter(&world) {
             if part.0 < 10 { assert_eq!(target.unwrap().0, camera); }
             else { assert!(target.is_none(), "rifle dot belongs above the weapon"); }
