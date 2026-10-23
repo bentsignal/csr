@@ -163,5 +163,52 @@ csrEI.call("csr.HudLayoutFixture", api.row(row, undefined), !row._visible,
     !api.row(undefined, ["Missing", "ALIVE", "", "0", "0", false]));
 "#, 1920, 1080);
     assert_eq!(calls.len(), 3);
-    for call in calls { assert!(call.iter().all(|value| value == &Value::Bool(true)), "{call:?}"); }
+    assert!(calls.iter().flatten().all(|value| value == &Value::Bool(true)),
+        "scoreboard row receipts (local, enemy, remove/reject): {calls:?}");
+}
+
+/// Diagnose the actual return channel independently from text side effects.
+/// Keep exact Boolean expectations: undefined must never pass as success.
+#[test]
+fn scoreboard_helper_return_channel_preserves_callers_values() {
+    let calls = run(r#"
+function checkScoreboardReturnChannel() {
+    var api = _global.csrScoreboard;
+    var fixture = _root.createEmptyMovieClip("csrReturnFixture", 401);
+    fixture.createTextField("Money", 1, 0, 0, 100, 20);
+    fixture.createEmptyMovieClip("Nested", 2);
+    fixture.Nested.createEmptyMovieClip("Leaf", 1);
+    // The same declaration/call form as the failing row fixture, with no
+    // installed timeline, recursive traversal, or inline receipt expression.
+    var literal = function() { return true; };
+    var constantResult = literal();
+    var writeResult = api.write(fixture.Money, "$800");
+    var rejectedResult = api.write(undefined, "missing");
+    csrEI.call("csr.HudLayoutFixture", constantResult, writeResult,
+        rejectedResult === false, fixture.Money.text == "$800");
+    var afterTimeline = function() {
+        fixture.gotoAndStop("UnownedMissingLabel");
+        return true;
+    };
+    var timelineResult = afterTimeline();
+    csrEI.call("csr.HudLayoutFixture", timelineResult);
+    var afterFreeze = function() {
+        api.freeze(fixture, 0);
+        return true;
+    };
+    var freezeResult = afterFreeze();
+    csrEI.call("csr.HudLayoutFixture", freezeResult);
+    var afterOnly = function() {
+        api.only(fixture, {Money:true});
+        return true;
+    };
+    var onlyResult = afterOnly();
+    csrEI.call("csr.HudLayoutFixture", onlyResult, fixture.Money._visible,
+        !fixture.Nested._visible);
+}
+checkScoreboardReturnChannel();
+"#, 1920, 1080);
+    assert_eq!(calls.len(), 4, "missing helper receipt: {calls:?}");
+    assert!(calls.iter().flatten().all(|value| value == &Value::Bool(true)),
+        "scoreboard helper receipts (literal/write/reject, timeline, freeze, only): {calls:?}");
 }
