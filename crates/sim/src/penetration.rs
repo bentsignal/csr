@@ -22,7 +22,8 @@ fn observed_wood(surface: BulletSurface) -> bool {
 fn supported(surface: BulletSurface) -> bool {
     // Installed concrete/metal declarations may admit thin cover under this
     // same approximation; their material codes alone never authorize an exit.
-    matches!(surface.material, b'W' | b'U' | b'L' | b'Y' | b'G' | b'C' | b'M')
+    matches!(surface.material, b'W' | b'U' | b'L' | b'Y' | b'G' | b'C' | b'M'
+        | b'2' | b'5' | b'T')
         && surface.penetration_modifier.is_finite() && surface.penetration_modifier > 0.
         && surface.damage_modifier.is_finite() && (0. ..=1.).contains(&surface.damage_modifier)
 }
