@@ -64,6 +64,11 @@
 - [x] Admit reachable ladder-cap mounts beneath low ceilings using the actual
   movement-solver jump preview, retaining blocked-headroom recovery and
   unchanged human physics. Parsed-NAV bot traversal passed at 64/128 Hz.
+- [x] Keep Loading active through chunked prop preparation and successive
+  scene-import phases; cancel partial scenes without retiring the frontend.
+  Geometry/cancellation tests and rendered match/home controls passed. Heavy-map
+  preparation remains slower than the old blocking path; indivisible model
+  phases and total loading speed still need work.
 - [ ] Finish unresolved player outcomes in the approved order; an increment or
   first pass does not finish its backlog category.
 
