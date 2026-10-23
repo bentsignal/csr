@@ -129,7 +129,7 @@ fn declared_concrete_and_metal_keep_existing_thickness_and_retention_policy() {
             let start = Vec3::new(0., 0., 65.);
             let end = Vec3::new(140., 0., 65.);
             let hit = world.collision.trace_ray(start, end, contents::MASK_SHOT);
-            let continuation = crate::crate::penetration::through(&world.collision, start, end, &hit, 2.);
+            let continuation = crate::penetration::through(&world.collision, start, end, &hit, 2.);
             if thickness == 8. {
                 let (next_start, retention) = continuation.unwrap();
                 assert!(next_start.x > 58. && next_start.x < 59.);
