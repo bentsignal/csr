@@ -760,15 +760,23 @@ pub fn material_from_vmt(
     if !lightmapped {
         match scope_lens_fallback(mat) {
             Some(ScopeLensFallback::AdditiveReflection) => {
-                // Installed AUG/SG glass has no diffuse texture. White here
-                // adds a solid bright disc: use the authored reflection mask
-                // and tint as a bounded stand-in until cubemap sampling exists.
-                // Missing masks contribute no light, never the white fallback.
-                out.base = mat.str("$envmapmask")
-                    .and_then(|name| textures.load(fs, images, name, false))
-                    .map_or_else(|| textures.black.clone(), |info| info.handle);
+                // Installed AUG/SG glass has NO diffuse/emissive contribution.
+                // The mask modulates an environment reflection; drawing the
+                // mask as colour made a flat grey/pink disc when unscoped.
+                // As with Scout glass, an unavailable cubemap contributes no
+                // light. Keep the authored dirt layer and opaque housing.
+                out.base = textures.black.clone();
                 let tint = mat.color("$envmaptint").unwrap_or([0.0; 3]);
                 params.color = Vec4::new(tint[0], tint[1], tint[2], mat.alpha());
+            }
+            Some(ScopeLensFallback::FramebufferReticle) => {
+                // scope_dot_white encodes a signed coverage field around
+                // middle grey, not ordinary diffuse RGBA. Its native
+                // $crosshairmode combines that field with a framebuffer.
+                // The accepted scoped UI dot already decodes this asset and
+                // clips it to the posed lens. Do not also draw its grey field
+                // on the model when the weapon is unscoped.
+                params.color = Vec4::ZERO;
             }
             Some(ScopeLensFallback::ScoutRear) => {
                 // The installed SSG08 MDL actually binds snip_ssg08/glass,
@@ -790,7 +798,7 @@ pub fn material_from_vmt(
 }
 
 #[derive(Debug, PartialEq)]
-enum ScopeLensFallback { AdditiveReflection, ScoutRear }
+enum ScopeLensFallback { AdditiveReflection, FramebufferReticle, ScoutRear }
 
 fn scope_lens_fallback(mat: &vmt::Material) -> Option<ScopeLensFallback> {
     let path_is = |key, expected| mat.str(key).is_some_and(|path|
@@ -799,6 +807,10 @@ fn scope_lens_fallback(mat: &vmt::Material) -> Option<ScopeLensFallback> {
         && path_is("$envmap", "env_cubemap")
         && path_is("$envmapmask", "models/weapons/shared/scope/scope_lens_reflect_mask") {
         Some(ScopeLensFallback::AdditiveReflection)
+    } else if mat.shader == "unlittwotexture" && mat.translucent() && mat.flag("$crosshairmode")
+        && path_is("$basetexture", "models/weapons/shared/scope/scope_dot_white")
+        && path_is("$texture2", "_rt_poweroftwofb") {
+        Some(ScopeLensFallback::FramebufferReticle)
     } else if mat.shader == "vertexlitgeneric" && mat.additive() && mat.base_texture().is_none()
         && path_is("$envmap", "env_cubemap")
         && mat.str("$color").and_then(|color| color.trim().parse::<f32>().ok()) == Some(0.0)
@@ -910,8 +922,8 @@ mod authored_transform_tests {
         assert_eq!(out.alpha_mode, AlphaMode::Add);
         let world = material_from_vmt(Some(&glass), &fs, &mut textures, &mut images, &shared, 1., true);
         assert_eq!(world.base, textures.white);
-        // A present authored mask must be bound as data, not substituted with
-        // the generic white base. The fixture is synthetic, never game art.
+        // A present reflection mask must not become a diffuse/emissive disc
+        // either. The fixture is synthetic, never game art.
         let mut masked_fs = normal_fs();
         let mask_bytes = masked_fs.read("materials/test/normal.vtf").unwrap();
         masked_fs.push_back("scope fixture", vfs::Mount::Memory(std::collections::BTreeMap::from([
@@ -920,16 +932,30 @@ mod authored_transform_tests {
         let mut masked_images = Assets::<Image>::default();
         let mut masked_textures = TextureCache::new(&mut masked_images);
         let masked_shared = SharedHandles { lightmap: masked_textures.white.clone() };
-        let expected = masked_textures.load(&masked_fs, &mut masked_images,
-            "models/weapons/shared/scope/scope_lens_reflect_mask", false).unwrap().handle;
         let present = material_from_vmt(Some(&glass), &masked_fs, &mut masked_textures,
             &mut masked_images, &masked_shared, 1., false);
-        assert_eq!(present.base, expected);
+        assert_eq!(present.base, masked_textures.black);
         for text in [
             r#"UnlitGeneric { "$additive" "1" "$envmap" "env_cubemap" }"#,
             r#"UnlitGeneric { "$basetexture" "models/weapons/shared/scope/scope_lens_dirt" "$translucent" "1" }"#,
             r#"VertexLitGeneric { "$basetexture" "models/weapons/v_models/snip_ssg08/snip_ssg08_scope" "$phong" "1" }"#,
         ] { assert_eq!(scope_lens_fallback(&parse(text)), None); }
+    }
+
+    #[test]
+    fn framebuffer_optic_dot_never_draws_its_grey_coverage_field_as_glass() {
+        let text = r#"UnlitTwoTexture {
+            "$basetexture" "models/weapons/shared/scope/scope_dot_white"
+            "$texture2" "_rt_poweroftwofb" "$crosshairmode" "1" "$translucent" "1"
+        }"#;
+        let dot = vmt::Material::parse_with(text, &|_| None, 0).unwrap();
+        assert_eq!(scope_lens_fallback(&dot), Some(ScopeLensFallback::FramebufferReticle));
+        let out = normal_material(Some(&dot), false);
+        assert_eq!(out.params.color, Vec4::ZERO);
+        assert_eq!(out.alpha_mode, AlphaMode::Blend);
+        assert_eq!(normal_material(Some(&dot), true).params.color, Vec4::ONE);
+        let ordinary = vmt::Material::parse_with(&text.replace("\"$crosshairmode\" \"1\"", ""), &|_| None, 0).unwrap();
+        assert_eq!(scope_lens_fallback(&ordinary), None);
     }
 
     #[test]

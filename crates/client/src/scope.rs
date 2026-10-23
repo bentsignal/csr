@@ -4,6 +4,10 @@ use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 use crate::player::{LocalPlayer, SimWorld};
 
+#[path = "optic_blur.rs"]
+mod optic_blur;
+pub use optic_blur::OpticBlurPlugin;
+
 #[derive(Component)]
 pub struct ScopePart(u8);
 
@@ -158,6 +162,7 @@ pub fn update(
     (time, fixed): (Res<Time>, Res<Time<Fixed>>),
     (reticles, optic, ui_scale): (Res<ReticleImages>, Res<OpticAperture>, Res<UiScale>),
     mut images: ResMut<Assets<Image>>, mut blur: Local<ScopeBlur>,
+    mut optical: ResMut<optic_blur::OpticState>,
     local: Res<LocalPlayer>, world: Res<SimWorld>, window: Single<&Window, With<PrimaryWindow>>,
     mut parts: Query<(&ScopePart, &mut Node, &mut Visibility, Option<&mut ImageNode>)>,
     mut crosshair: Query<(&crate::hud::Crosshair, &mut Visibility, &mut Node, &mut BackgroundColor), (With<crate::hud::Crosshair>, Without<ScopePart>)>,
@@ -176,6 +181,14 @@ pub fn update(
     });
     if blur.key != key { blur.key = key; blur.sigma = 0.0; }
     blur.sigma = smooth_blur(blur.sigma, target, time.delta_secs());
+    // Reticle coverage alone only spreads/fades the lines. The final scene
+    // camera also defocuses the image and the moving sniper aperture. Rifle
+    // optics instead defocus only the close weapon, using its own depth.
+    optical.0 = optic_blur::OpticSettings {
+        aperture: optic.0,
+        params: Vec4::new(if sniper { 1.0 } else { 0.0 }, blur.sigma,
+            if zoomed && !sniper && optic.0.z > 0.0 { 7.0 } else { 0.0 }, 1.0),
+    };
     let blur_step = (blur.sigma / MAX_BLUR * BLUR_STEPS as f32).round().clamp(0.0, BLUR_STEPS as f32) as usize;
     let regular = p.is_some() && !zoomed && !weapon.is_some_and(|w| w.def.class == weapons::WeaponClass::Sniper);
     for (part,mut v,mut node,mut color) in &mut crosshair { *v = if regular && (part.0 != 4 || settings.cross_dot) { Visibility::Inherited } else { Visibility::Hidden }; let (x,y,w,h)=crate::menu::cross_bar(&settings,part.0);node.left=px(x);node.top=px(y);node.width=px(w);node.height=px(h);color.0=settings.crosshair_color(); }
