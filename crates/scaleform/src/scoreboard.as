@@ -117,6 +117,11 @@ _global.csrScoreboard.present = function(stamp, title, teams) {
         panel.CT_Headers._alpha = 100;
         panel.CT_TeamName._alpha = 100;
         panel.T_TeamName._alpha = 100;
+        // The frozen Standard timeline leaves the CT heading beneath its
+        // roster. Position the existing clips in the unused top header band;
+        // retain the original typography, score badge and row geometry.
+        panel.CT_TeamName._y = panel.CT_Headers._y - panel.CT_TeamName._height - 8;
+        panel.CT_Score._y = panel.CT_Headers._y - panel.CT_Score._height - 8;
         // Fit original background bounds; invisible awards/vote clips do not
         // affect the viewport. No replacement geometry or synthetic font.
         panel._xscale = 100; panel._yscale = 100; panel._x = 0; panel._y = 0;
