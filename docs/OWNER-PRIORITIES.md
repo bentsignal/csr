@@ -120,7 +120,14 @@ preserving the centered aim ray, zoom/FOV and existing blur. This is a bounded
 presentation fit; native movement-dependent vignette deformation and exact
 blur/refraction parity remain unmeasured. The resize-in-session 1080p capture
 was unusable and excluded; the admitted 1080p control launched at that size.
-All native sessions restored twelve exact preference snapshots.
+All native sessions restored twelve exact preference snapshots. The final
+client still measures 758px at 900p, with black outer edges and a centered reticle.
+All 1,332 workspace tests and the normal PLAY build pass; immutable Dust II
+probe/sim passed before the outer-bar-only seam correction. The final strict
+client capture preserves protected userdata and executable hashes. A preceding
+capture flagged two live Steam-file changes; that failed receipt is retained,
+without restoring Steam files or attributing the changes to this UI correction.
+CI for this scope increment remains pending.
 
 The owner launcher/profile has not been replaced.
 
