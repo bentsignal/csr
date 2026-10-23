@@ -104,7 +104,7 @@ mod tests {
         world.bullet_surfaces.push(Some(BulletSurface { material: b'W', penetration_modifier: 0.9, damage_modifier: 0.6 }));
         let wood = bind(&world, old);
         assert_ne!(wood, empty);
-        world.bullet_surfaces[0].as_mut().unwrap().damage_modifier = 0.4;
+        world.bullet_surfaces.last_mut().unwrap().as_mut().unwrap().damage_modifier = 0.4;
         assert_ne!(wood, bind(&world, old));
     }
 
@@ -128,5 +128,73 @@ mod tests {
         assert!(world.bullet_surface(unknown).is_none());
         drop(fs);
         assert_eq!(world.bullet_surface(id).unwrap().damage_modifier, 0.4);
+    }
+
+    #[test]
+    #[ignore = "requires read-only installed Legacy Nuke geometry/materials; no native game"]
+    fn installed_thin_wood_uses_mounted_definitions_and_actual_tick_fire() {
+        use glam::Vec3;
+        use collision::contents;
+        use sim::{GameEvent, Team, TickInput, World, weapon::WeaponState};
+        use std::sync::Arc;
+        let level = crate::Level::load("de_nuke", None).expect("installed Legacy Nuke");
+        let intact = World::with_catalog(level.collision.clone(), level.catalog.clone());
+        let gun = Arc::new(level.catalog.get("weapon_ak47").unwrap().clone());
+        // Find a real isolated wood slab with room for standing players on both
+        // sides. Do not replace the mounted world, model, VMT or weapon values.
+        let mut lane = None;
+        'solids: for solid in &intact.collision.static_world().convexes {
+            if !std::iter::once(&solid.surface).chain(&solid.plane_surfaces)
+                .any(|&id| intact.collision.bullet_surface(id).is_some_and(|s| s.material == b'W')) { continue; }
+            let center = (solid.mins + solid.maxs) * 0.5;
+            for dir in [Vec3::X, -Vec3::X, Vec3::Y, -Vec3::Y] {
+                let feet = intact.drop_to_floor(center - dir * 128. - Vec3::Z * 64., false);
+                let from = feet + Vec3::Z * 64.;
+                let to = from + dir * 256.;
+                if [feet, to - Vec3::Z * 64.].into_iter().any(|pos|
+                    intact.collision.trace_box(pos, pos, movement::STAND_MINS,
+                        movement::STAND_MAXS, contents::MASK_PLAYERSOLID).start_solid) { continue; }
+                let hit = intact.collision.trace_ray(from, to, contents::MASK_SHOT);
+                if !intact.collision.bullet_surface(hit.surface).is_some_and(|s| s.material == b'W') { continue; }
+                let Some(exit) = intact.collision.bullet_exit(from, to, &hit, 64.) else { continue; };
+                let Some(leaving) = intact.collision.bullet_surface(exit.surface) else { continue; };
+                let entry = intact.collision.bullet_surface(hit.surface).unwrap();
+                if leaving.material != b'W' || exit.thickness >= 16. * gun.penetration
+                    * entry.penetration_modifier.min(leaving.penetration_modifier) { continue; }
+                if intact.collision.trace_ray(exit.next_start, to, contents::MASK_SHOT).hit() { continue; }
+                lane = Some((from, to, hit.surface, exit.thickness));
+                break 'solids;
+            }
+        }
+        let (from, to, surface, thickness) = lane.expect("reachable actual Nuke wood slab");
+        eprintln!("installed thin-cover: eye={from:?} target_eye={to:?} surface={} thickness={thickness}",
+            intact.collision.surface_name(surface));
+        for rate in [64, 128] {
+            for opaque in [false, true] {
+                let mut collision = (*level.collision).clone();
+                if opaque { collision.bullet_surfaces.fill(None); }
+                let mut world = World::with_catalog(Arc::new(collision), level.catalog.clone());
+                world.set_tick_rate(rate);
+                let shooter = world.add_player("wood control", Team::Terrorist);
+                let victim = world.add_player("behind actual wood", Team::CounterTerrorist);
+                for (id, eye) in [(shooter, from), (victim, to)] {
+                    let player = world.player_mut(id).unwrap();
+                    player.movement = movement::PlayerMove::spawn_at(eye - Vec3::Z * 64.);
+                    player.armor = 0; player.helmet = false;
+                }
+                let player = world.player_mut(shooter).unwrap();
+                player.weapons = vec![WeaponState::new(gun.clone())]; player.active = 0;
+                let dir = (to - from).normalize();
+                let angles = Vec3::new(0., dir.y.atan2(dir.x).to_degrees(), 0.);
+                // Settle through the real solver before ordinary trigger input.
+                for _ in 0..4 { world.step(&[(shooter, TickInput { view_angles: angles, ..Default::default() })]); }
+                world.step(&[(shooter, TickInput { view_angles: angles,
+                    buttons: movement::buttons::ATTACK, ..Default::default() })]);
+                assert!(world.events.iter().any(|e| matches!(e, GameEvent::Fire { .. })));
+                let health = world.player(victim).unwrap().health;
+                assert_eq!(health < 100, !opaque, "rate={rate}, opaque={opaque}, health={health}");
+                assert_eq!(world.player(shooter).unwrap().active_weapon().unwrap().clip, gun.clip_size - 1);
+            }
+        }
     }
 }
