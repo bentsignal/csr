@@ -139,16 +139,66 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires read-only installed Legacy Inferno BSP; no native game"]
+    fn installed_inferno_native_wood_counterexample_exits_into_sealed_solid_leaf() {
+        use collision::contents;
+        use glam::Vec3;
+        let level = crate::Level::load("de_inferno", None).expect("installed Legacy Inferno");
+        // Original observations: native-thin-wood-oct23-r2/r3. The front AK
+        // shot stopped at the frame; reverse setpos at y3432 explicitly said
+        // "into world" and rendered black. These are sealed void coordinates,
+        // not a valid two-sided wood penetration/damage control.
+        let front = Vec3::new(1226., 3176., 192.093811);
+        let next_start = Vec3::new(1226., 3312.07, 192.093811);
+        let front_leaf = level.bsp.point_leaf(front);
+        assert_eq!(front_leaf, 401);
+        assert_eq!(level.bsp.leafs[front_leaf].contents, 0);
+        for point in [next_start, Vec3::new(1226., 3336., 192.093811),
+            Vec3::new(1226., 3432., 192.093811)] {
+            let leaf = level.bsp.point_leaf(point);
+            assert_eq!(leaf, 387, "point={point:?}");
+            assert_ne!(level.bsp.leafs[leaf].contents & contents::SOLID, 0);
+            // Brush-only emptiness was the old false-positive premise.
+            assert_eq!(level.collision.point_contents(point, contents::MASK_SHOT) & contents::SOLID, 0);
+        }
+        for y in [3336., 3432.] {
+            let target = Vec3::new(1226., y, 192.093811);
+            let hit = level.collision.trace_ray(front, target, contents::MASK_SHOT);
+            assert!(hit.hit() && !hit.start_solid && !hit.all_solid);
+            assert!((hit.end.y - 3296.).abs() < 0.1, "hit={hit:?}");
+            assert_eq!(level.collision.bullet_surface(hit.surface).unwrap().material, b'W');
+            assert!(!level.collision.trace_ray(next_start, target, contents::MASK_SHOT).hit());
+            assert!(level.collision.bullet_exit(front, target, &hit, 64.).is_none());
+            installed_tick_fire_control(&level, front, target, false, false);
+        }
+    }
+
+    #[test]
     #[ignore = "requires read-only installed Legacy Nuke geometry/materials; no native game"]
     fn installed_thin_concrete_and_metal_use_actual_tick_fire() {
         installed_cover_case("de_nuke", b'C');
         installed_cover_case("de_nuke", b'M');
     }
 
+    fn installed_nonsolid_player_space(map: &bsp::Bsp, eye: glam::Vec3) -> bool {
+        use glam::Vec3;
+        let feet = eye - Vec3::Z * 64.;
+        let mut points = vec![eye, feet];
+        for x in [movement::STAND_MINS.x, movement::STAND_MAXS.x] {
+            for y in [movement::STAND_MINS.y, movement::STAND_MAXS.y] {
+                for z in [movement::STAND_MINS.z, movement::STAND_MAXS.z] {
+                    points.push(feet + Vec3::new(x, y, z));
+                }
+            }
+        }
+        points.into_iter().all(|point| map.leafs.get(map.point_leaf(point))
+            .is_some_and(|leaf| leaf.contents & collision::contents::SOLID == 0))
+    }
+
     fn installed_cover_case(map: &str, material: u8) {
         use glam::Vec3;
         use collision::contents;
-        use sim::{GameEvent, Team, TickInput, World, weapon::WeaponState};
+        use sim::World;
         use std::sync::Arc;
         let mut level = crate::Level::load(map, None).expect("installed Legacy map");
         let intact = World::with_catalog(level.collision.clone(), level.catalog.clone());
@@ -164,13 +214,13 @@ mod tests {
                 let feet = intact.drop_to_floor(center - dir * 128. + Vec3::Z * 16., false);
                 let from = feet + Vec3::Z * 64.;
                 let to = from + dir * 256.;
-                if [feet, to - Vec3::Z * 64.].into_iter().any(|pos|
-                    intact.collision.trace_box(pos, pos, movement::STAND_MINS,
-                        movement::STAND_MAXS, contents::MASK_PLAYERSOLID).start_solid) { continue; }
+                if !installed_nonsolid_player_space(&level.bsp, from)
+                    || intact.collision.trace_box(feet, feet, movement::STAND_MINS,
+                        movement::STAND_MAXS, contents::MASK_PLAYERSOLID).start_solid { continue; }
                 let hit = intact.collision.trace_ray(from, to, contents::MASK_SHOT);
                 if !intact.collision.bullet_surface(hit.surface).is_some_and(|s| s.material == material) { continue; }
                 let Some(exit) = intact.collision.bullet_exit(from, to, &hit, 64.) else { continue; };
-                if material != b'W' {
+                {
                     // Avoid grazing panel edges: the real weapon has authored
                     // spread, so a single exactly-clear center ray is insufficient.
                     let perpendicular = Vec3::Z.cross(dir);
@@ -189,9 +239,11 @@ mod tests {
                         && s.penetration_modifier >= entry.penetration_modifier.min(leaving.penetration_modifier)))
                     || exit.thickness >= 16. * gun.penetration
                     * entry.penetration_modifier.min(leaving.penetration_modifier) { continue; }
-                // Put hard-cover targets just behind the panel, with room for
-                // their full standing hull. The wood control retains its lane.
-                let to = if material == b'W' { to } else { exit.next_start + dir * 24. };
+                // Every material needs actual open BSP space behind the panel.
+                // The old Inferno wood target was in a sealed SOLID leaf even
+                // though brush-only stationary hull traces called it clear.
+                let to = exit.next_start + dir * 24.;
+                if !installed_nonsolid_player_space(&level.bsp, to) { continue; }
                 let target_feet = to - Vec3::Z * 64.;
                 if intact.collision.trace_box(target_feet, target_feet, movement::STAND_MINS,
                     movement::STAND_MAXS, contents::MASK_PLAYERSOLID).start_solid { continue; }
@@ -206,29 +258,38 @@ mod tests {
         drop(intact);
         for opaque in [false, true] {
             if opaque { Arc::get_mut(&mut level.collision).unwrap().bullet_surfaces.fill(None); }
-            for rate in [64, 128] {
-                let mut world = World::with_catalog(level.collision.clone(), level.catalog.clone());
-                world.set_tick_rate(rate);
-                let shooter = world.add_player("cover control", Team::Terrorist);
-                let victim = world.add_player("behind actual cover", Team::CounterTerrorist);
-                for (id, eye) in [(shooter, from), (victim, to)] {
-                    let player = world.player_mut(id).unwrap();
-                    player.movement = movement::PlayerMove::spawn_at(eye - Vec3::Z * 64.);
-                    player.armor = 0; player.helmet = false;
-                }
-                let player = world.player_mut(shooter).unwrap();
-                player.weapons = vec![WeaponState::new(gun.clone())]; player.active = 0;
-                let dir = (to - from).normalize();
-                let angles = Vec3::new(0., dir.y.atan2(dir.x).to_degrees(), 0.);
-                // Settle through the real solver before ordinary trigger input.
-                for _ in 0..4 { world.step(&[(shooter, TickInput { view_angles: angles, ..Default::default() })]); }
-                world.step(&[(shooter, TickInput { view_angles: angles,
-                    buttons: movement::buttons::ATTACK, ..Default::default() })]);
-                assert!(world.events.iter().any(|e| matches!(e, GameEvent::Fire { .. })));
-                let health = world.player(victim).unwrap().health;
-                assert_eq!(health < 100, !opaque, "rate={rate}, opaque={opaque}, health={health}");
-                assert_eq!(world.player(shooter).unwrap().active_weapon().unwrap().clip, gun.clip_size - 1);
+            installed_tick_fire_control(&level, from, to, !opaque, opaque);
+        }
+    }
+
+    fn installed_tick_fire_control(level: &crate::Level, from: glam::Vec3, to: glam::Vec3,
+        expected_damage: bool, opaque: bool) {
+        use glam::Vec3;
+        use sim::{GameEvent, Team, TickInput, World, weapon::WeaponState};
+        use std::sync::Arc;
+        let gun = Arc::new(level.catalog.get("weapon_ak47").unwrap().clone());
+        for rate in [64, 128] {
+            let mut world = World::with_catalog(level.collision.clone(), level.catalog.clone());
+            world.set_tick_rate(rate);
+            let shooter = world.add_player("cover control", Team::Terrorist);
+            let victim = world.add_player("behind actual cover", Team::CounterTerrorist);
+            for (id, eye) in [(shooter, from), (victim, to)] {
+                let player = world.player_mut(id).unwrap();
+                player.movement = movement::PlayerMove::spawn_at(eye - Vec3::Z * 64.);
+                player.armor = 0; player.helmet = false;
             }
+            let player = world.player_mut(shooter).unwrap();
+            player.weapons = vec![WeaponState::new(gun.clone())]; player.active = 0;
+            let dir = (to - from).normalize();
+            let angles = Vec3::new(0., dir.y.atan2(dir.x).to_degrees(), 0.);
+            // Settle through the real solver before ordinary trigger input.
+            for _ in 0..4 { world.step(&[(shooter, TickInput { view_angles: angles, ..Default::default() })]); }
+            world.step(&[(shooter, TickInput { view_angles: angles,
+                buttons: movement::buttons::ATTACK, ..Default::default() })]);
+            assert!(world.events.iter().any(|e| matches!(e, GameEvent::Fire { .. })));
+            let health = world.player(victim).unwrap().health;
+            assert_eq!(health < 100, expected_damage, "rate={rate}, opaque={opaque}, health={health}");
+            assert_eq!(world.player(shooter).unwrap().active_weapon().unwrap().clip, gun.clip_size - 1);
         }
     }
 }

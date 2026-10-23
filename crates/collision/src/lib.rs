@@ -245,6 +245,9 @@ pub struct CollisionWorld {
     /// Mounted, resolved ballistic definitions, indexed by surface ID.
     /// Runtime pose overlays read these from their immutable base world.
     pub bullet_surfaces: Vec<Option<bullet_exit::BulletSurface>>,
+    /// BSP world-model leaf contents for ballistic exit clearance only.
+    /// Absent for synthetic worlds; runtime overlays consult their base.
+    bullet_solid_space: Option<std::sync::Arc<bullet_exit::BspSolidSpace>>,
     /// Authored prop doors, separate from the immutable map solids.
     pub doors: std::sync::Arc<[doors::Door]>,
     pub breakables: std::sync::Arc<[breakables::Breakable]>,
@@ -857,6 +860,7 @@ impl CollisionWorld {
     pub fn from_bsp_with_model_data(map: &bsp::Bsp, opts: &MapCollisionOptions,
         prop_hulls: &PropHullLoader, models: &breakables::ModelDataLoader<'_>, presets: &kv::Block) -> Self {
         let mut w = CollisionWorld::new();
+        w.bullet_solid_space = Some(std::sync::Arc::new(bullet_exit::BspSolidSpace::from_bsp(map)));
         w.doors = doors::load(map, prop_hulls, &mut w.surfaces).into();
         let props = breakables::load_props(map, prop_hulls, models, presets);
         // Collect edges before brush loading so linked static brushes are never
