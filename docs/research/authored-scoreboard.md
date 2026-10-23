@@ -37,19 +37,23 @@ ping, assist, MVP, rank or award data. Enemy money and equipment are absent
 before the snapshot crosses into the worker. Team scores are the same values
 as the working fallback. Rosters above twelve per side use the fallback.
 
-The worker parks when hidden or when its current snapshot is admitted. Resize
-invalidates the raster; a changed snapshot cannot expose the previous team's
-private data. A per-receipt raster fence excludes a pre-callback readback.
+The worker parks when hidden or when its current snapshot is admitted. Ordinary
+kills/deaths/money updates retain the last admitted raster while its replacement
+is rendered, so they do not briefly switch back to the custom layout. Resize,
+viewer/team changes and changed match headings invalidate that retained raster.
+A per-receipt raster fence excludes a pre-callback readback.
 Loading/presentation timeouts retain the functional fallback. The developer
 switch `CSR_NO_CLASSIC_SCOREBOARD` selects that fallback explicitly.
 
 ## Root verification and limits
 
-This is a functional source implementation, not a claim of verified raster
-fidelity. Root still needs to build, execute the narrow regressions, and view
-one ordinary Tab scoreboard with changed kills/deaths, both teams, and a resize.
-The new sources cover original row replacement/hiding and revision/viewport/
-raster-fence admission. No child build/test/game/UI execution or publication.
+Root compiled the adapter, passed its focused regressions and workspace checks,
+and inspected original-movie captures with both small and full rosters. The CT
+heading is above its roster and the board keeps a consistent maximum display
+width; decorative layout is still a practical first pass. Sources cover original
+row replacement/hiding, viewer/team invalidation and revision/viewport/raster-fence
+admission. Natural Tab interaction and all optional panels are not qualified by
+the screenshot controls.
 
 The observed declarative clips must survive authored first-frame initialization
 in the installed/private variant. If they do not, the adapter rejects it and

@@ -33,7 +33,16 @@ and exact decorative layout remain outside this first pass. Scout/Negev curves a
 passes. A further input correction preserves release/repress sequences seen
 between simulation ticks; the ordinary sampler emits an up tick before the
 retained fresh press. Held automatic fire and sim cadence stay unchanged.
+Follow-through also preserves a complete release/repress delivered in one render
+frame, stretches the sniper reticle strips across the scope, and retains the
+original scoreboard during same-view stat updates instead of flashing fallback.
 The owner launcher/profile has not been replaced.
+
+October 23 recovery instruction: an hourly T3 scheduled check resumes approved
+unfinished work after an accidental early stop. Newer owner pauses, planning
+discussions and active playtests take precedence. Those no-op checks must stay
+silent; never bury the owner's testing instructions with repeated status posts.
+Do not duplicate active implementation, builds, CI or delegated work.
 
 Accepted for now: airborne weapon presentation (explicitly stop polishing),
 Molotov visuals/damage, positional audio, HUD scale, visible loading progress,
