@@ -11,6 +11,9 @@ pub use optic_blur::OpticBlurPlugin;
 #[derive(Component)]
 pub struct ScopePart(u8);
 
+#[derive(Component)]
+struct SniperOverlayCamera;
+
 // Provisional presentation coefficients, not measured native blur parity. The
 // input is the same milliradian inaccuracy used by the authoritative shot path.
 const MAX_BLUR: f32 = 8.0;
@@ -186,11 +189,18 @@ pub fn setup(commands: Commands, level: Res<crate::LoadedLevel>, mut images: Res
 }
 
 fn spawn_parts(mut commands: Commands, arc: Option<Handle<Image>>, reticles: ReticleImages) {
+    // Keep the sniper mask/lines in an explicit pass between the world and
+    // the final weapon/HUD camera. They must never share a UI batch with the
+    // radar or combat-HUD rasters. The rifle dot stays with the final camera.
+    let overlay = commands.spawn((Camera2d, Camera {
+        order: 2, clear_color: ClearColorConfig::None, ..default()
+    }, bevy::camera::visibility::RenderLayers::none(), SniperOverlayCamera)).id();
     for part in 0..11 {
         let mut entity = commands.spawn((
             Node { position_type: PositionType::Absolute, ..default() },
             GlobalZIndex(-1), Visibility::Hidden, ScopePart(part),
         ));
+        if part < 10 { entity.insert(UiTargetCamera(overlay)); }
         if part < 4 {
             if let Some(image) = &arc {
                 // In the original quarter arc (0, 0) is the clear centre.
@@ -368,6 +378,13 @@ mod tests {
             }
         }
         assert_eq!(lines, 2);
+        let camera = world.query_filtered::<Entity, With<SniperOverlayCamera>>().single(&world).unwrap();
+        assert_eq!(world.get::<Camera>(camera).unwrap().order, 2);
+        assert_eq!(world.get::<Camera>(camera).unwrap().clear_color, ClearColorConfig::None);
+        for (part, target) in world.query::<(&ScopePart, Option<&UiTargetCamera>)>().iter(&world) {
+            if part.0 < 10 { assert_eq!(target.unwrap().0, camera); }
+            else { assert!(target.is_none(), "rifle dot belongs above the weapon"); }
+        }
     }
 
     #[test]

@@ -741,7 +741,7 @@ fn finish_level(
         Camera3d::default(),
         material::camera_clusters(),
         Camera {
-            order: 2,
+            order: 3,
             clear_color: ClearColorConfig::None,
             ..default()
         },
