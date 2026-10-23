@@ -137,7 +137,7 @@ mod tests {
         use collision::contents;
         use sim::{GameEvent, Team, TickInput, World, weapon::WeaponState};
         use std::sync::Arc;
-        let level = crate::Level::load("de_nuke", None).expect("installed Legacy Nuke");
+        let mut level = crate::Level::load("de_nuke", None).expect("installed Legacy Nuke");
         let intact = World::with_catalog(level.collision.clone(), level.catalog.clone());
         let gun = Arc::new(level.catalog.get("weapon_ak47").unwrap().clone());
         // Find a real isolated wood slab with room for standing players on both
@@ -169,11 +169,11 @@ mod tests {
         let (from, to, surface, thickness) = lane.expect("reachable actual Nuke wood slab");
         eprintln!("installed thin-cover: eye={from:?} target_eye={to:?} surface={} thickness={thickness}",
             intact.collision.surface_name(surface));
-        for rate in [64, 128] {
-            for opaque in [false, true] {
-                let mut collision = (*level.collision).clone();
-                if opaque { collision.bullet_surfaces.fill(None); }
-                let mut world = World::with_catalog(Arc::new(collision), level.catalog.clone());
+        drop(intact);
+        for opaque in [false, true] {
+            if opaque { Arc::get_mut(&mut level.collision).unwrap().bullet_surfaces.fill(None); }
+            for rate in [64, 128] {
+                let mut world = World::with_catalog(level.collision.clone(), level.catalog.clone());
                 world.set_tick_rate(rate);
                 let shooter = world.add_player("wood control", Team::Terrorist);
                 let victim = world.add_player("behind actual wood", Team::CounterTerrorist);
