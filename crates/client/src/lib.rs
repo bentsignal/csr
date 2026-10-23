@@ -757,7 +757,6 @@ fn finish_level(
         PlayerCamera,
         player::ViewModelCamera,
         bevy::render::view::NoIndirectDrawing,
-        IsDefaultUiCamera,
         menu_blur::PostProcessSettings::default(),
     ));
     commands.insert_resource(local);
