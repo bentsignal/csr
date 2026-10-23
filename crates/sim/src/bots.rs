@@ -63,6 +63,7 @@ struct LadderRoute {
 struct LadderTopMount {
     launch: Vec3,
     cap: Vec3,
+    crouch: bool,
     jumping: bool,
     previewed: bool,
 }
@@ -1435,7 +1436,8 @@ fn ladder_contact(world: &World, bot: &Player, ladder: &nav::Ladder) -> (Option<
 fn ladder_top_mount(world: &World, bot: &Player, ladder: &nav::Ladder,
     source: &nav::Area, face: collision::Trace, mount: Vec3) -> Option<LadderTopMount>
 {
-    if source.flags & nav::attr::NO_JUMP != 0 || bot.movement.ducked
+    let crouch = source.flags & nav::attr::CROUCH != 0;
+    if source.flags & nav::attr::NO_JUMP != 0 || (bot.movement.ducked && !crouch)
         || bot.movement.ladder_normal.is_some() || world.collision.dynamic.is_some()
         || world.config.gravity <= 0.0 || world.config.jump_impulse <= 0.0 { return None; }
     let pos = bot.movement.origin;
@@ -1479,7 +1481,7 @@ fn ladder_top_mount(world: &World, bot: &Player, ladder: &nav::Ladder,
     // The human-solver preview admits the jump from the settled launch.
     // A ceiling can shorten its arc while still allowing a real cap landing;
     // unused air volume at the unrestricted apex need not be clear.
-    Some(LadderTopMount { launch, cap: cap.end, jumping: false, previewed: false })
+    Some(LadderTopMount { launch, cap: cap.end, crouch, jumping: false, previewed: false })
 }
 
 fn ladder_cap_supported(world: &World, pm: &movement::PlayerMove, mount: &LadderTopMount) -> bool {
@@ -1510,7 +1512,8 @@ fn ladder_cap_jump_clear(world: &World, bot: &Player, mount: &LadderTopMount, no
         let direction = ladder_cap_direction(&pm, mount, normal);
         movement::player_move(&mut pm, &movement::MoveInput {
             view_angles: Vec3::new(0.0, yaw, 0.0), forward_move: direction.length() * 450.0,
-            side_move: 0.0, buttons: buttons::JUMP, weapon_max_speed: max_speed,
+            side_move: 0.0, buttons: buttons::JUMP | if mount.crouch { buttons::DUCK } else { 0 },
+            weapon_max_speed: max_speed,
         }, &world.config, world.collision.as_ref(), world.dt());
         if pm.ladder_normal.is_some() { return false; }
         if pm.on_ground { return tick > 0 && ladder_cap_supported(world, &pm, mount); }
@@ -1590,6 +1593,10 @@ fn follow_ladder(mesh: &NavMesh, world: &World, bot: &Player, brain: &mut Brain,
     } else { mount.unwrap_or(entry) };
     let mut direction = target - pos;
     if let Some(top) = &mut route.top_mount {
+        // Only an authored CROUCH departure admits ducking here. Preview and
+        // execution share the same held input; human physics owns the stance
+        // transition, feet tuck, hull clearance and eventual cap support.
+        if top.crouch { input.buttons |= buttons::DUCK; }
         if top.jumping {
             direction = ladder_cap_direction(&bot.movement, top, normal);
             input.buttons |= buttons::JUMP;
@@ -1818,13 +1825,17 @@ mod tests {
 
     /// Own synthetic NAV bytes and collision geometry; no private asset fixture.
     fn ladder_nav() -> NavMesh {
+        ladder_nav_with_departure_flags(0)
+    }
+
+    fn ladder_nav_with_departure_flags(departure_flags: u32) -> NavMesh {
         let mut bytes = Vec::new();
         let word = |bytes: &mut Vec<u8>, value: u32| bytes.extend(value.to_le_bytes());
         for value in [0xFEED_FACE, 16, 1, 0] { word(&mut bytes, value); }
         bytes.push(1); bytes.extend(0u16.to_le_bytes()); bytes.push(1);
         word(&mut bytes, 2);
         for (id, x0, x1, z) in [(1, -160f32, -16f32, 0f32), (2, 16f32, 160f32, 256f32)] {
-            word(&mut bytes, id); word(&mut bytes, 0);
+            word(&mut bytes, id); word(&mut bytes, if id == 2 { departure_flags } else { 0 });
             for value in [x0, -64.0, z, x1, 64.0, z, z, z] { word(&mut bytes, value.to_bits()); }
             for _ in 0..4 { word(&mut bytes, 0); }
             bytes.push(0); word(&mut bytes, 0); bytes.extend(0u16.to_le_bytes());
@@ -1985,6 +1996,156 @@ mod tests {
             assert!(pm.on_ground && pm.ladder_normal.is_none() && pm.origin.x < -40. && pm.origin.z < 8.,
                 "{rate} Hz: descent must complete: {pm:?}");
             assert!(bots.brains[&id].failed_transitions.is_empty());
+        }
+    }
+
+    fn crouch_cap_fixture(rate: u32, flags: u32, ceiling: f32) -> (World, Bots, PlayerId) {
+        let (mut world, mut bots, id) = ladder_route_fixture(rate, false, true, 286.);
+        bots.nav = Some(Arc::new(ladder_nav_with_departure_flags(flags)));
+        let collision = Arc::get_mut(&mut world.collision).unwrap();
+        collision.add_convex(ladder_box(Vec3::new(-64., -64., ceiling),
+            Vec3::new(160., 64., ceiling + 16.), collision::contents::SOLID));
+        collision.finalize();
+        (world, bots, id)
+    }
+
+    // UNRUN: independent human commands establish the supported input before
+    // the bot regression below exercises its collision-qualified policy.
+    #[test]
+    fn human_crouch_jump_can_land_on_cap_that_rejects_standing_at_both_rates() {
+        for rate in [64, 128] {
+            for crouch in [false, true] {
+                let (mut world, _, id) = crouch_cap_fixture(rate, nav::attr::CROUCH, 350.);
+                let pm = &mut world.player_mut(id).unwrap().movement;
+                *pm = movement::PlayerMove::spawn_at(Vec3::new(19.03125, 0., 256.03125));
+                pm.on_ground = true;
+                let stance = if crouch { buttons::DUCK } else { 0 };
+                // A player holds crouch while stationary, then holds forward
+                // and jump throughout. No bot direction/preview helper is used.
+                for _ in 0..rate / 4 {
+                    world.step_prediction(&[(id, TickInput { buttons: stance, ..Default::default() })]);
+                }
+                assert_eq!(world.player(id).unwrap().movement.ducked, crouch);
+                let mut jumped = false;
+                let mut cap_landing = false;
+                for _ in 0..rate {
+                    world.step_prediction(&[(id, TickInput { view_angles: Vec3::new(0., 180., 0.),
+                        forward_move: 450., buttons: buttons::JUMP | stance, ..Default::default() })]);
+                    let pm = &world.player(id).unwrap().movement;
+                    jumped |= !pm.on_ground && pm.origin.z > 256.1;
+                    assert!(pm.origin.z + pm.hull().1.z <= 350., "human solver respects the ceiling");
+                    if pm.on_ground && (pm.origin.z - 286.).abs() < 2. {
+                        let (mins, maxs) = pm.hull();
+                        let tr = world.collision.trace_box(pm.origin, pm.origin - Vec3::Z * 2.,
+                            mins, maxs, collision::contents::MASK_PLAYERSOLID);
+                        assert!(tr.hit() && !tr.start_solid && !tr.all_solid
+                            && tr.contents & collision::contents::LADDER != 0 && tr.normal.z > 0.99);
+                        cap_landing = true;
+                        break;
+                    }
+                }
+                assert!(jumped, "{rate} Hz crouch={crouch}: require an actual human jump");
+                assert_eq!(cap_landing, crouch, "{rate} Hz: only the crouched human can land on this cap");
+            }
+        }
+    }
+
+    // UNRUN: parsed authored CROUCH access, ordinary think + World movement.
+    #[test]
+    fn parsed_crouch_departure_mounts_and_descends_raised_cap_at_both_rates() {
+        for rate in [64, 128] {
+            for already_ducked in [false, true] {
+                let (mut world, mut bots, id) = crouch_cap_fixture(rate, nav::attr::CROUCH, 350.);
+                assert_eq!(bots.nav.as_ref().unwrap().area(2).unwrap().flags, nav::attr::CROUCH);
+                if already_ducked {
+                    for _ in 0..rate / 4 {
+                        world.step_prediction(&[(id, TickInput { buttons: buttons::DUCK, ..Default::default() })]);
+                    }
+                    assert!(world.player(id).unwrap().movement.ducked);
+                }
+                let mut top_jump = false;
+                let mut cap_landing = false;
+                let mut attached = false;
+                let mut detached = false;
+                for _ in 0..rate * 8 {
+                    let before = world.player(id).unwrap().movement;
+                    let inputs = bots.think(&world);
+                    assert_eq!(world.player(id).unwrap().movement, before, "think emits input only");
+                    assert_eq!(inputs[0].1.buttons & buttons::ATTACK, 0);
+                    if before.on_ground && before.ladder_normal.is_none()
+                        && inputs[0].1.buttons & buttons::JUMP != 0 {
+                        assert_ne!(inputs[0].1.buttons & buttons::DUCK, 0);
+                        top_jump = true;
+                    }
+                    if bots.brains[&id].ladder_route.as_ref().and_then(|r| r.top_mount.as_ref())
+                        .is_some_and(|m| m.jumping) {
+                        assert_eq!(inputs[0].1.buttons & (buttons::JUMP | buttons::DUCK), buttons::JUMP | buttons::DUCK);
+                    }
+                    world.step_prediction(&inputs);
+                    let pm = &world.player(id).unwrap().movement;
+                    assert!(pm.origin.z + pm.hull().1.z <= 350., "ordinary hull respects the ceiling");
+                    if pm.on_ground && (pm.origin.z - 286.).abs() < 2. {
+                        assert!(pm.ducked, "cap clearance requires crouching");
+                        let (mins, maxs) = pm.hull();
+                        let tr = world.collision.trace_box(pm.origin, pm.origin - Vec3::Z * 2.,
+                            mins, maxs, collision::contents::MASK_PLAYERSOLID);
+                        assert!(tr.hit() && !tr.start_solid && !tr.all_solid
+                            && tr.contents & collision::contents::LADDER != 0 && tr.normal.z > 0.99);
+                        cap_landing = true;
+                    }
+                    attached |= pm.ladder_normal == Some(-Vec3::X)
+                        && ladder_contact(&world, world.player(id).unwrap(),
+                            bots.nav.as_ref().unwrap().ladder(7).unwrap()).1;
+                    detached |= attached && pm.ladder_normal.is_none();
+                    if pm.on_ground && pm.ladder_normal.is_none() && pm.origin.x < -40. && pm.origin.z < 8. { break; }
+                }
+                let pm = &world.player(id).unwrap().movement;
+                assert!(top_jump && cap_landing && attached && detached,
+                    "{rate} Hz already_ducked={already_ducked}: require jump, cap support and selected-ladder traversal: {pm:?}");
+                assert!(pm.on_ground && pm.ladder_normal.is_none() && pm.origin.x < -40. && pm.origin.z < 8.,
+                    "{rate} Hz: descent must complete: {pm:?}");
+                assert!(bots.brains[&id].failed_transitions.is_empty());
+            }
+        }
+    }
+
+    // UNRUN: CROUCH is authorization to try the existing solver, not proof of
+    // clearance or permission to bypass NO_JUMP / the departure floor bounds.
+    #[test]
+    fn crouch_cap_access_keeps_authorship_clearance_and_source_guards_at_both_rates() {
+        for rate in [64, 128] {
+            for case in 0..4 {
+                let flags = match case {
+                    0 => 0,
+                    1 => nav::attr::CROUCH | nav::attr::NO_JUMP,
+                    _ => nav::attr::CROUCH,
+                };
+                let (mut world, mut bots, id) = crouch_cap_fixture(rate, flags, if case == 2 { 330. } else { 350. });
+                if case == 3 {
+                    // The back-face launch is outside this departure floor.
+                    Arc::get_mut(bots.nav.as_mut().unwrap()).unwrap().areas.iter_mut()
+                        .find(|a| a.id == 2).unwrap().nw.x = 32.;
+                }
+                let mut failed = false;
+                let mut preview_rejected = false;
+                for _ in 0..rate * 4 {
+                    let before = world.player(id).unwrap().movement;
+                    let inputs = bots.think(&world);
+                    assert_eq!(world.player(id).unwrap().movement, before);
+                    assert_eq!(inputs[0].1.buttons & buttons::JUMP, 0, "unqualified mount case={case}");
+                    preview_rejected |= bots.brains[&id].ladder_route.as_ref()
+                        .and_then(|r| r.top_mount.as_ref()).is_some_and(|m| m.previewed && !m.jumping);
+                    world.step_prediction(&inputs);
+                    if bots.brains[&id].failed_transitions.iter().any(|e| e.from == 2 && e.to == 1) {
+                        failed = true;
+                        break;
+                    }
+                }
+                assert!(failed, "{rate} Hz case={case}: retain bounded crossing recovery");
+                if case == 0 || case == 2 { assert!(preview_rejected, "full solver must reject the trajectory"); }
+                let pm = &world.player(id).unwrap().movement;
+                assert!(pm.on_ground && pm.ladder_normal.is_none() && pm.origin.z < 258.);
+            }
         }
     }
 
