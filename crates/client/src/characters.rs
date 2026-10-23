@@ -422,7 +422,7 @@ pub(crate) mod lighting_tests {
         use collision::{CollisionWorld, Convex, Plane};
         let mins = glam::Vec3::new(-64., -64., 16.);
         let maxs = glam::Vec3::new(64., 64., 18.);
-        let solid = Convex {
+        let solid = Convex { plane_surfaces: Vec::new(),
             mins, maxs, contents: contents::SOLID, surface: 0,
             planes: vec![
                 Plane { normal: glam::Vec3::X, dist: maxs.x },

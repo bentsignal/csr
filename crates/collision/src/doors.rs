@@ -1,7 +1,7 @@
 //! Clean-room rotating prop doors from mounted BSP entities and PHY hulls.
 //! No geometry or map coordinates are supplied by the implementation.
 
-use crate::{CollisionWorld, Convex, PropHullLoader, Trace, contents, convex_from_hull, clip_convex};
+use crate::{CollisionWorld, Convex, PropHullLoader, Trace, contents, convex_from_hull, clip_convex_surfaces};
 use glam::{Mat3, Vec3};
 use std::sync::Arc;
 
@@ -43,6 +43,16 @@ struct DoorHull {
     geometry: mdl::ConvexHull,
     contents: i32,
     surface: u32,
+    /// Triangle ordinals retain each authored brush plane's material through
+    /// triangulation. Generated sweep bevels retain the hull fallback.
+    face_surfaces: Vec<(usize, u32)>,
+}
+
+struct LoadedDoorHull {
+    geometry: mdl::ConvexHull,
+    contents: i32,
+    material: String,
+    face_materials: Vec<(usize, String)>,
 }
 
 impl Door {
@@ -62,8 +72,42 @@ impl Door {
             let points: Vec<_> = hull.geometry.points.iter().map(|p| self.origin + rotation * *p).collect();
             // Rebuild the axial/edge bevels for this rotation. Reusing rotated
             // bevels alone is insufficient for swept world-axis player hulls.
-            convex_from_hull(&points, &hull.geometry.triangles, hull.contents, hull.surface)
+            let mut solid = convex_from_hull(&points, &hull.geometry.triangles, hull.contents, hull.surface)?;
+            if !hull.face_surfaces.is_empty() {
+                let centroid = points.iter().copied().sum::<Vec3>() / points.len() as f32;
+                let faces: Vec<_> = hull.face_surfaces.iter().filter_map(|(triangle, surface)| {
+                    let [a, b, c] = hull.geometry.triangles[*triangle].map(|i| points[i as usize]);
+                    let mut normal = (b - a).cross(c - a);
+                    if normal.dot(a - centroid) < 0.0 { normal = -normal; }
+                    let length = normal.length();
+                    if length < 1e-6 { return None; }
+                    normal /= length;
+                    let local_dist = points.iter().map(|p| normal.dot(*p - self.origin)).fold(f32::MIN, f32::max);
+                    Some((normal, local_dist, *surface))
+                }).collect();
+                // Derive face planes from the same posed points as the hull
+                // builder: analytically rotating the BSP normal/distance can
+                // differ at distant hinges due to f32 vertex rounding. Match
+                // its direction tolerance in authored side/triangle order. Compare
+                // support distances in the hinge frame, where small normal
+                // roundoff cannot be magnified by a distant world origin.
+                // Only annotate the existing planes; never replace/reorder them.
+                solid.plane_surfaces = solid.planes.iter().map(|plane| {
+                    faces.iter().find(|(normal, dist, _)|
+                        plane.normal.dot(*normal) > 0.9999
+                            && (plane.dist - plane.normal.dot(self.origin) - dist).abs() < 0.01)
+                        .map_or(u32::MAX, |(_, _, surface)| *surface)
+                }).collect();
+            }
+            Some(solid)
         }).collect()
+    }
+
+    /// Brush-driven doors can use a visual MDL while their collision hulls
+    /// carry BSP material IDs. Validate contacts against the actual hulls.
+    pub fn has_surface(&self, surface: u32) -> bool {
+        self.hulls.iter().any(|hull| hull.surface == surface
+            || hull.face_surfaces.iter().any(|(_, face)| *face == surface))
     }
 
     pub fn center_at(&self, angle: f32) -> Vec3 { self.origin + self.rotation(angle) * self.center }
@@ -123,15 +167,17 @@ pub(super) fn load(map: &bsp::Bsp, loader: &PropHullLoader<'_>, surfaces: &mut V
             if authored_model.starts_with('*') { continue; }
             let Some(hulls) = loader(authored_model) else { continue; };
             (authored_model, None, entity, Vec3::ZERO, authored_angles, authored_angles,
-                hulls.into_iter().map(|hull| (hull, contents::SOLID, String::new())).collect())
+                hulls.into_iter().map(|geometry| LoadedDoorHull {
+                    geometry, contents: contents::SOLID, material: String::new(), face_materials: Vec::new(),
+                }).collect())
         };
         // Preserve the shared malformed/zero-volume PHY rejection.
-        hulls.retain(|(h, mask, _)| convex_from_hull(&h.points, &h.triangles, *mask, 0).is_some());
+        hulls.retain(|h| convex_from_hull(&h.geometry.points, &h.geometry.triangles, h.contents, 0).is_some());
         if hulls.is_empty() { continue; }
         let mut low = Vec3::splat(f32::INFINITY);
         let mut high = Vec3::splat(f32::NEG_INFINITY);
         let mut radius = 0.0f32;
-        for p in hulls.iter().flat_map(|(h, _, _)| &h.points) {
+        for p in hulls.iter().flat_map(|h| &h.geometry.points) {
             low = low.min(*p); high = high.max(*p); radius = radius.max(p.length());
         }
         if radius > 4096.0 { continue; }
@@ -148,14 +194,19 @@ pub(super) fn load(map: &bsp::Bsp, loader: &PropHullLoader<'_>, surfaces: &mut V
             Some(i) => i as u32,
             None => { surfaces.push(surface_name); (surfaces.len() - 1) as u32 }
         };
-        let hulls = hulls.into_iter().map(|(geometry, contents, name)| {
-            let surface = if name.is_empty() { surface } else {
+        let mut material_id = |name: String| {
+            if name.is_empty() { surface } else {
                 match surfaces.iter().position(|s| s == &name) {
                     Some(index) => index as u32,
                     None => { surfaces.push(name); (surfaces.len() - 1) as u32 }
                 }
-            };
-            DoorHull { geometry, contents, surface }
+            }
+        };
+        let hulls = hulls.into_iter().map(|hull| {
+            let surface = material_id(hull.material);
+            let face_surfaces = hull.face_materials.into_iter()
+                .map(|(triangle, name)| (triangle, material_id(name))).collect();
+            DoorHull { geometry: hull.geometry, contents: hull.contents, surface, face_surfaces }
         }).collect();
         let cue = |key| ent.str(key).filter(|s| !s.eq_ignore_ascii_case("none")).unwrap_or("").to_owned();
         names.push((ent.str("targetname").unwrap_or("").to_owned(), ent.str("slavename").unwrap_or("").to_owned()));
@@ -195,7 +246,7 @@ pub(super) fn load(map: &bsp::Bsp, loader: &PropHullLoader<'_>, surfaces: &mut V
 /// Recover the bounded compiled brush convexes in their local hinge frame.
 /// Plane triplets supply vertices; each plane's ordered polygon supplies edges
 /// for swept-box bevels. Do not substitute a visible mesh or model bounds.
-fn brush_hulls(map: &bsp::Bsp, model: usize) -> Option<Vec<(mdl::ConvexHull, i32, String)>> {
+fn brush_hulls(map: &bsp::Bsp, model: usize) -> Option<Vec<LoadedDoorHull>> {
     let model = map.models.get(model)?;
     let mut brushes = Vec::new();
     crate::collect_leaf_brushes(map, model.head_node, &mut brushes);
@@ -210,11 +261,14 @@ fn brush_hulls(map: &bsp::Bsp, model: usize) -> Option<Vec<(mdl::ConvexHull, i32
         if !(4..=64).contains(&count) { return None; }
         let mut planes = Vec::new();
         let mut material = String::new();
+        let mut materials = Vec::new();
         for side in map.brush_sides.get(first..first.checked_add(count)?)? {
             if side.bevel { continue; }
-            if material.is_empty() && side.texinfo >= 0 {
-                material = map.texinfo_material(side.texinfo as usize).unwrap_or("").to_ascii_lowercase();
-            }
+            let face_material = if side.texinfo >= 0 {
+                map.texinfo_material(side.texinfo as usize).unwrap_or("").to_ascii_lowercase()
+            } else { String::new() };
+            if material.is_empty() { material = face_material.clone(); }
+            materials.push(face_material);
             let plane = map.planes.get(side.plane as usize)?;
             if !plane.normal.is_finite() || !plane.dist.is_finite() { return None; }
             planes.push((plane.normal, plane.dist));
@@ -234,7 +288,8 @@ fn brush_hulls(map: &bsp::Bsp, model: usize) -> Option<Vec<(mdl::ConvexHull, i32
         } } }
         if points.len() < 4 || points.len() > 256 { return None; }
         let mut triangles = Vec::new();
-        for (normal, dist) in planes {
+        let mut face_materials = Vec::new();
+        for ((normal, dist), material) in planes.into_iter().zip(materials) {
             let mut face: Vec<usize> = points.iter().enumerate()
                 .filter(|(_, p)| (normal.dot(**p) - dist).abs() < 0.01).map(|(i, _)| i).collect();
             if face.len() < 3 { continue; }
@@ -245,7 +300,10 @@ fn brush_hulls(map: &bsp::Bsp, model: usize) -> Option<Vec<(mdl::ConvexHull, i32
                 let pa = points[a] - center; let pb = points[b] - center;
                 pa.dot(v).atan2(pa.dot(u)).total_cmp(&pb.dot(v).atan2(pb.dot(u)))
             });
-            for i in 1..face.len()-1 { triangles.push([face[0] as u32, face[i] as u32, face[i+1] as u32]); }
+            for i in 1..face.len()-1 {
+                if !material.is_empty() { face_materials.push((triangles.len(), material.clone())); }
+                triangles.push([face[0] as u32, face[i] as u32, face[i+1] as u32]);
+            }
         }
         // An unbounded/incomplete half-space set can have some finite
         // intersections. It is not an admitted closed collider: every triangle
@@ -259,7 +317,8 @@ fn brush_hulls(map: &bsp::Bsp, model: usize) -> Option<Vec<(mdl::ConvexHull, i32
         }
         if edges.is_empty() || edges.values().any(|&count| count != 2) { return None; }
         convex_from_hull(&points, &triangles, brush.contents, 0)?;
-        hulls.push((mdl::ConvexHull { points, triangles }, brush.contents, material));
+        hulls.push(LoadedDoorHull { geometry: mdl::ConvexHull { points, triangles },
+            contents: brush.contents, material, face_materials });
     }
     (!hulls.is_empty()).then_some(hulls)
 }
@@ -271,7 +330,7 @@ pub fn obstructed(solids: &[Convex], origin: Vec3, mins: Vec3, maxs: Vec3) -> bo
     solids.iter().any(|solid| {
         if (origin + maxs).cmplt(solid.mins).any() || (origin + mins).cmpgt(solid.maxs).any() { return false; }
         let mut tr = Trace::empty(origin);
-        clip_convex(&solid.planes, origin + offset, origin + offset, ext, solid.contents, solid.surface, &mut tr);
+        clip_convex_surfaces(&solid.planes, origin + offset, origin + offset, ext, solid.contents, solid.surface, &solid.plane_surfaces, &mut tr);
         tr.start_solid
     })
 }
@@ -279,7 +338,7 @@ pub fn obstructed(solids: &[Convex], origin: Vec3, mins: Vec3, maxs: Vec3) -> bo
 pub fn ray_fraction(solids: &[Convex], start: Vec3, end: Vec3) -> Option<f32> {
     let mut tr = Trace::empty(end);
     for solid in solids {
-        clip_convex(&solid.planes, start, end, Vec3::ZERO, solid.contents, solid.surface, &mut tr);
+        clip_convex_surfaces(&solid.planes, start, end, Vec3::ZERO, solid.contents, solid.surface, &solid.plane_surfaces, &mut tr);
     }
     tr.hit().then_some(tr.fraction)
 }

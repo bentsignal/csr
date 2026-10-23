@@ -89,7 +89,7 @@ fn start_solid_drop_keeps_existing_anchor_without_depenetration_64_128() {
     for rate in [64, 128] {
         let (mut w, id, _) = drop_fixture(rate, 600.);
         let c = Arc::get_mut(&mut w.collision).unwrap();
-        c.add_convex(collision::Convex {
+        c.add_convex(collision::Convex { plane_surfaces: Vec::new(),
             planes: vec![
                 collision::Plane { normal: Vec3::X, dist: 100. },
                 collision::Plane { normal: -Vec3::X, dist: 100. },

@@ -8,7 +8,7 @@ fn bsp_ladder_tick_input_snapshot_prediction_and_life_reset_64_128() {
         let mut w = world();
         w.set_tick_rate(rate);
         let c = Arc::get_mut(&mut w.collision).unwrap();
-        c.add_convex(collision::Convex {
+        c.add_convex(collision::Convex { plane_surfaces: Vec::new(),
             planes: vec![
                 collision::Plane { normal: Vec3::X, dist: 1. },
                 collision::Plane { normal: -Vec3::X, dist: 0. },

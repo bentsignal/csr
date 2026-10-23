@@ -2,7 +2,7 @@ use super::*;
 use collision::{CollisionWorld, Convex, Plane};
 
 fn box_shape(low: Vec3, high: Vec3, contents: i32) -> Convex {
-    Convex {
+    Convex { plane_surfaces: Vec::new(),
         planes: vec![
             Plane { normal: Vec3::X, dist: high.x }, Plane { normal: -Vec3::X, dist: -low.x },
             Plane { normal: Vec3::Y, dist: high.y }, Plane { normal: -Vec3::Y, dist: -low.y },

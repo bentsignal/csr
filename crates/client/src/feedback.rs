@@ -62,7 +62,7 @@ impl DoorImpactMark {
         if self.map != *map || !self.impact.valid() { return None; }
         let def = collision.doors.get(self.impact.door as usize)?;
         let state = states.get(self.impact.door as usize)?;
-        if self.surface != def.surface || self.impact.pos.length() > def.radius + 0.25 { return None; }
+        if !def.has_surface(self.surface) || self.impact.pos.length() > def.radius + 0.25 { return None; }
         let rotation = def.rotation(state.angle);
         let normal = self.impact.normal.normalize_or_zero();
         Some(Transform::from_translation(to_bevy(def.origin + rotation * (self.impact.pos + normal * MARK_OFFSET)))
@@ -813,6 +813,17 @@ mod decal_tests {
         assert_eq!(app.world_mut().query::<&MatchEntity>().iter(app.world()).count(), 0);
     }
 
+    #[test]
+    fn brush_door_marks_accept_collision_material_instead_of_visual_model_identity() {
+        let (mark, mut world, states) = door_mark();
+        let visual = world.surface_id("models/different_visual_leaf.mdl");
+        std::sync::Arc::get_mut(&mut world.doors).unwrap()[0].surface = visual;
+        assert_ne!(mark.surface, visual);
+        assert!(mark.pose(&mark.map, &world, &states).is_some());
+        let wrong = DoorImpactMark { surface: visual, ..mark };
+        assert!(wrong.pose(&wrong.map, &world, &states).is_none());
+    }
+
     pub(super) fn door_mark() -> (DoorImpactMark, collision::CollisionWorld, Vec<sim::doors::State>) {
         let mut map = bsp::Bsp::default();
         let doc = kv::parse(r#"door { classname prop_door_rotating model models/fixture_leaf.mdl
@@ -1036,7 +1047,7 @@ mod mob_blood_tests {
         use std::sync::Arc;
         use collision::{CollisionWorld, Convex, Plane};
 
-        let solid = |mins: glam::Vec3, maxs: glam::Vec3| Convex {
+        let solid = |mins: glam::Vec3, maxs: glam::Vec3| Convex { plane_surfaces: Vec::new(),
             planes: vec![
                 Plane { normal: glam::Vec3::X, dist: maxs.x },
                 Plane { normal: -glam::Vec3::X, dist: -mins.x },

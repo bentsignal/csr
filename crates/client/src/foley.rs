@@ -539,7 +539,7 @@ mod tests {
         let slab = |bottom, top, surface| {
             let mins = Vec3::new(-64., -64., bottom);
             let maxs = Vec3::new(64., 64., top);
-            Convex { mins, maxs, surface, contents: contents::SOLID, planes: vec![
+            Convex { plane_surfaces: Vec::new(), mins, maxs, surface, contents: contents::SOLID, planes: vec![
                 Plane { normal: Vec3::X, dist: maxs.x },
                 Plane { normal: -Vec3::X, dist: -mins.x },
                 Plane { normal: Vec3::Y, dist: maxs.y },

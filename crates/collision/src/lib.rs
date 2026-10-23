@@ -79,6 +79,9 @@ pub struct Convex {
     pub maxs: Vec3,
     pub contents: i32,
     pub surface: u32,
+    /// Optional material IDs in bounding-plane order. Empty means uniform.
+    /// Missing/bevel entries use the solid's fallback surface.
+    pub plane_surfaces: Vec<u32>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -416,7 +419,7 @@ impl CollisionWorld {
             let e = end + offset;
             for (index, solid) in self.convexes.iter().enumerate() {
                 if solid.contents & mask != 0 && swept_bounds_overlap(s, e, ext, solid.mins, solid.maxs) {
-                    if clip_convex(&solid.planes, s, e, ext, solid.contents, solid.surface, &mut tr) {
+                    if clip_convex_surfaces(&solid.planes, s, e, ext, solid.contents, solid.surface, &solid.plane_surfaces, &mut tr) {
                         owner = self.runtime_owners.get(index).copied().flatten();
                     }
                 }
@@ -469,7 +472,7 @@ impl CollisionWorld {
                                 }
                                 continue;
                             }
-                            clip_convex(&c.planes, s, e, ext, c.contents, c.surface, &mut tr);
+                            clip_convex_surfaces(&c.planes, s, e, ext, c.contents, c.surface, &c.plane_surfaces, &mut tr);
                         }
                         Shape::Triangle(i) => {
                             let t = &self.triangles[i as usize];
@@ -602,12 +605,16 @@ fn swept_bounds_overlap(s: Vec3, e: Vec3, ext: Vec3, low: Vec3, high: Vec3) -> b
 // Returns true only when this shape replaces the hit surface. Start-solid
 // contents alone do not change ownership; all-solid and strict earlier hits do.
 fn clip_convex(planes: &[Plane], s: Vec3, e: Vec3, ext: Vec3, contents: i32, surface: u32, tr: &mut Trace) -> bool {
+    clip_convex_surfaces(planes, s, e, ext, contents, surface, &[], tr)
+}
+
+fn clip_convex_surfaces(planes: &[Plane], s: Vec3, e: Vec3, ext: Vec3, contents: i32, surface: u32, surfaces: &[u32], tr: &mut Trace) -> bool {
     let mut enter = -1.0f32;
     let mut leave = 1.0f32;
-    let mut clip: Option<Plane> = None;
+    let mut clip: Option<(Plane, u32)> = None;
     let mut get_out = false;
     let mut start_out = false;
-    for p in planes {
+    for (index, p) in planes.iter().enumerate() {
         let n = p.normal;
         let dist = p.dist + n.x.abs() * ext.x + n.y.abs() * ext.y + n.z.abs() * ext.z;
         let d1 = n.dot(s) - dist;
@@ -645,7 +652,8 @@ fn clip_convex(planes: &[Plane], s: Vec3, e: Vec3, ext: Vec3, contents: i32, sur
             let f = ((d1 - DIST_EPSILON) / (d1 - d2)).max(0.0);
             if f > enter {
                 enter = f;
-                clip = Some(Plane { normal: n, dist });
+                clip = Some((Plane { normal: n, dist }, surfaces.get(index).copied()
+                    .filter(|id| *id != u32::MAX).unwrap_or(surface)));
             }
         } else {
             let f = ((d1 + DIST_EPSILON) / (d1 - d2)).min(1.0);
@@ -666,12 +674,12 @@ fn clip_convex(planes: &[Plane], s: Vec3, e: Vec3, ext: Vec3, contents: i32, sur
         return false;
     }
     if enter < leave && enter > -1.0 && enter < tr.fraction {
-        if let Some(p) = clip {
+        if let Some((p, face_surface)) = clip {
             tr.fraction = enter.max(0.0);
             tr.normal = p.normal;
             tr.plane_dist = p.dist;
             tr.contents = contents;
-            tr.surface = surface;
+            tr.surface = face_surface;
             return true;
         }
     }
@@ -791,7 +799,7 @@ pub fn convex_from_hull(points: &[Vec3], triangles: &[[u32; 3]], contents: i32, 
             add(-n, &mut planes);
         }
     }
-    Some(Convex {
+    Some(Convex { plane_surfaces: Vec::new(),
         planes,
         mins,
         maxs,
@@ -865,6 +873,7 @@ impl CollisionWorld {
                 }
                 let mut planes = Vec::with_capacity(b.num_sides as usize);
                 let mut surface_name = String::new();
+                let mut plane_surfaces = Vec::with_capacity(b.num_sides as usize);
                 for s in 0..b.num_sides.max(0) as usize {
                     let side = &map.brush_sides[b.first_side as usize + s];
                     let p = &map.planes[side.plane as usize];
@@ -872,15 +881,19 @@ impl CollisionWorld {
                         normal: p.normal,
                         dist: p.dist + p.normal.dot(origin),
                     });
-                    if surface_name.is_empty() && !side.bevel && side.texinfo >= 0 {
-                        if let Some(name) = map.texinfo_material(side.texinfo as usize) {
-                            surface_name = name.to_ascii_lowercase();
-                        }
+                    let face = (!side.bevel && side.texinfo >= 0)
+                        .then(|| map.texinfo_material(side.texinfo as usize)).flatten()
+                        .filter(|name| !name.is_empty()).map(str::to_ascii_lowercase);
+                    if let Some(name) = face {
+                        if surface_name.is_empty() { surface_name = name.clone(); }
+                        plane_surfaces.push(w.surface_id(&name));
+                    } else {
+                        plane_surfaces.push(u32::MAX);
                     }
                 }
                 let Some((mins, maxs)) = brush_bounds(&planes) else { continue };
                 let surface = w.surface_id(&surface_name);
-                w.add_convex(Convex {
+                w.add_convex(Convex { plane_surfaces,
                     planes,
                     mins,
                     maxs,
@@ -1060,7 +1073,7 @@ mod tests {
     use super::*;
 
     fn box_convex(mins: Vec3, maxs: Vec3) -> Convex {
-        Convex {
+        Convex { plane_surfaces: Vec::new(),
             planes: vec![
                 Plane { normal: Vec3::X, dist: maxs.x },
                 Plane { normal: -Vec3::X, dist: -mins.x },
@@ -1221,7 +1234,7 @@ mod long_trace_tests {
     #[test]
     fn long_ray_hits_far_wall_and_near_wall_first() {
         let mut w = CollisionWorld::new();
-        let wall = |x0: f32| Convex {
+        let wall = |x0: f32| Convex { plane_surfaces: Vec::new(),
             planes: vec![
                 Plane { normal: Vec3::X, dist: x0 + 16.0 },
                 Plane { normal: -Vec3::X, dist: -x0 },
@@ -1252,3 +1265,6 @@ mod separating_plane_tests;
 
 #[cfg(test)]
 mod trace_scratch_tests;
+
+#[cfg(test)]
+mod face_surface_tests;

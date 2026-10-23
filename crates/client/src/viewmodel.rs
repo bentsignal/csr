@@ -2099,7 +2099,7 @@ pub fn update(
     models: Res<ViewModels>,
     mut state: ResMut<ViewModelState>,
     (request,inventory): (Res<crate::tracers::InspectRequest>,Res<crate::cosmetics::Inventory>),
-    (mut muzzles, mut wick): (ResMut<crate::tracers::Muzzles>, ResMut<HeldWick>),
+    (mut muzzles, mut wick, mut optic): (ResMut<crate::tracers::Muzzles>, ResMut<HeldWick>, Option<ResMut<crate::scope::OpticAperture>>),
     mut materials: ResMut<Assets<WorldMaterial>>,
     effects: Res<crate::effects::Effects>,
     level: Res<LoadedLevel>,
@@ -2114,6 +2114,7 @@ pub fn update(
     muzzles.first=None;
     // Clear before every early return, including death, noclip and switching.
     wick.sample = None;
+    if let Some(optic) = optic.as_deref_mut() { optic.0 = Vec4::ZERO; }
     // Cached meshes belong to a successfully sampled view target. Every early
     // return must leave them hidden; reveal only after gun and arms are posed.
     if let Some((_, gun, arms, _)) = &state.weapon {
@@ -2479,7 +2480,7 @@ pub fn update(
     let mut offset = glam::Vec3::new(VIEWMODEL_OFFSET.y, -VIEWMODEL_OFFSET.x, VIEWMODEL_OFFSET.z);
     if let (Some(center), Some(w)) = (view.scope_center, w) {
         let scoped_fov = w.def.attr_f32("zoom fov 1").unwrap_or(45.0);
-        let blend = ((90.0 - w.rendered_fov(world.0.time())) / (90.0 - scoped_fov)).clamp(0.0, 1.0);
+        let blend = ((90.0 - w.rendered_fov(world.0.time() + fixed.overstep_fraction() * world.0.dt())) / (90.0 - scoped_fov)).clamp(0.0, 1.0);
         let rear = view.scope_rear.map_or(center, |(position, _)| position);
         // Eye relief is measured to the REAR lens, not the forward dirt
         // plane. Subtracting center.x can place the rear housing on/behind
@@ -2541,6 +2542,7 @@ pub fn update(
             scope_aperture(lens, radius, Vec2::new(window.physical_width() as f32, window.physical_height() as f32))
         })
     } else { Vec4::ZERO };
+    if let Some(optic) = optic.as_deref_mut() { optic.0 = aperture; }
     if let Some((_, _, _, mats)) = &state.weapon {
         for handle in mats {
             // Unscoped weapons normally retain ZERO. Rewriting it every

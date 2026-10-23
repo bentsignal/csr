@@ -16,7 +16,7 @@ impl TraceWorld for ObservedTrace<'_> {
 }
 
 fn bounds(mins: Vec3, maxs: Vec3) -> Convex {
-    Convex {
+    Convex { plane_surfaces: Vec::new(),
         planes: vec![
             Plane {
                 normal: Vec3::X,

@@ -69,7 +69,7 @@ mod tests {
     use std::sync::Arc;
 
     fn fixture() -> CollisionWorld {
-        let solid = Convex { planes: vec![Plane { normal: Vec3::X, dist: 1. }],
+        let solid = Convex { plane_surfaces: Vec::new(), planes: vec![Plane { normal: Vec3::X, dist: 1. }],
             mins: -Vec3::ONE, maxs: Vec3::ONE, contents: 1, surface: 0 };
         let mut world = CollisionWorld::new();
         world.breakables = vec![Breakable { entity: 4, model: 0, origin: Vec3::ZERO, health: 1., material: -1,

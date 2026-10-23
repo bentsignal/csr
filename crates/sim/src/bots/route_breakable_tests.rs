@@ -40,7 +40,7 @@ fn fixture(rate: u32, metadata: &str, mask: i32, side_window: bool, wall: bool,
     }
     if wall {
         // A solid wall before the vent wins the ordinary collision ray.
-        collision.add_convex(collision::Convex {
+        collision.add_convex(collision::Convex { plane_surfaces: Vec::new(),
             planes: vec![collision::Plane { normal: Vec3::X, dist: -8. },
                 collision::Plane { normal: -Vec3::X, dist: 10. },
                 collision::Plane { normal: Vec3::Y, dist: 64. },
@@ -235,7 +235,7 @@ fn an_eye_visible_vent_does_not_override_a_solid_hull_obstruction_or_a_spread_mi
         world.player_mut(id).unwrap().movement.origin.x = -19.;
         world.collision = CollisionWorld::map_arc(&world.collision);
         let base = Arc::get_mut(&mut world.collision).unwrap();
-        base.add_convex(collision::Convex {
+        base.add_convex(collision::Convex { plane_surfaces: Vec::new(),
             // The eye can see the vent above this overlapping low solid;
             // the player hull cannot perform the attempted horizontal move.
             planes: vec![collision::Plane { normal: Vec3::X, dist: 1. },

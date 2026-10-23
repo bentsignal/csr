@@ -247,6 +247,18 @@ impl Level {
             })
             .unwrap_or_default();
         let item_schema_sha1 = catalog_sha1;
+        // Surface IDs now include each BSP brush face, rather than only the
+        // first side of a brush. Old builds must not interpret contact events
+        // with their older material-ID table on the same raw map/schema.
+        let catalog_sha1 = if bsp.brush_sides.is_empty() { catalog_sha1 } else {
+            catalog_sha1.map(|previous: [u8; 20]| {
+                let mut hash = Sha1::new();
+                hash.update(b"csr-brush-face-surfaces-v1\0");
+                hash.update(previous);
+                hash.finalize().into()
+            })
+        };
+
         let catalog_sha1=recoil_trajectories::import(&mut catalog,catalog_sha1);
         let catalog_sha1=grenade_animations::import(&mut catalog,&fs,catalog_sha1,item_schema_sha1);
         let catalog_sha1=suppressor_animations::import(&mut catalog,&fs,catalog_sha1);

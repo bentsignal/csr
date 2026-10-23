@@ -216,3 +216,74 @@ checkScoreboardReturnChannel();
     assert!(calls.iter().flatten().all(|value| value == &Value::Bool(true)),
         "scoreboard helper receipts (literal/write/reject, timeline, freeze, only): {calls:?}");
 }
+
+#[test]
+fn scoreboard_heading_scores_and_both_roster_headers_survive_refresh() {
+    let calls = run(r#"
+function near(a, b) { return Math.abs(a - b) < 0.12; }
+function heading(parent, name, depth, fieldName, y) {
+    var clip = parent.createEmptyMovieClip(name, depth);
+    clip.createTextField(fieldName, 1, 0, 0, 150, 18);
+    clip[fieldName].text = name;
+    clip._y = y;
+}
+function header(parent, name, depth) {
+    var clip = parent.createEmptyMovieClip(name, depth);
+    var labels = ["Player_Label", "CT_money_header", "CT_Kills_Header", "CT_Death_Header", "CT_Ping_Header"];
+    var i = 0;
+    while (i < labels.length) {
+        heading(clip, labels[i], i + 1, "Text", 6);
+        i += 1;
+    }
+}
+function checkScoreboardLayout() {
+    var api = _global.csrScoreboard;
+    var panel = _root.createEmptyMovieClip("layoutFixture", 402);
+    header(panel, "CT_Headers", 1);
+    // Pre-existing strip models a subsequent presentation. Dynamic empty
+    // clips cannot model SWF symbol duplication; root checks that with Legacy.
+    header(panel, "csrTHeaders", 4000);
+    panel.CT_Headers._x = 214;
+    panel.CT_Headers._y = 59;
+    heading(panel, "CT_TeamName", 2, "CT_TeamNameText", 316);
+    heading(panel, "T_TeamName", 3, "T_TeamNameText", 354);
+    heading(panel, "CT_Score", 4, "CT_Score", 356);
+    heading(panel, "T_Score", 5, "T_Score", 344);
+    // Visible text has different local offsets from the clip origins.
+    panel.CT_Score.CT_Score._y = -40;
+    panel.T_Score.T_Score._y = 12;
+    var sides = ["CT", "T"];
+    var i = 0;
+    while (i < 2) {
+        var side = sides[i];
+        var table = panel.createEmptyMovieClip(side + "_Scoretable", 6 + i);
+        var row = table.createEmptyMovieClip(side + "_ScoreRow_0", 1);
+        row.createTextField("Kills", 1, 0, 0, 40, 20);
+        row.Kills.textColor = i == 0 ? 0x8acaff : 0xf2d373;
+        table._y = i == 0 ? 83 : 388;
+        i += 1;
+    }
+    var ok = api.layout(panel);
+    var ct = panel.CT_Score._y + panel.CT_Score.CT_Score._y + panel.CT_Score.CT_Score._height / 2;
+    var ctName = panel.CT_TeamName._y + panel.CT_TeamName.CT_TeamNameText._y + panel.CT_TeamName.CT_TeamNameText._height / 2;
+    var t = panel.T_Score._y + panel.T_Score.T_Score._y + panel.T_Score.T_Score._height / 2;
+    var tName = panel.T_TeamName._y + panel.T_TeamName.T_TeamNameText._y + panel.T_TeamName.T_TeamNameText._height / 2;
+    csrEI.call("csr.HudLayoutFixture", ok,
+        near(ct, ctName), near(t, tName),
+        panel.csrTHeaders._visible, near(panel.csrTHeaders._x, 214),
+        near(panel.csrTHeaders._y, 364), !panel.csrTHeaders.CT_Ping_Header._visible,
+        panel.CT_Headers.Player_Label.Text.textColor == 0x8acaff,
+        panel.csrTHeaders.CT_Kills_Header.Text.textColor == 0xf2d373);
+    var strip = panel.csrTHeaders;
+    var scoreY = panel.CT_Score._y;
+    ok = api.layout(panel);
+    csrEI.call("csr.HudLayoutFixture", ok, panel.csrTHeaders == strip,
+        near(panel.CT_Score._y, scoreY), near(panel.CT_Scoretable._y, 83),
+        near(panel.T_Scoretable._y, 388));
+}
+checkScoreboardLayout();
+"#, 1920, 1080);
+    assert_eq!(calls.len(), 2, "missing layout receipt: {calls:?}");
+    assert!(calls.iter().flatten().all(|value| value == &Value::Bool(true)),
+        "scoreboard heading/header refresh: {calls:?}");
+}

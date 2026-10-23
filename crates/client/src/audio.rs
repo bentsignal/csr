@@ -1071,7 +1071,7 @@ mod tests {
     fn acoustic_box(mins: glam::Vec3, maxs: glam::Vec3, contents: i32) -> collision::Convex {
         use collision::Plane;
         use glam::Vec3;
-        collision::Convex {
+        collision::Convex { plane_surfaces: Vec::new(),
             planes: vec![
                 Plane { normal: Vec3::X, dist: maxs.x }, Plane { normal: -Vec3::X, dist: -mins.x },
                 Plane { normal: Vec3::Y, dist: maxs.y }, Plane { normal: -Vec3::Y, dist: -mins.y },

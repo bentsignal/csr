@@ -112,8 +112,8 @@ fn runtime_swept_bounds_rejection_matches_unfiltered_convex_clipping() {
                             .trace_box_excluding(start, end, mins, maxs, mask, exclusion);
                         for solid in &world.convexes {
                             if solid.contents & mask != 0 {
-                                clip_convex(&solid.planes, start + offset, end + offset, ext,
-                                    solid.contents, solid.surface, &mut expected);
+                                clip_convex_surfaces(&solid.planes, start + offset, end + offset, ext,
+                                    solid.contents, solid.surface, &solid.plane_surfaces, &mut expected);
                             }
                         }
                         expected.end = if expected.all_solid { start } else { start + (end - start) * expected.fraction };
@@ -204,4 +204,162 @@ fn exact_door_owner_obeys_static_flush_ties_runtime_order_and_masks() {
     let world = CollisionWorld::with_runtime_owners(base, masked, owners);
     assert_eq!(world.trace_owned_ray(start, end, contents::MASK_SHOT).1, Some(HitOwner::Breakable(0)));
     assert_eq!(world.trace_owned_ray(start, end, contents::WATER).1, Some(HitOwner::Door(0)));
+}
+
+fn mixed_brush_door() -> (Arc<CollisionWorld>, Vec3, Vec<Vec3>) {
+    let mut map = bsp::Bsp::default();
+    let center = Vec3::new(20., 8., 32.);
+    let authored = Mat3::from_rotation_z(17.0f32.to_radians());
+    let normals: Vec<_> = [Vec3::X, -Vec3::X, Vec3::Y, -Vec3::Y, Vec3::Z, -Vec3::Z]
+        .into_iter().map(|normal| authored * normal).collect();
+    let materials = ["fixture/metal", "fixture/wood", "fixture/concrete",
+        "fixture/glass", "tools/toolsskybox", "fixture/dirt"];
+    for (index, (&normal, material)) in normals.iter().zip(materials).enumerate() {
+        map.planes.push(bsp::Plane { normal, dist: 16. + normal.dot(center), kind: 0 });
+        map.brush_sides.push(bsp::BrushSide { plane: index as u16, texinfo: index as i16, dispinfo: -1, bevel: false });
+        map.texinfo.push(bsp::TexInfo { texture_vecs: [glam::Vec4::ZERO; 2],
+            lightmap_vecs: [glam::Vec4::ZERO; 2], flags: 0, texdata: index as i32 });
+        map.texdata.push(bsp::TexData { reflectivity: Vec3::ONE, name_id: index as i32, width: 16, height: 16 });
+        map.texdata_strings.push(material.into());
+    }
+    // Authored compiler bevels do not donate a material or change recovery of
+    // the closed brush. Runtime world-axis/edge bevels are rebuilt as before.
+    map.brush_sides.push(bsp::BrushSide { plane: 0, texinfo: 4, dispinfo: -1, bevel: true });
+    map.brushes.push(bsp::Brush { first_side: 0, num_sides: 7, contents: contents::SOLID });
+    map.leaf_brushes.push(0);
+    let leaf = bsp::Leaf { contents: 0, cluster: 0, area: 0, mins: [-64; 3], maxs: [64; 3],
+        first_leaf_face: 0, num_leaf_faces: 0, first_leaf_brush: 0, num_leaf_brushes: 1 };
+    map.leafs.push(leaf);
+    let mut empty_leaf = leaf; empty_leaf.num_leaf_brushes = 0;
+    map.leafs.push(empty_leaf);
+    let model = bsp::Model { mins: Vec3::splat(-64.), maxs: Vec3::splat(64.), origin: Vec3::ZERO,
+        head_node: -1, first_face: 0, num_faces: 0 };
+    let mut world_model = model; world_model.head_node = -2;
+    map.models.extend([world_model, model]);
+    let doc = kv::parse(r#"
+        door { classname func_door_rotating model *1 targetname hinge
+            origin "128 -256 48" spawnflags 272 }
+        visual { classname prop_dynamic parentname hinge model models/fixture_leaf.mdl
+            origin "128 -256 48" solid 6 }
+    "#).unwrap();
+    map.entities.extend([doc.block("door").unwrap().clone(), doc.block("visual").unwrap().clone()]);
+    let base = CollisionWorld::from_bsp(&map, &MapCollisionOptions::default(), &|_| None);
+    assert_eq!(base.doors.len(), 1);
+    assert!(base.convexes.is_empty(), "moving brush must not remain in static collision");
+    (Arc::new(base), center, normals)
+}
+
+#[test]
+fn rotating_brush_hit_faces_keep_material_owner_and_transformed_geometry() {
+    use crate::HitOwner;
+    let (base, local_center, normals) = mixed_brush_door();
+    let door = &base.doors[0];
+    let materials = ["fixture/metal", "fixture/wood", "fixture/concrete",
+        "fixture/glass", "tools/toolsskybox", "fixture/dirt"];
+    assert!(!door.has_surface(door.surface), "visual MDL is not a brush contact material");
+    assert!(!door.has_surface(u32::MAX));
+    assert_eq!(door.hulls[0].geometry.points.len(), 8);
+    assert_eq!(door.hulls[0].geometry.triangles.len(), 12);
+    for angle in [0., 37., 90., -63.] {
+        let rotation = door.rotation(angle);
+        let center = door.origin + rotation * local_center;
+        let solids = door.solids(angle);
+        let points: Vec<_> = door.hulls[0].geometry.points.iter()
+            .map(|point| door.origin + rotation * *point).collect();
+        let uniform = convex_from_hull(&points, &door.hulls[0].geometry.triangles,
+            contents::SOLID, door.hulls[0].surface).unwrap();
+        assert_eq!(solids.len(), 1);
+        assert_eq!(solids[0].planes, uniform.planes, "face metadata must preserve every face/bevel");
+        assert_eq!((solids[0].mins, solids[0].maxs), (uniform.mins, uniform.maxs));
+        assert_eq!(solids[0].plane_surfaces.len(), solids[0].planes.len());
+        assert_eq!(solids[0].plane_surfaces.iter().filter(|&&id| id != u32::MAX).count(), 6);
+        let world = CollisionWorld::with_runtime_owners(base.clone(), solids, vec![Some(HitOwner::Door(0))]);
+        let bare = CollisionWorld::with_runtime_owners(base.clone(), vec![uniform], vec![Some(HitOwner::Door(0))]);
+        for (index, local_normal) in normals.iter().enumerate() {
+            let normal = rotation * *local_normal;
+            let start = center + normal * 64.;
+            for ext in [Vec3::ZERO, Vec3::splat(2.)] {
+                let (trace, owner) = world.trace_box_owned(start, center, -ext, ext, contents::MASK_SHOT, None);
+                let (expected, expected_owner) = bare.trace_box_owned(start, center, -ext, ext, contents::MASK_SHOT, None);
+                assert!(trace.hit() && !trace.start_solid);
+                assert_eq!(owner, Some(HitOwner::Door(0)));
+                assert_eq!(owner, expected_owner);
+                assert_eq!(world.surface_name(trace.surface), materials[index], "angle {angle}, face {index}");
+                assert!(door.has_surface(trace.surface), "marks must accept each actual face material");
+                assert_eq!(world.is_sky(trace.surface), index == 4);
+                assert!((trace.normal - normal).length() < 1e-5);
+                let support = normal.abs().dot(ext);
+                let contact = center + normal * (16. + support + crate::DIST_EPSILON);
+                assert!((trace.end - contact).length() < 2e-4);
+                assert!((trace.plane_dist - (normal.dot(center) + 16. + support)).abs() < 2e-4);
+                assert_eq!(trace.fraction.to_bits(), expected.fraction.to_bits());
+                assert_eq!(trace.end, expected.end);
+                assert_eq!(trace.normal, expected.normal);
+                assert_eq!(trace.plane_dist.to_bits(), expected.plane_dist.to_bits());
+                if ext == Vec3::ZERO {
+                    // A mark's hinge-local point/normal must still be on the
+                    // same material face after the leaf moves to another pose.
+                    let local = rotation.transpose() * (trace.end - door.origin);
+                    let moved_rotation = door.rotation(angle + 23.);
+                    let moved_point = door.origin + moved_rotation * local;
+                    let moved_normal = moved_rotation * *local_normal;
+                    let moved = CollisionWorld::with_runtime_owners(base.clone(), door.solids(angle + 23.),
+                        vec![Some(HitOwner::Door(0))]);
+                    let (hit, owner) = moved.trace_owned_ray(moved_point + moved_normal * 8.,
+                        moved_point - moved_normal * 8., contents::MASK_SHOT);
+                    assert_eq!(owner, Some(HitOwner::Door(0)));
+                    assert_eq!(hit.surface, trace.surface);
+                    assert!((hit.end - moved_point).length() < 2e-4);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn distant_rotating_brush_matches_materials_to_the_rebuilt_face_planes() {
+    let (mut base, local_center, normals) = mixed_brush_door();
+    let world = Arc::get_mut(&mut base).unwrap();
+    Arc::get_mut(&mut world.doors).unwrap()[0].origin = Vec3::new(32768., -49152., 8192.);
+    let door = &base.doors[0];
+    let materials = ["fixture/metal", "fixture/wood", "fixture/concrete",
+        "fixture/glass", "tools/toolsskybox", "fixture/dirt"];
+    for angle in [37., -63.] {
+        let rotation = door.rotation(angle);
+        let center = door.origin + rotation * local_center;
+        let world = CollisionWorld::with_runtime_owners(base.clone(), door.solids(angle),
+            vec![Some(crate::HitOwner::Door(0))]);
+        for (normal, material) in normals.iter().zip(materials) {
+            let (trace, owner) = world.trace_owned_ray(center + rotation * *normal * 64., center, contents::MASK_SHOT);
+            assert_eq!(owner, Some(crate::HitOwner::Door(0)));
+            assert_eq!(world.surface_name(trace.surface), material);
+            assert!(door.has_surface(trace.surface));
+        }
+    }
+}
+
+#[test]
+fn rotating_phy_door_retains_uniform_model_surface_and_bevels() {
+    let base = fixture();
+    let door = &base.doors[0];
+    assert!(door.has_surface(door.surface));
+    assert!(!door.has_surface(u32::MAX));
+    for angle in [0., 37., -90.] {
+        let rotation = door.rotation(angle);
+        let solids = door.solids(angle);
+        assert!(solids[0].plane_surfaces.is_empty());
+        let points: Vec<_> = door.hulls[0].geometry.points.iter()
+            .map(|point| door.origin + rotation * *point).collect();
+        let expected = convex_from_hull(&points, &door.hulls[0].geometry.triangles,
+            contents::SOLID, door.surface).unwrap();
+        assert_eq!(solids[0].planes, expected.planes);
+        assert_eq!((solids[0].mins, solids[0].maxs), (expected.mins, expected.maxs));
+        let normal = rotation * -Vec3::X;
+        let center = door.center_at(angle);
+        let world = CollisionWorld::with_runtime_owners(base.clone(), solids, vec![Some(crate::HitOwner::Door(0))]);
+        let (trace, owner) = world.trace_owned_ray(center + normal * 64., center, contents::MASK_SHOT);
+        assert_eq!(owner, Some(crate::HitOwner::Door(0)));
+        assert_eq!(trace.surface, door.surface);
+        assert_eq!(world.surface_name(trace.surface), "models/fixture_leaf.mdl");
+    }
 }

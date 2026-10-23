@@ -156,7 +156,7 @@ mod tests {
         use collision::{CollisionWorld, Convex, Plane};
         use std::sync::Arc;
 
-        let solid = |lo: glam::Vec3, hi: glam::Vec3| Convex {
+        let solid = |lo: glam::Vec3, hi: glam::Vec3| Convex { plane_surfaces: Vec::new(),
             planes: vec![
                 Plane { normal: glam::Vec3::X, dist: hi.x },
                 Plane { normal: -glam::Vec3::X, dist: -lo.x },

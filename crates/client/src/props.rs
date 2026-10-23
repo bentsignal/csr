@@ -767,7 +767,7 @@ mod lighting_tests {
 
     fn add_world_bounds(w: &mut CollisionWorld, mins: SourceVec3, maxs: SourceVec3, material: &str) {
         let surface = w.surface_id(material);
-        assert!(w.add_convex(collision::Convex {
+        assert!(w.add_convex(collision::Convex { plane_surfaces: Vec::new(),
             planes: vec![
                 collision::Plane { normal: SourceVec3::X, dist: maxs.x },
                 collision::Plane { normal: -SourceVec3::X, dist: -mins.x },

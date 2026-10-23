@@ -26,7 +26,7 @@ fn brush(world: &mut World, mins: Vec3, maxs: Vec3) {
     .into_iter()
     .map(|(normal, dist)| collision::Plane { normal, dist })
     .collect();
-    assert!(collision.add_convex(collision::Convex {
+    assert!(collision.add_convex(collision::Convex { plane_surfaces: Vec::new(),
         planes,
         mins,
         maxs,

@@ -2,7 +2,7 @@ use super::*;
 
 fn add_box(w: &mut CollisionWorld, low: Vec3, high: Vec3, contents: i32, name: &str) {
     let surface = w.surface_id(name);
-    assert!(w.add_convex(Convex {
+    assert!(w.add_convex(Convex { plane_surfaces: Vec::new(),
         planes: vec![
             Plane {
                 normal: Vec3::X,

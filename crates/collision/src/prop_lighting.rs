@@ -256,7 +256,7 @@ impl<'a> PropLightingQuery<'a> {
                 match self.shapes[index] {
                     Shape::Convex(i) => {
                         let c = &self.world.convexes[i as usize];
-                        clip_convex(&c.planes, s, e, Vec3::ZERO, c.contents, c.surface, &mut tr);
+                        clip_convex_surfaces(&c.planes, s, e, Vec3::ZERO, c.contents, c.surface, &c.plane_surfaces, &mut tr);
                     }
                     Shape::Triangle(i) => {
                         let t = &self.world.triangles[i as usize];
@@ -303,7 +303,7 @@ mod ownership_tests {
     fn owned_forks_keep_the_same_map_and_acceleration_with_independent_ray_scratch() {
         let mut world = CollisionWorld::new();
         let surface = world.surface_id("synthetic");
-        assert!(world.add_convex(Convex {
+        assert!(world.add_convex(Convex { plane_surfaces: Vec::new(),
             planes: vec![Plane { normal: Vec3::Z, dist: 4. }, Plane { normal: -Vec3::Z, dist: 4. }],
             mins: Vec3::splat(-4.), maxs: Vec3::splat(4.), contents: contents::SOLID, surface,
         }));

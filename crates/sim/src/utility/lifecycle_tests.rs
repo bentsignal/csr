@@ -5,7 +5,7 @@ use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
 
 fn floor() -> CollisionWorld {
     let mut collision = CollisionWorld::new();
-    assert!(collision.add_convex(Convex {
+    assert!(collision.add_convex(Convex { plane_surfaces: Vec::new(),
         mins: Vec3::new(-512., -512., -16.),
         maxs: Vec3::new(512., 512., 0.),
         planes: [Vec3::X, -Vec3::X, Vec3::Y, -Vec3::Y, Vec3::Z, -Vec3::Z]
@@ -302,7 +302,7 @@ fn fire_early_contact_keeps_existing_guard_before_later_floor_ignition() {
 #[test]
 fn fire_wall_contact_bounces_before_expiry_and_never_creates_ground_fire() {
     let mut wall = CollisionWorld::new();
-    assert!(wall.add_convex(Convex {
+    assert!(wall.add_convex(Convex { plane_surfaces: Vec::new(),
         mins: Vec3::new(-16., -512., -512.),
         maxs: Vec3::new(0., 512., 512.),
         planes: [Vec3::X, -Vec3::X, Vec3::Y, -Vec3::Y, Vec3::Z, -Vec3::Z]
