@@ -37,7 +37,7 @@ pub(crate) struct Panel {
 
 }
 #[derive(Component, Clone)]
-enum Action { Toggle, Page(Page), Weapon(u32, String), Bots(u32), PauseBots, Respawn, Map(String), Lane(usize), EndLane }
+enum Action { Toggle, Page(Page), Weapon(u32, String), Bots(u32), PauseBots, Respawn, Map(String), Lane(usize), InspectLane, EndLane }
 
 #[derive(Component)]
 struct Picker;
@@ -181,6 +181,15 @@ fn input(
             Action::Bots(count) => { panel.end_lane = panel.lane.is_some(); panel.selected_bots = Some(*count); panel.bots = Some(*count); panel.respawn = true; panel.open = false; }
             Action::PauseBots => { panel.bots_paused = !panel.bots_paused; panel.open = false; }
             Action::Lane(index) => { panel.pending_lane = Some(*index); panel.open = false; }
+            Action::InspectLane => {
+                if let Some(lane) = panel.lane.and_then(|i| panel.lanes.get(i)) {
+                    local.noclip = true;
+                    local.noclip_pos = lane.target + glam::Vec3::Z * 64.;
+                    let back = lane.shooter - lane.target;
+                    local.yaw = back.y.atan2(back.x).to_degrees(); local.pitch = 0.;
+                    panel.open = false;
+                }
+            }
             Action::EndLane => { panel.end_lane = true; panel.open = false; }
             Action::Respawn => { if panel.lane.is_some() { panel.pending_lane = panel.lane; } else { panel.respawn = true; } panel.open = false; }
             Action::Map(map) => {
@@ -327,7 +336,8 @@ fn draw(
         )).collect(),
         Page::Tests => panel.lanes.iter().enumerate().map(|(index, lane)|
             ("Wallbang targets on this map", lane.name.clone(), Action::Lane(index)))
-            .chain(std::iter::once(("Wallbang targets on this map", "End target test / restore match".into(), Action::EndLane))).collect(),
+            .chain([( "Wallbang targets on this map", "Inspect target side / existing marks".into(), Action::InspectLane),
+                ("Wallbang targets on this map", "End target test / restore match".into(), Action::EndLane)]).collect(),
         Page::Match => vec![("Match", "Solo / explore".into(), Action::Bots(0)), ("Match", "Ten-player match".into(), Action::Bots(9)),
             ("Match", (if panel.bots_paused { "Resume bots" } else { "Pause bots" }).into(), Action::PauseBots),
             ("Match", "Respawn and refill".into(), Action::Respawn)],
@@ -363,6 +373,11 @@ fn draw(
     button(&mut commands, root, "Resume match", Action::Toggle, art.regular.clone());
 }
 
+fn headshot_gain_at(relative_x: f32) -> f32 {
+    // Bevy 0.19 normalizes around the node centre, from -.5 to +.5.
+    ((relative_x + 0.5).clamp(0., 1.) * 200.).round() / 100.
+}
+
 fn headshot_slider(
     mut panel: ResMut<Panel>, mouse: Res<ButtonInput<MouseButton>>,
     track: Query<(&Interaction, &bevy::ui::RelativeCursorPosition), With<HeadshotSlider>>,
@@ -375,7 +390,7 @@ fn headshot_slider(
             if *interaction == Interaction::Pressed { panel.slider_drag = true; }
             if panel.slider_drag && mouse.pressed(MouseButton::Left) {
                 if let Some(at) = cursor.normalized {
-                    settings.audio_options.headshot_feedback_volume = (at.x.clamp(0., 1.) * 200.).round() / 100.;
+                    settings.audio_options.headshot_feedback_volume = headshot_gain_at(at.x);
                     for mut fill in &mut fills { fill.width = percent(settings.audio_options.headshot_feedback_volume * 50.); }
                     for mut label in &mut labels { label.0 = format!("Headshot feedback: {:.2}  (saved automatically)", settings.audio_options.headshot_feedback_volume); }
                 }
@@ -470,6 +485,15 @@ mod tests {
         assert_eq!(world.spawns, original);
         assert!(panel.lane.is_none());
         assert_eq!(world.players.iter().filter(|p| p.is_bot).count(), 1);
+    }
+
+    #[test]
+    fn headshot_track_maps_both_edges_and_center_to_the_saved_gain_range() {
+        assert_eq!(headshot_gain_at(-0.5), 0.);
+        assert_eq!(headshot_gain_at(0.), 1.);
+        assert_eq!(headshot_gain_at(0.5), 2.);
+        assert_eq!(headshot_gain_at(-4.), 0.);
+        assert_eq!(headshot_gain_at(4.), 2.);
     }
 
     fn bot_settings_level() -> level::Level {

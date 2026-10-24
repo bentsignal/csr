@@ -64,3 +64,30 @@ pub(super) fn lanes(level: &level::Level) -> Vec<Lane> {
     }
     out
 }
+
+#[cfg(test)]
+mod installed_tests {
+    use super::*;
+    #[test]
+    #[ignore = "requires installed Legacy and already-local classic map archives"]
+    fn installed_wallbang_picker_lanes_have_standing_endpoints_and_real_cover() {
+        for name in ["de_dust2", "de_dust2_2017", "de_inferno_2016", "de_nuke_2016",
+            "de_train_2015", "de_vertigo_2017", "de_mirage_2019", "de_cbble_2018",
+            "de_cache_2015", "de_overpass_2015"] {
+            let (game_dir, fs) = level::mount_game(None).unwrap();
+            let level = level::Level::load_local_id_from_vfs(
+                &content::ContentId::csgo(content::ContentKind::Map, name), game_dir, fs,
+                &workshop::Store::current()).unwrap();
+            let cases = lanes(&level);
+            eprintln!("WALLBANG {name}: {} lanes: {:?}", cases.len(), cases.iter().map(|c| &c.name).collect::<Vec<_>>());
+            assert!(!cases.is_empty(), "{name}: no usable player target lanes");
+            if name.starts_with("de_dust2") {
+                assert_eq!(cases.iter().filter(|c| c.name.starts_with("Mid doors")).count(), 4);
+            }
+            let world = sim::World::with_catalog(level.collision.clone(), level.catalog.clone());
+            for lane in cases {
+                assert!(cover_lane(&world, lane.name.clone(), lane.shooter, lane.target).is_some(), "{name}: {}", lane.name);
+            }
+        }
+    }
+}
