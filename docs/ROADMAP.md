@@ -1,5 +1,24 @@
 # Roadmap
 
+## October 24 core-mechanics test follow-up
+
+- [x] Add F8 stationary wallbang target lanes with per-shot and cumulative
+  damage, contact-event counts, target HP, reset and target-side inspection.
+  Dust II mid doors have explicit leaf/direction cases; generated samples are
+  constrained to authored navigable areas and retain every cover-material guard.
+- [x] Blur the entire sniper reticle without a retained sharp core or extra
+  world/mask-edge defocus; extend AUG/SG foreground blur across silhouettes.
+- [x] Add a saved, numeric headshot-feedback gain slider to F8 Tests / audio.
+- [x] Add authoritative live-player hull contact and flat moving-base support;
+  replicate teammate solidity and protect the changed snapshot layout.
+- [x] Provide same-session contact, crouched-boost, ready-on-head run-boost and
+  installed Legacy surf-map tests, with F7 reset and explicit surf preset.
+- [ ] Complete native run-boost, crouch-to-stand lifting, uneven-base and
+  whole-course surfing parity after these initial mechanics tests.
+
+This does not reopen accepted weapon motion, impacts, Dualies, R8 or SG firing
+motion. Buy-wheel/menu polish and multiplayer remain later work.
+
 > **October 20 overnight:** [OWNER-PRIORITIES.md](OWNER-PRIORITIES.md) gives
 > the current ordered queue and proportional batch checks. Grenade throws and
 > knives are accepted for now; preserve them while improving the rest of play.

@@ -70,13 +70,21 @@ fn enter(mut panel: ResMut<Panel>, opts: Res<crate::Options>, remote: Option<Res
         lanes.extend(wallbang::partner_lanes(&level.0)); lanes
     }).unwrap_or_default() } else { Vec::new() };
     panel.surf_available = level.as_ref().is_some_and(|l| l.0.vfs.exists("maps/surf_ski_3_nova_kg_v6.bsp"));
-    panel.surf_active = opts.0.map.starts_with("surf_");
+    panel.surf_active = panel.offline_playtest && opts.0.map.starts_with("surf_");
     panel.pending_surf = panel.surf_active.then_some(true);
     panel.old_movement = None;
     if opts.0.screenshot.is_some() && panel.offline_playtest {
         if std::env::var("CSR_TEST_PLAYTEST_PAGE").ok().as_deref() == Some("tests") { panel.page = Page::Tests; }
         if let Some(index) = std::env::var("CSR_TEST_WALLBANG_LANE").ok().and_then(|s| s.parse::<usize>().ok()).filter(|&i| i < panel.lanes.len()) {
             panel.pending_lane = Some(index); panel.open = false;
+        }
+        if let Ok(case)=std::env::var("CSR_TEST_MOVEMENT_CASE") {
+            let kind=match case.as_str() {"contact"=>Some(wallbang::Kind::Contact),"boost"=>Some(wallbang::Kind::Boost),
+                "runboost"=>Some(wallbang::Kind::RunBoost),_=>None};
+            if let Some(index)=kind.and_then(|kind|panel.lanes.iter().position(|l|l.kind==kind)) {
+                panel.pending_lane=Some(index); panel.open=false;
+            }
+            if case=="surf" && panel.surf_active {panel.open=false;}
         }
     }
 }
