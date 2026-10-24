@@ -27,6 +27,8 @@ pub struct RulesConfig {
     /// Explicit sandbox option: humans spawn with renewable utility in deathmatch.
     /// Never enabled by competitive defaults or by a client's loadout request.
     pub grenade_practice: bool,
+    /// mp_solid_teammates: 0 pass through, 1 solid, 2 supporting tops only.
+    pub solid_teammates: u8,
     pub freeze_time: f32,
     /// Seconds after the freeze time ends during which buying is allowed.
     pub buy_time: f32,
@@ -63,6 +65,7 @@ impl Default for RulesConfig {
     fn default() -> Self {
         Self {
             grenade_practice: false,
+            solid_teammates: 1,
             freeze_time: 15.0,
             buy_time: 20.0,
             round_time: 1.92 * 60.0,
@@ -115,6 +118,7 @@ impl RulesConfig {
         let f = |k: &str| cvars.get(k).and_then(|v| v.parse::<f32>().ok());
         let i = |k: &str| f(k).map(|v| v as i32);
         let s = |k: &str| cvars.get(k).filter(|v| !v.is_empty()).cloned();
+        if let Some(v) = i("mp_solid_teammates").filter(|v| (0..=2).contains(v)) { c.solid_teammates = v as u8; }
         if let Some(v) = f("mp_freezetime") { c.freeze_time = v; }
         if let Some(v) = f("mp_buytime") { c.buy_time = v; }
         if let Some(v) = f("mp_roundtime_defuse").filter(|v| *v > 0.0).or_else(|| f("mp_roundtime")) { c.round_time = v * 60.0; }
