@@ -36,7 +36,10 @@ Jobs queue while the PC is off and start when it is back.
 - Toolchain on WINSERVE (all per-user except Build Tools): rustup stable,
   Visual Studio 2022 Build Tools (C++ workload, Windows 11 SDK), .NET 8 SDK in
   `%USERPROFILE%\.dotnet`, Temurin JDK 21 in `%LocalAppData%\Programs\jdk-21`,
-  Git and `gh` in `%LocalAppData%\Programs`.
+  Git and `gh` in `%LocalAppData%\Programs`. Workflow steps run through
+  Windows PowerShell, so the user's execution policy must allow scripts
+  (`Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`); Windows' default
+  fails every step.
 - Build cache: `C:\tools\csr-actions-runner\cargo-target` (`CARGO_TARGET_DIR`
   in the workflows). Delete it to force a clean build.
 - Re-register (for example after moving it):
