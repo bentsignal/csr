@@ -67,7 +67,12 @@ fn enter(mut panel: ResMut<Panel>, opts: Res<crate::Options>, remote: Option<Res
     panel.enter_match(opts.0.playtest, remote.is_some());
     panel.lanes = if panel.offline_playtest { level.as_ref().map(|level| {
         let mut lanes=if level.0.name.starts_with("surf_") {Vec::new()} else {wallbang::lanes(&level.0)};
-        lanes.extend(wallbang::partner_lanes(&level.0)); lanes
+        let partners=wallbang::partner_lanes(&level.0);
+        if let Some(partner)=partners.first() {
+            let mut open=partner.clone(); open.kind=wallbang::Kind::Wallbang;
+            open.name="Open target / headshot-volume control".into(); lanes.push(open);
+        }
+        lanes.extend(partners); lanes
     }).unwrap_or_default() } else { Vec::new() };
     panel.surf_available = level.as_ref().is_some_and(|l| l.0.vfs.exists("maps/surf_ski_3_nova_kg_v6.bsp"));
     panel.surf_active = panel.offline_playtest && opts.0.map.starts_with("surf_");
@@ -177,10 +182,15 @@ pub(crate) fn configure(panel: &mut Panel, world: &mut sim::World, id: sim::Play
             }
             panel.look = Some(glam::Vec2::new(if lane.kind==wallbang::Kind::Wallbang {pitch} else {0.}, yaw));
             panel.slot=(lane.kind!=wallbang::Kind::Wallbang).then_some(3);
+            let same_lane=panel.lane==Some(index);
             panel.lane = Some(index);
             panel.result = "Aim is on the target's chest. Fire to measure damage. F7 resets.".into();
             panel.shot_contacts = 0; panel.shot_damage = 0; panel.total_damage=0; panel.peak_speed=0.;
-            panel.pending_weapon = (lane.kind==wallbang::Kind::Wallbang).then(|| panel.selected_weapon.clone().unwrap_or_else(|| "weapon_ak47".into()));
+            panel.pending_weapon = (lane.kind==wallbang::Kind::Wallbang).then(|| {
+                if same_lane {panel.selected_weapon.clone().unwrap_or_else(||lane.recommended_weapon.into())}
+                else {lane.recommended_weapon.into()}
+            });
+            if let Some(weapon)=&panel.pending_weapon {panel.selected_weapon=Some(weapon.clone());}
             panel.dirty = true;
         }
     }
@@ -392,7 +402,7 @@ fn draw(
             "Maps", workshop::find(name).map(|m| m.title.to_owned()).unwrap_or_else(|| name.clone()), Action::Map(name.clone())
         )).collect(),
         Page::Tests => panel.lanes.iter().enumerate().map(|(index, lane)|
-            (if lane.kind==wallbang::Kind::Wallbang {"Wallbang targets on this map"} else {"Player contact / boosting"}, lane.name.clone(), Action::Lane(index)))
+            (if lane.name.starts_with("Open target") {"Headshot feedback"} else if lane.kind==wallbang::Kind::Wallbang {"Wallbang targets on this map"} else {"Player contact / boosting"}, lane.name.clone(), Action::Lane(index)))
             .chain([( "Wallbang targets on this map", "Inspect target side / existing marks".into(), Action::InspectLane),
                 ("Wallbang targets on this map", "End target test / restore match".into(), Action::EndLane)]).collect(),
         Page::Match => vec![("Match", "Solo / explore".into(), Action::Bots(0)), ("Match", "Ten-player match".into(), Action::Bots(9)),
@@ -537,7 +547,7 @@ mod tests {
         let (mut world, local, _) = pause_world();
         let original = world.spawns.clone();
         let mut panel = Panel { offline_playtest: true, pending_lane: Some(0),
-            lanes: vec![wallbang::Lane { kind: wallbang::Kind::Wallbang, name: "fixture".into(), shooter: glam::Vec3::new(64., 0., 1.),
+            lanes: vec![wallbang::Lane { recommended_weapon:"weapon_ak47", kind: wallbang::Kind::Wallbang, name: "fixture".into(), shooter: glam::Vec3::new(64., 0., 1.),
                 target: glam::Vec3::new(320., 0., 1.) }], ..default() };
         configure(&mut panel, &mut world, local);
         let target = panel.target.unwrap();
@@ -580,7 +590,7 @@ mod tests {
         let (mut world,local,_)=pause_world();
         let original_rule=world.rules.solid_teammates;
         let mut panel=Panel {offline_playtest:true,pending_lane:Some(0),lanes:vec![wallbang::Lane {
-            kind:wallbang::Kind::RunBoost,name:"run boost".into(),shooter:glam::Vec3::new(64.,0.,1.),
+            recommended_weapon:"weapon_ak47",kind:wallbang::Kind::RunBoost,name:"run boost".into(),shooter:glam::Vec3::new(64.,0.,1.),
             target:glam::Vec3::new(320.,0.,1.)}],..default()};
         configure(&mut panel,&mut world,local);
         let partner=panel.target.unwrap();

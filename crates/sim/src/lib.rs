@@ -38,6 +38,7 @@ pub mod recoil_motion;
 pub mod utility;
 pub mod tactics;
 mod penetration;
+pub use penetration::preview_exit as preview_bullet_exit;
 mod player_contact;
 
 use collision::{contents, CollisionWorld};

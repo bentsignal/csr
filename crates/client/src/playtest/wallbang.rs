@@ -9,6 +9,7 @@ pub(super) enum Kind { Wallbang, Contact, Boost, RunBoost }
 pub(super) struct Lane {
     pub name: String,
     pub kind: Kind,
+    pub recommended_weapon: &'static str,
     pub shooter: Vec3,
     pub target: Vec3,
 }
@@ -27,10 +28,14 @@ fn cover_lane(world: &sim::World, name: String, a: Vec3, b: Vec3) -> Option<Lane
     let to = target + Vec3::Z * 56.;
     let hit = world.collision.trace_ray(from, to, contents::MASK_SHOT);
     if !hit.hit() || hit.start_solid || hit.all_solid { return None; }
-    let exit = world.collision.bullet_exit(from, to, &hit, 64.)?;
+    let (recommended_weapon, exit) = ["weapon_ak47", "weapon_awp"].into_iter().find_map(|name| {
+        let def = world.catalog.get(name)?;
+        let (exit, retention) = sim::preview_bullet_exit(&world.collision,from,to,def.penetration)?;
+        (def.damage * retention >= 1.).then_some((name,exit))
+    })?;
     if exit.crossed_surfaces.iter().any(|&s| world.collision.bullet_surface(s).is_none()) { return None; }
     if world.collision.trace_ray(exit.next_start, to, contents::MASK_SHOT).hit() { return None; }
-    Some(Lane { name, shooter, target, kind: Kind::Wallbang })
+    Some(Lane { name, shooter, target, kind: Kind::Wallbang, recommended_weapon })
 }
 
 pub(super) fn lanes(level: &level::Level) -> Vec<Lane> {
@@ -69,7 +74,7 @@ pub(super) fn lanes(level: &level::Level) -> Vec<Lane> {
             let place = nav_area(lane.target).and_then(|area| level.nav.as_ref()?.places.get(area.place.checked_sub(1)? as usize))
                 .map(String::as_str).unwrap_or("Cover");
             if place_counts.get(place).copied().unwrap_or(0)>=2 {continue;}
-            lane.name=format!("{place} / cover {} ({:.0}, {:.0})",out.len()+1,center.x,center.y);
+            lane.name=format!("{place} / cover {} [{}]",out.len()+1,if lane.recommended_weapon=="weapon_awp" {"AWP"} else {"AK"});
             *place_counts.entry(place.into()).or_default()+=1;
             out.push(lane);
         }
@@ -124,7 +129,7 @@ pub(super) fn partner_lanes(level: &level::Level) -> Vec<Lane> {
             return [(Kind::Contact,"Player contact / walk into partner"),
                 (Kind::Boost,"Boost / jump onto crouched partner"),
                 (Kind::RunBoost,"Run-boost / start on standing partner")].into_iter()
-                .map(|(kind,name)| Lane {kind,name:name.into(),shooter:a,target:b}).collect();
+                .map(|(kind,name)| Lane {kind,name:name.into(),shooter:a,target:b,recommended_weapon:"weapon_ak47"}).collect();
         }
     }
     Vec::new()
