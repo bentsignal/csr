@@ -598,6 +598,7 @@ pub fn tick(
     if remote.is_some() || front.open() || playtest.as_ref().is_some_and(|p| p.open) {return;}
     if let Some(panel) = playtest.as_deref_mut() {
         crate::playtest::configure(panel, &mut world.0, local.id);
+        if let Some(slot)=panel.slot.take() {local.pending_slot=slot;}
         if let Some(look) = crate::playtest::take_look(panel) {
             local.pitch = look.x; local.yaw = look.y; local.noclip = false;
             if let Some(me) = world.0.player(local.id) { local.prev_eye = me.eye(); local.curr_eye = me.eye(); local.was_alive = me.alive; }

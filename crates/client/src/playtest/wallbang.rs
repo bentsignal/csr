@@ -2,9 +2,13 @@
 use glam::Vec3;
 use collision::contents;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Kind { Wallbang, Contact, Boost, RunBoost }
+
 #[derive(Clone, Debug)]
 pub(super) struct Lane {
     pub name: String,
+    pub kind: Kind,
     pub shooter: Vec3,
     pub target: Vec3,
 }
@@ -26,7 +30,7 @@ fn cover_lane(world: &sim::World, name: String, a: Vec3, b: Vec3) -> Option<Lane
     let exit = world.collision.bullet_exit(from, to, &hit, 64.)?;
     if exit.crossed_surfaces.iter().any(|&s| world.collision.bullet_surface(s).is_none()) { return None; }
     if world.collision.trace_ray(exit.next_start, to, contents::MASK_SHOT).hit() { return None; }
-    Some(Lane { name, shooter, target })
+    Some(Lane { name, shooter, target, kind: Kind::Wallbang })
 }
 
 pub(super) fn lanes(level: &level::Level) -> Vec<Lane> {
@@ -90,4 +94,30 @@ mod installed_tests {
             }
         }
     }
+}
+
+/// Pick an unobstructed, standable section of this map for partner tests.
+pub(super) fn partner_lanes(level: &level::Level) -> Vec<Lane> {
+    let world = sim::World::with_catalog(level.collision.clone(), level.catalog.clone());
+    let mut starts: Vec<_> = level.bsp.entities_of_class("info_player_counterterrorist")
+        .filter_map(|e| e.str("origin").and_then(bsp::parse_origin)).collect();
+    if let Some(nav)=&level.nav {
+        let mut areas: Vec<_> = nav.areas.iter().collect();
+        areas.sort_by(|a,b| b.size().total_cmp(&a.size()));
+        starts.extend(areas.into_iter().take(256).map(|a| a.center()+Vec3::Z*8.));
+    }
+    for center in starts {
+        for dir in [Vec3::X,Vec3::Y,-Vec3::X,-Vec3::Y] {
+            let Some(a)=standing(&world,center) else {continue};
+            let Some(b)=standing(&world,center+dir*96.) else {continue};
+            let Some(end)=standing(&world,center+dir*384.) else {continue};
+            if (a.z-b.z).abs()>2. || (a.z-end.z).abs()>8. {continue;}
+            if world.collision.trace_box(a,end,movement::STAND_MINS,movement::STAND_MAXS,contents::MASK_PLAYERSOLID).hit() {continue;}
+            return [(Kind::Contact,"Player contact / walk into partner"),
+                (Kind::Boost,"Boost / jump onto crouched partner"),
+                (Kind::RunBoost,"Run-boost / start on standing partner")].into_iter()
+                .map(|(kind,name)| Lane {kind,name:name.into(),shooter:a,target:b}).collect();
+        }
+    }
+    Vec::new()
 }

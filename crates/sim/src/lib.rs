@@ -792,7 +792,10 @@ impl World {
     fn place(&mut self, id: PlayerId) {
         let Some(team) = self.player(id).map(|p| p.team) else { return };
         let spawn = self.pick_spawn(id, team);
-        let origin = self.drop_to_floor(spawn.origin, false);
+        let contacts = player_contact::PlayerWorld::new(self.collision.as_ref(), &self.players, id, self.rules.solid_teammates);
+        let hit=movement::TraceWorld::trace_hull(&contacts,spawn.origin+Vec3::Z*2.,spawn.origin-Vec3::Z*256.,
+            movement::STAND_MINS,movement::STAND_MAXS,contents::MASK_PLAYERSOLID);
+        let origin=if hit.start_solid || hit.fraction==1. {spawn.origin} else {hit.end};
         if let Some(p) = self.player_mut(id) {
             p.movement = PlayerMove::spawn_at(origin);
             p.view_angles = Vec3::new(0.0, spawn.yaw, 0.0);
