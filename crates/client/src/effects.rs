@@ -32,7 +32,7 @@ pub(crate) const ATTACKER_HEAD_GAIN: f32 = 0.42;
 
 pub(crate) fn play_combat_cue(
     event: &GameEvent, local: &LocalPlayer, commands: &mut Commands,
-    sounds: &mut SoundLibrary, sources: &mut Assets<AudioSource>, fs: &vfs::Vfs,
+    sounds: &mut SoundLibrary, sources: &mut Assets<AudioSource>, fs: &vfs::Vfs, headshot_gain: f32,
 ) {
     let shooter = |attacker, victim| !local.noclip && attacker == local.view_target() && attacker != victim;
     let (sound, victim, pos, feedback) = match event {
@@ -55,7 +55,7 @@ pub(crate) fn play_combat_cue(
     let own = feedback || (victim == local.view_target() && !local.noclip);
     sounds.play_with_gain(commands, fs, sources, sound,
         Emit { at: (!own).then_some(pos), owner: Some(victim), local: own },
-        if feedback { ATTACKER_HEAD_GAIN } else { 1.0 });
+        if feedback { headshot_gain } else { 1.0 });
 }
 
 /// Events produced by fixed ticks since the last frame.
@@ -187,7 +187,7 @@ pub fn process(
     // remote Fire evidence stays unknown instead of reusing a prior mode.
     let mut shot_modes = std::collections::HashMap::<sim::PlayerId, (String, bool)>::new();
     for event in pending.0.drain(..) {
-        play_combat_cue(&event, &local, &mut commands, &mut sounds, &mut sources, fs);
+        play_combat_cue(&event, &local, &mut commands, &mut sounds, &mut sources, fs, settings.audio_options.headshot_feedback_volume);
         if matches!(event, GameEvent::Damage {..} | GameEvent::Impact {..} | GameEvent::RoundStart {..}) { effects.feedback.push(event.clone()); }
         match event {
             GameEvent::Fire { player, weapon, origin, suppressed, secondary } => {

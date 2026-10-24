@@ -3,7 +3,8 @@ use bevy::{prelude::*, window::{CursorGrabMode, CursorOptions, PrimaryWindow}};
 use crate::{session::{AppState, Persistent}, player::LocalPlayer};
 
 #[derive(Default, Clone, Copy, PartialEq, Eq)]
-enum Page { #[default] Weapons, Knives, Match, Maps }
+enum Page { #[default] Weapons, Knives, Match, Maps, Tests }
+mod wallbang;
 #[derive(Resource, Default)]
 pub(crate) struct Panel {
     pub(crate) open: bool,
@@ -21,26 +22,49 @@ pub(crate) struct Panel {
     scroll: f32,
     root: Option<Entity>,
     dirty: bool,
+    lanes: Vec<wallbang::Lane>,
+    lane: Option<usize>,
+    pending_lane: Option<usize>,
+    end_lane: bool,
+    saved_spawns: Option<Vec<sim::SpawnPoint>>,
+    saved_bots: u32,
+    target: Option<sim::PlayerId>,
+    look: Option<glam::Vec2>,
+    result: String,
+    shot_contacts: u32,
+    shot_damage: i32,
+    slider_drag: bool,
+
 }
 #[derive(Component, Clone)]
-enum Action { Toggle, Page(Page), Weapon(u32, String), Bots(u32), PauseBots, Respawn, Map(String) }
+enum Action { Toggle, Page(Page), Weapon(u32, String), Bots(u32), PauseBots, Respawn, Map(String), Lane(usize), EndLane }
 
 #[derive(Component)]
 struct Picker;
+#[derive(Component)]
+struct HeadshotSlider;
+#[derive(Component)]
+struct HeadshotFill;
+#[derive(Component)]
+struct HeadshotLabel;
 
 pub(crate) fn install(app: &mut App) {
     app.init_resource::<Panel>()
         .add_systems(OnEnter(AppState::Match), enter)
         .add_systems(PreUpdate, input.after(bevy::input::InputSystems).after(bevy::ui::UiSystems::Focus)
             .run_if(in_state(AppState::Match)))
-        .add_systems(Update, (draw.after(crate::frontend::update), scroll_picker.after(draw)));
+        .add_systems(Update, (draw.after(crate::frontend::update), scroll_picker.after(draw), headshot_slider.after(draw)));
 }
-fn enter(mut panel: ResMut<Panel>, opts: Res<crate::Options>, remote: Option<Res<crate::remote::RemoteClient>>) {
+fn enter(mut panel: ResMut<Panel>, opts: Res<crate::Options>, remote: Option<Res<crate::remote::RemoteClient>>, level: Option<Res<crate::LoadedLevel>>) {
     panel.enter_match(opts.0.playtest, remote.is_some());
+    panel.lanes = if panel.offline_playtest { level.map(|level| wallbang::lanes(&level.0)).unwrap_or_default() } else { Vec::new() };
 }
 impl Panel {
     fn enter_match(&mut self, playtest: bool, remote: bool) {
         self.offline_playtest = playtest && !remote;
+        self.lane = None; self.pending_lane = None; self.target = None;
+        self.saved_spawns = None; self.end_lane = false; self.look = None;
+        self.result.clear();
         // Only an explicit F8 map action continues the choice. OnEnter need
         // not see SimWorld yet: resolve against the new catalog at fixed tick.
         self.pending_weapon = self.reload_weapon.take().filter(|_| self.offline_playtest);
@@ -64,7 +88,7 @@ pub(crate) fn append_bot_inputs(
     panel: &Panel, world: &sim::World, local: sim::PlayerId,
     inputs: &mut Vec<(sim::PlayerId, sim::TickInput)>,
 ) {
-    if !panel.offline_playtest || !panel.bots_paused { return; }
+    if !panel.offline_playtest || (!panel.bots_paused && panel.lane.is_none()) { return; }
     for bot in world.players.iter().filter(|p| p.is_bot && p.id != local) {
         inputs.push((bot.id, sim::TickInput {
             view_angles: bot.view_angles,
@@ -76,6 +100,40 @@ pub(crate) fn append_bot_inputs(
 }
 /// Called only by the offline fixed-tick owner, never by a UI/render system.
 pub(crate) fn configure(panel: &mut Panel, world: &mut sim::World, id: sim::PlayerId) {
+    if panel.end_lane {
+        panel.end_lane = false;
+        if let Some(spawns) = panel.saved_spawns.take() { world.spawns = spawns; }
+        panel.lane = None; panel.target = None; panel.result.clear();
+        if panel.bots.is_none() { panel.bots = Some(panel.saved_bots); }
+        panel.respawn = true;
+    }
+    if let Some(index) = panel.pending_lane.take() {
+        if let Some(lane) = panel.lanes.get(index).cloned() {
+            if panel.saved_spawns.is_none() {
+                panel.saved_spawns = Some(world.spawns.clone());
+                panel.saved_bots = world.players.iter().filter(|p| p.is_bot).count() as u32;
+            }
+            let old: Vec<_> = world.players.iter().filter(|p| p.is_bot).map(|p| p.id).collect();
+            for bot in old { world.remove_player(bot); }
+            panel.bots = None;
+            let team = world.player(id).map(|p| p.team).unwrap_or(sim::Team::CounterTerrorist);
+            let other = if team == sim::Team::Terrorist { sim::Team::CounterTerrorist } else { sim::Team::Terrorist };
+            let aim = lane.target + glam::Vec3::Z * 56. - (lane.shooter + glam::Vec3::Z * 64.);
+            let yaw = aim.y.atan2(aim.x).to_degrees();
+            let pitch = (-aim.z).atan2(aim.truncate().length()).to_degrees();
+            world.spawns = vec![sim::SpawnPoint { origin: lane.shooter, yaw, team },
+                sim::SpawnPoint { origin: lane.target, yaw: yaw + 180., team: other }];
+            world.respawn(id);
+            panel.target = Some(world.add_bot("Wallbang target", other));
+            panel.look = Some(glam::Vec2::new(pitch, yaw));
+            panel.lane = Some(index);
+            panel.result = "Aim is on the target's chest. Fire to measure damage. F7 resets.".into();
+            panel.shot_contacts = 0; panel.shot_damage = 0;
+            panel.pending_weapon = Some(panel.selected_weapon.clone().unwrap_or_else(|| "weapon_ak47".into()));
+            panel.dirty = true;
+        }
+    }
+
     if let Some(name) = panel.pending_weapon.take() {
         panel.weapon = world.catalog.get(&name).map(|def| def.def_index);
     }
@@ -101,6 +159,9 @@ fn input(
 ) {
     if !opts.0.playtest || remote.is_some() { return; }
     let was_open = panel.open;
+    if keys.just_pressed(KeyCode::F7) && panel.lane.is_some() {
+        panel.pending_lane = panel.lane; panel.open = false; panel.dirty = true;
+    }
     if keys.just_pressed(KeyCode::F8) || (panel.open && keys.just_pressed(KeyCode::Escape)) {
         panel.open = !panel.open;
         keys.clear_just_pressed(KeyCode::Escape);
@@ -117,9 +178,11 @@ fn input(
                 panel.pending_weapon = None;
                 panel.open = false;
             }
-            Action::Bots(count) => { panel.selected_bots = Some(*count); panel.bots = Some(*count); panel.respawn = true; panel.open = false; }
+            Action::Bots(count) => { panel.end_lane = panel.lane.is_some(); panel.selected_bots = Some(*count); panel.bots = Some(*count); panel.respawn = true; panel.open = false; }
             Action::PauseBots => { panel.bots_paused = !panel.bots_paused; panel.open = false; }
-            Action::Respawn => { panel.respawn = true; panel.open = false; }
+            Action::Lane(index) => { panel.pending_lane = Some(*index); panel.open = false; }
+            Action::EndLane => { panel.end_lane = true; panel.open = false; }
+            Action::Respawn => { if panel.lane.is_some() { panel.pending_lane = panel.lane; } else { panel.respawn = true; } panel.open = false; }
             Action::Map(map) => {
                 panel.reload_bots = panel.selected_bots;
                 panel.reload_weapon = panel.selected_weapon.clone();
@@ -205,6 +268,7 @@ fn draw(
     art: Res<crate::ui_assets::UiAssets>, loc: Res<crate::localize::Localization>, menu: Res<crate::menu::Menu>,
     world: Option<Res<crate::player::SimWorld>>,
     remote: Option<Res<crate::remote::RemoteClient>>,
+    settings: Res<crate::settings::Settings>,
 ) {
     let active = remote.is_none() && opts.0.playtest && *state.get() == AppState::Match;
     if !active {
@@ -216,7 +280,7 @@ fn draw(
     if let Some(root) = panel.root.take() { commands.entity(root).despawn(); }
     let root = commands.spawn((Persistent, GlobalZIndex(25000), Node {
         position_type: PositionType::Absolute,
-        left: if panel.open { percent(8) } else { percent(43) },
+        left: if panel.open { percent(8) } else { percent(18) },
         top: if panel.open { percent(4) } else { auto() },
         bottom: if panel.open { auto() } else { px(12) },
         width: if panel.open { percent(84) } else { auto() },
@@ -226,9 +290,9 @@ fn draw(
     }, BackgroundColor(Color::srgba(0.035, 0.055, 0.07, if panel.open { 0.97 } else { 0.75 })))).id();
     panel.root = Some(root);
     if !panel.open {
-        let hint = commands.spawn((Persistent, Text::new(if panel.bots_paused {
-            "F8  Playtest controls  |  Bots paused"
-        } else { "F8  Playtest controls" }), TextFont {
+        let hint = commands.spawn((Persistent, Text::new(if let Some(index) = panel.lane {
+            format!("{} | {} | F7 reset / F8 controls", panel.lanes[index].name, panel.result)
+        } else if panel.bots_paused { "F8  Playtest controls  |  Bots paused".into() } else { "F8  Playtest controls".into() }), TextFont {
             font: art.regular.clone().into(), font_size: FontSize::Px(14.), ..default()
         }, TextColor(Color::WHITE))).id();
         commands.entity(root).add_children(&[hint]);
@@ -240,7 +304,7 @@ fn draw(
     commands.entity(root).add_children(&[title]);
     let tabs = commands.spawn((Persistent, Node { column_gap: px(10), flex_wrap: FlexWrap::Wrap, ..default() })).id();
     commands.entity(root).add_children(&[tabs]);
-    for (text, page) in [("Weapons", Page::Weapons), ("Classic knives", Page::Knives), ("Match", Page::Match), ("Maps", Page::Maps)] {
+    for (text, page) in [("Weapons", Page::Weapons), ("Classic knives", Page::Knives), ("Match", Page::Match), ("Maps", Page::Maps), ("Tests / audio", Page::Tests)] {
         button(&mut commands, tabs, text, Action::Page(page), art.regular.clone());
     }
     let body = commands.spawn((Persistent, Picker, ScrollPosition(Vec2::new(0., panel.scroll)), Node {
@@ -261,10 +325,22 @@ fn draw(
         Page::Maps => menu.maps.iter().map(|name| (
             "Maps", workshop::find(name).map(|m| m.title.to_owned()).unwrap_or_else(|| name.clone()), Action::Map(name.clone())
         )).collect(),
+        Page::Tests => panel.lanes.iter().enumerate().map(|(index, lane)|
+            ("Wallbang targets on this map", lane.name.clone(), Action::Lane(index)))
+            .chain(std::iter::once(("Wallbang targets on this map", "End target test / restore match".into(), Action::EndLane))).collect(),
         Page::Match => vec![("Match", "Solo / explore".into(), Action::Bots(0)), ("Match", "Ten-player match".into(), Action::Bots(9)),
             ("Match", (if panel.bots_paused { "Resume bots" } else { "Pause bots" }).into(), Action::PauseBots),
             ("Match", "Respawn and refill".into(), Action::Respawn)],
     };
+    if panel.page == Page::Tests {
+        let label = commands.spawn((Persistent, HeadshotLabel, Text::new(format!("Headshot feedback: {:.2}  (saved automatically)", settings.audio_options.headshot_feedback_volume)),
+            TextFont { font: art.regular.clone().into(), font_size: FontSize::Px(19.), ..default() }, TextColor(Color::WHITE))).id();
+        let track = commands.spawn((Persistent, Button, HeadshotSlider, bevy::ui::RelativeCursorPosition::default(),
+            Node { width: percent(90), min_height: px(36), flex_shrink: 0., ..default() }, BackgroundColor(Color::srgb(0.13, 0.18, 0.22))))
+            .with_children(|p| { p.spawn((Persistent, HeadshotFill, Node { width: percent(settings.audio_options.headshot_feedback_volume * 50.), height: percent(100), ..default() },
+                BackgroundColor(Color::srgb(0.3, 0.65, 0.85)), bevy::ui::FocusPolicy::Pass)); }).id();
+        commands.entity(body).add_children(&[label, track]);
+    }
     let mut section = "";
     let mut row = body;
     for (group, name, action) in &entries {
@@ -285,6 +361,55 @@ fn draw(
         TextColor(Color::srgb(0.65, 0.75, 0.82)))).id();
     commands.entity(root).add_children(&[hint]);
     button(&mut commands, root, "Resume match", Action::Toggle, art.regular.clone());
+}
+
+fn headshot_slider(
+    mut panel: ResMut<Panel>, mouse: Res<ButtonInput<MouseButton>>,
+    track: Query<(&Interaction, &bevy::ui::RelativeCursorPosition), With<HeadshotSlider>>,
+    mut fills: Query<&mut Node, With<HeadshotFill>>,
+    mut labels: Query<&mut Text, With<HeadshotLabel>>,
+    mut settings: ResMut<crate::settings::Settings>,
+) {
+    if panel.open && panel.page == Page::Tests {
+        for (interaction, cursor) in &track {
+            if *interaction == Interaction::Pressed { panel.slider_drag = true; }
+            if panel.slider_drag && mouse.pressed(MouseButton::Left) {
+                if let Some(at) = cursor.normalized {
+                    settings.audio_options.headshot_feedback_volume = (at.x.clamp(0., 1.) * 200.).round() / 100.;
+                    for mut fill in &mut fills { fill.width = percent(settings.audio_options.headshot_feedback_volume * 50.); }
+                    for mut label in &mut labels { label.0 = format!("Headshot feedback: {:.2}  (saved automatically)", settings.audio_options.headshot_feedback_volume); }
+                }
+            }
+        }
+    }
+    if panel.slider_drag && !mouse.pressed(MouseButton::Left) {
+        panel.slider_drag = false;
+        if let Err(error) = settings.save() { eprintln!("Save headshot feedback: {error}"); }
+    }
+}
+
+pub(crate) fn take_look(panel: &mut Panel) -> Option<glam::Vec2> { panel.look.take() }
+
+pub(crate) fn observe_step(panel: &mut Panel, world: &sim::World, local: sim::PlayerId) {
+    if panel.lane.is_none() { return; }
+    let mut changed = false;
+    for event in &world.events {
+        match event {
+            sim::GameEvent::Fire { player, .. } if *player == local => {
+                panel.shot_contacts = 0; panel.shot_damage = 0; changed = true;
+            }
+            sim::GameEvent::Impact { player, .. } if *player == local => { panel.shot_contacts += 1; changed = true; }
+            sim::GameEvent::Damage { attacker, victim, health, .. } if *attacker == local && Some(*victim) == panel.target => {
+                panel.shot_damage += health; changed = true;
+            }
+            _ => {}
+        }
+    }
+    if changed {
+        let hp = panel.target.and_then(|id| world.player(id)).map(|p| p.health).unwrap_or(0);
+        panel.result = format!("Last shot: {} damage | {} impact events | target {} HP", panel.shot_damage, panel.shot_contacts, hp);
+        panel.dirty = true;
+    }
 }
 
 #[cfg(test)]
@@ -313,6 +438,40 @@ mod tests {
         let bot = world.add_bot("target", sim::Team::Terrorist);
         (world, local, bot)
     }
+    #[test]
+    fn target_lane_setup_reset_and_exit_restore_normal_match_spawns() {
+        let (mut world, local, _) = pause_world();
+        let original = world.spawns.clone();
+        let mut panel = Panel { offline_playtest: true, pending_lane: Some(0),
+            lanes: vec![wallbang::Lane { name: "fixture".into(), shooter: glam::Vec3::new(64., 0., 1.),
+                target: glam::Vec3::new(320., 0., 1.) }], ..default() };
+        configure(&mut panel, &mut world, local);
+        let target = panel.target.unwrap();
+        assert!(world.player(target).unwrap().is_bot);
+        assert_eq!(world.player(local).unwrap().movement.origin.x, 64.);
+        let mut inputs = Vec::new();
+        append_bot_inputs(&panel, &world, local, &mut inputs);
+        assert_eq!(inputs.len(), 1);
+        assert_eq!(inputs[0].0, target);
+        assert_eq!(inputs[0].1.buttons, 0);
+        world.events = vec![sim::GameEvent::Fire { player: local, weapon: "weapon_ak47".into(),
+            origin: glam::Vec3::ZERO, suppressed: false, secondary: false },
+            sim::GameEvent::Impact { player: local, pos: glam::Vec3::ZERO, normal: glam::Vec3::X, surface: 0, door: None },
+            sim::GameEvent::Damage { attacker: local, victim: target, health: 17,
+                group: sim::weapon::HitGroup::Chest, pos: glam::Vec3::ZERO, protection: sim::weapon::HitProtection::Flesh }];
+        observe_step(&mut panel, &world, local);
+        assert!(panel.result.contains("17 damage"));
+        assert!(panel.result.contains("1 impact"));
+        panel.pending_lane = Some(0);
+        configure(&mut panel, &mut world, local);
+        assert_ne!(panel.target, Some(target));
+        panel.end_lane = true;
+        configure(&mut panel, &mut world, local);
+        assert_eq!(world.spawns, original);
+        assert!(panel.lane.is_none());
+        assert_eq!(world.players.iter().filter(|p| p.is_bot).count(), 1);
+    }
+
     fn bot_settings_level() -> level::Level {
         use std::{collections::BTreeMap, sync::Arc};
         // Synthetic content exercises the real resolver, not installed tuning.

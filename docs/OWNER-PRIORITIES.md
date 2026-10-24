@@ -1,5 +1,22 @@
 # Current owner priorities
 
+## October 24: active implementation after owner playtest
+
+1. Wallbang tests in F8: stationary targets behind real map cover, starting
+   with both Dust II mid-door leaves; report actual hits/damage and exits.
+2. Sniper blur: blur the complete crosshair without a sharp central core;
+   preserve the scope circumference and world image.
+3. AUG/SG close-focus blur must soften the outside silhouette as well as the
+   weapon interior. Preserve accepted SG firing motion.
+4. Saved headshot-feedback volume slider with a visible numeric value.
+5. Prepare surfing, player-contact, boosting and run-boosting tests in the same
+   launcher. Core mechanics precede buy-wheel/menu polish and multiplayer.
+
+The owner explicitly resumed work and requested these tests. Preserve accepted
+F8 lists, Dualies motion, R8 balance, impact dust/marks, fire, grenade, knife,
+HUD size and airborne weapon motion. Older completion/staging notes below are
+historical and do not close this queue.
+
 ## October 23 playtest follow-up: current ordered backlog
 
 The owner resumed implementation after testing PR #317. Complete these player
