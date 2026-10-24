@@ -17,6 +17,15 @@ F8 lists, Dualies motion, R8 balance, impact dust/marks, fire, grenade, knife,
 HUD size and airborne weapon motion. Older completion/staging notes below are
 historical and do not close this queue.
 
+Implementation for the requested next test: F8 includes stationary wallbang
+targets admitted by the shared live penetration policy, an open headshot-tuning
+target beside the saved volume slider, target-side inspection, and F7 reset.
+Sniper defocus affects the entire reticle; rifle foreground blur crosses its
+silhouette. Player hull contact, flat moving support and same-session partner/
+surf tests are implemented. Native run-boost calibration, crouch-to-stand lifting,
+uneven-base behavior and whole-course surf parity remain open; the new mechanics
+test does not declare those solved. See [player-contact evidence and limits](research/player-contact.md).
+
 ## October 23 playtest follow-up: current ordered backlog
 
 The owner resumed implementation after testing PR #317. Complete these player

@@ -401,7 +401,7 @@ fn draw(
         Page::Maps => menu.maps.iter().map(|name| (
             "Maps", workshop::find(name).map(|m| m.title.to_owned()).unwrap_or_else(|| name.clone()), Action::Map(name.clone())
         )).collect(),
-        Page::Tests => panel.lanes.iter().enumerate().map(|(index, lane)|
+        Page::Tests => panel.lanes.iter().enumerate().filter(|(_,lane)| !lane.name.starts_with("Open target")).map(|(index, lane)|
             (if lane.name.starts_with("Open target") {"Headshot feedback"} else if lane.kind==wallbang::Kind::Wallbang {"Wallbang targets on this map"} else {"Player contact / boosting"}, lane.name.clone(), Action::Lane(index)))
             .chain([( "Wallbang targets on this map", "Inspect target side / existing marks".into(), Action::InspectLane),
                 ("Wallbang targets on this map", "End target test / restore match".into(), Action::EndLane)]).collect(),
@@ -417,6 +417,9 @@ fn draw(
             .with_children(|p| { p.spawn((Persistent, HeadshotFill, Node { width: percent(settings.audio_options.headshot_feedback_volume * 50.), height: percent(100), ..default() },
                 BackgroundColor(Color::srgb(0.3, 0.65, 0.85)), bevy::ui::FocusPolicy::Pass)); }).id();
         commands.entity(body).add_children(&[label, track]);
+        if let Some(index)=panel.lanes.iter().position(|lane|lane.name.starts_with("Open target")) {
+            button(&mut commands,body,"Stationary target / tune headshot feedback",Action::Lane(index),art.regular.clone());
+        }
     }
     if panel.page==Page::Tests && panel.surf_available {
         button(&mut commands,body,"Surf map / Solo",Action::Map("surf_ski_3_nova_kg_v6".into()),art.regular.clone());
