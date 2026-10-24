@@ -79,12 +79,23 @@
 - [x] Preserve each Dualies shot's muzzle side through batched render events,
   retaining both posed attachments for tracers and live supported flash cards.
   Unsupported first-person particle layers remain omitted.
-- [ ] Finish unresolved player outcomes in the approved order; an increment or
-  first pass does not finish its backlog category.
+- [x] Replace F8 weapon/map pagination with tall scrollable lists and weapon
+  categories, keeping every choice available without Next/Previous.
+- [x] Resolve numeric/default/model cover materials, preserve all tied exit
+  faces and emit admitted exit marks. Actual current/classic Dust II door shots
+  pass at 64/128 Hz; installed material/exit coverage passes across 36 maps.
+  The separate M3 native damage/geometry parity task remains open.
+- [x] Restore soft sniper line coverage, remove grey AUG/SG lens contributions,
+  add close weapon depth blur and restrain scoped SG fire; preserve the HUD
+  outside the optical opening.
+- [x] Preserve independent Dualies hand motion across rapid alternating shots
+  and clear stale firing presentation at life/round boundaries.
+- [x] Raise attacker headshot feedback slightly from the owner's quieter test.
+- [x] Slow instant R8 primary to .65 seconds and use Deagle-like torso damage,
+  preserving lethal heads and the authored faster secondary.
 
-The increments after #276 are merged and locally checked but have not replaced
-the owner's desktop playtest. Continue implementation; prepare a new owner
-testing pass only when requested.
+The owner tested #317. These locally checked changes do not replace that
+desktop test. Prepare another owner playtest only when requested.
 
 > **October 18 follow-up:** implementation approved: classic maps/playability,
 > then movement/viewmodels, hit-audio consistency, then grenades. Grenade feel

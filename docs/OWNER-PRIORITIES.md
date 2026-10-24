@@ -1,5 +1,53 @@
 # Current owner priorities
 
+## October 23 playtest follow-up: current ordered backlog
+
+The owner resumed implementation after testing PR #317. Complete these player
+outcomes in order; continue through commits and PRs until the approved queue is
+finished or the owner interrupts. Do not stage another test unless requested.
+
+1. F8: replace weapon and map Next/Previous pages with tall scrollable lists;
+   group weapons by type and keep the whole catalog accessible.
+2. Wall penetration: cover wallbangable spots across the maps, including Dust II
+   mid doors. Check actual passage and damage separately from exit marks.
+3. Scopes: convincing sniper blur; correct unscoped AUG/SG lens artifacts;
+   close-focus weapon blur and restrained scoped firing motion, especially SG.
+4. Dualies: preserve ongoing firing motion instead of snapping the other pistol
+   back to its starting pose on every shot.
+5. Headshot feedback: increase slightly from the latest quieter build.
+6. R8: slow instant primary slightly and tune torso damage toward Deagle-like
+   two-hit kills, preserving lethal headshots and the faster right-click.
+
+Accepted by the owner: wall-impact presentation, Glock/Tec-9 cadence, AUG
+automatic firing, improved Negev recovery, visible muzzle flashes and normal R8
+kill-feed placement. Preserve previously accepted grenade, knife, fire, audio,
+HUD sizing and airborne weapon-motion scopes. Multiplayer stays deferred.
+
+### October 23 six-outcome implementation
+
+- F8 uses tall scrollable lists with named weapon groups and all map choices;
+  the old twelve-item pages and Next/Previous actions are removed.
+- Cover resolves numeric Legacy material IDs, loaded VMT defaults and header-only
+  MDL surface properties. Exact tied cover retains every crossed material;
+  admitted shots leave exit marks. Actual current/classic Dust II door damage
+  passes both directions at 64/128 Hz; coverage checks pass on 36 available maps.
+- Sniper lines use the mounted soft coverage sprite with a dark core. AUG/SG
+  lose invalid grey lens contributions and gain depth-aware close weapon blur;
+  SG scoped firing motion is restrained. Optical pixels outside the sniper
+  opening pass through unchanged, preserving the HUD.
+- Dualies preserve independent hand clocks and blend same-hand restarts instead
+  of resetting the other hand; firing presentation clears at life boundaries.
+- Attacker headshot feedback gain rises from .35 to .42; other feedback is kept.
+- Instant R8 primary uses a .65-second interval and mounted Deagle damage for
+  two close torso hits and lethal heads; the .4-second secondary is preserved.
+
+Local checks: 1,345 workspace tests, 1,425 sound decodes, installed map/door and
+rapid-Dualies controls, normal PLAY build, Dust II probe/sim and GPU comparisons.
+The penetration loss curve remains approximate; unknown definitions, sealed BSP
+space and unsupported exit geometry stay blocked. This does not close M3 native
+formula/geometry parity. Owner staging remains the last tested #317 build; do
+not replace it or prepare another owner playtest without a request.
+
 ## October 22 evening playtest: active owner-approved follow-up
 
 This latest feedback supersedes the older queue below. Continue useful combined

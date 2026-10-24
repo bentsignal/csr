@@ -28,6 +28,10 @@ fn declared_surface(material: u8) -> BulletSurface {
     let (penetration_modifier, damage_modifier) = match material {
         b'C' => (0.5, 0.25),
         b'M' => (0.4, 0.3),
+        2 => (0.7, 0.6), // plaster
+        5 => (0.85, 0.6), // sheetrock
+        13 => (0.5, 0.3), // dense wood, including current Dust II doors
+        b'T' => (0.7, 0.3), // tile
         _ => (0.9, 0.6),
     };
     BulletSurface { material, penetration_modifier, damage_modifier }
@@ -74,7 +78,16 @@ fn thin_wood_reaches_target_with_loss_entry_feedback_and_one_ammo() {
     assert_eq!(covered.players[0].weapons[0].clip, 29);
     assert_eq!(covered.players[0].shots, 1);
     assert_eq!(covered.events.iter().filter(|e| matches!(e, GameEvent::Fire { .. })).count(), 1);
-    assert_eq!(covered.events.iter().filter(|e| matches!(e, GameEvent::Impact { .. })).count(), 1);
+    assert_eq!(covered.events.iter().filter(|e| matches!(e, GameEvent::Impact { .. })).count(), 2);
+    let marks: Vec<_> = covered.events.iter().filter_map(|e| match e {
+        GameEvent::Impact { pos, normal, surface, .. } => Some((*pos, *normal, *surface)),
+        _ => None,
+    }).collect();
+    assert!((marks[0].0.x - 50.).abs() < 0.1);
+    assert_eq!(marks[0].1, -Vec3::X);
+    assert!((marks[1].0.x - 58.).abs() < 0.001);
+    assert_eq!(marks[1].1, Vec3::X);
+    assert_eq!(marks[0].2, marks[1].2);
     assert_eq!(covered.events.iter().filter(|e| matches!(e, GameEvent::Tracer { .. })).count(), 1);
     assert!(covered.events.iter().any(|e| matches!(e, GameEvent::Tracer { start, end, .. }
         if start.x.abs() < 0.001 && end.x > 100.)));
@@ -159,7 +172,7 @@ fn declared_materials_still_require_valid_modifiers_and_supported_codes() {
             BulletSurface { damage_modifier: f32::NAN, ..declared },
             BulletSurface { damage_modifier: f32::INFINITY, ..declared },
             BulletSurface { material: b'?', ..declared },
-            BulletSurface { material: b'D', ..declared },
+            BulletSurface { material: 255, ..declared },
         ] {
             let (mut world, _, victim) = pair();
             slab_with_surface(&mut world, 50., 8., invalid);
@@ -206,7 +219,7 @@ fn shotgun_pellets_each_continue_but_share_one_fire_and_ammo_step() {
     assert!(world.player(victim).unwrap().alive && world.player(victim).unwrap().health < 100);
     for (count, expected) in [
         (world.events.iter().filter(|e| matches!(e, GameEvent::Damage { .. })).count(), 5),
-        (world.events.iter().filter(|e| matches!(e, GameEvent::Impact { .. })).count(), 5),
+        (world.events.iter().filter(|e| matches!(e, GameEvent::Impact { .. })).count(), 10),
         (world.events.iter().filter(|e| matches!(e, GameEvent::Fire { .. })).count(), 1),
     ] { assert_eq!(count, expected); }
     assert_eq!(world.players[0].weapons[0].clip, 29);
@@ -243,7 +256,7 @@ fn range_falloff_after_exit_cannot_revive_exhausted_pellets() {
     covered.fire(0, 1., None, None);
     assert_eq!(covered.player(victim).unwrap().health, 100);
     assert!(!covered.events.iter().any(|e| matches!(e, GameEvent::Damage { .. })));
-    assert_eq!(covered.events.iter().filter(|e| matches!(e, GameEvent::Impact { .. })).count(), 1);
+    assert_eq!(covered.events.iter().filter(|e| matches!(e, GameEvent::Impact { .. })).count(), 2);
     assert_eq!(covered.events.iter().filter(|e| matches!(e, GameEvent::Tracer { .. })).count(), 1);
     assert_eq!(covered.events.iter().filter(|e| matches!(e, GameEvent::Fire { .. })).count(), 1);
     assert_eq!(covered.players[0].weapons[0].clip, 29);
@@ -252,7 +265,7 @@ fn range_falloff_after_exit_cannot_revive_exhausted_pellets() {
 
 #[test]
 fn every_supported_material_and_separated_cover_layers() {
-    for material in [b'W', b'U', b'L', b'Y', b'G', b'C', b'M'] {
+    for material in (b'A'..=b'Z').chain(0..=14) {
         let (mut world, _, victim) = pair();
         // C/M retain less damage; keep both exits above the existing
         // sub-one-damage cutoff without changing the original wood fixtures.
@@ -261,7 +274,7 @@ fn every_supported_material_and_separated_cover_layers() {
         slab(&mut world, 90., thickness, material);
         world.fire(0, 1., None, None);
         assert!(world.player(victim).unwrap().health < 100);
-        assert_eq!(world.events.iter().filter(|e| matches!(e, GameEvent::Impact { .. })).count(), 2);
+        assert_eq!(world.events.iter().filter(|e| matches!(e, GameEvent::Impact { .. })).count(), 4);
         assert_eq!(world.events.iter().filter(|e| matches!(e, GameEvent::Tracer { .. })).count(), 1);
     }
 }
@@ -344,7 +357,7 @@ fn bounded_four_exits_even_with_high_damage_and_high_weapon_power() {
     for x in [30., 45., 60., 75., 90.] { slab(&mut world, x, 2., b'W'); }
     world.fire(0, 1., None, None);
     assert_eq!(world.player(victim).unwrap().health, 100);
-    assert_eq!(world.events.iter().filter(|e| matches!(e, GameEvent::Impact { .. })).count(), 5);
+    assert_eq!(world.events.iter().filter(|e| matches!(e, GameEvent::Impact { .. })).count(), 9);
 }
 
 #[test]
@@ -420,7 +433,7 @@ fn connected_wood_matches_one_slab_and_keeps_tick_replay_at_both_rates() {
             assert_eq!(joined.state(), prediction.state());
             assert_eq!(joined.state(), replay.state());
             assert!(prediction.events.is_empty());
-            assert_eq!(joined.events.iter().filter(|e| matches!(e, GameEvent::Impact { .. })).count(), 1);
+            assert_eq!(joined.events.iter().filter(|e| matches!(e, GameEvent::Impact { .. })).count(), 2);
             assert_eq!(joined.events.iter().filter(|e| matches!(e, GameEvent::Tracer { .. })).count(), 1);
             assert_eq!(joined.players[0].weapons[0].clip, 29);
         }

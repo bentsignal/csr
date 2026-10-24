@@ -243,6 +243,13 @@ impl Model {
             flags: m.i32(152)?,
             ..Default::default()
         };
+        // Header-only consumers (including ballistic material admission) need
+        // the same authored property as the full mesh loader. No VMT/name
+        // inference: this is the absolute string offset in the MDL header.
+        let surfaceprop_index = m.i32(308)?;
+        if surfaceprop_index > 0 {
+            model.surface_prop = m.cstr(surfaceprop_index as usize)?;
+        }
         model.read_animation_data(mdl)?;
         Ok(model)
     }
@@ -607,6 +614,25 @@ mod tests {
         assert!(Model::body_choices(&data[..415], 0).is_err());
         data[408..412].copy_from_slice(&(-1i32).to_le_bytes());
         assert!(Model::body_choices(&data, 0).is_err());
+    }
+
+    #[test]
+    fn header_surface_property_matches_full_loader_without_mesh_data() {
+        let mut data = vec![0u8; 432];
+        data[..4].copy_from_slice(b"IDST");
+        data[4..8].copy_from_slice(&49i32.to_le_bytes());
+        data[308..312].copy_from_slice(&416i32.to_le_bytes());
+        data[416..427].copy_from_slice(b"Wood_Dense\0");
+        let mut vvd = vec![0u8; 64]; vvd[..4].copy_from_slice(b"IDSV");
+        let mut vtx = vec![0u8; 36]; vtx[..4].copy_from_slice(&7i32.to_le_bytes());
+        let header = Model::load_header(&data).unwrap();
+        let full = Model::load(&data, &vvd, &vtx).unwrap();
+        assert_eq!(header.surface_prop, "Wood_Dense");
+        assert_eq!(header.surface_prop, full.surface_prop);
+        data[308..312].copy_from_slice(&0i32.to_le_bytes());
+        assert!(Model::load_header(&data).unwrap().surface_prop.is_empty());
+        data[308..312].copy_from_slice(&433i32.to_le_bytes());
+        assert!(Model::load_header(&data).is_err());
     }
 
     #[test]

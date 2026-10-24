@@ -649,6 +649,19 @@ pub fn tick(
                     weapon.map(|w| w.def.class_name.as_str()), weapon.map(|w| w.suppressor_attached),
                     weapon.and_then(|w| w.suppressor_transition), weapon.map(|w| w.next_attack));
             }
+        } else if std::env::var("CSR_TEST_SWITCH").as_deref() == Ok("elite-alternating") {
+            // Screenshot-only ordinary press/release edges at the installed
+            // Elite cadence. No ammo, attack receipts or poses are injected.
+            input.buttons &= !(buttons::ATTACK | buttons::ATTACK2);
+            if let Some(gun) = world.0.player(local.id).and_then(|p| p.active_weapon())
+                .filter(|w| w.def.class_name == "weapon_elite") {
+                let start = world.0.ticks(1.5);
+                let period = world.0.ticks(gun.def.cycle_time).max(1) + 1;
+                if world.0.tick >= start && world.0.tick < world.0.ticks(3.)
+                    && (world.0.tick - start).is_multiple_of(period) {
+                    input.buttons |= buttons::ATTACK;
+                }
+            }
         } else if std::env::var("CSR_TEST_SWITCH").as_deref() == Ok("burst-release") {
             // Screenshot-only ordinary inputs: empty the declared magazine,
             // hold the final burst's trigger, then release to exercise idle
