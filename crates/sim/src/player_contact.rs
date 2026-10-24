@@ -112,6 +112,7 @@ mod tests {
         let b = world.add_player("base", if same_team {Team::CounterTerrorist} else {Team::Terrorist});
         world.player_mut(a).unwrap().movement = PlayerMove::spawn_at(Vec3::new(-100.,0.,1.));
         world.player_mut(b).unwrap().movement = PlayerMove::spawn_at(Vec3::new(0.,0.,1.));
+        for p in &mut world.players { p.weapons.clear(); }
         (world,a,b)
     }
     #[test]
@@ -119,7 +120,7 @@ mod tests {
         for rate in [64,128] { for same in [false,true] {
             for (mode, dead, blocked) in [(1,false,true),(0,false,!same),(2,false,!same),(1,true,false)] {
                 let (mut world,a,b) = pair(rate,same); world.rules.solid_teammates=mode;
-                if dead { world.player_mut(b).unwrap().alive=false; }
+                if dead { let p=world.player_mut(b).unwrap(); p.alive=false; p.respawn_at=10.; }
                 for _ in 0..rate { world.step(&[(a,TickInput { forward_move:450., ..Default::default() }), (b,TickInput::default())]); }
                 let x = world.player(a).unwrap().movement.origin.x;
                 if blocked { assert!((x+32.).abs()<0.1,"rate={rate} same={same} mode={mode}: {x}"); }
