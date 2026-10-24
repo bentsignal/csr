@@ -15,7 +15,7 @@
 # Usage (from the repository root):
 #   powershell -ExecutionPolicy Bypass -File tools\package-release.ps1
 #     [-SkipBuild]          reuse the last build
-#     [-Version 1.2.3]      package as this version (default: Cargo.toml)
+#     [-Version 1.2.3]      must match the resolved Cargo workspace version
 #     [-NoInstaller]        only the zip (no Velopack installer)
 #     [-DeltaFromGitHub]    fetch the latest published release first, so the
 #                           new release includes a delta update from it
@@ -33,9 +33,9 @@ $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
 
-if (-not $Version) {
-    $Version = (Select-String -Path Cargo.toml -Pattern '^version\s*=\s*"([^"]+)"' | Select-Object -First 1).Matches[0].Groups[1].Value
-}
+$tag = if ($env:GITHUB_REF_TYPE -eq 'tag') { $env:GITHUB_REF_NAME } else { '' }
+# Fail before builds, staging deletion or packaging, including manual overrides.
+$Version = & (Join-Path $PSScriptRoot 'verify-release-version.ps1') -Version $Version -Tag $tag
 $name = 'CSGO-Rewrite'
 $packId = 'CSGORewrite'        # Velopack app id: never change it, or installed copies stop updating
 $vpkVersion = '1.2.161'        # keep in step with the velopack crate in crates/launcher/Cargo.toml

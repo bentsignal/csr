@@ -47,11 +47,24 @@ PLAYING
 -------
 Start CSGO Rewrite from the desktop, the Start menu or Steam.
 
+For Practice, choose Play > Offline with Bots, select the map/mode/bot settings
+and choose GO. This plays locally without starting a network server.
+
+To host, choose Play > Play with Friends, then Create Lobby. Open the lobby's
+settings control, select a supported installed map and mode, accept the
+selection, then choose GO. Your PC runs the server while you play. The Pause
+Invite friends address-sharing panel is being verified for the next release.
+
 For an existing server, choose Play > Community Server Browser. In Favorites,
 choose Add a Server and enter the address your host gave you. Select the
 server and choose Connect. The game loads matching content from your own
-Legacy install; it shows an error if that content is unavailable. Hosting
-from the menu and automatic server content downloads are still being added.
+Legacy install or installed content pack; it shows an error if that content
+is unavailable. Server content downloads, LAN browsing and a public server
+directory are still being added. Hosting uses address-based access; the
+classic lobby does not establish an authenticated friends-only server.
+
+This is a desktop prototype. Complete classic inventory/case interactions,
+original gameplay/visual fidelity and playable VR remain unfinished.
 
 WASD move, Space jump, Ctrl crouch, Shift walk, LMB fire, R reload,
 E use/defuse, 1-5 / Q / wheel weapons, G drop, B buy menu, Tab scoreboard,

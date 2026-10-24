@@ -17,6 +17,22 @@ The release job needs the .NET SDK (8 or newer) on the runner for `vpk`; the
 workflow installs or updates the pinned `vpk` version itself
 (`dotnet tool update -g vpk`).
 
+Before packaging and again before publication, `tools/verify-release-version.ps1`
+resolves the common workspace-member version through actual Cargo metadata and
+requires the tag to equal `v<version>`. A manual `-Version` packaging override
+must also match that version. Publication selects the exact versioned ZIP.
+`tools/test-release-version.ps1` verifies real valid/mismatched tags, prerelease
+identity, mixed workspace versions and rejection before staging mutation; both
+CI workflows run it without compiling targets or fetching dependencies.
+Cargo's metadata schema and `--no-deps` behavior are documented in the
+[Cargo Book](https://doc.rust-lang.org/cargo/commands/cargo-metadata.html).
+
+`workflow_dispatch` produces unpublished installer/ZIP artifacts. A pushed
+version tag publishes immediately; it is not a private candidate channel.
+Packaged static-CRT executable and installed-update checks are separate from
+the ordinary source `play`/release proofs. Player data and app ID must remain
+unchanged across an update.
+
 Jobs queue while the PC is off and start when it is back.
 
 ## The runner

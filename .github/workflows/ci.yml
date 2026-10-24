@@ -38,6 +38,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - run: Add-Content $env:GITHUB_PATH "$env:USERPROFILE\.cargo\bin"
+      - run: powershell -NoProfile -File tools/test-release-version.ps1
       - run: cargo test --workspace --locked
       - run: cargo test -p launcher --example movement_replay --locked
       - run: powershell -NoProfile -File tools/fidelity/with-native-slot.ps1

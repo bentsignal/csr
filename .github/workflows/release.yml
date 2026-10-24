@@ -34,6 +34,12 @@ jobs:
       - uses: actions/checkout@v5
       - run: Add-Content $env:GITHUB_PATH "$env:USERPROFILE\.cargo\bin"
       - run: Add-Content $env:GITHUB_PATH "$env:USERPROFILE\.dotnet\tools"
+      - name: Verify release tag and Cargo workspace version
+        run: |
+          $tag = if ($env:GITHUB_REF_TYPE -eq 'tag') { $env:GITHUB_REF_NAME } else { '' }
+          ./tools/verify-release-version.ps1 -Tag $tag
+      - name: Test release version guard (metadata only)
+        run: ./tools/test-release-version.ps1
       - name: Velopack packer (vpk, same version as the velopack crate)
         run: |
           dotnet tool update -g vpk --version 1.2.161
@@ -49,8 +55,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $zip = Get-ChildItem dist -Filter 'CSGO-Rewrite-*-windows-x64.zip' | Select-Object -First 1
-          gh release create $env:GITHUB_REF_NAME $zip.FullName --title "CSGO Rewrite $env:GITHUB_REF_NAME" --generate-notes
+          $version = ./tools/verify-release-version.ps1 -Tag $env:GITHUB_REF_NAME
+          $zip = Join-Path $PWD "dist/CSGO-Rewrite-$version-windows-x64.zip"
+          if (-not (Test-Path -LiteralPath $zip)) { throw "Missing exact release package: $zip" }
+          gh release create $env:GITHUB_REF_NAME $zip --title "CSGO Rewrite $env:GITHUB_REF_NAME" --generate-notes
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           # Adds Setup.exe, the update packages and the feed to the same release.
           vpk upload github --repoUrl "https://github.com/$env:GITHUB_REPOSITORY" --token $env:GH_TOKEN `
