@@ -596,7 +596,14 @@ pub fn tick(
 ) {
     let _frame_scope = crate::input_latency::frame_scope("simulation");
     if remote.is_some() || front.open() || playtest.as_ref().is_some_and(|p| p.open) {return;}
-    if let Some(panel) = playtest.as_deref_mut() { crate::playtest::configure(panel, &mut world.0, local.id); }
+    if let Some(panel) = playtest.as_deref_mut() {
+        crate::playtest::configure(panel, &mut world.0, local.id);
+        if let Some(slot)=panel.slot.take() {local.pending_slot=slot;}
+        if let Some(look) = crate::playtest::take_look(panel) {
+            local.pitch = look.x; local.yaw = look.y; local.noclip = false;
+            if let Some(me) = world.0.player(local.id) { local.prev_eye = me.eye(); local.curr_eye = me.eye(); local.was_alive = me.alive; }
+        }
+    }
     let mut input = sample_tick_input(&mut local, &Controls {
         keys: &real_keys, mouse: &mouse, settings: &settings, enabled: enabled.0,
         blocked: block.0 != 0, captured: captured(&cursor), buy_menu: menu.open,
@@ -808,6 +815,7 @@ pub fn tick(
         crate::playtest::append_bot_inputs(panel, &world.0, id, &mut inputs);
     }
     world.0.step(&inputs);
+    if let Some(panel) = playtest.as_deref_mut() { crate::playtest::observe_step(panel, &world.0, id); }
     probe.observe_step(&world.0, id, producer_tick);
     poses.capture(&world.0);
     pending.0.extend(world.0.events.iter().cloned());

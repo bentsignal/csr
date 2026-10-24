@@ -1,5 +1,31 @@
 # Current owner priorities
 
+## October 24: active implementation after owner playtest
+
+1. Wallbang tests in F8: stationary targets behind real map cover, starting
+   with both Dust II mid-door leaves; report actual hits/damage and exits.
+2. Sniper blur: blur the complete crosshair without a sharp central core;
+   preserve the scope circumference and world image.
+3. AUG/SG close-focus blur must soften the outside silhouette as well as the
+   weapon interior. Preserve accepted SG firing motion.
+4. Saved headshot-feedback volume slider with a visible numeric value.
+5. Prepare surfing, player-contact, boosting and run-boosting tests in the same
+   launcher. Core mechanics precede buy-wheel/menu polish and multiplayer.
+
+The owner explicitly resumed work and requested these tests. Preserve accepted
+F8 lists, Dualies motion, R8 balance, impact dust/marks, fire, grenade, knife,
+HUD size and airborne weapon motion. Older completion/staging notes below are
+historical and do not close this queue.
+
+Implementation for the requested next test: F8 includes stationary wallbang
+targets admitted by the shared live penetration policy, an open headshot-tuning
+target beside the saved volume slider, target-side inspection, and F7 reset.
+Sniper defocus affects the entire reticle; rifle foreground blur crosses its
+silhouette. Player hull contact, flat moving support and same-session partner/
+surf tests are implemented. Native run-boost calibration, crouch-to-stand lifting,
+uneven-base behavior and whole-course surf parity remain open; the new mechanics
+test does not declare those solved. See [player-contact evidence and limits](research/player-contact.md).
+
 ## October 23 playtest follow-up: current ordered backlog
 
 The owner resumed implementation after testing PR #317. Complete these player

@@ -3,11 +3,13 @@ use bevy::{prelude::*, window::{CursorGrabMode, CursorOptions, PrimaryWindow}};
 use crate::{session::{AppState, Persistent}, player::LocalPlayer};
 
 #[derive(Default, Clone, Copy, PartialEq, Eq)]
-enum Page { #[default] Weapons, Knives, Match, Maps }
+enum Page { #[default] Weapons, Knives, Match, Maps, Tests }
+mod wallbang;
 #[derive(Resource, Default)]
 pub(crate) struct Panel {
     pub(crate) open: bool,
     pub(crate) weapon: Option<u32>,
+    pub(crate) slot: Option<u8>,
     selected_weapon: Option<String>,
     reload_weapon: Option<String>,
     pending_weapon: Option<String>,
@@ -21,26 +23,82 @@ pub(crate) struct Panel {
     scroll: f32,
     root: Option<Entity>,
     dirty: bool,
+    lanes: Vec<wallbang::Lane>,
+    lane: Option<usize>,
+    pending_lane: Option<usize>,
+    end_lane: bool,
+    saved_spawns: Option<Vec<sim::SpawnPoint>>,
+    saved_bots: u32,
+    target: Option<sim::PlayerId>,
+    look: Option<glam::Vec2>,
+    result: String,
+    shot_contacts: u32,
+    shot_damage: i32,
+    slider_drag: bool,
+    total_damage: i32,
+    old_solidity: Option<u8>,
+    surf_available: bool,
+    surf_active: bool,
+    pending_surf: Option<bool>,
+    old_movement: Option<movement::MoveConfig>,
+    peak_speed: f32,
+
 }
 #[derive(Component, Clone)]
-enum Action { Toggle, Page(Page), Weapon(u32, String), Bots(u32), PauseBots, Respawn, Map(String) }
+enum Action { Toggle, Page(Page), Weapon(u32, String), Bots(u32), PauseBots, Respawn, Map(String), Lane(usize), InspectLane, EndLane, SurfPhysics(bool) }
 
 #[derive(Component)]
 struct Picker;
+#[derive(Component)]
+struct HeadshotSlider;
+#[derive(Component)]
+struct HeadshotFill;
+#[derive(Component)]
+struct HeadshotLabel;
 
 pub(crate) fn install(app: &mut App) {
     app.init_resource::<Panel>()
         .add_systems(OnEnter(AppState::Match), enter)
         .add_systems(PreUpdate, input.after(bevy::input::InputSystems).after(bevy::ui::UiSystems::Focus)
             .run_if(in_state(AppState::Match)))
-        .add_systems(Update, (draw.after(crate::frontend::update), scroll_picker.after(draw)));
+        .add_systems(Update, (draw.after(crate::frontend::update), scroll_picker.after(draw), headshot_slider.after(draw)));
 }
-fn enter(mut panel: ResMut<Panel>, opts: Res<crate::Options>, remote: Option<Res<crate::remote::RemoteClient>>) {
+fn enter(mut panel: ResMut<Panel>, opts: Res<crate::Options>, remote: Option<Res<crate::remote::RemoteClient>>, level: Option<Res<crate::LoadedLevel>>) {
     panel.enter_match(opts.0.playtest, remote.is_some());
+    panel.lanes = if panel.offline_playtest { level.as_ref().map(|level| {
+        let mut lanes=if level.0.name.starts_with("surf_") {Vec::new()} else {wallbang::lanes(&level.0)};
+        let partners=wallbang::partner_lanes(&level.0);
+        if let Some(partner)=partners.first() {
+            let mut open=partner.clone(); open.kind=wallbang::Kind::Wallbang;
+            open.name="Open target / headshot-volume control".into(); lanes.push(open);
+        }
+        lanes.extend(partners); lanes
+    }).unwrap_or_default() } else { Vec::new() };
+    panel.surf_available = level.as_ref().is_some_and(|l| l.0.vfs.exists("maps/surf_ski_3_nova_kg_v6.bsp"));
+    panel.surf_active = panel.offline_playtest && opts.0.map.starts_with("surf_");
+    panel.pending_surf = panel.surf_active.then_some(true);
+    panel.old_movement = None;
+    if opts.0.screenshot.is_some() && panel.offline_playtest {
+        if std::env::var("CSR_TEST_PLAYTEST_PAGE").ok().as_deref() == Some("tests") { panel.page = Page::Tests; }
+        if let Some(index) = std::env::var("CSR_TEST_WALLBANG_LANE").ok().and_then(|s| s.parse::<usize>().ok()).filter(|&i| i < panel.lanes.len()) {
+            panel.pending_lane = Some(index); panel.open = false;
+        }
+        if let Ok(case)=std::env::var("CSR_TEST_MOVEMENT_CASE") {
+            let kind=match case.as_str() {"contact"=>Some(wallbang::Kind::Contact),"boost"=>Some(wallbang::Kind::Boost),
+                "runboost"=>Some(wallbang::Kind::RunBoost),_=>None};
+            if let Some(index)=kind.and_then(|kind|panel.lanes.iter().position(|l|l.kind==kind)) {
+                panel.pending_lane=Some(index); panel.open=false;
+            }
+            if case=="surf" && panel.surf_active {panel.open=false;}
+        }
+    }
 }
 impl Panel {
     fn enter_match(&mut self, playtest: bool, remote: bool) {
         self.offline_playtest = playtest && !remote;
+        self.lane = None; self.pending_lane = None; self.target = None;
+        self.saved_spawns = None; self.old_solidity = None; self.end_lane = false; self.look = None; self.slot = None;
+        self.result.clear();
         // Only an explicit F8 map action continues the choice. OnEnter need
         // not see SimWorld yet: resolve against the new catalog at fixed tick.
         self.pending_weapon = self.reload_weapon.take().filter(|_| self.offline_playtest);
@@ -64,11 +122,18 @@ pub(crate) fn append_bot_inputs(
     panel: &Panel, world: &sim::World, local: sim::PlayerId,
     inputs: &mut Vec<(sim::PlayerId, sim::TickInput)>,
 ) {
-    if !panel.offline_playtest || !panel.bots_paused { return; }
+    if !panel.offline_playtest || (!panel.bots_paused && panel.lane.is_none()) { return; }
+    let kind = panel.lane.and_then(|i| panel.lanes.get(i)).map(|l| l.kind);
+    let rider = world.player(local);
+    let command = inputs.iter().find(|(id,_)| *id==local).map(|(_,input)| *input).unwrap_or_default();
     for bot in world.players.iter().filter(|p| p.is_bot && p.id != local) {
         inputs.push((bot.id, sim::TickInput {
-            view_angles: bot.view_angles,
-            buttons: if bot.movement.ducked { movement::buttons::DUCK }
+            view_angles: if kind==Some(wallbang::Kind::RunBoost) { command.view_angles.with_x(0.) } else { bot.view_angles },
+            forward_move: if kind==Some(wallbang::Kind::RunBoost) && rider.is_some_and(|p| p.movement.origin.z-bot.movement.origin.z>40.) { command.forward_move } else {0.},
+            side_move: if kind==Some(wallbang::Kind::RunBoost) && rider.is_some_and(|p| p.movement.origin.z-bot.movement.origin.z>40.) { command.side_move } else {0.},
+            weapon_slot: if kind.is_some_and(|k| k!=wallbang::Kind::Wallbang) {3} else {0},
+            buttons: if kind==Some(wallbang::Kind::Boost) {movement::buttons::DUCK}
+                else if kind.is_some() {0} else if bot.movement.ducked { movement::buttons::DUCK }
                 else { bot.last_input.buttons & movement::buttons::DUCK },
             ..default()
         }));
@@ -76,6 +141,60 @@ pub(crate) fn append_bot_inputs(
 }
 /// Called only by the offline fixed-tick owner, never by a UI/render system.
 pub(crate) fn configure(panel: &mut Panel, world: &mut sim::World, id: sim::PlayerId) {
+    if let Some(surf) = panel.pending_surf.take() {
+        if surf {
+            if panel.old_movement.is_none() {panel.old_movement=Some(world.config.clone());}
+            world.config.accelerate=10.; world.config.air_accelerate=1000.;
+        } else if let Some(config)=panel.old_movement.take() {world.config=config;}
+    }
+    if panel.end_lane {
+        panel.end_lane = false;
+        if let Some(spawns) = panel.saved_spawns.take() { world.spawns = spawns; }
+        panel.lane = None; panel.target = None; panel.result.clear();
+        if let Some(rule)=panel.old_solidity.take() {world.rules.solid_teammates=rule;}
+        if panel.bots.is_none() { panel.bots = Some(panel.saved_bots); }
+        panel.respawn = true;
+    }
+    if let Some(index) = panel.pending_lane.take() {
+        if let Some(lane) = panel.lanes.get(index).cloned() {
+            if panel.saved_spawns.is_none() {
+                panel.saved_spawns = Some(world.spawns.clone());
+                panel.saved_bots = world.players.iter().filter(|p| p.is_bot).count() as u32;
+                panel.old_solidity=Some(world.rules.solid_teammates);
+            }
+            let old: Vec<_> = world.players.iter().filter(|p| p.is_bot).map(|p| p.id).collect();
+            for bot in old { world.remove_player(bot); }
+            panel.bots = None;
+            let team = world.player(id).map(|p| p.team).unwrap_or(sim::Team::CounterTerrorist);
+            let other = if lane.kind!=wallbang::Kind::Wallbang {team} else if team == sim::Team::Terrorist {sim::Team::CounterTerrorist} else {sim::Team::Terrorist};
+            if lane.kind!=wallbang::Kind::Wallbang {world.rules.solid_teammates=1;}
+            else if let Some(rule)=panel.old_solidity {world.rules.solid_teammates=rule;}
+            let aim = lane.target + glam::Vec3::Z * 56. - (lane.shooter + glam::Vec3::Z * 64.);
+            let yaw = aim.y.atan2(aim.x).to_degrees();
+            let pitch = (-aim.z).atan2(aim.truncate().length()).to_degrees();
+            world.spawns = vec![sim::SpawnPoint { origin: lane.shooter, yaw, team }];
+            world.respawn(id);
+            world.spawns.push(sim::SpawnPoint { origin:lane.target,yaw,team:other });
+            panel.target = Some(world.add_bot(if lane.kind==wallbang::Kind::Wallbang {"Wallbang target"} else {"Practice partner"}, other));
+            if lane.kind==wallbang::Kind::RunBoost {
+                world.spawns=vec![sim::SpawnPoint {origin:lane.target+glam::Vec3::Z*96.,yaw,team}];
+                world.respawn(id);
+            }
+            panel.look = Some(glam::Vec2::new(if lane.kind==wallbang::Kind::Wallbang {pitch} else {0.}, yaw));
+            panel.slot=(lane.kind!=wallbang::Kind::Wallbang).then_some(3);
+            let same_lane=panel.lane==Some(index);
+            panel.lane = Some(index);
+            panel.result = "Aim is on the target's chest. Fire to measure damage. F7 resets.".into();
+            panel.shot_contacts = 0; panel.shot_damage = 0; panel.total_damage=0; panel.peak_speed=0.;
+            panel.pending_weapon = (lane.kind==wallbang::Kind::Wallbang).then(|| {
+                if same_lane {panel.selected_weapon.clone().unwrap_or_else(||lane.recommended_weapon.into())}
+                else {lane.recommended_weapon.into()}
+            });
+            if let Some(weapon)=&panel.pending_weapon {panel.selected_weapon=Some(weapon.clone());}
+            panel.dirty = true;
+        }
+    }
+
     if let Some(name) = panel.pending_weapon.take() {
         panel.weapon = world.catalog.get(&name).map(|def| def.def_index);
     }
@@ -88,7 +207,9 @@ pub(crate) fn configure(panel: &mut Panel, world: &mut sim::World, id: sim::Play
             world.add_bot(&format!("Bot {}", i + 1), if i % 2 == 0 { other } else { team });
         }
     }
-    if std::mem::take(&mut panel.respawn) || (panel.weapon.is_some() && world.player(id).is_some_and(|p| !p.alive)) { world.respawn(id); }
+    if std::mem::take(&mut panel.respawn) || (panel.weapon.is_some() && world.player(id).is_some_and(|p| !p.alive)) { world.respawn(id);
+        if let Some(player) = world.player(id) { panel.look = Some(glam::Vec2::new(0., player.view_angles.y)); }
+    }
 }
 fn input(
     mut panel: ResMut<Panel>, opts: Res<crate::Options>,
@@ -101,6 +222,10 @@ fn input(
 ) {
     if !opts.0.playtest || remote.is_some() { return; }
     let was_open = panel.open;
+    if keys.just_pressed(KeyCode::F7) {
+        if panel.lane.is_some() { panel.pending_lane=panel.lane; } else {panel.respawn=true;}
+        panel.open=false; panel.dirty=true;
+    }
     if keys.just_pressed(KeyCode::F8) || (panel.open && keys.just_pressed(KeyCode::Escape)) {
         panel.open = !panel.open;
         keys.clear_just_pressed(KeyCode::Escape);
@@ -117,14 +242,28 @@ fn input(
                 panel.pending_weapon = None;
                 panel.open = false;
             }
-            Action::Bots(count) => { panel.selected_bots = Some(*count); panel.bots = Some(*count); panel.respawn = true; panel.open = false; }
+            Action::Bots(count) => { panel.end_lane = panel.lane.is_some(); panel.selected_bots = Some(*count); panel.bots = Some(*count); panel.respawn = true; panel.open = false; }
             Action::PauseBots => { panel.bots_paused = !panel.bots_paused; panel.open = false; }
-            Action::Respawn => { panel.respawn = true; panel.open = false; }
+            Action::Lane(index) => { panel.pending_lane = Some(*index); panel.open = false; }
+            Action::InspectLane => {
+                if let Some(lane) = panel.lane.and_then(|i| panel.lanes.get(i)) {
+                    local.noclip = true;
+                    local.noclip_pos = lane.target + glam::Vec3::Z * 64.;
+                    let back = lane.shooter - lane.target;
+                    local.yaw = back.y.atan2(back.x).to_degrees(); local.pitch = 0.;
+                    panel.open = false;
+                }
+            }
+            Action::SurfPhysics(enabled) => {panel.pending_surf=Some(*enabled);}
+            Action::EndLane => { panel.end_lane = true; panel.open = false; }
+            Action::Respawn => { if panel.lane.is_some() { panel.pending_lane = panel.lane; } else { panel.respawn = true; } panel.open = false; }
             Action::Map(map) => {
                 panel.reload_bots = panel.selected_bots;
                 panel.reload_weapon = panel.selected_weapon.clone();
                 let mut options = opts.0.clone();
                 options.map = map.clone();
+                if map.starts_with("surf_") { panel.selected_bots=Some(0); panel.reload_bots=Some(0); }
+
                 if let Some(count) = panel.selected_bots {
                     // Solo changes quota, not the current menu difficulty.
                     options.bots = count.div_ceil(2);
@@ -205,6 +344,7 @@ fn draw(
     art: Res<crate::ui_assets::UiAssets>, loc: Res<crate::localize::Localization>, menu: Res<crate::menu::Menu>,
     world: Option<Res<crate::player::SimWorld>>,
     remote: Option<Res<crate::remote::RemoteClient>>,
+    settings: Res<crate::settings::Settings>,
 ) {
     let active = remote.is_none() && opts.0.playtest && *state.get() == AppState::Match;
     if !active {
@@ -216,7 +356,7 @@ fn draw(
     if let Some(root) = panel.root.take() { commands.entity(root).despawn(); }
     let root = commands.spawn((Persistent, GlobalZIndex(25000), Node {
         position_type: PositionType::Absolute,
-        left: if panel.open { percent(8) } else { percent(43) },
+        left: if panel.open { percent(8) } else { percent(18) },
         top: if panel.open { percent(4) } else { auto() },
         bottom: if panel.open { auto() } else { px(12) },
         width: if panel.open { percent(84) } else { auto() },
@@ -226,9 +366,9 @@ fn draw(
     }, BackgroundColor(Color::srgba(0.035, 0.055, 0.07, if panel.open { 0.97 } else { 0.75 })))).id();
     panel.root = Some(root);
     if !panel.open {
-        let hint = commands.spawn((Persistent, Text::new(if panel.bots_paused {
-            "F8  Playtest controls  |  Bots paused"
-        } else { "F8  Playtest controls" }), TextFont {
+        let hint = commands.spawn((Persistent, Text::new(if let Some(index) = panel.lane {
+            format!("{} | {} | F7 reset / F8 controls", panel.lanes[index].name, panel.result)
+        } else if panel.surf_active {panel.result.clone()} else if panel.bots_paused { "F8  Playtest controls  |  Bots paused".into() } else { "F8  Playtest controls".into() }), TextFont {
             font: art.regular.clone().into(), font_size: FontSize::Px(14.), ..default()
         }, TextColor(Color::WHITE))).id();
         commands.entity(root).add_children(&[hint]);
@@ -240,7 +380,7 @@ fn draw(
     commands.entity(root).add_children(&[title]);
     let tabs = commands.spawn((Persistent, Node { column_gap: px(10), flex_wrap: FlexWrap::Wrap, ..default() })).id();
     commands.entity(root).add_children(&[tabs]);
-    for (text, page) in [("Weapons", Page::Weapons), ("Classic knives", Page::Knives), ("Match", Page::Match), ("Maps", Page::Maps)] {
+    for (text, page) in [("Weapons", Page::Weapons), ("Classic knives", Page::Knives), ("Match", Page::Match), ("Maps", Page::Maps), ("Tests / audio", Page::Tests)] {
         button(&mut commands, tabs, text, Action::Page(page), art.regular.clone());
     }
     let body = commands.spawn((Persistent, Picker, ScrollPosition(Vec2::new(0., panel.scroll)), Node {
@@ -261,10 +401,33 @@ fn draw(
         Page::Maps => menu.maps.iter().map(|name| (
             "Maps", workshop::find(name).map(|m| m.title.to_owned()).unwrap_or_else(|| name.clone()), Action::Map(name.clone())
         )).collect(),
+        Page::Tests => panel.lanes.iter().enumerate().filter(|(_,lane)| !lane.name.starts_with("Open target")).map(|(index, lane)|
+            (if lane.name.starts_with("Open target") {"Headshot feedback"} else if lane.kind==wallbang::Kind::Wallbang {"Wallbang targets on this map"} else {"Player contact / boosting"}, lane.name.clone(), Action::Lane(index)))
+            .chain([( "Wallbang targets on this map", "Inspect target side / existing marks".into(), Action::InspectLane),
+                ("Wallbang targets on this map", "End target test / restore match".into(), Action::EndLane)]).collect(),
         Page::Match => vec![("Match", "Solo / explore".into(), Action::Bots(0)), ("Match", "Ten-player match".into(), Action::Bots(9)),
             ("Match", (if panel.bots_paused { "Resume bots" } else { "Pause bots" }).into(), Action::PauseBots),
             ("Match", "Respawn and refill".into(), Action::Respawn)],
     };
+    if panel.page == Page::Tests {
+        let label = commands.spawn((Persistent, HeadshotLabel, Text::new(format!("Headshot feedback: {:.2}  (saved automatically)", settings.audio_options.headshot_feedback_volume)),
+            TextFont { font: art.regular.clone().into(), font_size: FontSize::Px(19.), ..default() }, TextColor(Color::WHITE))).id();
+        let track = commands.spawn((Persistent, Button, HeadshotSlider, bevy::ui::RelativeCursorPosition::default(),
+            Node { width: percent(90), min_height: px(36), flex_shrink: 0., ..default() }, BackgroundColor(Color::srgb(0.13, 0.18, 0.22))))
+            .with_children(|p| { p.spawn((Persistent, HeadshotFill, Node { width: percent(settings.audio_options.headshot_feedback_volume * 50.), height: percent(100), ..default() },
+                BackgroundColor(Color::srgb(0.3, 0.65, 0.85)), bevy::ui::FocusPolicy::Pass)); }).id();
+        commands.entity(body).add_children(&[label, track]);
+        if let Some(index)=panel.lanes.iter().position(|lane|lane.name.starts_with("Open target")) {
+            button(&mut commands,body,"Stationary target / tune headshot feedback",Action::Lane(index),art.regular.clone());
+        }
+    }
+    if panel.page==Page::Tests && panel.surf_available {
+        button(&mut commands,body,"Surf map / Solo",Action::Map("surf_ski_3_nova_kg_v6".into()),art.regular.clone());
+        if panel.surf_active {
+            button(&mut commands,body,"Surf practice physics (air 1000 / ground 10)",Action::SurfPhysics(true),art.regular.clone());
+            button(&mut commands,body,"Competitive movement physics",Action::SurfPhysics(false),art.regular.clone());
+        }
+    }
     let mut section = "";
     let mut row = body;
     for (group, name, action) in &entries {
@@ -285,6 +448,75 @@ fn draw(
         TextColor(Color::srgb(0.65, 0.75, 0.82)))).id();
     commands.entity(root).add_children(&[hint]);
     button(&mut commands, root, "Resume match", Action::Toggle, art.regular.clone());
+}
+
+fn headshot_gain_at(relative_x: f32) -> f32 {
+    // Bevy 0.19 normalizes around the node centre, from -.5 to +.5.
+    ((relative_x + 0.5).clamp(0., 1.) * 200.).round() / 100.
+}
+
+fn headshot_slider(
+    mut panel: ResMut<Panel>, mouse: Res<ButtonInput<MouseButton>>,
+    track: Query<(&Interaction, &bevy::ui::RelativeCursorPosition), With<HeadshotSlider>>,
+    mut fills: Query<&mut Node, With<HeadshotFill>>,
+    mut labels: Query<&mut Text, With<HeadshotLabel>>,
+    mut settings: ResMut<crate::settings::Settings>,
+) {
+    if panel.open && panel.page == Page::Tests {
+        for (interaction, cursor) in &track {
+            if *interaction == Interaction::Pressed { panel.slider_drag = true; }
+            if panel.slider_drag && mouse.pressed(MouseButton::Left) {
+                if let Some(at) = cursor.normalized {
+                    settings.audio_options.headshot_feedback_volume = headshot_gain_at(at.x);
+                    for mut fill in &mut fills { fill.width = percent(settings.audio_options.headshot_feedback_volume * 50.); }
+                    for mut label in &mut labels { label.0 = format!("Headshot feedback: {:.2}  (saved automatically)", settings.audio_options.headshot_feedback_volume); }
+                }
+            }
+        }
+    }
+    if panel.slider_drag && !mouse.pressed(MouseButton::Left) {
+        panel.slider_drag = false;
+        if let Err(error) = settings.save() { eprintln!("Save headshot feedback: {error}"); }
+    }
+}
+
+pub(crate) fn take_look(panel: &mut Panel) -> Option<glam::Vec2> { panel.look.take() }
+
+pub(crate) fn observe_step(panel: &mut Panel, world: &sim::World, local: sim::PlayerId) {
+    if panel.surf_active && panel.lane.is_none() && world.tick%8==0 {
+        if let Some(p)=world.player(local) {
+            panel.result=format!("Surf | speed {:.0} | F7 restart / F8 controls",p.movement.speed_2d()); panel.dirty=true;
+        }
+    }
+    let Some(kind)=panel.lane.and_then(|i|panel.lanes.get(i)).map(|l| l.kind) else {return};
+    if kind!=wallbang::Kind::Wallbang {
+        if world.tick%8==0 {
+            if let (Some(p),Some(base))=(world.player(local),panel.target.and_then(|id|world.player(id))) {
+                panel.peak_speed=panel.peak_speed.max(p.movement.speed_2d());
+                panel.result=format!("speed {:.0} / peak {:.0} | height {:.1} | {}",p.movement.speed_2d(),panel.peak_speed,
+                    p.movement.origin.z-base.movement.origin.z,if p.movement.on_ground {"supported"} else {"airborne"}); panel.dirty=true;
+            }
+        }
+        return;
+    }
+    let mut changed = false;
+    for event in &world.events {
+        match event {
+            sim::GameEvent::Fire { player, .. } if *player == local => {
+                panel.shot_contacts = 0; panel.shot_damage = 0; changed = true;
+            }
+            sim::GameEvent::Impact { player, .. } if *player == local => { panel.shot_contacts += 1; changed = true; }
+            sim::GameEvent::Damage { attacker, victim, health, .. } if *attacker == local && Some(*victim) == panel.target => {
+                panel.shot_damage += health; panel.total_damage += health; changed = true;
+            }
+            _ => {}
+        }
+    }
+    if changed {
+        let hp = panel.target.and_then(|id| world.player(id)).map(|p| p.health).unwrap_or(0);
+        panel.result = format!("Last shot: {} damage | total {} | {} impact events | target {} HP", panel.shot_damage, panel.total_damage, panel.shot_contacts, hp);
+        panel.dirty = true;
+    }
 }
 
 #[cfg(test)]
@@ -313,6 +545,72 @@ mod tests {
         let bot = world.add_bot("target", sim::Team::Terrorist);
         (world, local, bot)
     }
+    #[test]
+    fn target_lane_setup_reset_and_exit_restore_normal_match_spawns() {
+        let (mut world, local, _) = pause_world();
+        let original = world.spawns.clone();
+        let mut panel = Panel { offline_playtest: true, pending_lane: Some(0),
+            lanes: vec![wallbang::Lane { recommended_weapon:"weapon_ak47", kind: wallbang::Kind::Wallbang, name: "fixture".into(), shooter: glam::Vec3::new(64., 0., 1.),
+                target: glam::Vec3::new(320., 0., 1.) }], ..default() };
+        configure(&mut panel, &mut world, local);
+        let target = panel.target.unwrap();
+        assert!(world.player(target).unwrap().is_bot);
+        assert_eq!(world.player(local).unwrap().movement.origin.x, 64.);
+        let mut inputs = Vec::new();
+        append_bot_inputs(&panel, &world, local, &mut inputs);
+        assert_eq!(inputs.len(), 1);
+        assert_eq!(inputs[0].0, target);
+        assert_eq!(inputs[0].1.buttons, 0);
+        world.events = vec![sim::GameEvent::Fire { player: local, weapon: "weapon_ak47".into(),
+            origin: glam::Vec3::ZERO, suppressed: false, secondary: false },
+            sim::GameEvent::Impact { player: local, pos: glam::Vec3::ZERO, normal: glam::Vec3::X, surface: 0, door: None },
+            sim::GameEvent::Damage { attacker: local, victim: target, health: 17,
+                group: sim::weapon::HitGroup::Chest, pos: glam::Vec3::ZERO, protection: sim::weapon::HitProtection::Flesh }];
+        observe_step(&mut panel, &world, local);
+        assert!(panel.result.contains("17 damage"));
+        assert!(panel.result.contains("1 impact"));
+        panel.pending_lane = Some(0);
+        configure(&mut panel, &mut world, local);
+        assert_ne!(panel.target, Some(target));
+        panel.end_lane = true;
+        configure(&mut panel, &mut world, local);
+        assert_eq!(world.spawns, original);
+        assert!(panel.lane.is_none());
+        assert_eq!(world.players.iter().filter(|p| p.is_bot).count(), 1);
+    }
+
+    #[test]
+    fn headshot_track_maps_both_edges_and_center_to_the_saved_gain_range() {
+        assert_eq!(headshot_gain_at(-0.5), 0.);
+        assert_eq!(headshot_gain_at(0.), 1.);
+        assert_eq!(headshot_gain_at(0.5), 2.);
+        assert_eq!(headshot_gain_at(-4.), 0.);
+        assert_eq!(headshot_gain_at(4.), 2.);
+    }
+
+    #[test]
+    fn run_boost_setup_starts_on_the_partner_and_never_mirrors_the_jump_button() {
+        let (mut world,local,_)=pause_world();
+        let original_rule=world.rules.solid_teammates;
+        let mut panel=Panel {offline_playtest:true,pending_lane:Some(0),lanes:vec![wallbang::Lane {
+            recommended_weapon:"weapon_ak47",kind:wallbang::Kind::RunBoost,name:"run boost".into(),shooter:glam::Vec3::new(64.,0.,1.),
+            target:glam::Vec3::new(320.,0.,1.)}],..default()};
+        configure(&mut panel,&mut world,local);
+        let partner=panel.target.unwrap();
+        let human=world.player(local).unwrap(); let base=world.player(partner).unwrap();
+        assert_eq!(human.team,base.team);
+        assert!((human.movement.origin.z-base.bounds().1.z).abs()<0.1);
+        assert_eq!(world.rules.solid_teammates,1);
+        let mut inputs=vec![(local,sim::TickInput {forward_move:450.,buttons:movement::buttons::JUMP,..default()})];
+        append_bot_inputs(&panel,&world,local,&mut inputs);
+        assert_eq!(inputs[1].0,partner);
+        assert_eq!(inputs[1].1.forward_move,450.);
+        assert_eq!(inputs[1].1.buttons & movement::buttons::JUMP,0);
+        panel.end_lane=true;
+        configure(&mut panel,&mut world,local);
+        assert_eq!(world.rules.solid_teammates,original_rule);
+    }
+
     fn bot_settings_level() -> level::Level {
         use std::{collections::BTreeMap, sync::Arc};
         // Synthetic content exercises the real resolver, not installed tuning.

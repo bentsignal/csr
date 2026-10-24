@@ -94,43 +94,18 @@ fn line_profile(rgba: &[u8], width: usize, height: usize) -> Option<Vec<f32>> {
     profile.iter().any(|alpha| *alpha > 0.0).then_some(profile)
 }
 
-fn sample_profile(profile: &[f32], position: f32) -> f32 {
-    if position < 0.0 || position > (profile.len() - 1) as f32 { return 0.0; }
-    let index = position.floor() as usize;
-    let next = profile[(index + 1).min(profile.len() - 1)];
-    profile[index] + (next - profile[index]) * position.fract()
-}
-
-fn sniper_line(profile: Option<&[f32]>, sigma: f32) -> Vec<f32> {
+fn sniper_line(_profile: Option<&[f32]>, sigma: f32) -> Vec<f32> {
     let mut line = vec![0.0; RETICLE_SIZE + 1];
-    line[RETICLE_SIZE / 2] = 1.0;
-    if sigma <= 0.0 { return line; }
-    // The mounted sprite authors a broad soft line with a legible dark core
-    // (about .85 alpha), not the unit-area distribution of a one-pixel impulse.
-    // Scale that profile across the line while keeping its authored coverage.
-    // Dot bloom deliberately retains the separate energy-normalized kernel.
-    let shape = profile.filter(|shape| shape.len() >= 2).map(|shape| {
-        let center = (shape.len() - 1) as f32 * 0.5;
-        let mass: f32 = shape.iter().sum();
-        let variance = shape.iter().enumerate().map(|(x, alpha)|
-            *alpha * (x as f32 - center).powi(2)).sum::<f32>() / mass.max(f32::EPSILON);
-        (shape, center, variance.sqrt().max(0.5))
-    });
-    let blend = sigma.min(1.0);
+    if sigma <= 0.0 { line[RETICLE_SIZE / 2] = 1.0; return line; }
+    // Convolve the whole one-pixel line. Keeping a second dark central strip
+    // made the previous widening look translucent rather than out of focus.
+    let sigma = sigma.max(0.15);
     for (index, alpha) in line.iter_mut().enumerate() {
         let distance = index as f32 - (RETICLE_SIZE / 2) as f32;
-        let coverage = if let Some((shape, center, native_sigma)) = shape {
-            // Symmetrize about the aim ray; texture compression/asymmetry must
-            // not displace the reticle when its width changes.
-            let offset = distance * native_sigma / sigma;
-            (sample_profile(shape, center + offset) + sample_profile(shape, center - offset)) * 0.5
-        } else {
-            // Missing mounted art still gets a soft, readable line, never the
-            // nearly invisible 1/(sigma*sqrt(2*pi)) impulse peak.
-            0.85 * (-0.5 * (distance / sigma).powi(2)).exp()
-        };
-        *alpha += (coverage - *alpha) * blend;
+        *alpha = (-0.5 * (distance / sigma).powi(2)).exp();
     }
+    let mass = line.iter().sum::<f32>();
+    for alpha in &mut line { *alpha /= mass; }
     line
 }
 
@@ -234,12 +209,11 @@ pub fn update(
     });
     if blur.key != key { blur.key = key; blur.sigma = 0.0; }
     blur.sigma = smooth_blur(blur.sigma, target, time.delta_secs());
-    // Sniper lines use their mounted soft coverage profile. Scene defocus is
-    // confined to the outer optical region, keeping the world at aim sharp.
+    // Sniper defocus affects only the reticle, never the world or mask edge.
     // Rifle optics instead defocus only the close weapon, using its own depth.
     optical.0 = optic_blur::OpticSettings {
         aperture: optic.0,
-        params: Vec4::new(if sniper { 1.0 } else { 0.0 }, blur.sigma,
+        params: Vec4::new(0.0, blur.sigma,
             if zoomed && !sniper && optic.0.z > 0.0 { 7.0 } else { 0.0 }, 1.0),
     };
     let blur_step = (blur.sigma / MAX_BLUR * BLUR_STEPS as f32).round().clamp(0.0, BLUR_STEPS as f32) as usize;
@@ -304,7 +278,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn sniper_soft_line_uses_alpha_and_retains_a_readable_center_as_it_defocuses() {
+    fn sniper_defocus_blurs_the_entire_line_without_a_retained_dark_core() {
         // Synthetic black strip, deliberately unequal sides: alpha is the
         // native semantic; symmetry/centering belong to our aim presentation.
         let rgba: Vec<u8> = [0, 32, 160, 216, 192, 64, 0].into_iter()
@@ -316,14 +290,13 @@ mod tests {
         assert_eq!(sharp.iter().sum::<f32>(), 1.0);
         let narrow = sniper_line(Some(&profile), 2.0);
         let broad = sniper_line(Some(&profile), MAX_BLUR);
-        assert!(broad[RETICLE_SIZE / 2] > 0.8, "motion must not dissolve the dark core");
-        assert_eq!(broad[RETICLE_SIZE / 2], narrow[RETICLE_SIZE / 2]);
-        assert!(broad.iter().sum::<f32>() > narrow.iter().sum::<f32>() * 3.0);
+        assert!(broad[RETICLE_SIZE / 2] < narrow[RETICLE_SIZE / 2] * 0.3);
+        assert!((broad.iter().sum::<f32>() - 1.0).abs() < 1e-5);
         for offset in 0..=RETICLE_SIZE / 2 {
             assert_eq!(broad[RETICLE_SIZE / 2 - offset], broad[RETICLE_SIZE / 2 + offset]);
         }
-        assert_eq!(broad[0], 0.0);
-        assert!(sniper_line(None, MAX_BLUR)[RETICLE_SIZE / 2] > 0.8);
+        assert!(broad[0] < 1e-8);
+        assert!(sniper_line(None, MAX_BLUR)[RETICLE_SIZE / 2] < 0.06);
         assert!(line_profile(&rgba[..rgba.len() - 1], 7, 1).is_none());
     }
 

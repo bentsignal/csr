@@ -5,6 +5,7 @@
 pub struct AudioOptions {
     pub mute_lose_focus: bool,
     pub menu_music_volume: f32,
+    pub headshot_feedback_volume: f32,
 }
 
 impl Default for AudioOptions {
@@ -15,6 +16,7 @@ impl Default for AudioOptions {
             // Legacy's public help reports default 1.0; a player's archived
             // current value is not the engine default.
             menu_music_volume: 1.0,
+            headshot_feedback_volume: crate::effects::ATTACKER_HEAD_GAIN,
         }
     }
 }
@@ -32,12 +34,17 @@ impl AudioOptions {
         match name {
             "snd_mute_losefocus" => Some(u8::from(self.mute_lose_focus) as f64),
             "snd_menumusic_volume" => Some(self.menu_music_volume as f64),
+            "csr_headshot_volume" => Some(self.headshot_feedback_volume as f64),
             _ => None,
         }
     }
 
     pub(crate) fn set_convar_number(&mut self, name: &str, value: f64) -> bool {
         match name {
+            "csr_headshot_volume" if value.is_finite() => {
+                self.headshot_feedback_volume = value.clamp(0.0, 2.0) as f32;
+                true
+            }
             "snd_menumusic_volume" if value.is_finite() => {
                 self.menu_music_volume = value.clamp(0.0, 1.0) as f32;
                 true
@@ -62,6 +69,7 @@ impl AudioOptions {
             u8::from(self.mute_lose_focus)
         ));
         text.push_str(&format!("snd_menumusic_volume={}\n", self.menu_music_volume));
+        text.push_str(&format!("csr_headshot_volume={}\n", self.headshot_feedback_volume));
     }
 }
 
@@ -165,5 +173,19 @@ mod tests {
             Settings::parse("snd_mute_losefocus=NaN\n").audio_options,
             Default::default()
         );
+    }
+}
+
+#[cfg(test)]
+mod headshot_tests {
+    use crate::settings::Settings;
+    #[test]
+    fn headshot_gain_round_trips_and_rejects_nonfinite_values() {
+        let mut settings = Settings::parse("csr_headshot_volume=0.73\n");
+        assert_eq!(settings.audio_options.headshot_feedback_volume, 0.73);
+        assert_eq!(Settings::parse(&settings.encode()), settings);
+        assert!(!settings.set_convar_number("csr_headshot_volume", f64::NAN));
+        assert!(settings.set_convar_number("csr_headshot_volume", 4.0));
+        assert_eq!(settings.audio_options.headshot_feedback_volume, 2.0);
     }
 }

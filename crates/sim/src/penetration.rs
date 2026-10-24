@@ -8,6 +8,15 @@ use glam::Vec3;
 
 pub(super) const MAX_SLABS: usize = 4;
 
+/// Read-only admission for offline practice lanes. Uses the authoritative
+/// policy; previewing cover never fires a shot or changes simulation state.
+pub fn preview_exit(world: &CollisionWorld, start: Vec3, end: Vec3,
+    weapon_power: f32) -> Option<(collision::bullet_exit::BulletExit, f32)> {
+    let hit = world.trace_ray(start, end, collision::contents::MASK_SHOT);
+    if !hit.hit() || hit.start_solid || hit.all_solid { return None; }
+    through_exit(world, start, end, &hit, weapon_power)
+}
+
 // Three original Legacy shots through the same ~4-unit wood post: AK
 // 36 entry / 7.8 lost, M4A4 33 / 7.3, AWP 115 / 20.1. Using their mounted
 // powers (2, 2, 2.5), least squares gives 0.925315; rounded to 0.925, the

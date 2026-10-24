@@ -1513,7 +1513,7 @@ mod tests {
                 local: Res<crate::player::LocalPlayer>| {
                 for event in hits.0.drain(..) {
                     crate::effects::play_combat_cue(&event, &local, &mut commands,
-                        &mut sounds, &mut sources, &vfs::Vfs::new());
+                        &mut sounds, &mut sources, &vfs::Vfs::new(), crate::effects::ATTACKER_HEAD_GAIN);
                 }
             });
             app.update();

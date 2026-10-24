@@ -38,6 +38,8 @@ pub mod recoil_motion;
 pub mod utility;
 pub mod tactics;
 mod penetration;
+pub use penetration::preview_exit as preview_bullet_exit;
+mod player_contact;
 
 use collision::{contents, CollisionWorld};
 use glam::Vec3;
@@ -514,7 +516,7 @@ impl World {
     }
 
     pub fn with_catalog(collision: Arc<CollisionWorld>, catalog: Arc<weapons::Catalog>) -> Self {
-        let rules = RulesConfig::default();
+        let rules = RulesConfig { solid_teammates: 0, ..RulesConfig::default() };
         let mut world = Self {
             collision,
             doors: Vec::new(),
@@ -791,7 +793,10 @@ impl World {
     fn place(&mut self, id: PlayerId) {
         let Some(team) = self.player(id).map(|p| p.team) else { return };
         let spawn = self.pick_spawn(id, team);
-        let origin = self.drop_to_floor(spawn.origin, false);
+        let contacts = player_contact::PlayerWorld::new(self.collision.as_ref(), &self.players, id, self.rules.solid_teammates);
+        let hit=movement::TraceWorld::trace_hull(&contacts,spawn.origin+Vec3::Z*2.,spawn.origin-Vec3::Z*256.,
+            movement::STAND_MINS,movement::STAND_MAXS,contents::MASK_PLAYERSOLID);
+        let origin=if hit.start_solid || hit.fraction==1. {spawn.origin} else {hit.end};
         if let Some(p) = self.player_mut(id) {
             p.movement = PlayerMove::spawn_at(origin);
             p.view_angles = Vec3::new(0.0, spawn.yaw, 0.0);
@@ -1583,6 +1588,7 @@ impl World {
                 weapon_max_speed: max_speed,
             };
             {
+                let contacts = player_contact::PlayerWorld::new(collision.as_ref(), &self.players, id, self.rules.solid_teammates);
                 let p = &mut self.players[i];
                 p.view_angles = input.view_angles;
                 p.tracked = input.tracked;
@@ -1593,9 +1599,9 @@ impl World {
                     p.movement.velocity*=0.97;
                     let vertical=if input.buttons&buttons::JUMP!=0{140.}else if input.buttons&buttons::DUCK!=0{-100.}else{-input.view_angles.x.to_radians().sin()*input.forward_move*0.3-12.};
                     p.movement.velocity.z=vertical;
-                    p.last_events=movement::player_move(&mut p.movement,&move_input,&config,collision.as_ref(),dt);
+                    p.last_events=contacts.move_player(&mut p.movement,&move_input,&config,dt);
                 } else {
-                    p.last_events = movement::player_move(&mut p.movement, &move_input, &self.config, collision.as_ref(), dt);
+                    p.last_events = contacts.move_player(&mut p.movement, &move_input, &self.config, dt);
                 }
                 if p.last_events.jumped {
                     self.events.push(GameEvent::Jump { player: id });
