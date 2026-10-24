@@ -1,6 +1,10 @@
 # Handoff
 
-> **Status: HANDED OFF on 2026-10-11 to OpenAI Codex / T3 Code session.**
+> **Status: HANDED OFF on 2026-10-24 to Claude Code / T3 Code session on WINSERVE.**
+>
+> Development moved from the owner's gaming PC (GAMERBOX) to WINSERVE on
+> 2026-10-24; the environment facts below that name GAMERBOX are historical.
+> See `docs/CI.md` for the current machine and runner.
 >
 > If you are the agent picking this up: **before doing anything else**, change
 > the line above to `Status: HANDED OFF on <date> to <thread or session

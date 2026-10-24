@@ -80,6 +80,9 @@ installs may still use the 730 `csgo_legacy` beta in
 
 - Rust stable via rustup; cargo is in `%USERPROFILE%\.cargo\bin`. In Git
   Bash: `export PATH="$HOME/.cargo/bin:$PATH"`.
+- Building also needs MSVC Build Tools and a Java runtime (Ruffle's build
+  script compiles ActionScript with it); packaging needs the .NET 8 SDK for
+  `vpk`. The dev machine is WINSERVE; its setup is in `docs/CI.md`.
 - Bevy 0.19: read the sources in `~/.cargo/registry/src/*/bevy_*-0.19.*`
   before using an API. Do not write Bevy APIs from memory.
 - The first `client` build takes several minutes. Use `--profile play` for
