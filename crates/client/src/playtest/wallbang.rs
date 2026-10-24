@@ -126,6 +126,12 @@ pub(super) fn partner_lanes(level: &level::Level) -> Vec<Lane> {
             let Some(end)=standing(&world,center+dir*384.) else {continue};
             if (a.z-b.z).abs()>2. || (a.z-end.z).abs()>8. {continue;}
             if world.collision.trace_box(a,end,movement::STAND_MINS,movement::STAND_MAXS,contents::MASK_PLAYERSOLID).hit() {continue;}
+            // The ready-on-head spawn must fit a complete standing rider,
+            // not just the partner's floor-level hull under a low ceiling.
+            let high=b+Vec3::Z*96.;
+            if world.collision.trace_box(high,high,movement::STAND_MINS,movement::STAND_MAXS,contents::MASK_PLAYERSOLID).start_solid {continue;}
+            if world.collision.trace_box(b+Vec3::Z*72.1,end+Vec3::Z*72.1,
+                movement::STAND_MINS,movement::STAND_MAXS,contents::MASK_PLAYERSOLID).hit() {continue;}
             return [(Kind::Contact,"Player contact / walk into partner"),
                 (Kind::Boost,"Boost / jump onto crouched partner"),
                 (Kind::RunBoost,"Run-boost / start on standing partner")].into_iter()
