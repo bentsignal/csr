@@ -567,6 +567,29 @@ mod tests {
         assert_eq!(headshot_gain_at(4.), 2.);
     }
 
+    #[test]
+    fn run_boost_setup_starts_on_the_partner_and_never_mirrors_the_jump_button() {
+        let (mut world,local,_)=pause_world();
+        let original_rule=world.rules.solid_teammates;
+        let mut panel=Panel {offline_playtest:true,pending_lane:Some(0),lanes:vec![wallbang::Lane {
+            kind:wallbang::Kind::RunBoost,name:"run boost".into(),shooter:glam::Vec3::new(64.,0.,1.),
+            target:glam::Vec3::new(320.,0.,1.)}],..default()};
+        configure(&mut panel,&mut world,local);
+        let partner=panel.target.unwrap();
+        let human=world.player(local).unwrap(); let base=world.player(partner).unwrap();
+        assert_eq!(human.team,base.team);
+        assert!((human.movement.origin.z-base.bounds().1.z).abs()<0.1);
+        assert_eq!(world.rules.solid_teammates,1);
+        let mut inputs=vec![(local,sim::TickInput {forward_move:450.,buttons:movement::buttons::JUMP,..default()})];
+        append_bot_inputs(&panel,&world,local,&mut inputs);
+        assert_eq!(inputs[1].0,partner);
+        assert_eq!(inputs[1].1.forward_move,450.);
+        assert_eq!(inputs[1].1.buttons & movement::buttons::JUMP,0);
+        panel.end_lane=true;
+        configure(&mut panel,&mut world,local);
+        assert_eq!(world.rules.solid_teammates,original_rule);
+    }
+
     fn bot_settings_level() -> level::Level {
         use std::{collections::BTreeMap, sync::Arc};
         // Synthetic content exercises the real resolver, not installed tuning.

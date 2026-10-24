@@ -50,6 +50,7 @@ pub(super) fn lanes(level: &level::Level) -> Vec<Lane> {
     // Discover additional real cover on the loaded map. Standable endpoints,
     // complete exit geometry and all material declarations are mandatory.
     // Labels come from the nearest authored NAV place, never a guessed callout.
+    let mut place_counts = std::collections::BTreeMap::<String, usize>::new();
     for solid in level.collision.convexes.iter().take(20_000) {
         if out.len() >= 20 { break; }
         let center = (solid.mins + solid.maxs) * 0.5;
@@ -57,13 +58,20 @@ pub(super) fn lanes(level: &level::Level) -> Vec<Lane> {
             let a = center - dir * 128. + Vec3::Z * 64.;
             let b = center + dir * 128. + Vec3::Z * 64.;
             if out.iter().any(|lane| lane.shooter.distance_squared(a) < 256. * 256.) { continue; }
-            let place = level.nav.as_ref().and_then(|nav| {
-                let area = nav.areas.iter().filter(|a| a.place > 0).min_by(|a,b|
-                    a.center().distance_squared(center).total_cmp(&b.center().distance_squared(center)))?;
-                nav.places.get(area.place as usize - 1)
-            }).map(String::as_str).unwrap_or("Cover");
-            let name = format!("{place} / cover {} ({:.0}, {:.0})", out.len() + 1, center.x, center.y);
-            if let Some(lane) = cover_lane(&world, name, a, b) { out.push(lane); }
+            let Some(mut lane) = cover_lane(&world, String::new(), a, b) else {continue};
+            let nav_area = |point: Vec3| level.nav.as_ref().and_then(|nav|
+                nav.areas.iter().filter(|area| area.contains_xy(point, 8.)
+                    && (area.z_at(point.x, point.y)-point.z).abs()<20.)
+                    .min_by(|a,b| a.size().total_cmp(&b.size())));
+            // Generic samples must be in the authored playable navigation,
+            // not an isolated floor in scenery or an inaccessible map shell.
+            if level.nav.is_some() && (nav_area(lane.shooter).is_none() || nav_area(lane.target).is_none()) {continue;}
+            let place = nav_area(lane.target).and_then(|area| level.nav.as_ref()?.places.get(area.place.checked_sub(1)? as usize))
+                .map(String::as_str).unwrap_or("Cover");
+            if place_counts.get(place).copied().unwrap_or(0)>=2 {continue;}
+            lane.name=format!("{place} / cover {} ({:.0}, {:.0})",out.len()+1,center.x,center.y);
+            *place_counts.entry(place.into()).or_default()+=1;
+            out.push(lane);
         }
     }
     out
