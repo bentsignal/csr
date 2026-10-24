@@ -49,7 +49,7 @@ fn horizontal(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
     if sigma < 0.05 {
         let coverage = coverage_at(in.uv);
         if coverage == 0.0 { return vec4<f32>(0.0); }
-        return vec4<f32>(textureSampleLevel(scene, scene_sampler, in.uv, 0.0).rgb * coverage, coverage);
+        return vec4<f32>(textureSampleLevel(scene, scene_sampler, in.uv, 0.0).rgb, coverage);
     }
     let step = vec2<f32>(max(sigma, 0.01) * 0.25 / f32(textureDimensions(scene).x), 0.0);
     var result = vec4<f32>(0.0);
@@ -59,7 +59,7 @@ fn horizontal(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
         let weight = exp(-0.5 * offset * offset);
         let uv = in.uv + step * f32(i);
         let coverage = coverage_at(uv);
-        result += vec4<f32>(textureSampleLevel(scene, scene_sampler, uv, 0.0).rgb * coverage, coverage) * weight;
+        result += vec4<f32>(textureSampleLevel(scene, scene_sampler, uv, 0.0).rgb, coverage) * weight;
         total += weight;
     }
     return result / total;
@@ -83,9 +83,10 @@ fn composite(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
     }
     result /= total;
     if result.a < 0.0001 { return original; }
-    let blurred = result.rgb / result.a;
-    // Covered foreground pixels replace their sharp source. Outside pixels
-    // receive premultiplied defocused coverage, making the silhouette soft.
-    let amount = max(coverage_at(in.uv), result.a);
+    let blurred = result.rgb;
+    // Convolve scene colour across the boundary as well as foreground coverage.
+    // Normalizing only foreground colour kept an opaque sharp edge on the
+    // inside of the silhouette. The lens itself still bypasses this pass.
+    let amount = max(coverage_at(in.uv), clamp(result.a * 2.0, 0.0, 1.0));
     return vec4<f32>(mix(original.rgb, blurred, amount), original.a);
 }

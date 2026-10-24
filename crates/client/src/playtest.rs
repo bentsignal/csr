@@ -58,6 +58,12 @@ pub(crate) fn install(app: &mut App) {
 fn enter(mut panel: ResMut<Panel>, opts: Res<crate::Options>, remote: Option<Res<crate::remote::RemoteClient>>, level: Option<Res<crate::LoadedLevel>>) {
     panel.enter_match(opts.0.playtest, remote.is_some());
     panel.lanes = if panel.offline_playtest { level.map(|level| wallbang::lanes(&level.0)).unwrap_or_default() } else { Vec::new() };
+    if opts.0.screenshot.is_some() && panel.offline_playtest {
+        if std::env::var("CSR_TEST_PLAYTEST_PAGE").ok().as_deref() == Some("tests") { panel.page = Page::Tests; }
+        if let Some(index) = std::env::var("CSR_TEST_WALLBANG_LANE").ok().and_then(|s| s.parse::<usize>().ok()).filter(|&i| i < panel.lanes.len()) {
+            panel.pending_lane = Some(index); panel.open = false;
+        }
+    }
 }
 impl Panel {
     fn enter_match(&mut self, playtest: bool, remote: bool) {
@@ -146,7 +152,9 @@ pub(crate) fn configure(panel: &mut Panel, world: &mut sim::World, id: sim::Play
             world.add_bot(&format!("Bot {}", i + 1), if i % 2 == 0 { other } else { team });
         }
     }
-    if std::mem::take(&mut panel.respawn) || (panel.weapon.is_some() && world.player(id).is_some_and(|p| !p.alive)) { world.respawn(id); }
+    if std::mem::take(&mut panel.respawn) || (panel.weapon.is_some() && world.player(id).is_some_and(|p| !p.alive)) { world.respawn(id);
+        if let Some(player) = world.player(id) { panel.look = Some(glam::Vec2::new(0., player.view_angles.y)); }
+    }
 }
 fn input(
     mut panel: ResMut<Panel>, opts: Res<crate::Options>,

@@ -46,7 +46,7 @@ pub(super) fn lanes(level: &level::Level) -> Vec<Lane> {
     // Discover additional real cover on the loaded map. Standable endpoints,
     // complete exit geometry and all material declarations are mandatory.
     // Labels come from the nearest authored NAV place, never a guessed callout.
-    for solid in &level.collision.convexes {
+    for solid in level.collision.convexes.iter().take(20_000) {
         if out.len() >= 20 { break; }
         let center = (solid.mins + solid.maxs) * 0.5;
         for dir in [Vec3::X, Vec3::Y] {
