@@ -140,7 +140,7 @@ mod tests {
             assert!(world.player(a).unwrap().movement.on_ground);
             assert!((world.player(a).unwrap().movement.origin.z-top).abs()<0.1);
             input.forward_move=450.;
-            for _ in 0..rate/2 { world.step(&[(b,input),(a,TickInput::default())]); }
+            for _ in 0..rate { world.step(&[(b,input),(a,TickInput::default())]); }
             let rider=world.player(a).unwrap().movement;
             let base=world.player(b).unwrap().movement;
             assert!(rider.origin.x>10. && (rider.origin.x-base.origin.x).abs()<4.,"rate={rate} rider={rider:?} base={base:?}");
