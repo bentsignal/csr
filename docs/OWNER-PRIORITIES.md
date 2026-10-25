@@ -1,5 +1,16 @@
 # Current owner priorities
 
+## October 25: WINSERVE handoff
+
+Finish the WINSERVE CI migration, publish v0.4.0 from current master, and
+verify the development checkout before selecting more gameplay work. Anything
+the owner tests must be built from current master.
+
+Paused until the owner asks: wallbang damage calibration, sniper crosshair
+blur, AUG/SG depth-of-field quality, sustained standing/crouched run-boost
+tests, and automatic recovery after falling off the surf map. These pauses
+supersede the older active queues below. Ask for the next scope after setup.
+
 ## October 24: active implementation after owner playtest
 
 1. Wallbang tests in F8: stationary targets behind real map cover, starting

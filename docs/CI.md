@@ -17,19 +17,34 @@ The release job needs the .NET SDK (8 or newer) on the runner for `vpk`; the
 workflow installs or updates the pinned `vpk` version itself
 (`dotnet tool update -g vpk`).
 
+Every build needs a Java runtime (`java` on `PATH` or `JAVA_HOME`): Ruffle's
+`ruffle_core` build script compiles its ActionScript `playerglobal` library
+with Java.
+
 Jobs queue while the PC is off and start when it is back.
 
 ## The runner
 
-- Installed at `D:\tools\csr-actions-runner`, registered as
-  `GAMERBOX-csr` with labels `csr`, `gpu`, `csgo-legacy`.
-- Runs as the owner's user (no admin): `CSGO Rewrite CI runner.vbs` in the
-  Windows Startup folder starts `run.cmd` hidden at logon.
-- Build cache: `D:\tools\csr-actions-runner\cargo-target` (`CARGO_TARGET_DIR`
+- Runs on the development machine, WINSERVE (since 2026-10-24; it replaced
+  `GAMERBOX-csr` on the owner's gaming PC). Installed at
+  `S:\tools\csr-actions-runner`, registered against `bentsignal/csr` as
+  `WINSERVE-csr` with labels `csr`, `gpu`, `csgo-legacy`.
+- Runs as the owner's user (no admin): the per-user scheduled task
+  `CSGO Rewrite CI runner` runs `start-runner.vbs` at logon, which starts
+  `run.cmd` hidden. `Start-ScheduledTask 'CSGO Rewrite CI runner'` starts it
+  by hand.
+- Toolchain on WINSERVE (all per-user except Build Tools): rustup stable,
+  Visual Studio 2022 Build Tools (C++ workload, Windows 11 SDK), .NET 8 SDK in
+  `%USERPROFILE%\.dotnet`, Temurin JDK 21 in `%LocalAppData%\Programs\jdk-21`,
+  Git and `gh` in `%LocalAppData%\Programs`. Workflow steps run through
+  Windows PowerShell, so the user's execution policy must allow scripts
+  (`Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`); Windows' default
+  fails every step.
+- Build cache: `S:\tools\csr-actions-runner\cargo-target` (`CARGO_TARGET_DIR`
   in the workflows). Delete it to force a clean build.
 - Re-register (for example after moving it):
-  `gh api -X POST repos/bentsignal/global-offensive/actions/runners/registration-token --jq .token`,
-  then `config.cmd --unattended --url https://github.com/bentsignal/global-offensive --token <token> --name GAMERBOX-csr --labels csr,gpu,csgo-legacy --work _work --replace`.
+  `gh api -X POST repos/bentsignal/csr/actions/runners/registration-token --jq .token`,
+  then `config.cmd --unattended --url https://github.com/bentsignal/csr --token <token> --name WINSERVE-csr --labels csr,gpu,csgo-legacy --work _work --replace`.
 
 ## Safety
 

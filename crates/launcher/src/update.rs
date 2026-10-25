@@ -19,7 +19,7 @@ use velopack::locator::{LocationContext, VelopackLocator, auto_locate_app_manife
 use velopack::sources::{AutoSource, GithubSource, UpdateSource};
 use velopack::{UpdateCheck, UpdateManager, VelopackApp};
 
-pub const REPO_URL: &str = "https://github.com/bentsignal/global-offensive";
+pub const REPO_URL: &str = "https://github.com/bentsignal/csr";
 
 /// Must run first in `main`: handles the installer's hooks (it may exit
 /// the process) and applies an update downloaded by an earlier run.
