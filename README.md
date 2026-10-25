@@ -53,7 +53,7 @@ wall penetration and multiplayer networking are still unfinished.
 
 ## Download and play (Windows)
 
-**[Download the installer](https://github.com/bentsignal/global-offensive/releases/latest/download/CSGORewrite-win-Setup.exe)**
+**[Download the installer](https://github.com/bentsignal/csr/releases/latest/download/CSGORewrite-win-Setup.exe)**
 (this link always gets the newest version; share it as is).
 
 1. Run `CSGORewrite-win-Setup.exe`. Windows says "Windows protected your

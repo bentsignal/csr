@@ -27,8 +27,8 @@ Jobs queue while the PC is off and start when it is back.
 
 - Runs on the development machine, WINSERVE (since 2026-10-24; it replaced
   `GAMERBOX-csr` on the owner's gaming PC). Installed at
-  `C:\tools\csr-actions-runner`, registered as `WINSERVE-csr` with labels
-  `csr`, `gpu`, `csgo-legacy`.
+  `S:\tools\csr-actions-runner`, registered against `bentsignal/csr` as
+  `WINSERVE-csr` with labels `csr`, `gpu`, `csgo-legacy`.
 - Runs as the owner's user (no admin): the per-user scheduled task
   `CSGO Rewrite CI runner` runs `start-runner.vbs` at logon, which starts
   `run.cmd` hidden. `Start-ScheduledTask 'CSGO Rewrite CI runner'` starts it
@@ -40,11 +40,11 @@ Jobs queue while the PC is off and start when it is back.
   Windows PowerShell, so the user's execution policy must allow scripts
   (`Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`); Windows' default
   fails every step.
-- Build cache: `C:\tools\csr-actions-runner\cargo-target` (`CARGO_TARGET_DIR`
+- Build cache: `S:\tools\csr-actions-runner\cargo-target` (`CARGO_TARGET_DIR`
   in the workflows). Delete it to force a clean build.
 - Re-register (for example after moving it):
-  `gh api -X POST repos/bentsignal/global-offensive/actions/runners/registration-token --jq .token`,
-  then `config.cmd --unattended --url https://github.com/bentsignal/global-offensive --token <token> --name WINSERVE-csr --labels csr,gpu,csgo-legacy --work _work --replace`.
+  `gh api -X POST repos/bentsignal/csr/actions/runners/registration-token --jq .token`,
+  then `config.cmd --unattended --url https://github.com/bentsignal/csr --token <token> --name WINSERVE-csr --labels csr,gpu,csgo-legacy --work _work --replace`.
 
 ## Safety
 

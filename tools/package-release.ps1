@@ -39,7 +39,7 @@ if (-not $Version) {
 $name = 'CSGO-Rewrite'
 $packId = 'CSGORewrite'        # Velopack app id: never change it, or installed copies stop updating
 $vpkVersion = '1.2.161'        # keep in step with the velopack crate in crates/launcher/Cargo.toml
-$repoUrl = 'https://github.com/bentsignal/global-offensive'
+$repoUrl = 'https://github.com/bentsignal/csr'
 $dist = Join-Path $root 'dist'
 $out = Join-Path $dist $name
 $zip = Join-Path $dist "$name-$Version-windows-x64.zip"
