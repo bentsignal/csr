@@ -1,5 +1,15 @@
 # Current owner priorities
 
+## October 26: desktop launcher and release tracks
+
+The owner approved a desktop launcher as the next implementation batch:
+Play, Refresh, visible update/download progress, release notes, a saved Stable
+track by default and an opt-in Dev track for the latest published changes.
+Dev builds come from master after CI passes. Add basic management of existing
+private content packs. Development and automation stay on WINSERVE; owner
+playtests run on the gaming PC using the installed updater. Preserve the
+paused gameplay scopes below.
+
 ## October 25: WINSERVE handoff
 
 Finish the WINSERVE CI migration, publish v0.4.0 from current master, and

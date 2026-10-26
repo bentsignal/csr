@@ -14,6 +14,11 @@
 /config/cosmetics.lock
 /config/game.instance.lock
 /config/game.launch.lock
+/config/launcher.instance.lock
+/config/launcher.json
+/config/launcher.tmp
+/config/launcher-window.ps1
+/config/launcher-state.json
 
 /worlds/
 

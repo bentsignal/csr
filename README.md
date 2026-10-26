@@ -54,21 +54,23 @@ wall penetration and multiplayer networking are still unfinished.
 ## Download and play (Windows)
 
 **[Download the installer](https://github.com/bentsignal/csr/releases/latest/download/CSGORewrite-win-Setup.exe)**
-(this link always gets the newest version; share it as is).
+(this link always gets the newest Stable version; share it as is).
 
 1. Run `CSGORewrite-win-Setup.exe`. Windows says "Windows protected your
    PC" because the game is not code-signed: click **More info**, then
    **Run anyway**. It installs for your Windows account in seconds (no
-   admin), adds desktop and Start menu shortcuts and starts the game.
-2. The game finds CS:GO Legacy ("Counter-Strike: Global Offensive" in your
+   admin), adds desktop and Start menu shortcuts and opens the launcher.
+2. Press **Play**. The game finds CS:GO Legacy ("Counter-Strike: Global Offensive" in your
    Steam library) by itself. If it is not installed, click **Install it with
    Steam**; the game starts by itself when the download is done.
 3. Optionally, let it add CSGO Rewrite to your Steam library, with its own
    artwork.
 
-After that the game **updates itself**: each start checks GitHub Releases in
-the background, downloads a new version while you play and installs it the
-next time you start the game. Your progress is kept in
+The launcher checks for updates automatically; **Refresh** checks again.
+Downloads show progress. Choose **Apply update** or **Update & play** when
+ready. **Stable** is the default for friends; **Dev** gets changes from master
+after CI passes. The **Content packs** tab installs and removes private packs.
+Your progress is kept in
 `%LocalAppData%\CSGO-Rewrite\userdata` and survives updates. CS:GO files are
 never included; they are read from your own install. See
 [docs/PLAYERS.md](docs/PLAYERS.md) (shipped as `README.txt`).

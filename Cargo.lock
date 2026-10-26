@@ -1732,7 +1732,7 @@ dependencies = [
 
 [[package]]
 name = "bsp"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "glam 0.32.1",
  "kv",
@@ -1890,7 +1890,7 @@ dependencies = [
 
 [[package]]
 name = "character-pose"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "glam 0.32.1",
  "mdl",
@@ -1975,7 +1975,7 @@ checksum = "1c133bc6a41be0d194c306b5506d15e6feeea7b1d6604bd3f8310dfb2ca96486"
 
 [[package]]
 name = "client"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "bevy",
  "bevy_mod_openxr",
@@ -2052,7 +2052,7 @@ dependencies = [
 
 [[package]]
 name = "collision"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "bsp",
  "glam 0.32.1",
@@ -2146,7 +2146,7 @@ dependencies = [
 
 [[package]]
 name = "content"
-version = "0.4.0"
+version = "0.5.0"
 
 [[package]]
 name = "convert_case"
@@ -3883,11 +3883,11 @@ dependencies = [
 
 [[package]]
 name = "kv"
-version = "0.4.0"
+version = "0.5.0"
 
 [[package]]
 name = "launcher"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "bsp",
  "client",
@@ -3901,6 +3901,7 @@ dependencies = [
  "packs",
  "png",
  "rodio",
+ "serde",
  "serde_json",
  "sim",
  "velopack",
@@ -3920,7 +3921,7 @@ checksum = "20870f649af7073d53e38067b2a84312175d56ea15217e1b15bc83506ec50afb"
 
 [[package]]
 name = "level"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "bsp",
  "character-pose",
@@ -4142,7 +4143,7 @@ dependencies = [
 
 [[package]]
 name = "mdl"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "content",
  "glam 0.32.1",
@@ -4192,7 +4193,7 @@ checksum = "e53debba6bda7a793e5f99b8dacf19e626084f525f7829104ba9898f367d85ff"
 
 [[package]]
 name = "movement"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "collision",
  "glam 0.32.1",
@@ -4351,7 +4352,7 @@ dependencies = [
 
 [[package]]
 name = "nav"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "glam 0.32.1",
 ]
@@ -4388,7 +4389,7 @@ dependencies = [
 
 [[package]]
 name = "netcode"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "collision",
  "content",
@@ -4978,7 +4979,7 @@ dependencies = [
 
 [[package]]
 name = "packs"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "content",
  "serde",
@@ -5354,7 +5355,7 @@ checksum = "019b4b213425016d7d84a153c4c73afb0946fbb4840e4eece7ba8848b9d6da22"
 
 [[package]]
 name = "ragdoll"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "collision",
  "glam 0.32.1",
@@ -5971,7 +5972,7 @@ dependencies = [
 
 [[package]]
 name = "scaleform"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "async-channel",
@@ -6070,7 +6071,7 @@ dependencies = [
 
 [[package]]
 name = "server"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "ctrlc",
  "glam 0.32.1",
@@ -6131,7 +6132,7 @@ checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
 
 [[package]]
 name = "sim"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "bsp",
  "character-pose",
@@ -7114,7 +7115,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "vfs"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "kv",
  "lzma-rs",
@@ -7124,18 +7125,18 @@ dependencies = [
 
 [[package]]
 name = "vmt"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "kv",
 ]
 
 [[package]]
 name = "vpk"
-version = "0.4.0"
+version = "0.5.0"
 
 [[package]]
 name = "vtf"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "bcdec_rs",
 ]
@@ -7251,7 +7252,7 @@ checksum = "323f4da9523e9a669e1eaf9c6e763892769b1d38c623913647bfdc1532fe4549"
 
 [[package]]
 name = "weapons"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "content",
  "kv",
@@ -7994,7 +7995,7 @@ dependencies = [
 
 [[package]]
 name = "workshop"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "content",
  "serde_json",

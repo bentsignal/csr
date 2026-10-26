@@ -361,10 +361,9 @@ pub fn early_command(args: &[String]) -> Option<i32> {
     }
 }
 
-/// Prepares the process before any command runs: data folder, CS:GO Legacy
-/// folder, and for installed copies the one-time "Add to Steam" offer.
-/// `force_ask` re-runs the CS:GO folder question (`csr setup`).
-pub fn prepare(force_ask: bool) -> Result<(), String> {
+/// The desktop launcher can update and manage packs before Legacy is installed.
+/// Game discovery and its setup dialogs are deferred until Play.
+pub fn prepare_data() -> Result<Layout, String> {
     let layout = Layout::current();
     if matches!(layout, Layout::Installed(_)) {
         dialog::hide_own_console();
@@ -387,7 +386,13 @@ pub fn prepare(force_ask: bool) -> Result<(), String> {
         // and Workshop stores must not apply it again after chdir.
         unsafe { std::env::set_var("CSR_DATA_DIR", &data) };
     }
+    Ok(layout)
+}
 
+/// Prepare a game/CLI command, preserving installed preferences and setup.
+pub fn prepare(force_ask: bool) -> Result<(), String> {
+    let layout = prepare_data()?;
+    let data = std::env::current_dir().map_err(|e| e.to_string())?;
     if std::env::var_os("CSR_GAME_DIR").is_none() || force_ask {
         if let Some(game) = find_game(&layout, &data, force_ask)? {
             // SAFETY: single-threaded start-up, before anything reads the environment.
