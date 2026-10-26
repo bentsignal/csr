@@ -1,9 +1,13 @@
-param([Parameter(Mandatory)][string]$StateFile, [string]$Preview = '', [string]$IconFile = '')
+param([Parameter(Mandatory)][string]$StateFile, [string]$Preview = '', [string]$IconFile = '', [int]$ParentId = 0)
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
+$backend=$null
+if($ParentId){
+    try{$backend=[Diagnostics.Process]::GetProcessById($ParentId); $null=$backend.Handle}catch{exit 0}
+}
 
 $bg = [Drawing.ColorTranslator]::FromHtml('#11161d')
 $card = [Drawing.ColorTranslator]::FromHtml('#1a222c')
@@ -14,8 +18,10 @@ $script:rendering = $false
 $script:packSignature = ''
 
 function Send-Action([string]$Action, [string]$Value = '') {
-    [Console]::Out.WriteLine((@{action=$Action; value=$Value} | ConvertTo-Json -Compress))
-    [Console]::Out.Flush()
+    try{
+        [Console]::Out.WriteLine((@{action=$Action; value=$Value} | ConvertTo-Json -Compress))
+        [Console]::Out.Flush()
+    }catch{$form.Close()}
 }
 function Label($Parent, $Text, $X, $Y, $W, $H, $Size = 10, $Color = $ink) {
     $c = New-Object Windows.Forms.Label
@@ -127,6 +133,7 @@ $timer=New-Object Windows.Forms.Timer; $timer.Interval=150
 $script:previewTicks=0
 $timer.Add_Tick({
     try {
+        if($backend -and $backend.HasExited){$form.Close(); return}
         $s=Read-State; $script:rendering=$true
         $track.SelectedIndex=$(if($s.track -eq 'dev'){1}else{0})
         $track.Enabled=(-not $s.busy)
@@ -167,4 +174,4 @@ $timer.Add_Tick({
     } finally { $script:rendering=$false }
 })
 $timer.Start()
-try {[void]$form.ShowDialog()} finally {$timer.Stop(); $timer.Dispose(); $form.Dispose()}
+try {[void]$form.ShowDialog()} finally {$timer.Stop(); $timer.Dispose(); $form.Dispose(); if($backend){$backend.Dispose()}}

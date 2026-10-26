@@ -247,6 +247,8 @@ pub fn run(args: &[String]) -> Result<(), String> {
         .arg(&state_path)
         .arg("-IconFile")
         .arg(std::env::current_exe().map_err(|e| e.to_string())?)
+        .arg("-ParentId")
+        .arg(std::process::id().to_string())
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(fs::File::create(root.join("config/launcher-ui.log")).map_err(|e| e.to_string())?);
