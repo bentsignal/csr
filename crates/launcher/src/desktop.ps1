@@ -129,13 +129,13 @@ $timer.Add_Tick({
     try {
         $s=Read-State; $script:rendering=$true
         $track.SelectedIndex=$(if($s.track -eq 'dev'){1}else{0})
-        $track.Enabled=(-not $s.busy -and -not $s.ready)
+        $track.Enabled=(-not $s.busy)
         $status.Text=[string]$s.status
         $version.Text="v$($s.version)  /  $($s.build)"
         $play.Enabled=(-not $s.installing -and -not $s.running)
         $play.Text=$(if($s.running){'Game is running'}elseif($s.ready){'Update & play'}elseif($s.busy){'Play installed'}else{'Play'})
         $apply.Visible=[bool]$s.ready; $apply.Enabled=(-not $s.busy -and -not $s.running)
-        $refresh.Enabled=(-not $s.busy -and -not $s.ready)
+        $refresh.Enabled=(-not $s.busy)
         if($s.progress -lt 0){$progress.Style='Marquee'}else{$progress.Style='Continuous'; $progress.Value=[Math]::Min(100,[Math]::Max(0,[int]$s.progress))}
         $progress.Visible=[bool]$s.busy
         $nextNotes=([string]$s.notes).Replace("`r`n","`n").Replace("`n","`r`n")

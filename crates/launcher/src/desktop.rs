@@ -217,7 +217,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
             .collect(),
         track: preferences.track,
         status: "Checking for updates…".into(),
-        notes,
+        notes: notes.clone(),
         busy: true,
         running: false,
         ready: false,
@@ -382,7 +382,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
                     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
                     let _ = Command::new("explorer.exe").arg(dir).spawn();
                 }
-                "refresh" | "track" if !state.busy && !state.ready => {
+                "refresh" | "track" if !state.busy => {
                     if action.action == "track" {
                         let track = match action.value.as_str() {
                             "stable" => Track::Stable,
@@ -403,6 +403,11 @@ pub fn run(args: &[String]) -> Result<(), String> {
                         }
                         state.track = track;
                     }
+                    // Auto-apply is disabled: cached packages from a previous
+                    // track cannot be applied unless this check selects them.
+                    ready = None;
+                    state.ready = false;
+                    state.notes = notes.clone();
                     packs(&mut state, &root);
                     state.busy = true;
                     state.status = "Checking for updates…".into();
