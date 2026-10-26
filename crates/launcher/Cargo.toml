@@ -33,10 +33,11 @@ velopack = "=1.2.161"
 # Original Steam library artwork and the app icon, drawn in code.
 png = "0.18"
 crc32fast = "1"
+serde.workspace = true
+serde_json.workspace = true
 
 [build-dependencies]
 png = "0.18"
 
 [dev-dependencies]
 rodio = { version = "0.22", default-features = false, features = ["hound", "mp3"] }
-serde_json = "1"

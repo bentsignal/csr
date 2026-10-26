@@ -1,5 +1,14 @@
 # Roadmap
 
+## Desktop launcher and delivery (October 26)
+
+- [x] Desktop entry with Play, Refresh, update status/progress and release notes.
+- [x] Saved Stable default and opt-in Dev track; allow returning to Stable.
+- [x] Basic installed-pack list, install/cancel/remove, pack and log folders.
+- [x] Publish tested master to Dev prereleases without changing Stable.
+- [x] Check saved tracks and Stable return with local update-package fixtures;
+  reject corrupt downloads before enabling Apply.
+
 ## October 24 core-mechanics test follow-up
 
 - [x] Add F8 stationary wallbang target lanes with per-shot and cumulative

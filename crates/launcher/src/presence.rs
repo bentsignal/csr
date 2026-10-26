@@ -5,7 +5,7 @@ use std::path::Path;
 
 pub struct Game(File);
 
-fn file(root: &Path, name: &str) -> Result<File, String> {
+pub(crate) fn file(root: &Path, name: &str) -> Result<File, String> {
     let dir = root.join("config");
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let path = dir.join(name);
@@ -33,6 +33,15 @@ fn file(root: &Path, name: &str) -> Result<File, String> {
 }
 
 impl Game {
+    pub fn running(root: &Path) -> Result<bool, String> {
+        let presence = file(root, "game.instance.lock")?;
+        match presence.try_lock() {
+            Ok(()) => Ok(false),
+            Err(TryLockError::WouldBlock) => Ok(true),
+            Err(TryLockError::Error(e)) => Err(e.to_string()),
+        }
+    }
+
     /// Ordinary explicit launches may coexist, but each holds a shared lock
     /// until `client::run` returns. The gate also coordinates file-open launches.
     pub fn launch(root: &Path) -> Result<Self, String> {
@@ -99,10 +108,12 @@ mod tests {
             .filter_map(|t| t.join().unwrap())
             .collect();
         assert_eq!(guards.len(), 1);
+        assert!(Game::running(&root).unwrap());
         let explicit = Game::launch(&root).unwrap();
         drop(guards);
         assert!(Game::launch_if_absent(&root).unwrap().is_none());
         drop(explicit);
+        assert!(!Game::running(&root).unwrap());
         assert!(Game::launch_if_absent(&root).unwrap().is_some());
         fs::remove_dir_all(root).unwrap();
     }

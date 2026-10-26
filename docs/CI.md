@@ -12,6 +12,13 @@ run the real-data checks.
 | `ci.yml` on every PR and push to `master` | `[self-hosted, csr]` | `cargo test`, `play` build, `csr probe de_dust2`, `csr sim de_dust2`, two-client UDP Dust II netcheck and owned-session checks at 128/64 tick |
 | `ci.yml` asset guard | GitHub (`ubuntu-latest`, seconds) | `tools/check-no-assets.sh` |
 | `release.yml` on a `v*` tag | `[self-hosted, csr]` | tests, `tools/package-release.ps1 -DeltaFromGitHub` (zip, Velopack installer, full and delta update packages), publish all of it to the GitHub Release (`gh release create`, then `vpk upload github --merge`) |
+| `dev-release.yml` after successful master-push CI | `[self-hosted, csr]` | package the tested source SHA and publish a Dev prerelease; skip superseded commits |
+
+Stable releases are explicitly tagged. Dev versions use the next patch plus
+`-dev.<CI run number>.<attempt>`; they never become GitHub's latest Stable
+release. Publishing starts with a draft and exposes it only after the installer,
+packages and feed are uploaded. The launcher's Stable track reads the latest
+Stable download feed directly, so Dev release volume cannot hide Stable.
 
 The release job needs the .NET SDK (8 or newer) on the runner for `vpk`; the
 workflow installs or updates the pinned `vpk` version itself

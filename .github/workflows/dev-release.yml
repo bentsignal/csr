@@ -1,0 +1,88 @@
+name: Dev release
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [master]
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: dev-release
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_BUILD_JOBS: 1
+  CARGO_TARGET_DIR: S:\tools\csr-actions-runner\cargo-target
+  CSR_BUILD_SHA: ${{ github.event.workflow_run.head_sha }}
+
+jobs:
+  publish:
+    # Only trusted pushes to master with a successful complete CI batch.
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'master' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: [self-hosted, csr]
+    defaults:
+      run:
+        shell: powershell
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+      - name: Toolchain paths
+        run: |
+          Add-Content $env:GITHUB_PATH "$env:USERPROFILE\.cargo\bin"
+          Add-Content $env:GITHUB_PATH "$env:USERPROFILE\.dotnet\tools"
+          Add-Content $env:GITHUB_PATH "$env:USERPROFILE\.dotnet"
+      - name: Skip superseded commits
+        id: current
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $master = gh api "repos/$env:GITHUB_REPOSITORY/commits/master" --jq .sha
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          "publish=$($master -eq $env:CSR_BUILD_SHA)".ToLowerInvariant() | Add-Content $env:GITHUB_OUTPUT
+      - name: Velopack packer
+        if: steps.current.outputs.publish == 'true'
+        run: |
+          dotnet tool update -g vpk --version 1.2.161
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Version and release notes
+        if: steps.current.outputs.publish == 'true'
+        env:
+          CI_RUN_NUMBER: ${{ github.event.workflow_run.run_number }}
+          CI_RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+        run: |
+          $base = (Select-String -Path Cargo.toml -Pattern '^version\s*=\s*"([^"]+)"' | Select-Object -First 1).Matches[0].Groups[1].Value
+          $parts = $base.Split('.')
+          $version = "$($parts[0]).$($parts[1]).$([int]$parts[2]+1)-dev.$env:CI_RUN_NUMBER.$env:CI_RUN_ATTEMPT"
+          "CSR_DEV_VERSION=$version" | Add-Content $env:GITHUB_ENV
+          $summary = git log -1 --format=%s
+          @("Dev build from master", '', $summary, '', "Source: $env:CSR_BUILD_SHA") | Set-Content dist-dev-notes.md -Encoding UTF8
+      - name: Package tested master
+        if: steps.current.outputs.publish == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ./tools/package-release.ps1 -Version $env:CSR_DEV_VERSION -Prerelease -DeltaFromGitHub -ReleaseNotes (Join-Path $PWD 'dist-dev-notes.md')
+      - name: Publish Dev update
+        if: steps.current.outputs.publish == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $master = gh api "repos/$env:GITHUB_REPOSITORY/commits/master" --jq .sha
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ($master -ne $env:CSR_BUILD_SHA) { Write-Host 'Newer master is waiting for CI; skipping this superseded build.'; exit 0 }
+          $tag = "v$env:CSR_DEV_VERSION"
+          $zip = Get-ChildItem dist -Filter "CSGO-Rewrite-$env:CSR_DEV_VERSION-windows-x64.zip" | Select-Object -First 1
+          gh release create $tag $zip.FullName --target $env:CSR_BUILD_SHA --title "CSGO Rewrite Dev $env:CSR_DEV_VERSION" --notes-file dist-dev-notes.md --draft --prerelease --latest=false
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          vpk upload github --repoUrl "https://github.com/$env:GITHUB_REPOSITORY" --token $env:GH_TOKEN `
+            --outputDir dist\velopack --tag $tag --releaseName "CSGO Rewrite Dev $env:CSR_DEV_VERSION" --merge --pre --publish
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

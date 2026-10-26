@@ -23,6 +23,7 @@
 mod art;
 mod cs2_config;
 mod dialog;
+mod desktop;
 mod fileassoc;
 mod mapcmd;
 mod packcmd;
@@ -45,6 +46,7 @@ fn main() {
     if pack_open.is_some() { dialog::hide_own_console(); }
     if args.iter().any(|a| a == "--help" || a == "-h") {
         println!("CSGO Rewrite\n\n\
+            csr launcher            Open the desktop launcher (also the default)\n\
             csr play [map] [options]  Open the main menu (default: de_dust2)\n\
             csr sim [map] [--tickrate N]  Check movement, combat and rounds (default 128 tick)\n\
             csr probe [map]           Validate the map's models and textures\n\
@@ -81,6 +83,14 @@ fn main() {
     if let Some(code) = setup::early_command(&args) {
         std::process::exit(code);
     }
+    if desktop::requested(&args) {
+        dialog::hide_own_console();
+        if let Err(e) = setup::prepare_data().and_then(|_| desktop::run(&args)) {
+            dialog::message("CSGO Rewrite Launcher", &e);
+            std::process::exit(1);
+        }
+        return;
+    }
     let setup_only = args.first().is_some_and(|a| a == "setup");
     if let Err(e) = setup::prepare(setup_only) {
         setup::report(&e);
@@ -94,7 +104,8 @@ fn main() {
         steam::offer(&std::env::current_dir().unwrap_or_default(), true);
         return;
     }
-    update::check_in_background();
+    // The desktop launcher owns updates. Explicit CLI/automation launches never
+    // download an update behind the launcher or change its selected track.
     if let Some(source) = pack_open {
         let result = source.and_then(|source| packopen::run(source, &std::env::current_dir().unwrap_or_default()));
         let code = match result {

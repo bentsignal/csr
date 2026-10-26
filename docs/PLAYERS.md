@@ -19,14 +19,14 @@ WHAT YOU NEED
 INSTALLING
 ----------
 1. Download CSGORewrite-win-Setup.exe (from the link you were sent, or the
-   Releases page: github.com/bentsignal/global-offensive/releases).
+   Releases page: github.com/bentsignal/csr/releases).
    If your browser asks whether to keep the file, choose Keep.
 2. Run it. Windows may say "Windows protected your PC". Click "More info",
    then "Run anyway". (The game is not code-signed, so Windows does not
    recognise it yet. You only see this once.)
 3. It installs in a few seconds, without asking for an administrator,
    puts "CSGO Rewrite" on your desktop and in the Start menu, and starts.
-4. The game finds CS:GO Legacy by itself. If it is not installed, click
+4. Press Play. The game finds CS:GO Legacy by itself. If it is not installed, click
    "Install it with Steam" and then Install in Steam. Leave the CSGO Rewrite
    window open: the game starts by itself when the download is done.
 5. It asks once whether to add CSGO Rewrite to your Steam library. If you
@@ -37,15 +37,24 @@ INSTALLING
 
 UPDATES
 -------
-Automatic. Each time you start the game it checks for a new version in the
-background. When there is one, it downloads while you play and you get a
-notification. It installs the next time you start the game, which takes a
-few seconds. You never need to download the installer again.
+Open CSGO Rewrite to see the launcher. It checks for updates automatically;
+Refresh checks again. Downloads show progress. When an update is ready,
+choose Apply update, or Update & play to install it and start the game.
+You never need to download the installer again. If the update service is
+unavailable, you can still play your installed version. Play installed also
+lets you start without waiting for an update check or download to finish.
+
+Stable is the default release track, recommended for friends. Choose Dev to
+receive the newest changes from master after automated tests pass. Your
+choice is remembered. Switching back to Stable can install an older version;
+your settings and content packs are kept. Close the game before applying an
+update or changing installed content packs.
 
 
 PLAYING
 -------
-Start CSGO Rewrite from the desktop, the Start menu or Steam.
+Start CSGO Rewrite from the desktop, the Start menu or Steam, then press Play
+in the launcher. Dev launches also enable the in-game F8 playtest controls.
 
 For an existing server, choose Play > Community Server Browser. In Favorites,
 choose Add a Server and enter the address your host gave you. Select the
@@ -80,6 +89,8 @@ opens the game, or shows a notification if the game is already running.
 Cancelling before installation finishes keeps the previous pack version.
 Packs are kept with your other data and survive game updates.
 The Content packs button on the home screen opens the installed pack list.
+The desktop launcher's Content packs tab also lists installed packs, installs
+new .csrpack files, removes selected packs and opens the packs folder.
 Choose a pack and map, then Play. Install opens a file picker; dropping a
 .csrpack file onto the game window also starts installation.
 

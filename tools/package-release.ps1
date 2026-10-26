@@ -27,6 +27,8 @@ param(
     [string]$Version,
     [switch]$NoInstaller,
     [switch]$DeltaFromGitHub,
+    [switch]$Prerelease,
+    [string]$ReleaseNotes,
     [string]$Releases
 )
 $ErrorActionPreference = 'Stop'
@@ -61,16 +63,35 @@ $exe = Join-Path $targetDir 'release\csr.exe'
 if (-not (Test-Path $exe)) { throw "Missing $exe (run without -SkipBuild)" }
 
 # --- Lay out the game folder -----------------------------------------------
-if (Test-Path $out) { Remove-Item $out -Recurse -Force }
+function Remove-PackageFolder([string]$Folder) {
+    $absolute = [IO.Path]::GetFullPath($Folder)
+    $distRoot = [IO.Path]::GetFullPath($dist).TrimEnd('\') + '\'
+    if (-not $absolute.StartsWith($distRoot, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "Package cleanup escapes dist: $absolute"
+    }
+    foreach ($candidate in @($dist, $absolute)) {
+        if ((Test-Path -LiteralPath $candidate) -and ((Get-Item -LiteralPath $candidate -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+            throw "Package cleanup refuses a linked folder: $candidate"
+        }
+    }
+    foreach ($saved in @('userdata', 'config', 'logs')) {
+        if (Test-Path -LiteralPath (Join-Path $absolute $saved)) { throw "Preserving player data in $absolute; move this played copy before packaging." }
+    }
+    if (Test-Path -LiteralPath $absolute) { Remove-Item -LiteralPath $absolute -Recurse -Force }
+}
+Remove-PackageFolder $out
 New-Item -ItemType Directory -Force $out | Out-Null
 Copy-Item $exe (Join-Path $out "$name.exe")
 Copy-Item 'docs\PLAYERS.md' (Join-Path $out 'README.txt')
 Copy-Item 'LICENSE' (Join-Path $out 'LICENSE.txt') -ErrorAction SilentlyContinue
+if (-not $ReleaseNotes) { $ReleaseNotes = Join-Path $root 'docs\LAUNCHER-RELEASE-NOTES.md' }
+if (-not (Test-Path -LiteralPath $ReleaseNotes -PathType Leaf)) { throw 'Release notes file is missing' }
+Copy-Item -LiteralPath $ReleaseNotes -Destination (Join-Path $out 'RELEASE-NOTES.md')
 
 # The installed app gets the same files, minus the portable marker and the
 # .bat launchers (it has Start menu and desktop shortcuts instead).
 $appDir = Join-Path $dist "$name-app"
-if (Test-Path $appDir) { Remove-Item $appDir -Recurse -Force }
+Remove-PackageFolder $appDir
 Copy-Item $out $appDir -Recurse
 
 # Marks the zip copy as portable: player data goes to userdata\ next to the exe.
@@ -84,7 +105,7 @@ function Write-Bat($file, $body) {
     Set-Content -Encoding ascii (Join-Path $out $file) ("@echo off`r`ncd /d `"%~dp0`"`r`n" + $body)
 }
 Write-Bat 'Play CSGO.bat' @"
-"$name.exe" play de_dust2
+"$name.exe" launcher
 if errorlevel 1 pause
 "@
 Write-Bat 'Change CSGO Folder.bat' @"
@@ -130,6 +151,7 @@ if ($DeltaFromGitHub) {
     # The previous full package lets vpk build a small delta update.
     $tokenArgs = @()
     if ($env:GH_TOKEN) { $tokenArgs = @('--token', $env:GH_TOKEN) }
+    if ($Prerelease) { $tokenArgs += '--pre' }
     & $vpk download github --repoUrl $repoUrl -o $Releases @tokenArgs
     if ($LASTEXITCODE -ne 0) { Write-Host 'No earlier installer release found; this one has no delta.' }
 }
@@ -138,6 +160,7 @@ Write-Host "Packing installer $Version..."
 & $vpk pack --packId $packId --packVersion $Version --packDir $appDir --mainExe "$name.exe" `
     --packTitle 'CSGO Rewrite' --packAuthors 'CSGO Rewrite contributors' `
     --icon (Join-Path $art 'icon.ico') --splashImage (Join-Path $art 'splash.png') `
+    --releaseNotes $ReleaseNotes `
     --runtime win-x64 --shortcuts 'Desktop,StartMenuRoot' --noPortable --outputDir $Releases
 if ($LASTEXITCODE -ne 0) { throw 'vpk pack failed' }
 
