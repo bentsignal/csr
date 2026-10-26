@@ -24,7 +24,7 @@ pub fn request(args: &[String]) -> Option<Result<PathBuf, String>> {
     }
 }
 
-fn status(progress: packs::Progress) -> String {
+pub(crate) fn status(progress: packs::Progress) -> String {
     use packs::Stage::*;
     let text = match progress.stage {
         Reading => "Reading the pack",

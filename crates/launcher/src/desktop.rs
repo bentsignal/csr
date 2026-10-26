@@ -344,7 +344,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
             } else {
                 -1
             };
-            let text = format!("Installing content pack… {:?}", progress.stage);
+            let text = crate::packopen::status(progress);
             if state.status != text || state.progress != percent {
                 state.status = text;
                 state.progress = percent;
