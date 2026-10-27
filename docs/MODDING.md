@@ -1,5 +1,10 @@
 # Private content packs
 
+Version 2 additionally supports sandboxed movement modules and rigid board
+visuals through the same installer. See [MECHANICS.md](MECHANICS.md) for the API
+and [SKATE.md](SKATE.md) for creating a pack from an owned Skate installation.
+The version 1 restrictions described below remain in force for v1 packs.
+
 `.csrpack` version 1 is a bounded ZIP of data. It supports named BSP maps and
 model, material and sound resources through stable `ContentId`s. Recipe packs
 can name maps in the player's own CS:GO Legacy install. Importers for other

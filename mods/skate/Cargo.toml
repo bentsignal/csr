@@ -1,0 +1,34 @@
+[workspace]
+
+[package]
+name = "csr-skate"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-only"
+description = "Skate 3 Rust Engine riding calculations adapted to CSGO Rewrite mechanics packs"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "prepare-skate-pack"
+path = "src/prepare.rs"
+required-features = ["authoring"]
+
+[features]
+authoring = ["dep:skate-data", "dep:gltf", "dep:serde_json", "dep:packs"]
+
+[dependencies]
+mechanics-api = { path = "../../crates/mechanics-api" }
+skate-core = { git = "https://github.com/SK8-ENGINE/skate-3-rust-engine", rev = "2e16697797c8358d16f747a8259354ff2921041a" }
+glam = "=0.32.1"
+skate-data = { git = "https://github.com/SK8-ENGINE/skate-3-rust-engine", rev = "2e16697797c8358d16f747a8259354ff2921041a", optional = true }
+gltf = { version = "1.4", default-features = false, features = ["utils", "names"], optional = true }
+serde_json = { version = "1", optional = true }
+packs = { path = "../../crates/packs", optional = true }
+
+[profile.release]
+opt-level = 2
+lto = true
+panic = "abort"
+strip = true

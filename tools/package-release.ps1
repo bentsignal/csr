@@ -84,6 +84,8 @@ New-Item -ItemType Directory -Force $out | Out-Null
 Copy-Item $exe (Join-Path $out "$name.exe")
 Copy-Item 'docs\PLAYERS.md' (Join-Path $out 'README.txt')
 Copy-Item 'LICENSE' (Join-Path $out 'LICENSE.txt') -ErrorAction SilentlyContinue
+& (Join-Path $root 'tools/build-skate-tools.ps1') -OutputDir $out
+Copy-Item -LiteralPath 'docs/SKATE.md' -Destination (Join-Path $out 'Skate-README.txt')
 if (-not $ReleaseNotes) { $ReleaseNotes = Join-Path $root 'docs\LAUNCHER-RELEASE-NOTES.md' }
 if (-not (Test-Path -LiteralPath $ReleaseNotes -PathType Leaf)) { throw 'Release notes file is missing' }
 Copy-Item -LiteralPath $ReleaseNotes -Destination (Join-Path $out 'RELEASE-NOTES.md')

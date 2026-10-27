@@ -18,6 +18,7 @@ path = "examples/xr_smoke.rs"
 required-features = ["xr-smoke"]
 
 [dependencies]
+mechanics.workspace = true
 bevy.workspace = true
 tracing = { version = "=0.1.44", optional = true, default-features = false, features = ["std"] }
 tracing-subscriber = { version = "=0.3.23", optional = true, default-features = false, features = ["registry", "std"] }

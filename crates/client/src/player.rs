@@ -35,6 +35,7 @@ pub struct LocalPlayer {
     pub curr_eye: glam::Vec3,
     /// The pose shared by all cameras and the weapon this render frame.
     pub render_eye: glam::Vec3,
+    pub render_camera: glam::Vec3,
     pub render_angles: glam::Vec3,
     /// Buttons pressed since the last tick, so short taps are not lost.
     pub latched: u32,
@@ -54,6 +55,7 @@ pub struct LocalPlayer {
     /// Purchases waiting to be sent, one per tick.
     pub pending_buys: Vec<Purchase>,
     pub pending_drop: bool,
+    pub pending_mode: bool,
     /// The teammate being watched while dead.
     pub spectating: Option<PlayerId>,
     was_alive: bool,
@@ -74,6 +76,7 @@ impl LocalPlayer {
             prev_eye: eye,
             curr_eye: eye,
             render_eye: eye,
+            render_camera: eye,
             render_angles: glam::Vec3::new(0.0, yaw, 0.0),
             latched: 0,
             pointer_attacks: 0,
@@ -85,6 +88,7 @@ impl LocalPlayer {
             console_utility: 0,
             pending_buys: Vec::new(),
             pending_drop: false,
+            pending_mode: false,
             spectating: None,
             was_alive: true,
             remote_life: 0,
@@ -111,6 +115,7 @@ impl LocalPlayer {
         self.pending_slot = 0;
         self.clear_utility_requests();
         self.pending_drop = false;
+        self.pending_mode = false;
         self.pending_buys.clear();
         self.capture_mouse = 0;
     }
@@ -288,6 +293,7 @@ pub fn focus_input(
             local.pending_slot = 0;
             local.pending_utility = 0;
             local.pending_drop = false;
+            local.pending_mode = false;
         }
     }
 }
@@ -389,6 +395,10 @@ pub fn look(
     let me = world.0.player(local.id);
     let alive = me.is_some_and(|p| p.alive);
     if alive && grabbed && settings.action_just_pressed(12, &keys, &mouse, blocked_mouse) {inspect.start();}
+    if alive && grabbed && remote.is_none() && !world.0.mechanics.is_empty()
+        && settings.action_just_pressed(crate::settings::KEY_MOVEMENT_MODE, &keys, &mouse, blocked_mouse) {
+        local.pending_mode = true;
+    }
 
     // Spectating: left click cycles through living teammates.
     if !alive && grabbed && mouse.just_pressed(MouseButton::Left) {
@@ -559,6 +569,7 @@ pub fn sample_tick_input(local: &mut LocalPlayer, controls: &Controls<'_>) -> Ti
     let device_utility = std::mem::take(&mut local.pending_utility);
     let console_utility = std::mem::take(&mut local.console_utility);
     TickInput {
+        toggle_mode: std::mem::take(&mut local.pending_mode) && attack_allowed,
         view_angles: glam::Vec3::new(local.pitch, local.yaw, 0.),
         forward_move, side_move,
         buttons: attacks
@@ -608,10 +619,25 @@ pub fn tick(
         keys: &real_keys, mouse: &mouse, settings: &settings, enabled: enabled.0,
         blocked: block.0 != 0, captured: captured(&cursor), buy_menu: menu.open,
     });
+    if let Some(me) = world.0.player(local.id).filter(|p| crate::movement_modes::third_person(p)) {
+        // Third-person crosshair chooses a world target; CS still admits the
+        // muzzle and fires from the player's eye, preserving cover collision.
+        let angles = input.view_angles;
+        let camera = crate::movement_modes::camera_eye(me.eye(), angles, &world.0.collision);
+        let (forward, _, _) = movement::angle_vectors(angles);
+        let hit = world.0.collision.trace_box(camera, camera + forward * 8192., glam::Vec3::ZERO, glam::Vec3::ZERO, collision::contents::MASK_SHOT);
+        input.aim = Some(sim::AimRay { origin: me.eye() - me.movement.origin, direction: (hit.end - me.eye()).normalize_or_zero() });
+    }
     if let Some(index) = playtest.as_deref_mut().and_then(|p| p.weapon.take()) { input.buy = Purchase::Weapon(index); }
     // Smoke tests can hold the trigger to exercise the fire path.
     if !enabled.0 && std::env::var_os("CSR_AUTOFIRE").is_some() {
         input.buttons |= buttons::ATTACK;
+    }
+    if !enabled.0 && std::env::var_os("CSR_TEST_MOVEMENT_MODE").is_some() {
+        input.toggle_mode = world.0.tick == 0;
+        if std::env::var("CSR_TEST_MOVEMENT_MODE").as_deref() == Ok("ride") {
+            input.forward_move = if world.0.time() < 1. {450.} else {0.};
+        }
     }
     if !enabled.0 && std::env::var_os("CSR_ATTACK2").is_some() { input.buttons |= buttons::ATTACK2; }
     // Screenshot-only phase proof through real TickInput. Each five-second
@@ -891,6 +917,8 @@ pub fn update_camera(
     }
     local.render_eye = eye;
     local.render_angles = angles;
+    let chase = !local.noclip && world.0.player(local.view_target()).is_some_and(crate::movement_modes::third_person);
+    local.render_camera = if chase { crate::movement_modes::camera_eye(eye, angles, &world.0.collision) } else { eye };
     let fwd = view_forward(angles.x, angles.y);
     let fov = if local.noclip { 90.0 } else {
         world.0.player(local.view_target()).filter(|p| p.alive).and_then(|p| p.active_weapon())
@@ -900,7 +928,7 @@ pub fn update_camera(
         if viewmodel.is_none() {
             if let Projection::Perspective(p) = &mut *projection { p.fov = crate::viewmodel::vertical_fov(fov); }
         }
-        cam.translation = to_bevy(eye);
+        cam.translation = to_bevy(if viewmodel.is_none() { local.render_camera } else { eye });
         cam.look_to(fwd, Vec3::Y);
     }
 }

@@ -1,5 +1,12 @@
 # Stitching games together
 
+The first movement crossover is now the optional Skate adapter. It uses a
+versioned WebAssembly pack interface, so upstream Bevy 0.18 and our Bevy 0.19
+do not need to share renderer/ECS dependencies. The host/API remain general;
+Skate code lives in its separate GPL workspace and assets stay private.
+See [SKATE.md](SKATE.md) and [MECHANICS.md](MECHANICS.md). The older compiled-in
+approach below remains historical context, not a requirement for new modules.
+
 The goal is one runtime that can run content from several rewritten games:
 CS:GO from this repo, MW2/BO1/MW3 from COD-Legacy-Mashup (IW4L), and more.
 This page records what has been done so far to keep that possible.

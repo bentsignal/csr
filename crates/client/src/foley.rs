@@ -439,7 +439,7 @@ pub fn update(
             st.moving = false;
         }
         let speed = if climbing { v.length() } else { (v.x * v.x + v.y * v.y).sqrt() };
-        if let Some(left) = st.footstep(p.movement.on_ground || climbing, speed, elapsed) {
+        if let Some(left) = st.footstep(p.mechanic.is_none() && (p.movement.on_ground || climbing), speed, elapsed) {
             // The installed surface table declares ladder.StepLeft/Right.
             // Resolve it through the same soundscript library as ground steps;
             // no fabricated waveform or alternate game's asset is introduced.

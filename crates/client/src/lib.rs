@@ -208,6 +208,7 @@ impl GameData {
 struct Options(ClientOptions);
 
 pub struct CsgoPlugin;
+mod movement_modes;
 
 impl Plugin for CsgoPlugin {
     fn build(&self, app: &mut App) {
@@ -290,7 +291,7 @@ impl Plugin for CsgoPlugin {
                     sky::follow_camera,
                     visibility::update,
                     effects::draw,
-                    characters::sync,
+                    (characters::sync, movement_modes::draw).chain(),
                     items::sync,
                     (doors::sync, breakables::sync, window_fade::update).chain(),
                     (viewmodel::update, foley::inspect, utility_fx::update_wick).chain(),
@@ -603,6 +604,9 @@ fn finish_level(
         world.load_map(&level.bsp, level.overview().as_deref());
         world
     };
+    let (movement_modules, movement_visuals) = if remote { (Vec::new(), movement_modes::Visuals::default()) } else { movement_modes::load() };
+    world.mechanics = movement_modules;
+    commands.insert_resource(movement_visuals);
     let (mine, theirs) = if opts.terrorist {
         (sim::Team::Terrorist, sim::Team::CounterTerrorist)
     } else {
