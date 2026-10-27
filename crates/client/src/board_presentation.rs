@@ -26,6 +26,7 @@ pub(crate) fn update(
     request: Res<InspectRequest>,
     mut held: ResMut<HeldBoard>,
     mut materials: ResMut<Assets<crate::material::WorldMaterial>>,
+    mut meshes: ResMut<Assets<Mesh>>,
     mut transforms: Query<&mut Transform>,
     mut visible: Query<&mut Visibility>,
     material_query: Query<&MeshMaterial3d<crate::material::WorldMaterial>>,
@@ -114,7 +115,7 @@ pub(crate) fn update(
                 commands.entity(e).despawn();
             }
         }
-        if let Some((asset, pose, hand)) = models.board_grip(p.team) {
+        if let Some((asset, pose, hand)) = models.board_grip(p.team, &mut meshes) {
             let arms = skinning::spawn(&mut commands, &asset, None, Some(&mut materials));
             for e in &arms.meshes {
                 commands.entity(*e).insert(Visibility::Hidden);
@@ -126,8 +127,12 @@ pub(crate) fn update(
     if let Some((_, arms, pose, hand)) = &held.arms {
         // Wrist closes around the near rail; use the same rigid transform for
         // the board and hand so inspection never lets the grip drift apart.
-        let grip = center + basis * Vec3::new(3.8, 0., -7.);
-        let rotation = basis * Mat3::from_rotation_z(-1.2);
+        let grip = center + basis * Vec3::new(1.5, -0.7, -7.);
+        // Turning the deck is wrist motion. Keep the forearm entering from
+        // below the camera instead of spinning its cut end into the scene.
+        let arm_basis = Mat3::from_cols(-r, -f, u)
+            * Mat3::from_quat(Quat::from_euler(EulerRot::XYZ, -0.12, -0.48, 0.35));
+        let rotation = arm_basis * Mat3::from_rotation_z(-1.2);
         let target = Mat4::from_rotation_translation(
             crate::coords::rotation_to_bevy(rotation),
             to_bevy(grip),

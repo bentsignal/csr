@@ -677,7 +677,7 @@ pub fn tick(
         let tick=world.0.tick;let rate=world.0.tick_rate as u64;let t=world.0.time();
         input.toggle_mode=false;input.controller.connected=true;
         if tick==rate/2||tick==rate*3{input.weapon_slot=sim::SLOT_PREVIOUS;}
-        if (1.0..1.05).contains(&t)||(3.2..3.25).contains(&t){input.buttons|=buttons::ATTACK;}
+        if std::env::var_os("CSR_TEST_BOARD_HOLD").is_none() && ((1.0..1.05).contains(&t)||(3.2..3.25).contains(&t)){input.buttons|=buttons::ATTACK;}
     }
     // Screenshot-only phase proof through real TickInput. Each five-second
     // cycle holds from 0.5 to 2.5 seconds, then releases all attack buttons.

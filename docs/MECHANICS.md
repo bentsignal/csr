@@ -1,5 +1,15 @@
 # Mechanics packs
 
+The shipped full-runtime process protocol is version 2. Explicit Start/Pose
+checkpoints keep session markers in the host's snapshot state and carry them
+across mode switches, with pack identity/hash checks. Original marker geometry
+validation runs again before native actor reset; markers are never hidden
+process-global gameplay state. CS return placement checks the complete CS hull
+against the current world before dropping the mode. Network protocol 37 rejects
+mechanics/tool/checkpoint state until multiplayer pack admission is implemented.
+Six exact, bounded RIFF/WAVE paths are admitted as optional private board audio;
+runtime bundles still reject executable/script paths and arbitrary audio names.
+
 Version 1 asset/recipe packs retain their existing data-only behavior. Version
 2 adds `[[mechanics]]` definitions, each providing a custom-origin `mode`
 ContentId, a display name, an `api_version = 1`, a `mechanics/*.wasm` module,

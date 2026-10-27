@@ -16,6 +16,12 @@ fn allowed(path: &str) -> bool {
             | "private/stock/skater-collections.json"
             | "private/stock/data/anim/OnBoard.abin"
             | "private/stock/data/anim/OffBoard.abin"
+            | "private/crossover-audio/roll.wav"
+            | "private/crossover-audio/pop.wav"
+            | "private/crossover-audio/land.wav"
+            | "private/crossover-audio/push.wav"
+            | "private/crossover-audio/grind.wav"
+            | "private/crossover-audio/brake.wav"
     ) || [
         ("private/stock/data/state/", "stategraph"),
         ("private/stock/data/script/", "stategraph"),
@@ -60,6 +66,9 @@ pub fn parse(bytes: &[u8]) -> Result<Vec<(&str, &[u8])>, String> {
             .get(at..at + size)
             .ok_or("truncated runtime data file")?;
         at += size;
+        if path.starts_with("private/crossover-audio/") && (data.len()>4*1024*1024 || !data.starts_with(b"RIFF") || data.get(8..12)!=Some(b"WAVE")) {
+            return Err("invalid or oversized board audio data".into());
+        }
         files.push((path, data));
     }
     for required in [
@@ -149,6 +158,17 @@ mod tests {
         ]
         .map(|name| (name.into(), b"private test bytes".to_vec()))
         .into()
+    }
+    #[test]
+    fn board_audio_admits_only_bounded_wave_files_at_known_paths() {
+        let mut entries=files();
+        entries.push(("private/crossover-audio/roll.wav".into(),b"RIFF0000WAVE".to_vec()));
+        assert!(build(&entries).is_ok());
+        for path in ["private/crossover-audio/code.wav.exe","private/crossover-audio/other.wav","private/crossover-audio/../roll.wav"] {
+            let mut bad=files();bad.push((path.into(),b"RIFF0000WAVE".to_vec()));assert!(build(&bad).is_err());
+        }
+        entries.last_mut().unwrap().1=b"not wave data".to_vec();assert!(build(&entries).is_err());
+        entries.last_mut().unwrap().1=vec![0;4*1024*1024+1];assert!(build(&entries).is_err());
     }
     #[test]
     fn runtime_bundle_rejects_traversal_aliases_programs_and_truncation() {

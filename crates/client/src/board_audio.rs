@@ -15,6 +15,7 @@ pub(crate) struct BoardAudio {
     last_tick: u64,
     last_tick_time: f32,
     push_at: f32,
+    logged: std::collections::HashSet<&'static str>,
 }
 pub(crate) fn update(
     mut commands: Commands,
@@ -46,6 +47,7 @@ pub(crate) fn update(
         state.key = key;
         state.clips.clear();
         state.previous = None;
+        state.logged.clear();
         if let Some((_, m, _)) = active {
             if let Some(model) = visuals.as_ref().and_then(|v| v.1.get(&m.id)) {
                 for (name, bytes) in &model.audio {
@@ -101,6 +103,15 @@ pub(crate) fn update(
             0.
         };
         sink.set_volume(Volume::Linear(gain));
+        if gain > 0.
+            && std::env::var_os("CSR_SKATE_AUDIO_TRACE").is_some()
+            && state.logged.insert(kind.0)
+        {
+            info!(
+                "SKATE_AUDIO loop={} gain={gain:.4} speed={speed:.2}",
+                kind.0
+            );
+        }
         sink.set_speed((0.75 + speed / 700.).clamp(0.75, 1.8));
         if on && running {
             sink.play();
@@ -136,6 +147,9 @@ pub(crate) fn update(
         if running {
             if let Some((name, gain)) = event {
                 if let Some(clip) = state.clips.get(name) {
+                    if std::env::var_os("CSR_SKATE_AUDIO_TRACE").is_some() {
+                        info!("SKATE_AUDIO event={name} gain={:.4}", master * gain);
+                    }
                     commands.spawn((
                         AudioPlayer(clip.clone()),
                         PlaybackSettings::DESPAWN.with_volume(Volume::Linear(master * gain)),

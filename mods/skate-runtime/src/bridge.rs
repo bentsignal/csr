@@ -304,6 +304,9 @@ impl Runtime {
             );
         }
         self.scene_state = frame.scene.clone();
+        // Marker UI reads every admitted host report, including reports in
+        // between native physics periods. A short D-pad press must not vanish.
+        self.marker.update(if frame.input.connected{frame.input.buttons}else{0},frame.dt,&self.physics,&mut self.skater);
         self.accumulator += f64::from(frame.dt);
         while self.accumulator + 1e-10 >= self.physics.period().as_secs_f64() {
             self.accumulator -= self.physics.period().as_secs_f64();
@@ -318,7 +321,6 @@ impl Runtime {
             self.pad
                 .update(if report.connected { &values } else { &[] });
             let actions = skate_core::input::gameplay_map::GameplayActions::from_pad(&self.pad);
-            self.marker.update(if report.connected{report.buttons}else{0},self.physics.period().as_secs_f32(),&self.physics,&mut self.skater);
             self.step(*actions.values(), report.connected)?;
         }
         Ok(self.pose())

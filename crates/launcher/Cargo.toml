@@ -40,4 +40,5 @@ serde_json.workspace = true
 png = "0.18"
 
 [dev-dependencies]
+mechanics.workspace = true
 rodio = { version = "0.22", default-features = false, features = ["hound", "mp3"] }

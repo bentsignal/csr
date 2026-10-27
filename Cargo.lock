@@ -3941,6 +3941,7 @@ dependencies = [
  "kv",
  "level",
  "mdl",
+ "mechanics",
  "movement",
  "packs",
  "png",

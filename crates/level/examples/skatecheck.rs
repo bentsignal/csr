@@ -60,6 +60,7 @@ fn run() -> Result<(), String> {
     collision.finalize();
     let collision = Arc::new(collision);
     if full {
+        markercheck(module.clone(),collision.clone())?;
         offboardcheck(module.clone(), collision.clone())?;
         flipcheck(module.clone(), collision.clone())?;
         dynamiccheck(&module)?;
@@ -270,6 +271,12 @@ fn run() -> Result<(), String> {
             "CS feet miss the native board pose by {max_foot_error:.2} inches"
         ));
     }
+    world.step(&[(id,TickInput{toggle_mode:true,..Default::default()})]);
+    let actor=world.player(id).unwrap();
+    let (mins,maxs)=actor.movement.hull();
+    let hit=world.collision.trace_box(actor.movement.origin,actor.movement.origin,mins,maxs,collision::contents::MASK_PLAYERSOLID);
+    println!("Real-map CS return: mode={}, position={:?}, start_solid={}, all_solid={}",actor.mechanic.is_some(),actor.movement.origin,hit.start_solid,hit.all_solid);
+    if actor.mechanic.is_some()||hit.start_solid||hit.all_solid{return Err("real-map CS exit did not produce a clear player hull".into());}
     println!("failures: 0");
     Ok(())
 }
@@ -291,6 +298,37 @@ fn controller(t: f32) -> mechanics::link::Controller {
         report.left = [18000, 0];
     }
     report
+}
+fn markercheck(module:Arc<sim::mechanics::Module>,collision:Arc<collision::CollisionWorld>)->Result<(),String>{
+    use mechanics::link::Controller;
+    let mut w=sim::World::new(collision.clone());w.mechanics.push(module);
+    let id=w.add_player("Session marker",Team::CounterTerrorist);
+    w.player_mut(id).unwrap().movement.origin=Vec3::Z*0.1;
+    w.step(&[(id,TickInput{toggle_mode:true,..Default::default()})]);
+    for _ in 0..128 {w.step(&[(id,TickInput{controller:Controller{connected:true,..Default::default()},..Default::default()})]);}
+    w.step(&[(id,TickInput{controller:Controller{connected:true,buttons:0x102,..Default::default()},..Default::default()})]);
+    let marker=w.player(id).unwrap().mechanic_checkpoint.clone().ok_or("grounded marker placement failed")?;
+    let p=marker.target.transform[3];let expected=Vec3::new(p[0],-p[2],p[1])/0.0254;
+    let saved=w.state();let mut replay=w.clone();replay.restore(saved);
+    let mut future=Vec::new();
+    for _ in 0..256 {
+        let input=TickInput{controller:Controller{connected:true,buttons:0x1000,..Default::default()},..Default::default()};
+        w.step(&[(id,input)]);future.push((input,w.state_hash()));
+    }
+    for (input,hash) in future {replay.step(&[(id,input)]);if hash!=replay.state_hash(){return Err("marker diverged after restore".into());}}
+    let distance=w.player(id).unwrap().movement.origin.truncate().distance(expected.truncate());
+    if distance<40. {return Err("marker test did not travel away".into());}
+    w.step(&[(id,TickInput{toggle_mode:true,..Default::default()})]);
+    let actor=w.player(id).unwrap();let (mins,maxs)=actor.movement.hull();let hit=collision.trace_box(actor.movement.origin,actor.movement.origin,mins,maxs,collision::contents::MASK_PLAYERSOLID);
+    if actor.mechanic.is_some()||hit.start_solid||hit.all_solid{return Err("grounded Skate exit embedded CS hull".into());}
+    if actor.mechanic_checkpoint.as_ref()!=Some(&marker){return Err("CS exit erased session marker".into());}
+    w.step(&[(id,TickInput::default())]);
+    w.step(&[(id,TickInput{toggle_mode:true,..Default::default()})]);
+    for _ in 0..256 {w.step(&[(id,TickInput{controller:Controller{connected:true,buttons:0x101,..Default::default()},..Default::default()})]);}
+    let returned=w.player(id).unwrap().movement.origin.truncate().distance(expected.truncate());
+    println!("Session marker: travelled={distance:.2}in, return error={returned:.2}in; CS exit hull clear and marker preserved");
+    if returned>20. {return Err("session marker did not return through the native actor reset".into());}
+    Ok(())
 }
 fn grindcheck(module: Arc<sim::mechanics::Module>) -> Result<(), String> {
     let mut collision = collision::CollisionWorld::new();
@@ -390,6 +428,8 @@ fn offboardcheck(
     let mut remounted = false;
     let mut start = None;
     let mut distance = 0f32;
+    let mut look_baseline=None;
+    let mut look_up=None;
     for tick in 0..128 * 7 {
         let t = tick as f32 / 128.;
         let mut report = mechanics::link::Controller {
@@ -402,6 +442,7 @@ fn offboardcheck(
         if (1.5..3.5).contains(&t) {
             report.left = [0, 25000];
         }
+        if (2.5..3.5).contains(&t){report.right=[0,24000];}
         world.step(&[(
             id,
             TickInput {
@@ -420,6 +461,8 @@ fn offboardcheck(
             walked = true;
             let start = *start.get_or_insert(p.movement.origin);
             distance = distance.max(p.movement.origin.distance(start));
+            if (2.45..2.5).contains(&t){look_baseline=state.pose.camera.map(|m|Vec3::from_slice(&m[2][..3]).normalize_or_zero().z);}
+            if (3.45..3.5).contains(&t){look_up=state.pose.camera.map(|m|Vec3::from_slice(&m[2][..3]).normalize_or_zero().z);}
         }
         if t > 4.5 && (100..200).contains(&state.pose.state) {
             remounted = true;
@@ -429,6 +472,8 @@ fn offboardcheck(
     if !walked || !remounted || distance < 24. {
         return Err("native walking/remount did not complete".into());
     }
+    println!("Offboard vertical look: before={look_baseline:?}, stick-up={look_up:?}");
+    if !matches!((look_baseline,look_up),(Some(before),Some(after)) if after>before+0.03){return Err("walking stick-up did not raise the camera aim".into());}
     Ok(())
 }
 fn dynamiccheck(module: &sim::mechanics::Module) -> Result<(), String> {

@@ -10,8 +10,22 @@ Up/Down cycles inventory, and RT uses the board when selected.
 **View / Back** on Xbox or **X** on the keyboard remains a direct movement
 shortcut. The keyboard action is **Toggle movement mode** in Keyboard / Mouse.
 Camera travel animates in both directions, follows movement and clips against
-the map. App updates preserve settings and the existing private 0.2.0 pack;
-this follow-up needs no new pack transfer.
+the map. App updates preserve settings and private packs. The older 0.2.0 pack
+continues to work; install a private 0.3.0 replacement to add skating sounds.
+
+The held board uses your CS hands, a shaped equipment icon, and the same map
+ambient/sun lighting as CS models, both held and riding. Use **Inspect**
+(default **F**) or click the **left stick** while holding it to turn the board
+over and examine the deck, underside and trucks. Gameplay has no control-text
+overlay. Returning to CS checks the complete player hull against live geometry,
+including uphill corners and low ceilings; an airborne switch retains momentum.
+
+Place a session marker with **LB + D-pad Down** while grounded, then hold
+**LB + D-pad Up** to return. The original native eligibility, geometry checks,
+hold timing and actor reset run in the provider. Markers survive CS/Skate mode
+switches in the same life/map and are included in deterministic snapshot replay.
+Blocked destinations are refused. Vertical walking-camera look is corrected
+without changing the right stick's on-board trick mapping.
 
 Use an Xbox 360, One or Series controller through Windows XInput. Skate uses
 the original rewrite's controller mapping: A/X push, left stick steers, right
@@ -32,7 +46,8 @@ controller movement, aiming, firing and weapon selection.
    The installed creator needs no Rust, terminal or manual file copying.
 3. Open the pack to install it, load a CS map, and press View / Back or X.
 
-Use a **0.2.0** pack for the full runtime. Recreate a rushed 0.1.0 prototype
+Use a **0.3.0** pack for the full runtime with board audio (0.2.0 remains
+compatible without sounds). Recreate a rushed 0.1.0 prototype
 pack with the current creator; it lacks the animation/skin/graph data.
 Installing the replacement updates the same pack ID.
 
@@ -40,7 +55,8 @@ The creator reads your converted install without modifying it. It includes
 the original board skin/textures and rig reference GLB (which also contains
 the original skater mesh, although only its board is rendered), animation
 banks, skeleton/collection data, compiled state graphs, controller patterns,
-camera definitions and selected trick-name strings. It excludes original
+camera definitions, selected trick-name strings and six converted board-foley
+clips for rolling, popping, landing, pushing, grinding and braking. It excludes original
 executables, native libraries, Lua programs, original game code and Skate
 maps. The resulting file contains original game assets: keep it private,
 outside this repository and public releases. This project does not provide
@@ -64,8 +80,12 @@ Skate-authored grind splines: exposed top/side edges provide derived splines,
 an explicit crossover policy. CS materials currently use one native contact
 material; board textures render unlit in the CS renderer. Different character
 proportions, ledge metadata and camera spaces still need owner playtesting.
-Skate sound, courses/missions, multiplayer mechanics negotiation and complete
-original-game parity are not implemented. CS combat/audio remain available.
+The current sound pass uses private original samples, with pose-driven events
+and rolling/grind/brake loops that follow speed and stop on mode exit/pause.
+It follows the game's master volume and focus mute setting. It does not yet
+reproduce the complete native grain/DSP mix or surface-specific audio.
+Courses/missions, multiplayer mechanics negotiation and complete original-game
+parity are not implemented. CS combat/audio remain available.
 
 Windows XInput reports are forwarded unchanged to the original Pad/action
 mapping. WINSERVE has no connected physical controller, so automated checks

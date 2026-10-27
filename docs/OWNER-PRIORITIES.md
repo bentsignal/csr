@@ -2,22 +2,25 @@
 
 ## October 26: Skate crossover pivot
 
-### October 27 owner playtest: inventory and transitions
+### October 27: Skate presentation, sound and session usability
 
-The owner played the full runtime delivered in PR #325 / Dev 1040 and reports
-it is a good first pass. Native physics/animation, textured board, controller
-input and mode switching are accepted as the new baseline. Current follow-up:
+Dev 1042 / PR #326 is accepted as a better baseline: inventory selection,
+map preparation and camera transitions are delivered. Owner's next batch:
 
-1. Remove the first mode-switch hitch on each new map; prepare the provider,
-   map collision and board graphics during loading.
-2. Make the skateboard a selectable inventory item in the right HUD, cycled
-   with weapons. Primary use enters skating; retain convenient controller
-   support and the existing movement shortcut.
-3. Animate the camera between first-person CS and third-person skating in
-   both directions, preserving camera collision and separate authoritative aim.
+1. Replace the rectangular HUD icon with a shaped skateboard silhouette.
+2. Give the held board a deliberate hand grip and inspection animation.
+3. Light the held and ridden board from the map's ambient cubes and visible sun.
+4. Remove unsolicited Skate control text from the gameplay HUD.
+5. Add owned skating audio through a replacement private pack.
+6. Support the original place/return session marker controls, including across
+   CS/Skate switches; keep destination collision validation.
+7. Never admit an embedded CS hull when leaving Skate, including on slopes,
+   around props and under low ceilings. Preserve airborne switching.
+8. Correct vertical camera look while walking in Skate mode without changing
+   on-board right-stick trick inputs.
 
-Preserve the installed private 0.2.0 pack and accepted gameplay. Development
-and rendered checks stay on WINSERVE; deliver through the Dev updater.
+Keep all original assets private. Preserve accepted skating/CS behavior and
+settings. Development/verification stays on WINSERVE; deliver through Dev.
 
 The owner requests Skate 3 movement on CS maps with CS characters and guns,
 an easy in-match CS/skate switch, and installation through content packs.

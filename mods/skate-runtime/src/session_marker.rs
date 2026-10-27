@@ -82,6 +82,17 @@ impl SessionMarker {
             && state != 104
             && deck.basis.columns[1][1] > 0.71)
             || (p.state.category_12 == 500 && state == 500);
+        if set && std::env::var_os("CSR_SKATE_DIAGNOSTICS").is_some() {
+            eprintln!(
+                "SKATE_MARKER state={state} category={} wheels={} deck_up={} surface={} eligible={allowed} geometry={} position={:?}",
+                p.state.category_12,
+                p.collision.wheel_count_0,
+                deck.basis.columns[1][1],
+                p.surface_default_mode,
+                self.validation.check(physics.world(), transform[3]),
+                transform[3]
+            );
+        }
         if set
             && allowed
             && p.surface_default_mode != 8
