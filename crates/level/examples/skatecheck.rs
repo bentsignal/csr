@@ -161,11 +161,23 @@ fn run() -> Result<(), String> {
     }
     world.mechanics.push(module);
     let id = world.add_player("Map skate check", Team::CounterTerrorist);
+    world.step(&[(id, TickInput {
+        weapon_slot: sim::SLOT_PREVIOUS,
+        ..Default::default()
+    })]);
+    if world.player(id).unwrap().equipped_mechanic.is_none() {
+        return Err("map inventory did not select the board".into());
+    }
     let activation=std::time::Instant::now();
     world.step(&[(
         id,
         TickInput {
-            toggle_mode: true,
+            buttons: movement::buttons::ATTACK,
+            controller: mechanics::link::Controller {
+                connected: true,
+                triggers: [0, 255],
+                ..Default::default()
+            },
             ..Default::default()
         },
     )]);
