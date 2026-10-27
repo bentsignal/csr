@@ -213,6 +213,7 @@ mod tests {
                 min_game_version: "0.0.0".into(),
                 description: String::new(),
                 resources: vec![],
+                mechanics: vec![],
                 maps: vec![packs::MapDef {
                     id: "mod_map_arena".into(),
                     bsp: "de_dust2".into(),
