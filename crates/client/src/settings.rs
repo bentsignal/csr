@@ -1,7 +1,7 @@
 //! Persistent local settings shared by menus, input, audio and HUD.
 use bevy::prelude::*;
 
-pub const ACTIONS: [&str; 30] = [
+pub const ACTIONS: [&str; 31] = [
     "Move forward",
     "Move backward",
     "Move left",
@@ -32,8 +32,9 @@ pub const ACTIONS: [&str; 30] = [
     "Next weapon",
     "Previous weapon",
     "Select fire grenade",
+    "Toggle movement mode",
 ];
-pub const ACTION_COMMANDS: [&str; 30] = [
+pub const ACTION_COMMANDS: [&str; 31] = [
     "+forward", "+back", "+moveleft", "+moveright", "+jump", "+duck", "+speed",
     "+use", "+reload", "buymenu", "drop", "+showscores", "+lookatweapon",
     "+attack", "+attack2",
@@ -41,7 +42,9 @@ pub const ACTION_COMMANDS: [&str; 30] = [
     "use weapon_molotov", "use weapon_incgrenade", "use weapon_decoy",
     "lastinv", "slot1", "slot2", "slot3", "slot4", "slot5", "invnext", "invprev",
     "slot10",
+    "toggle_movement_mode",
 ];
+pub const KEY_MOVEMENT_MODE: usize = 30;
 pub const KEY_FIRE_GRENADE: usize = 29;
 pub const KEY_ATTACK: usize = 13;
 pub const KEY_ATTACK2: usize = 14;
@@ -200,7 +203,7 @@ pub struct Settings {
     pub radar_hud_size: f32,
     pub radar_rotate: bool,
     pub close_on_buy: bool,
-    pub binds: [Option<KeyCode>; 30],
+    pub binds: [Option<KeyCode>; 31],
     pub mouse_binds: [MouseAction; 5],
 }
 pub const RESOLUTIONS: [(u32, u32); 4] = [(1280, 720), (1600, 900), (1920, 1080), (2560, 1440)];
@@ -259,6 +262,7 @@ impl Default for Settings {
                 Some(KeyCode::Digit4), Some(KeyCode::Digit5),
                 None, None, // Keyboard next/previous default to unbound.
                 None, // Either team's fire grenade (CS2 slot10).
+                Some(KeyCode::KeyX), // In-match movement pack toggle.
             ],
             mouse_binds: [MouseAction::Attack, MouseAction::Attack2, MouseAction::None, MouseAction::None, MouseAction::None],
         }

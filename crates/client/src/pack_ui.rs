@@ -59,6 +59,7 @@ pub(crate) enum Action {
     Open,
     Close,
     Import,
+    CreateSkate,
     Cancel,
     Refresh,
     Previous,
@@ -169,6 +170,16 @@ pub(crate) fn update(
                 Action::Close => ui.open = false,
                 Action::Import if backend.picker.is_none() => {
                     backend.picker = Some(PackPicker::start())
+                }
+                Action::CreateSkate => {
+                    let result = std::env::current_exe().map_err(|e| e.to_string()).and_then(|exe| {
+                        let creator = exe.parent().ok_or("Cannot find the installed app folder")?.join("Skate-Pack-Creator.exe");
+                        std::process::Command::new(creator).spawn().map(|_| ()).map_err(|e|e.to_string())
+                    });
+                    backend.flow.notice = match result {
+                        Ok(()) => "Choose your prepared Skate installation in the pack creator. Open the saved .csrpack to install it.".into(),
+                        Err(error) => format!("The Skate pack creator could not open: {error}"),
+                    };
                 }
                 Action::Cancel => {
                     let picker_only = backend.picker.is_some() && !backend.flow.busy();
@@ -376,6 +387,7 @@ pub(crate) fn draw(
     commands.entity(root).add_children(&[controls]);
     for (label, action) in [
         ("Install pack", Action::Import),
+        ("Create Skate pack", Action::CreateSkate),
         ("Refresh", Action::Refresh),
         ("Cancel", Action::Cancel),
         ("Close", Action::Close),
@@ -398,8 +410,9 @@ pub(crate) fn draw(
         &mut commands,
         root,
         format!(
-            "{} installed packs · {count} maps",
-            backend.flow.catalog.entries.len()
+            "{} installed packs · {count} maps · {} movement modes",
+            backend.flow.catalog.entries.len(),
+            backend.flow.catalog.entries.iter().map(|e| e.manifest().mechanics.len()).sum::<usize>()
         ),
         font.clone(),
         17.0,
@@ -408,7 +421,7 @@ pub(crate) fn draw(
         text(
             &mut commands,
             root,
-            "No installed maps. Packs containing other resources are kept for future use.",
+            "Movement packs work on any map after the next match load. Their switch is in Keyboard / Mouse settings.",
             font.clone(),
             17.0,
         );

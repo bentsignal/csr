@@ -11,8 +11,10 @@ use sim::{GameEvent, PlayerId, Snapshot, Team, TickInput};
 // v27 combines authoritative door poses/cues, brush-breakable health/removal,
 // and replicated BSP ladder contact for prediction and foley.
 // Older peers must reject the session before attempting snapshot decoding.
-pub const VERSION: u32 = 33;
-pub const PROTOCOL_ID: u64 = 0x4353_5257_0000_0021;
+// v34 adds explicit movement-mode input and replicated module state.
+// This first pack release is offline; network admission rejects active modules.
+pub const VERSION: u32 = 34;
+pub const PROTOCOL_ID: u64 = 0x4353_5257_0000_0022;
 pub const CONTROL: u8 = 0;
 pub const INPUT: u8 = 1;
 pub const SNAPSHOT: u8 = 2;
@@ -479,6 +481,9 @@ pub(crate) fn validate_state(
             || (!actor.weapons.is_empty() && actor.active >= actor.weapons.len())
         {
             return Err("invalid snapshot player state".into());
+        }
+        if actor.mechanic.is_some() {
+            return Err("movement packs currently require an offline session".into());
         }
         for (slot, weapon) in actor.weapons.iter().enumerate() {
             validate_weapon(weapon,world.tick,world.tick_rate)?;

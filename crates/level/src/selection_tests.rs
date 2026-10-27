@@ -229,7 +229,7 @@ fn catalog_selected_level_retains_hash_and_refuses_changed_pack_bytes() {
         min_game_version: "0.0.0".into(),
         description: String::new(),
         maps: vec![map],
-        resources: Vec::new(),
+        resources: Vec::new(), mechanics: Vec::new(),
     };
     let pack = packs::Pack::from_bytes(
         packs::build(&manifest, &[("maps/test-arena.bsp", &bsp(4))]).unwrap(),
@@ -348,7 +348,7 @@ fn recipe_and_asset_digests_follow_parsed_bsp_and_its_embedded_catalog() {
             min_game_version: "0.0.0".into(),
             description: String::new(),
             maps: vec![map.clone()],
-            resources: Vec::new(),
+            resources: Vec::new(), mechanics: Vec::new(),
         };
         let payload = if source == packs::MapSource::Pack {
             vec![("maps/de_fixture.bsp", selected.as_slice())]

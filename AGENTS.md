@@ -67,6 +67,12 @@ Historical map/symptom examples do not narrow an outcome's scope.**
 - **Clean-room.** Work from public format documentation, the installed
   game's data and observed behaviour (screenshots, footage). Never use the
   leaked CS:GO/TF2 source or paste Source SDK code.
+  **Owner exception (2026-10-26):** the public GPL Rust implementation from
+  `SK8-ENGINE/skate-3-rust-engine` may be used for the Skate crossover,
+  including its reverse-engineered physics. Preserve its license, notices and
+  corresponding source. This permits that rewrite's code, never original EA
+  code, leaked code or original game assets in Git/public releases. Shawn's
+  owned, converted Skate data may be read locally and packaged privately.
 - **Fidelity is 1:1.** Match the original exactly (2018-era look, sounds and
   feel); measure against references, never invent.
 - **CS:GO, not CS2.** We rebuild the original CS:GO. Never use or imitate

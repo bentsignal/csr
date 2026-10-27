@@ -1,5 +1,20 @@
 # Roadmap
 
+## October 26: Skate crossover
+
+- [x] Versioned sandboxed movement packs with explicit fixed-tick state and
+  collision queries; preserve the existing private pack installer/update data.
+- [x] Separate GPL Skate adapter using public upstream riding/jump calculations
+  and private converted settings/board geometry; keep original assets out of Git.
+- [x] Rebindable CS/skate switch, CS character/weapon presentation and collision
+  constrained chase view on existing CS maps.
+- [x] Pack creation from an owner's prepared Skate installation, without a
+  player-side build or manual copying, with source/license notices.
+- [ ] Complete combined verification and published Dev delivery; owner playtest.
+- [ ] Extend beyond initial riding: articulated physics, animation retargeting,
+  tricks/grinds, textures, wipeouts and controller gestures. Multiplayer module
+  negotiation is separate future work, not declared complete here.
+
 ## Desktop launcher and delivery (October 26)
 
 - [x] Desktop entry with Play, Refresh, update status/progress and release notes.

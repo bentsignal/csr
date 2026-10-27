@@ -37,6 +37,7 @@ pub mod weapon;
 pub mod recoil_motion;
 pub mod utility;
 pub mod tactics;
+pub mod mechanics;
 mod penetration;
 pub use penetration::preview_exit as preview_bullet_exit;
 mod player_contact;
@@ -139,6 +140,8 @@ pub const AIM_WALL_MARGIN: f32 = 0.03125;
 /// Input for one player for one tick.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct TickInput {
+    /// One-shot request to cycle the server's installed movement modules.
+    pub toggle_mode: bool,
     /// Pitch, yaw, roll in degrees.
     pub view_angles: Vec3,
     /// -450..450
@@ -171,6 +174,7 @@ pub struct TickInput {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Player {
+    pub mechanic: Option<mechanics::State>,
     pub id: PlayerId,
     pub name: String,
     pub team: Team,
@@ -219,7 +223,7 @@ impl Player {
     }
 
     pub fn eye(&self) -> Vec3 {
-        self.movement.eye_position()
+        self.movement.eye_position() + Vec3::Z * self.mechanic.as_ref().map_or(0., |s| s.height)
     }
 
     /// Where shots start and the angles they leave at: the eye and view
@@ -245,7 +249,8 @@ impl Player {
 
     /// The hull the player occupies (mins, maxs) in world space.
     pub fn bounds(&self) -> (Vec3, Vec3) {
-        let (mins, maxs) = self.movement.hull();
+        let (mins, mut maxs) = self.movement.hull();
+        maxs.z += self.mechanic.as_ref().map_or(0., |s| s.height);
         (self.movement.origin + mins, self.movement.origin + maxs)
     }
 
@@ -449,6 +454,8 @@ pub enum GameEvent {
 /// enough to snapshot every tick for rewinds and tests.
 #[derive(Clone)]
 pub struct World {
+    /// Session-owned immutable modules. A pack refresh affects the next load.
+    pub mechanics: Vec<Arc<mechanics::Module>>,
     pub collision: Arc<CollisionWorld>,
     /// Replicated pose/lifecycle; immutable definitions stay with the map.
     pub doors: Vec<doors::State>,
@@ -518,6 +525,7 @@ impl World {
     pub fn with_catalog(collision: Arc<CollisionWorld>, catalog: Arc<weapons::Catalog>) -> Self {
         let rules = RulesConfig { solid_teammates: 0, ..RulesConfig::default() };
         let mut world = Self {
+            mechanics: Vec::new(),
             collision,
             doors: Vec::new(),
             breakables: Vec::new(),
@@ -674,6 +682,7 @@ impl World {
             is_bot,
             movement: PlayerMove::default(),
             view_angles: Vec3::ZERO,
+            mechanic: None,
             health: 100,
             armor: 0,
             helmet: false,
@@ -799,6 +808,7 @@ impl World {
         let origin=if hit.start_solid || hit.fraction==1. {spawn.origin} else {hit.end};
         if let Some(p) = self.player_mut(id) {
             p.movement = PlayerMove::spawn_at(origin);
+            if let Some(state) = &mut p.mechanic { state.reset = true; state.data.fill(0.); }
             p.view_angles = Vec3::new(0.0, spawn.yaw, 0.0);
             p.health = 100;
             p.flash_until = 0.0;
@@ -1496,6 +1506,7 @@ impl World {
                 drop: false,
                 utility: 0,
                 rewind_tick: None,
+                toggle_mode: false,
                 ..self.players[i].last_input
             });
             if !think_bots || self.players[i].is_bot {
@@ -1579,6 +1590,9 @@ impl World {
             }
 
             // Movement.
+            if input.toggle_mode && !self.players[i].last_input.toggle_mode && !frozen && !busy {
+                mechanics::toggle(&mut self.players[i], &self.mechanics);
+            }
             let max_speed = self.players[i].active_weapon().map_or(250.0, |w| w.max_speed());
             let move_input = MoveInput {
                 view_angles: input.view_angles,
@@ -1594,7 +1608,16 @@ impl World {
                 p.tracked = input.tracked;
                 // Dynamic-world fluids use the same collision sweeps as CS movement.
                 let swimming=collision.dynamic.as_ref().is_some_and(|d|d.point_contents(p.movement.origin+Vec3::Z*32.,contents::WATER)!=0);
-                if swimming {
+                if p.mechanic.is_some() && !swimming && !frozen && !busy {
+                    match mechanics::step(p, &input, &self.mechanics, &contacts, dt, time) {
+                        Ok(events) => p.last_events = events,
+                        Err(error) => {
+                            eprintln!("Movement pack disabled: {error}");
+                            p.mechanic = None;
+                            p.last_events = contacts.move_player(&mut p.movement, &move_input, &self.config, dt);
+                        }
+                    }
+                } else if swimming {
                     let mut config=self.config.clone();config.gravity=0.;config.air_accelerate=8.;config.air_max_wishspeed=160.;config.max_speed=160.;
                     p.movement.velocity*=0.97;
                     let vertical=if input.buttons&buttons::JUMP!=0{140.}else if input.buttons&buttons::DUCK!=0{-100.}else{-input.view_angles.x.to_radians().sin()*input.forward_move*0.3-12.};

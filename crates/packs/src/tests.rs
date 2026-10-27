@@ -45,8 +45,36 @@ fn manifest() -> Manifest {
             name: "Arena".into(),
             source: MapSource::Pack,
         }],
-        resources: Vec::new(),
+        resources: Vec::new(), mechanics: Vec::new(),
     }
+}
+
+#[test]
+fn v2_movement_pack_installs_with_identity_and_refuses_undeclared_code() {
+    let mut m = manifest();
+    m.format_version = 2; m.maps.clear();
+    m.provides = vec!["mod_mode_riding".into()];
+    m.mechanics.push(MechanicDef { id: "mod_mode_riding".into(), name: "Riding".into(),
+        module: "mechanics/ride.wasm".into(), api_version: 1,
+        config: "mechanics/ride.csrconfig".into(), model: None });
+    let wasm = wat::parse_str(r#"(module (memory (export "memory") 1)
+        (func (export "csr_packet") (result i32) i32.const 0)
+        (func (export "csr_step") (result i32) i32.const 0))"#).unwrap();
+    let config = format!("[{}]", ["0";256].join(","));
+    let files = [("mechanics/ride.wasm",wasm.as_slice()),("mechanics/ride.csrconfig",config.as_bytes())];
+    let bytes = build(&m,&files).unwrap();
+    let temp=Temp::new(); let source=temp.write("movement.csrpack",&bytes); let store=Installed::new(&temp.0.join("userdata"));
+    let pack=store.install(&source).unwrap();
+    let mut registry=Registry::default(); registry.add_pack(&pack).unwrap();
+    assert!(registry.get(&"mod_mode_riding".parse().unwrap()).is_some());
+    assert_eq!(store.catalog().entries[0].manifest().mechanics,m.mechanics);
+    let hash=pack.archive_hash().to_owned();
+    m.format_version=1; assert!(build(&m,&files).is_err());
+    m.format_version=2; m.mechanics[0].api_version=2; assert!(build(&m,&files).is_err());
+    m.mechanics[0].api_version=1;
+    assert!(build(&m,&[("mechanics/other.wasm",wasm.as_slice()),files[1]]).is_err());
+    assert!(build(&m,&[("mechanics/ride.wasm",b"not wasm"),files[1]]).is_err());
+    assert_eq!(store.load().0[0].archive_hash(),hash);
 }
 
 fn catalog_pack(store: &Installed, id: &str, map_id: &str, data: &[u8]) -> Vec<u8> {

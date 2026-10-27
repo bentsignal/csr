@@ -131,7 +131,7 @@ pub fn spawn_2d(commands: &mut Commands, level: &level::Level, meshes: &mut Asse
 }
 
 pub fn follow_camera(local: Res<crate::player::LocalPlayer>, mut faces: Query<&mut Transform, With<SkyFace>>) {
-    for mut face in &mut faces { face.translation = to_bevy(local.render_eye); }
+    for mut face in &mut faces { face.translation = to_bevy(local.render_camera); }
 }
 
 /// Maps 3D-skybox space into world space: `p' = (p - origin) * scale`.

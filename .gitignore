@@ -1,4 +1,5 @@
 /target
+/mods/skate/target/
 /target-core/
 /csr-artifacts
 *.log
@@ -31,6 +32,8 @@
 /workshop/
 /packs/
 *.csrpack
+*.csrmesh
+*.csrconfig
 
 # Agent worktrees and local tool state
 /.claude/

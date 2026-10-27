@@ -519,7 +519,7 @@ mod tests {
             min_game_version: "0.0.0".into(),
             description: String::new(),
             maps: Vec::new(),
-            resources,
+            resources, mechanics: Vec::new(),
         };
         packs::Pack::from_bytes(packs::build(&manifest, &inputs).unwrap()).unwrap()
     }

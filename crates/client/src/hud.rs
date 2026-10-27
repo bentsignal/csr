@@ -507,12 +507,20 @@ pub fn update(
                 }
             }
             HudText::Hint => {
-                if !me.alive && !local.noclip {
+                if let Some(state) = me.mechanic.as_ref().filter(|_| me.alive) {
+                    let mode = w.mechanics.iter().find(|m| m.id == state.id).map_or("Movement pack", |m| m.name.as_str());
+                    format!("{mode}   {}: movement mode   {}: push   {} / {}: steer   {}: jump   {}: brake",
+                        settings.action_binding_label(crate::settings::KEY_MOVEMENT_MODE),
+                        settings.action_binding_label(0), settings.action_binding_label(2), settings.action_binding_label(3),
+                        settings.action_binding_label(4), settings.action_binding_label(6))
+                } else if !me.alive && !local.noclip {
                     match local.spectating.and_then(|s| w.player(s)) {
                         Some(s) => format!("Spectating {}   (LMB: next player)", s.name),
                         None if competitive => "Waiting for the next round".into(),
                         None => String::new(),
                     }
+                } else if !w.mechanics.is_empty() && me.alive && !competitive {
+                    format!("{}: switch movement mode",settings.action_binding_label(crate::settings::KEY_MOVEMENT_MODE))
                 } else if competitive && round.phase == Phase::Live && me.alive {
                     let (mn, mx) = me.bounds();
                     let in_site = w.objectives.site_at(mn, mx);

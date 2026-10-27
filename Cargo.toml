@@ -24,7 +24,10 @@ members = [
     "crates/launcher",
     "crates/workshop",
     "crates/packs",
+    "crates/mechanics-api",
+    "crates/mechanics",
 ]
+exclude = ["mods/skate"]
 
 [workspace.package]
 version = "0.5.0"
@@ -89,6 +92,8 @@ scaleform = { path = "crates/scaleform" }
 client = { path = "crates/client" }
 workshop = { path = "crates/workshop" }
 packs = { path = "crates/packs" }
+mechanics-api = { path = "crates/mechanics-api" }
+mechanics = { path = "crates/mechanics" }
 
 [profile.dev]
 opt-level = 1

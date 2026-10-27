@@ -86,6 +86,12 @@ file copying and no reading.
   and players bring those in themselves. That keeps legal responsibility with
   whoever distributes the mod. (The previous author's vendored Minecraft code
   was removed on 2026-10-11 for this reason; it remains in git history.)
+  Owner clarification, 2026-10-26: publicly licensed rewrite code may live in
+  our GitHub with its license and attribution preserved. The public Skate Rust
+  rewrite is explicitly authorized, including its reverse-engineered physics.
+  Original game code, leaked code and game assets remain excluded. Optional
+  mechanics still install through the connection layer as content packs; see
+  [SKATE.md](SKATE.md) for the first adapter and private authoring flow.
 - Mods follow the same low-friction rule as sideloading: one file, dropped
   in, done, and shared automatically between friends on a server.
 

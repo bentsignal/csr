@@ -7,6 +7,8 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
+mechanics.workspace = true
+mechanics-api.workspace = true
 character-pose = { path = "../character-pose" }
 mdl.workspace = true
 serde.workspace = true
@@ -19,4 +21,7 @@ bsp.workspace = true
 weapons.workspace = true
 nav.workspace = true
 kv.workspace = true
+
+[dev-dependencies]
+wat = "1"
 

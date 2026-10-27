@@ -648,6 +648,7 @@ pub(crate) fn clear_match(world: &mut World) {
         }
     }
     world.remove_resource::<LoadedLevel>();
+    world.remove_resource::<crate::movement_modes::Visuals>();
     world.remove_resource::<crate::player::SimWorld>();
     world.remove_resource::<crate::player::LocalPlayer>();
     world.remove_resource::<crate::characters::CharacterModels>();

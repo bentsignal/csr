@@ -297,7 +297,7 @@ pub fn sync(
         // CSR_NO_SELF hides our own body from a noclip camera too, so
         // fidelity captures match the real game's noclip view.
         let own_hidden = p.id == local.id && std::env::var_os("CSR_NO_SELF").is_some();
-        let visible = p.alive && !own_hidden && (p.id != local.view_target() || local.noclip);
+        let visible = p.alive && !own_hidden && (p.id != local.view_target() || local.noclip || crate::movement_modes::third_person(p));
         for (index,e) in c.body.meshes.iter().chain(c.weapon.iter().flat_map(|w| w.instance.meshes.iter())).enumerate() {
             let default_glove=p.id==local.id && inventory.active("gloves").is_some() && team_model.asset.model.meshes.get(index).is_some_and(|m|team_model.asset.model.textures[team_model.asset.model.skin_texture(0,m.material)].contains("glove"));
             if let Ok(mut v) = visibility.get_mut(*e) {
@@ -359,7 +359,8 @@ pub fn sync(
             _ => counter_terrorist.as_ref().map(|m| &m.anims),
         };
         let Some(anims) = anims else { continue };
-        let pose = anims.evaluate_prepared(&mut c.anim, &input, 0.);
+        let mut pose = anims.evaluate_prepared(&mut c.anim, &input, 0.);
+        sim::model_pose::apply_movement_pose(p, anims.bones(), &mut pose);
         c.last_pose.clone_from(&pose);
         c.pose_life = p.life_epoch;
         let world_from_model = Mat4::from_rotation_translation(

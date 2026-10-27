@@ -119,6 +119,8 @@ $remove.Add_Click({
 })
 $folder=Button $packs 'Open packs folder' 723 315 191 42; $folder.Anchor='Bottom,Right'
 $folder.Add_Click({Send-Action 'packs-folder'})
+$createSkate=Button $packs 'Create Skate pack...' 353 315 190 42; $createSkate.Anchor='Bottom,Left'
+$createSkate.Add_Click({Send-Action 'create-skate'})
 $packStatus=Label $packs '' 0 374 914 74 10 $muted; $packStatus.Anchor='Bottom,Left,Right'
 $cancel=Button $form 'Cancel installation' 692 631 160 30; $cancel.Anchor='Bottom,Right'; $cancel.Visible=$false
 $cancel.Add_Click({Send-Action 'cancel'})

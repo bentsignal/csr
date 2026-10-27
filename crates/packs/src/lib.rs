@@ -1,4 +1,5 @@
-//! Data-only `.csrpack` archives. No pack file is extracted or executed.
+//! Validated `.csrpack` archives. V2 mechanics execute only in a bounded Wasm
+//! sandbox; no native code or pack file is extracted.
 //! Validation, mounting and installation use one immutable byte snapshot.
 //! Private assets stay outside the repository and public releases.
 
@@ -82,6 +83,20 @@ pub struct ResourceDef {
     pub path: String,
 }
 
+/// An opt-in movement module. Definitions are retained with their exact archive
+/// hash; installing or listing a pack never calls its gameplay entry point.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct MechanicDef {
+    pub id: String,
+    pub name: String,
+    pub module: String,
+    pub api_version: u32,
+    pub config: String,
+    #[serde(default)]
+    pub model: Option<String>,
+}
+
 /// Version 1 supports maps and model/material/sound/particle resources.
 /// Weapon overrides, importer recipes and sandboxed mechanics are later APIs.
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
@@ -103,6 +118,8 @@ pub struct Manifest {
     pub maps: Vec<MapDef>,
     #[serde(default)]
     pub resources: Vec<ResourceDef>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mechanics: Vec<MechanicDef>,
 }
 
 fn zero_version() -> String {
@@ -163,8 +180,8 @@ impl Manifest {
     }
 
     fn validate(&self) -> Result<(), String> {
-        if self.format_version != 1 {
-            return Err("unsupported pack format_version (expected 1)".into());
+        if !matches!(self.format_version, 1 | 2) {
+            return Err("unsupported pack format_version (expected 1 or 2)".into());
         }
         if !valid_pack_id(&self.id) {
             return Err("invalid pack id".into());
@@ -205,6 +222,30 @@ impl Manifest {
             }
         }
         let mut defined = BTreeSet::new();
+        if !self.mechanics.is_empty() && (self.format_version != 2 || self.kind != PackKind::Assets) {
+            return Err("mechanics require an assets pack with format_version 2".into());
+        }
+        if self.mechanics.len() > 16 { return Err("too many mechanics".into()); }
+        let mut modules = BTreeSet::new();
+        for mechanic in &self.mechanics {
+            let id: ContentId = mechanic.id.parse().map_err(|e| format!("mechanic: {e}"))?;
+            if id.kind != ContentKind::Mode || mechanic.api_version != 1
+                || mechanic.name.trim().is_empty() || mechanic.name.len() > 128
+                || !mechanic.module.starts_with("mechanics/") || !mechanic.module.ends_with(".wasm")
+                || canonical_path(&mechanic.module)? != mechanic.module
+                || !modules.insert(&mechanic.module) || !defined.insert(id)
+            { return Err(format!("invalid mechanic definition: {}", mechanic.id)); }
+            if let Some(model) = &mechanic.model {
+                if !model.starts_with("models/") || !model.ends_with(".csrmesh") || canonical_path(model)? != *model {
+                    return Err("invalid mechanics model path".into());
+                }
+                if !self.resources.iter().any(|r| r.path == *model && r.id.parse::<ContentId>().is_ok_and(|id| id.kind == ContentKind::Model)) {
+                    return Err("mechanics visuals require a declared model ContentId".into());
+                }
+            }
+            if !mechanic.config.starts_with("mechanics/") || !mechanic.config.ends_with(".csrconfig")
+                || canonical_path(&mechanic.config)? != mechanic.config { return Err("invalid mechanics config path".into()); }
+        }
         for map in &self.maps {
             let id: ContentId = map.id.parse().map_err(|e| format!("map: {e}"))?;
             if id.kind != ContentKind::Map
@@ -225,7 +266,7 @@ impl Manifest {
             let id: ContentId = resource.id.parse().map_err(|e| format!("resource: {e}"))?;
             let extension = resource.path.rsplit('.').next().unwrap_or("");
             let valid = match id.kind {
-                ContentKind::Model => resource.path.starts_with("models/") && extension == "mdl",
+                ContentKind::Model => resource.path.starts_with("models/") && (extension == "mdl" || (self.format_version == 2 && extension == "csrmesh")),
                 ContentKind::Material => {
                     resource.path.starts_with("materials/") && extension == "vmt"
                 }
@@ -249,7 +290,7 @@ impl Manifest {
             }
         }
         if provided != defined {
-            return Err("provides must match the map/resource definitions exactly".into());
+            return Err("provides must match the map/resource/mechanics definitions exactly".into());
         }
         Ok(())
     }
@@ -297,7 +338,9 @@ fn asset_path(path: &str) -> bool {
         "maps" => matches!(extension, "bsp" | "nav"),
         "materials" => matches!(extension, "vmt" | "vtf"),
         "particles" => extension == "pcf",
-        "models" => matches!(extension, "mdl" | "vvd" | "vtx" | "phy" | "ani"),
+        "models" => matches!(extension, "mdl" | "vvd" | "vtx" | "phy" | "ani" | "csrmesh"),
+        "mechanics" => matches!(extension, "wasm" | "csrconfig"),
+        "licenses" => extension == "txt",
         "sound" => matches!(extension, "wav" | "mp3" | "ogg"),
         "resource" => path.starts_with("resource/overviews/") && extension == "txt",
         _ => false,
@@ -358,6 +401,8 @@ impl Pack {
     pub fn mount(&self) -> vfs::Mount {
         vfs::Mount::Memory(self.assets.clone())
     }
+
+    pub fn file(&self, path: &str) -> Option<Arc<[u8]>> { self.assets.get(path).cloned() }
 
     pub fn open(path: &Path) -> Result<Self, String> {
         Self::open_with_limits(path, Limits::default())
@@ -505,6 +550,35 @@ impl Pack {
             return Err("pack content hash mismatch".into());
         }
         files.remove(MANIFEST);
+        // V1 remains data-only. V2 allows only explicitly declared modules.
+        for (path, bytes) in &files {
+            if path.ends_with(".csrconfig") {
+                if manifest.format_version != 2 || !manifest.mechanics.iter().any(|m| m.config == *path) {
+                    return Err(format!("undeclared mechanics config: {path}"));
+                }
+                mechanics::parse_config(bytes)?;
+            }
+            if path.ends_with(".wasm") {
+                if manifest.format_version != 2 || !manifest.mechanics.iter().any(|m| m.module == *path) {
+                    return Err(format!("undeclared mechanics module: {path}"));
+                }
+                mechanics::Program::compile(bytes).map_err(|e| format!("{path}: {e}"))?;
+            }
+            if path.ends_with(".csrmesh") {
+                if manifest.format_version != 2 || !manifest.mechanics.iter().any(|m| m.model.as_ref() == Some(path)) {
+                    return Err(format!("undeclared mechanics model: {path}"));
+                }
+                mechanics::VisualMesh::parse(bytes)?;
+            }
+            if path.starts_with("licenses/") && (manifest.format_version != 2 || bytes.len() > 256 * 1024) {
+                return Err("license text requires a v2 pack and at most 256 KiB".into());
+            }
+        }
+        for mechanic in &manifest.mechanics {
+            if !files.contains_key(&mechanic.module) || !files.contains_key(&mechanic.config) || mechanic.model.as_ref().is_some_and(|p| !files.contains_key(p)) {
+                return Err(format!("{}: missing mechanics module or model", mechanic.id));
+            }
+        }
         if manifest.kind == PackKind::Recipe && !files.is_empty() {
             return Err("recipe packs must contain no assets".into());
         }
@@ -636,6 +710,12 @@ impl Registry {
                 source: source.clone(),
                 map: None,
                 resource_path: Some(resource.path.clone()),
+            });
+        }
+        for mechanic in &pack.manifest.mechanics {
+            entries.push(Entry {
+                id: mechanic.id.parse().map_err(|e| format!("{e}"))?,
+                source: source.clone(), map: None, resource_path: Some(mechanic.module.clone()),
             });
         }
         for entry in &entries {
