@@ -30,6 +30,12 @@ with Java.
 
 Jobs queue while the PC is off and start when it is back.
 
+Workspace/test links use one Cargo job to limit memory. Release packaging
+uses four jobs so ThinLTO can use several CPU cores on WINSERVE. CI supplies
+the exact source SHA to the icon/build script; checkout timestamps do not
+invalidate an otherwise identical Stable/Dev executable. Local builds still
+watch Git refs to keep their build identity current.
+
 ## The runner
 
 - Runs on the development machine, WINSERVE (since 2026-10-24; it replaced
