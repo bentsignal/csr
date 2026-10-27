@@ -95,6 +95,8 @@ pub struct MechanicDef {
     pub config: String,
     #[serde(default)]
     pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
 }
 
 /// Version 1 supports maps and model/material/sound/particle resources.
@@ -229,9 +231,11 @@ impl Manifest {
         let mut modules = BTreeSet::new();
         for mechanic in &self.mechanics {
             let id: ContentId = mechanic.id.parse().map_err(|e| format!("mechanic: {e}"))?;
-            if id.kind != ContentKind::Mode || mechanic.api_version != 1
+            let wasm=mechanic.api_version==1&&mechanic.provider.is_none()&&mechanic.module.ends_with(".wasm");
+            let provider=mechanic.api_version==2&&mechanic.provider.as_deref()==Some("skate3-v2")&&mechanic.module.ends_with(".csrdata");
+            if id.kind != ContentKind::Mode || !(wasm||provider)
                 || mechanic.name.trim().is_empty() || mechanic.name.len() > 128
-                || !mechanic.module.starts_with("mechanics/") || !mechanic.module.ends_with(".wasm")
+                || !mechanic.module.starts_with("mechanics/")
                 || canonical_path(&mechanic.module)? != mechanic.module
                 || !modules.insert(&mechanic.module) || !defined.insert(id)
             { return Err(format!("invalid mechanic definition: {}", mechanic.id)); }
@@ -339,7 +343,7 @@ fn asset_path(path: &str) -> bool {
         "materials" => matches!(extension, "vmt" | "vtf"),
         "particles" => extension == "pcf",
         "models" => matches!(extension, "mdl" | "vvd" | "vtx" | "phy" | "ani" | "csrmesh"),
-        "mechanics" => matches!(extension, "wasm" | "csrconfig"),
+        "mechanics" => matches!(extension, "wasm" | "csrconfig" | "csrdata"),
         "licenses" => extension == "txt",
         "sound" => matches!(extension, "wav" | "mp3" | "ogg"),
         "resource" => path.starts_with("resource/overviews/") && extension == "txt",
@@ -563,6 +567,10 @@ impl Pack {
                     return Err(format!("undeclared mechanics module: {path}"));
                 }
                 mechanics::Program::compile(bytes).map_err(|e| format!("{path}: {e}"))?;
+            }
+            if path.ends_with(".csrdata") {
+                if !manifest.mechanics.iter().any(|m|m.api_version==2&&m.module==*path){return Err("undeclared runtime data bundle".into());}
+                mechanics::data::parse(bytes)?;
             }
             if path.ends_with(".csrmesh") {
                 if manifest.format_version != 2 || !manifest.mechanics.iter().any(|m| m.model.as_ref() == Some(path)) {

@@ -131,6 +131,7 @@ version = "0.1.0"
 dependencies = [
  "glam",
  "gltf",
+ "mechanics",
  "mechanics-api",
  "packs",
  "serde_json",
@@ -349,15 +350,25 @@ dependencies = [
  "collision",
  "glam",
  "mechanics-api",
+ "mechanics-link",
  "movement",
  "serde",
  "serde_json",
+ "sha2",
  "wasmi",
 ]
 
 [[package]]
 name = "mechanics-api"
 version = "0.5.0"
+
+[[package]]
+name = "mechanics-link"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "memchr"

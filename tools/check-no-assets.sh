@@ -5,7 +5,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-banned='\.(csrpack|csrmesh|csrconfig|wasm|glb|gltf|xex|abin|skate|vpk|bsp|nav|vtf|vmt|mdl|vvd|vtx|phy|ani|pcf|wav|mp3|ogg|bik|webm|pbin|ttf|otf|uifont|jar|dds|tga|pak|ff|iwd|xpak|ipak|swf|gfx)$'
+banned='\.(csrpack|csrmesh|csrconfig|csrdata|wasm|glb|gltf|xex|abin|skate|vpk|bsp|nav|vtf|vmt|mdl|vvd|vtx|phy|ani|pcf|wav|mp3|ogg|bik|webm|pbin|ttf|otf|uifont|jar|dds|tga|pak|ff|iwd|xpak|ipak|swf|gfx)$'
 hits=$(git ls-files | grep -iE "$banned" || true)
 
 # Images are only allowed as documentation references.

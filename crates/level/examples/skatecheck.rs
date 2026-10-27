@@ -13,8 +13,11 @@ fn load_module(pack: &packs::Pack) -> Result<Arc<sim::mechanics::Module>, String
         id: def.id.clone(),
         name: def.name.clone(),
         archive_hash: pack.archive_hash().into(),
-        program: mechanics::Program::compile(&pack.file(&def.module).ok_or("missing module")?)?,
+        program: if def.api_version==1{Some(mechanics::Program::compile(&pack.file(&def.module).ok_or("missing module")?)?)}else{None},
         config: mechanics::parse_config(&pack.file(&def.config).ok_or("missing configuration")?)?,
+        external: if def.api_version==2{Some(Arc::new(mechanics::external::Program::new(
+            std::env::var_os("CSR_SKATE_RUNTIME").map(std::path::PathBuf::from).ok_or("CSR_SKATE_RUNTIME missing")?,
+            mechanics::data::materialize(&pack.file(&def.module).ok_or("missing runtime data")?,&std::env::temp_dir().join("csr-skatecheck-cache"))?)?))}else{None},
     }))
 }
 
@@ -24,6 +27,7 @@ fn run() -> Result<(), String> {
         .ok_or("Usage: skatecheck <private pack.csrpack> [map]")?;
     let pack = packs::Pack::open(Path::new(&path))?;
     let module = load_module(&pack)?;
+    let full=pack.manifest().mechanics[0].api_version==2;
     let mut collision = collision::CollisionWorld::new();
     let floor = [
         Vec3::new(-5000., -5000., 0.),
@@ -59,6 +63,7 @@ fn run() -> Result<(), String> {
         let mut peak = 0f32;
         for tick in 0..rate * 3 {
             let input = TickInput {
+                controller: if full {controller(tick as f32/rate as f32)}else{Default::default()},
                 forward_move: 450.,
                 buttons: if tick == rate {
                     movement::buttons::JUMP
@@ -83,15 +88,20 @@ fn run() -> Result<(), String> {
         let state = world.state();
         let mut replay = world.clone();
         replay.restore(state);
+        let mut future=Vec::new();
         for tick in 0..rate {
             let input = TickInput {
+                controller: if full {controller(3.+tick as f32/rate as f32)}else{Default::default()},
                 forward_move: 450.,
                 side_move: if tick < rate / 2 { 450. } else { 0. },
                 ..Default::default()
             };
             world.step(&[(id, input)]);
+            future.push((input,world.state_hash()));
+        }
+        for (input,hash) in future {
             replay.step(&[(id, input)]);
-            if world.state_hash() != replay.state_hash() {
+            if hash != replay.state_hash() {
                 return Err("movement diverged after snapshot restore".into());
             }
         }
@@ -125,6 +135,7 @@ fn run() -> Result<(), String> {
     let started = std::time::Instant::now();
     for tick in 0..512 {
         let input = TickInput {
+            controller: if full {controller(tick as f32/128.)}else{Default::default()},
             view_angles: Vec3::ZERO,
             forward_move: 450.,
             side_move: if (128..256).contains(&tick) { 450. } else { 0. },
@@ -149,6 +160,14 @@ fn run() -> Result<(), String> {
     );
     println!("failures: 0");
     Ok(())
+}
+fn controller(t:f32)->mechanics::link::Controller{
+    let mut report=mechanics::link::Controller{connected:true,..Default::default()};
+    if t<1.5{report.buttons=0x1000;}
+    if (1.5..2.).contains(&t){report.right=[0,-32768];}
+    if (2.0..2.2).contains(&t){report.right=[0,32767];}
+    if (3.0..3.5).contains(&t){report.left=[18000,0];}
+    report
 }
 fn main() {
     if let Err(error) = run() {

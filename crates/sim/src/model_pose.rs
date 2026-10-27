@@ -7,6 +7,7 @@ use glam::{Mat4, Vec3};
 use mdl::hitbox::{HitboxSet, PosedHitbox};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+mod external;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct PoseState {
@@ -266,6 +267,7 @@ mod tests {
 /// A sideways planted lower body while CS aim/reload/fire stays on the upper
 /// skeleton. Both hit geometry and renderer apply this same crossover pose.
 pub fn apply_movement_pose(player: &Player, bones: &[mdl::skeleton::Bone], pose: &mut [Mat4]) {
+    if external::apply(player,bones,pose){return;}
     let Some(state) = &player.mechanic else { return; };
     let turn = Mat4::from_rotation_z((state.angles.y + 90. - player.view_angles.y).to_radians());
     let lift = Mat4::from_translation(Vec3::Z * state.height);

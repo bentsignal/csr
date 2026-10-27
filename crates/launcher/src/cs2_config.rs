@@ -161,8 +161,11 @@ fn bindings(
             }
         }
     }
+    let movement_binding = settings.binds[settings::KEY_MOVEMENT_MODE];
     if defaults.is_some() {
-        settings.binds.fill(None);
+        // The native CS configuration has no rewrite movement-mode command.
+        // Preserve this independent action while replacing native CS bindings.
+        settings.binds[..settings::KEY_MOVEMENT_MODE].fill(None);
         settings.console_key = None;
         settings.mouse_binds.fill(MouseAction::None);
         settings.wheel_up = WheelAction::None;
@@ -238,6 +241,13 @@ fn bindings(
             report.push_str(&format!(
                 "Unsupported device binding {key:?} = {source_command:?}; retained here\n"
             ));
+        }
+    }
+    if let Some(key) = movement_binding {
+        let claimed = settings.binds[..settings::KEY_MOVEMENT_MODE].contains(&Some(key))
+            || settings.console_key == Some(key);
+        if !claimed {
+            settings.binds[settings::KEY_MOVEMENT_MODE] = Some(key);
         }
     }
     count

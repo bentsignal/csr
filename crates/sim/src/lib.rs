@@ -142,6 +142,7 @@ pub const AIM_WALL_MARGIN: f32 = 0.03125;
 pub struct TickInput {
     /// One-shot request to cycle the server's installed movement modules.
     pub toggle_mode: bool,
+    pub controller: ::mechanics::link::Controller,
     /// Pitch, yaw, roll in degrees.
     pub view_angles: Vec3,
     /// -450..450
@@ -1609,7 +1610,8 @@ impl World {
                 // Dynamic-world fluids use the same collision sweeps as CS movement.
                 let swimming=collision.dynamic.as_ref().is_some_and(|d|d.point_contents(p.movement.origin+Vec3::Z*32.,contents::WATER)!=0);
                 if p.mechanic.is_some() && !swimming && !frozen && !busy {
-                    match mechanics::step(p, &input, &self.mechanics, &contacts, dt, time) {
+                    let scene=::mechanics::link::SceneState {doors:self.doors.iter().map(|d|d.angle).collect(),broken:self.breakables.iter().map(|b|b.broken()).collect()};
+                    match mechanics::step(p, &input, &self.mechanics, &contacts, dt, time, &collision,scene) {
                         Ok(events) => p.last_events = events,
                         Err(error) => {
                             eprintln!("Movement pack disabled: {error}");

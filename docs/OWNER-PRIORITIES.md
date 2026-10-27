@@ -2,6 +2,21 @@
 
 ## October 26: Skate crossover pivot
 
+### October 27 owner playtest: replace the rushed prototype
+
+The owner tried the portable build and rejected its gameplay/presentation:
+the board was upside down, white and rigid, the CS character did not use
+Skate animations, and Xbox controller input was missing. The mode binding
+also became blank. Stop treating the kinematic riding adapter as the desired
+Skate crossover. The owner now requests sustained work without rushing a
+handoff: actual upstream Skate simulation and animations on CS maps with CS
+characters/guns, properly textured/articulated board, Xbox/Xbox 360 controller
+support and reliable mode switching. Preserve normal CS and saved controls.
+Use original converted assets privately; public rewrite code is authorized
+with its GPL obligations and attribution. Verify the actual rendered result
+and controller input path before the next owner handoff. Hardware that is not
+available on WINSERVE must be reported honestly rather than called tested.
+
 The owner requests Skate 3 movement on CS maps with CS characters and guns,
 an easy in-match CS/skate switch, and installation through content packs.
 This supersedes the previous low priority for mod interoperability. Use the

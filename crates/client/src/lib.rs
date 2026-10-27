@@ -41,6 +41,7 @@ pub mod case_ui;
 pub mod menu_scene;
 mod menu_blur;
 pub mod settings;
+mod controller;
 mod console;
 pub mod menu;
 pub mod feedback;
@@ -291,7 +292,7 @@ impl Plugin for CsgoPlugin {
                     sky::follow_camera,
                     visibility::update,
                     effects::draw,
-                    (characters::sync, movement_modes::draw).chain(),
+                    (characters::sync, movement_modes::draw,movement_modes::full_board::draw).chain(),
                     items::sync,
                     (doors::sync, breakables::sync, window_fade::update).chain(),
                     (viewmodel::update, foley::inspect, utility_fx::update_wick).chain(),

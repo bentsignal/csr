@@ -4,6 +4,9 @@ use glam::Vec3;
 use mechanics_api as api;
 use movement::TraceWorld;
 use wasmi::{Caller, Config, Engine, Linker, Module, Store, StoreLimits, StoreLimitsBuilder};
+pub mod external;
+pub mod data;
+pub use mechanics_link as link;
 #[cfg(test)]
 mod tests;
 

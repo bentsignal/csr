@@ -1,0 +1,13 @@
+Copyright (c) 2026 dumbad and the Skate 3 Rust Engine contributors.
+Coordinator source under upstream/ is from:
+https://github.com/SK8-ENGINE/skate-3-rust-engine
+Revision 2e16697797c8358d16f747a8259354ff2921041a (owner's experimental build 49).
+Those files and this runtime are GPL-3.0-only; see LICENSE.
+
+The adaptation isolates the existing physics, graph, animation, camera and
+gesture owners from their Bevy rendering/window schedule. Gameplay calculations
+remain in the upstream implementations; wrapper changes are documented in
+README.md. No Electronic Arts game executables, original game code or game
+assets are included. Original asset data is supplied privately by the owner.
+
+Adapter copyright (c) 2026 CSGO Rewrite contributors.

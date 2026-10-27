@@ -16,7 +16,7 @@ path = "src/prepare.rs"
 required-features = ["authoring"]
 
 [features]
-authoring = ["dep:skate-data", "dep:gltf", "dep:serde_json", "dep:packs"]
+authoring = ["dep:skate-data", "dep:gltf", "dep:serde_json", "dep:packs", "dep:mechanics"]
 
 [dependencies]
 mechanics-api = { path = "../../crates/mechanics-api" }
@@ -26,6 +26,7 @@ skate-data = { git = "https://github.com/SK8-ENGINE/skate-3-rust-engine", rev = 
 gltf = { version = "1.4", default-features = false, features = ["utils", "names"], optional = true }
 serde_json = { version = "1", optional = true }
 packs = { path = "../../crates/packs", optional = true }
+mechanics = { path = "../../crates/mechanics", optional = true }
 
 [profile.release]
 opt-level = 2

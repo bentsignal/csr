@@ -389,6 +389,11 @@ impl Settings {
                 }
             }
         }
+        if !text.lines().any(|line|line.trim()=="movement_binding_version=2")
+            && s.controls_source.starts_with("CS2") && s.binds[KEY_MOVEMENT_MODE].is_none()
+            && !s.binds[..KEY_MOVEMENT_MODE].contains(&Some(KeyCode::KeyX)) && s.console_key!=Some(KeyCode::KeyX) {
+            s.binds[KEY_MOVEMENT_MODE]=Some(KeyCode::KeyX);
+        }
         s
     }
     /// The weapon list describes an effective direct selection binding, never
@@ -432,6 +437,7 @@ impl Settings {
         }
         text.push_str(&format!("menu_blur={}\n", self.menu_blur));
         text.push_str(&format!("controls_source={}\n", self.controls_source.replace(['\r', '\n'], " ")));
+        text.push_str("movement_binding_version=2\n");
         text.push_str(&format!("radar_scale={}\nradar_hud_size={}\nradar_rotate={}\n", self.radar_scale, self.radar_hud_size, self.radar_rotate));
         text.push_str(&format!("closeonbuy={}\n", u8::from(self.close_on_buy)));
         for (i, key) in self.binds.iter().enumerate() {

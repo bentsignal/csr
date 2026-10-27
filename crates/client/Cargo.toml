@@ -44,6 +44,7 @@ sha2 = "0.10"
 ragdoll = { path = "../ragdoll" }
 
 image = { version = "0.25", default-features = false, features = ["png"] }
+gltf = { version = "1.4", default-features = false, features = ["utils", "names"] }
 # Runtime-only installed equipment silhouettes; no SVG fonts or raster references.
 resvg = { version = "=0.47.0", default-features = false }
 
@@ -58,4 +59,4 @@ openxr = { version = "=0.21.1", optional = true }
 
 [target.'cfg(windows)'.dependencies]
 raw-window-handle = "0.6.2"
-windows-sys = { version = "=0.61.2", features = ["Win32_Foundation", "Win32_NetworkManagement_IpHelper", "Win32_NetworkManagement_Ndis", "Win32_Networking_WinSock", "Win32_System_DataExchange", "Win32_System_Memory", "Win32_System_Threading", "Win32_UI_WindowsAndMessaging"] }
+windows-sys = { version = "=0.61.2", features = ["Win32_UI_Input_XboxController", "Win32_Foundation", "Win32_NetworkManagement_IpHelper", "Win32_NetworkManagement_Ndis", "Win32_Networking_WinSock", "Win32_System_DataExchange", "Win32_System_Memory", "Win32_System_Threading", "Win32_UI_WindowsAndMessaging"] }

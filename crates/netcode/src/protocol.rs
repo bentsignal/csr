@@ -13,8 +13,8 @@ use sim::{GameEvent, PlayerId, Snapshot, Team, TickInput};
 // Older peers must reject the session before attempting snapshot decoding.
 // v34 adds explicit movement-mode input and replicated module state.
 // This first pack release is offline; network admission rejects active modules.
-pub const VERSION: u32 = 34;
-pub const PROTOCOL_ID: u64 = 0x4353_5257_0000_0022;
+pub const VERSION: u32 = 35;
+pub const PROTOCOL_ID: u64 = 0x4353_5257_0000_0023;
 pub const CONTROL: u8 = 0;
 pub const INPUT: u8 = 1;
 pub const SNAPSHOT: u8 = 2;

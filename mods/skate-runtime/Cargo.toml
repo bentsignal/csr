@@ -1,0 +1,35 @@
+[workspace]
+
+[package]
+name = "csr-skate-runtime"
+version = "0.2.0"
+edition = "2024"
+license = "GPL-3.0-only"
+description = "Full upstream Skate animation and physical-skeleton coordinator for CSGO Rewrite"
+
+[lib]
+test = false
+doctest = false
+
+[dependencies]
+bevy = { version = "=0.19.1", default-features = false, features = ["std", "bevy_log"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+mechanics-link = { path = "../../crates/mechanics-link" }
+gltf = { version = "1.4", default-features = false, features = ["utils", "names"] }
+skate-core = { git = "https://github.com/SK8-ENGINE/skate-3-rust-engine", rev = "2e16697797c8358d16f747a8259354ff2921041a" }
+skate-data = { git = "https://github.com/SK8-ENGINE/skate-3-rust-engine", rev = "2e16697797c8358d16f747a8259354ff2921041a" }
+skate-net = { git = "https://github.com/SK8-ENGINE/skate-3-rust-engine", rev = "2e16697797c8358d16f747a8259354ff2921041a" }
+skate-mods = { git = "https://github.com/SK8-ENGINE/skate-3-rust-engine", rev = "2e16697797c8358d16f747a8259354ff2921041a" }
+skate-dynamics = { git = "https://github.com/SK8-ENGINE/skate-3-rust-engine", rev = "2e16697797c8358d16f747a8259354ff2921041a" }
+
+[profile.dev]
+opt-level = 1
+debug = 0
+
+[profile.dev.package."*"]
+opt-level = 2
+
+[profile.release]
+lto = "thin"
+codegen-units = 16
