@@ -6,42 +6,48 @@ mod art;
 
 fn main() {
     println!("cargo:rerun-if-env-changed=CSR_BUILD_SHA");
-    // Record the executable's real source identity, including worktree refs.
-    for reference in ["HEAD", "packed-refs"] {
+    let supplied_revision = std::env::var("CSR_BUILD_SHA")
+        .ok()
+        .filter(|s| !s.is_empty());
+    // CI provides the immutable source SHA. Watching checkout timestamps too
+    // would relink the same executable when Stable and Dev use that same SHA.
+    if supplied_revision.is_none() {
+        // Record the executable's real source identity, including worktree refs.
+        for reference in ["HEAD", "packed-refs"] {
+            if let Ok(out) = std::process::Command::new("git")
+                .args(["rev-parse", "--git-path", reference])
+                .output()
+            {
+                if out.status.success() {
+                    println!(
+                        "cargo:rerun-if-changed={}",
+                        String::from_utf8_lossy(&out.stdout).trim()
+                    );
+                }
+            }
+        }
         if let Ok(out) = std::process::Command::new("git")
-            .args(["rev-parse", "--git-path", reference])
+            .args(["symbolic-ref", "-q", "HEAD"])
             .output()
         {
             if out.status.success() {
-                println!(
-                    "cargo:rerun-if-changed={}",
-                    String::from_utf8_lossy(&out.stdout).trim()
-                );
+                if let Ok(path) = std::process::Command::new("git")
+                    .args([
+                        "rev-parse",
+                        "--git-path",
+                        String::from_utf8_lossy(&out.stdout).trim(),
+                    ])
+                    .output()
+                {
+                    println!(
+                        "cargo:rerun-if-changed={}",
+                        String::from_utf8_lossy(&path.stdout).trim()
+                    );
+                }
             }
         }
     }
-    if let Ok(out) = std::process::Command::new("git")
-        .args(["symbolic-ref", "-q", "HEAD"])
-        .output()
-    {
-        if out.status.success() {
-            if let Ok(path) = std::process::Command::new("git")
-                .args([
-                    "rev-parse",
-                    "--git-path",
-                    String::from_utf8_lossy(&out.stdout).trim(),
-                ])
-                .output()
-            {
-                println!(
-                    "cargo:rerun-if-changed={}",
-                    String::from_utf8_lossy(&path.stdout).trim()
-                );
-            }
-        }
-    }
-    let revision = std::env::var("CSR_BUILD_SHA")
-        .ok()
+    let revision = supplied_revision
         .or_else(|| {
             std::process::Command::new("git")
                 .args(["rev-parse", "--short=8", "HEAD"])

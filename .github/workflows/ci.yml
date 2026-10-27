@@ -12,6 +12,7 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  CSR_BUILD_SHA: ${{ github.sha }}
   # Desktop links hold several GiB each; leave room for the owner's apps and
   # local development builds on the shared self-hosted machine.
   CARGO_BUILD_JOBS: 1

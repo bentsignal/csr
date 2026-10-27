@@ -15,7 +15,8 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
-  CARGO_BUILD_JOBS: 1
+  # Bound memory while allowing ThinLTO/code generation to use several cores.
+  CARGO_BUILD_JOBS: 4
   CARGO_TARGET_DIR: S:\tools\csr-actions-runner\cargo-target
   CSR_BUILD_SHA: ${{ github.sha }}
 
