@@ -1,78 +1,95 @@
 # Skate on CS maps
 
-Install a Skate `.csrpack` by opening it, or use **Content packs -> Install
-pack** in the game. Load any CS map. **X** switches between CS movement and
-skating without changing your character, weapons, ammunition or map. Rebind
-**Toggle movement mode** in Keyboard / Mouse if desired.
+Install a private Skate `.csrpack` by opening it, or choose **Content packs →
+Install pack**. Load an offline CS map. **View / Back** on an Xbox controller,
+or **X** on the keyboard, switches CS/skate without changing your character,
+weapons or ammunition. The keyboard action is **Toggle movement mode** in
+Keyboard / Mouse. App updates preserve your settings and private packs.
 
-While skating, use your movement keys to push, brake and steer. Space ollies;
-crouch gives the stronger pop; Shift brakes. Mouse aim, firing, reloading,
-weapon selection, health and damage still use CS rules. The camera follows
-behind your CS character and clips against the map. Switching back restores
-the ordinary first-person CS view.
+Use an Xbox 360, One or Series controller through Windows XInput. Skate uses
+the original rewrite's controller mapping: A/X push, left stick steers, right
+stick performs flick tricks, triggers grab, B brakes, and Y gets off/on the
+board. Original gesture, switch-stance, bail/recovery and camera logic run in
+the Skate coordinator. Start pauses. View / Back returns to CS at any time.
+While skating, D-pad Right fires the CS gun, Left reloads, Up/Down changes
+weapons. Holding LB leaves D-pad commands with Skate. CS also supports basic
+controller movement, aiming, firing and weapon selection.
 
 ## Create a pack from your own game
 
-1. Own Skate 3 and prepare your copy using the
+1. Own Skate 3 and prepare your copy with the
    [Skate 3 Rust Engine](https://github.com/SK8-ENGINE/skate-3-rust-engine).
-   Its setup accepts your Xbox 360 ISO or extracted `default.xex` and converts
-   the content locally. Follow that project's setup instructions.
-2. In CSGO Rewrite, choose **Content packs -> Create Skate pack**. Select
-   `skate3rust.exe` in your prepared installation and choose where to save
-   the `.csrpack`. The bundled creator needs no Rust, Python or manual copying.
-3. Open the saved pack to install it. Load a CS map and press X.
+   Follow its local Xbox 360 ISO / extracted `default.xex` conversion workflow.
+2. Choose **Content packs → Create Skate pack** in CSGO Rewrite. Select
+   `skate3rust.exe` in that prepared installation, then a new output `.csrpack`.
+   The installed creator needs no Rust, terminal or manual file copying.
+3. Open the pack to install it, load a CS map, and press View / Back or X.
 
-The creator reads the converted installation without modifying it. It includes
-the board geometry, selected normal-difficulty riding/jump settings, the GPL
-movement module and its notices. It does not include original game executables,
-skater bodies, maps or the original game's source code. The resulting file
-contains your game's assets: keep it out of this repository and public releases.
-The game updater preserves installed packs in your existing player data.
+Use a **0.2.0** pack for the full runtime. Recreate a rushed 0.1.0 prototype
+pack with the current creator; it lacks the animation/skin/graph data.
+Installing the replacement updates the same pack ID.
 
-## Current playable scope
+The creator reads your converted install without modifying it. It includes
+the original board skin/textures and rig reference GLB (which also contains
+the original skater mesh, although only its board is rendered), animation
+banks, skeleton/collection data, compiled state graphs, controller patterns,
+camera definitions and selected trick-name strings. It excludes original
+executables, native libraries, Lua programs, original game code and Skate
+maps. The resulting file contains original game assets: keep it private,
+outside this repository and public releases. This project does not provide
+or download disc images or privately converted assets.
 
-This first crossover brings pushing, coasting, braking, steering, ramp/curb
-contact and ollies onto CS maps, with CS models holding and using CS weapons.
-The pack calls the public rewrite's `skate-core` push, braking, steering and
-ground-jump functions. Private curves and coefficients are read from the
-owner's converted game data.
+## Implemented scope and limits
 
-It uses CS swept-hull collision rather than the upstream seven-body board and
-physical skeleton. Keyboard push cadence and truck-tilt-to-curvature mapping
-are crossover policies. The character uses a planted CS stance and CS combat
-gestures; board geometry currently uses flat material colors. Full Skate
-animation retargeting, textured decks, tricks/grinds, wipeouts and controller
-gestures remain future integration work. This does not claim exact Skate 3
-physics or full gameplay parity. Movement packs currently run in offline
-sessions; network sessions reject active movement-module state.
+The full upstream coordinator runs the seven-body board, physical skeleton,
+animation/motion/action graphs, original controller gestures, tricks, grinds,
+bails, walking/remounting, camera and scoring. CS characters follow that pose
+with their own body proportions and weapon grips; the board uses the owned
+GLB skin, inverse binds and embedded textures, including truck/wheel bones.
+Leg retargeting solves CS limb lengths to the native ankle targets so its
+longer legs do not push the boots through the board.
+This replaces the initial keyboard/hull/rigid-board prototype.
 
-## Source, licenses and developer builds
+CS geometry is converted to native metres/Y-up and compiled with the original
+collision welding, adjacency and query metadata. Doors and intact breakables
+use the upstream solid-contact and moving-query paths. CS ledges do not have
+Skate-authored grind splines: exposed top/side edges provide derived splines,
+an explicit crossover policy. CS materials currently use one native contact
+material; board textures render unlit in the CS renderer. Different character
+proportions, ledge metadata and camera spaces still need owner playtesting.
+Skate sound, courses/missions, multiplayer mechanics negotiation and complete
+original-game parity are not implemented. CS combat/audio remain available.
 
-The independent CSGO Rewrite host/API remain Apache-2.0. The optional adapter,
-module and pack creator are GPL-3.0-only, using
-[`SK8-ENGINE/skate-3-rust-engine` at 2e166977](https://github.com/SK8-ENGINE/skate-3-rust-engine/tree/2e16697797c8358d16f747a8259354ff2921041a).
-Preserve dumbad and the upstream contributors' attribution. Corresponding
-adapter source, build scripts and dependency lock are in `mods/skate` in the
-same source revision as the CSGO Rewrite release. See its `LICENSE` and
-`NOTICE`; the pinned upstream source remains available at the link above.
-The creator and module are built without any game data by CI. Original assets
-are converted only on the owner's machine and are never CI inputs/artifacts.
+Windows XInput reports are forwarded unchanged to the original Pad/action
+mapping. WINSERVE has no connected physical controller, so automated checks
+exercise actual raw reports, not a hardware playtest. Test your own controller
+for hot-plugging, flick tricks, grabs, camera and mode switching.
 
-For developers with Rust and the repository's Windows build prerequisites:
+## Public source and developer checks
+
+The CS host and process contract remain Apache-2.0. The optional coordinator
+and creator are **GPL-3.0-only**, attributed to dumbad and upstream contributors.
+Public upstream is pinned to
+[`2e166977`](https://github.com/SK8-ENGINE/skate-3-rust-engine/tree/2e16697797c8358d16f747a8259354ff2921041a).
+Corresponding adapted source, lockfiles, notices and build instructions live in
+`mods/skate-runtime` and `mods/skate` at each release's source revision.
+Public installers include both notices, GPL text and exact source links.
+CI builds the programs without original assets or private packs.
 
 ```powershell
 ./tools/build-skate-tools.ps1 -OutputDir C:/private/skate-tools
 C:/private/skate-tools/Skate-Pack-Creator.exe
 ```
 
-For unattended private conversion, use
+Unattended private conversion:
 `Skate-Pack-Creator.exe --create <path/to/skate3rust.exe> <new/output.csrpack>`.
-It refuses to replace an existing output. The older three-argument developer
-mode accepts `<converted assets folder> <module.wasm> <new private folder>`;
-`packs`' existing `packtool` can build that folder into a `.csrpack`.
+Existing outputs are never overwritten.
 
-The focused headless check is
+Private integration check (no fixture is committed): set `CSR_SKATE_RUNTIME`
+to that build's `Skate-Runtime.exe`, then run
 `cargo run -p level --example skatecheck -- <private.csrpack> [map]`.
-It exercises both tick rates, installed module execution, an ollie, mode
-switching, preserved inventory, snapshot replay and real-map movement.
-No private fixture is committed. API details are in [MECHANICS.md](MECHANICS.md).
+It exercises native grinds, walking/remounting, doors/breakables, both host
+tick rates, ollies, mode switching, inventory preservation, snapshot replay,
+real-map movement and finite CS animation retargeting. Actual rendered
+push/ollie/flick-trick captures complement the headless checks.
+See [MECHANICS.md](MECHANICS.md) for the process and pack contracts.

@@ -10,8 +10,21 @@ pub struct Module {
     pub id: String,
     pub name: String,
     pub archive_hash: String,
-    pub program: mechanics::Program,
+    pub program: Option<mechanics::Program>,
     pub config: [f32; api::CONFIG_WORDS],
+    pub external: Option<Arc<mechanics::external::Program>>,
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ExternalState {
+    pub session: u64,
+    pub provider_hash: String,
+    pub digest: [u8;32],
+    pub start: mechanics::link::Start,
+    pub history: mechanics::external::Journal,
+    pub pose: mechanics::link::Pose,
+    pub previous_pose: mechanics::link::Pose,
+    pub rig: mechanics::link::Rig,
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -23,6 +36,8 @@ pub struct State {
     pub angles: Vec3,
     pub height: f32,
     pub reset: bool,
+    #[serde(default)]
+    pub external: Option<Box<ExternalState>>,
 }
 
 pub(crate) fn toggle(player: &mut Player, modules: &[Arc<Module>]) {
@@ -40,6 +55,7 @@ pub(crate) fn toggle(player: &mut Player, modules: &[Arc<Module>]) {
         angles: Vec3::new(0., player.view_angles.y, 0.),
         height: 0.,
         reset: true,
+        external: None,
     });
     player.movement.ladder_normal = None;
 }
@@ -51,12 +67,43 @@ pub(crate) fn step(
     world: &dyn TraceWorld,
     dt: f32,
     time: f32,
+    collision: &Arc<collision::CollisionWorld>,
+    scene: mechanics::link::SceneState,
 ) -> Result<MoveEvents, String> {
     let state = player.mechanic.as_ref().ok_or("no active mechanic")?;
     let module = modules
         .iter()
         .find(|m| m.id == state.id && m.archive_hash == state.archive_hash)
         .ok_or("active mechanics pack changed or is unavailable")?;
+    if let Some(program) = &module.external {
+        let start = mechanics::link::Start { position:player.movement.origin.to_array(),velocity:player.movement.velocity.to_array(),yaw:player.view_angles.y };
+        let state=player.mechanic.as_mut().unwrap();
+        if state.reset {state.external=None;}
+        let external=state.external.get_or_insert_with(||Box::new(ExternalState{
+            session:((time.to_bits() as u64)<<32)|player.id as u64,provider_hash:program.fingerprint().into(),digest:mechanics::external::digest([0;32],&start),start,history:Default::default(),pose:Default::default(),previous_pose:Default::default(),
+            rig:mechanics::link::Rig{names:vec![],parents:vec![],rest:vec![],to_source:[[0.;4];4],bone_basis:[[0.;4];4]},
+        }));
+        let frame=mechanics::link::Frame{input:input.controller,dt,scene};
+        if external.provider_hash!=program.fingerprint(){return Err("movement runtime changed since this state was recorded".into());}
+        let (pose,rig)=program.advance_world(collision,external.session,&external.start,&external.history,external.digest,&frame)?;
+        if pose.position.iter().chain(pose.velocity.iter()).any(|v|!v.is_finite()||v.abs()>131072.)
+            ||pose.bones.len()>256||pose.bones.iter().flatten().flatten().any(|v|!v.is_finite()) {
+            return Err("invalid provider physical pose".into());
+        }
+        let was_grounded=player.movement.on_ground;
+        player.movement.origin=Vec3::from_array(pose.position);
+        player.movement.velocity=Vec3::from_array(pose.velocity);
+        player.movement.on_ground=pose.grounded;
+        player.movement.ground_ticks=if pose.grounded{player.movement.ground_ticks.saturating_add(1)}else{0};
+        player.movement.ducked=false;player.movement.duck_amount=0.;
+        player.movement.ladder_normal=None;
+        player.movement.old_buttons=input.buttons;
+        external.digest=mechanics::external::digest(external.digest,&frame);
+        if pose.generation!=external.pose.generation {external.previous_pose=external.pose.clone();}
+        if pose.discontinuity||pose.period!=external.pose.period||external.previous_pose.generation==0 {external.previous_pose=pose.clone();}
+        external.history.push(frame);external.pose=pose;external.rig=rig;state.reset=false;state.height=0.;
+        return Ok(MoveEvents{jumped:was_grounded&&!player.movement.on_ground&&player.movement.velocity.z>0.,..Default::default()});
+    }
     let mut packet = [0.; api::WORDS];
     packet[api::API] = api::VERSION;
     packet[api::DT] = dt;
@@ -92,7 +139,7 @@ pub(crate) fn step(
     packet[api::TIME] = time;
     packet[api::STATE..api::STATE + api::STATE_WORDS].copy_from_slice(&state.data);
     packet[api::CONFIG..].copy_from_slice(&module.config);
-    let out = module.program.step(&packet, world)?;
+    let out = module.program.as_ref().ok_or("movement program unavailable")?.step(&packet, world)?;
     let grounded = out[api::OUT_GROUNDED] == 1.;
     let previous_grounded = player.movement.on_ground;
     let fall_speed = -player.movement.velocity.z;
@@ -141,8 +188,9 @@ mod tests {
             id: "mod_mode_test".into(),
             name: "Test".into(),
             archive_hash: "hash".into(),
-            program: mechanics::Program::compile(&wasm).unwrap(),
+            program: Some(mechanics::Program::compile(&wasm).unwrap()),
             config: [0.; api::CONFIG_WORDS],
+            external: None,
         };
         let mut world = crate::World::new(Arc::new(collision::CollisionWorld::new()));
         world.mechanics.push(Arc::new(module));

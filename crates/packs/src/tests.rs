@@ -56,7 +56,7 @@ fn v2_movement_pack_installs_with_identity_and_refuses_undeclared_code() {
     m.provides = vec!["mod_mode_riding".into()];
     m.mechanics.push(MechanicDef { id: "mod_mode_riding".into(), name: "Riding".into(),
         module: "mechanics/ride.wasm".into(), api_version: 1,
-        config: "mechanics/ride.csrconfig".into(), model: None });
+        config: "mechanics/ride.csrconfig".into(), model: None, provider:None });
     let wasm = wat::parse_str(r#"(module (memory (export "memory") 1)
         (func (export "csr_packet") (result i32) i32.const 0)
         (func (export "csr_step") (result i32) i32.const 0))"#).unwrap();

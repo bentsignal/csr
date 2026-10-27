@@ -11,9 +11,14 @@
 - [x] Pack creation from an owner's prepared Skate installation, without a
   player-side build or manual copying, with source/license notices.
 - [ ] Complete combined verification and published Dev delivery; owner playtest.
-- [ ] Extend beyond initial riding: articulated physics, animation retargeting,
-  tricks/grinds, textures, wipeouts and controller gestures. Multiplayer module
-  negotiation is separate future work, not declared complete here.
+- [x] Replace initial riding with the full upstream articulated simulation,
+  native animation retargeting, textured/articulated board, tricks/grinds,
+  wipeouts, walking/remounting, Xbox reports and native camera/scoring.
+- [x] Compile CS collision with native metadata; bridge doors/breakables into
+  native contacts, derive grindable CS edges, preserve journal replay and
+  repair the movement binding erased by native config import.
+- [ ] Owner physical-controller playtest of the full runtime. Native Skate
+  audio, course gameplay and multiplayer negotiation remain future work.
 
 ## Desktop launcher and delivery (October 26)
 

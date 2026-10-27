@@ -4,13 +4,18 @@ Copyright (c) 2026 dumbad and the Skate 3 Rust Engine contributors.
 https://github.com/SK8-ENGINE/skate-3-rust-engine
 
 Adapter copyright (c) 2026 CSGO Rewrite contributors.
-The adapter and its combined WebAssembly module are GPL-3.0-only.
-The pack creator is GPL-3.0-only as well. Corresponding source and build
-instructions are in https://github.com/bentsignal/csr/tree/master/mods/skate
+The historical WebAssembly adapter, pack creator and full isolated runtime
+are GPL-3.0-only. Corresponding source and build instructions are in
+https://github.com/bentsignal/csr/tree/master/mods/skate and
+https://github.com/bentsignal/csr/tree/master/mods/skate-runtime
 and docs/SKATE.md at the source revision of the distributing release.
 The original CSGO Rewrite host and mechanics API retain their Apache-2.0
 license. See LICENSE in this directory and the repository root LICENSE.
 
-Original Skate 3 game assets and game code are not included. The private
-authoring tool reads the player's own already-converted game installation.
+Original game assets and game code are not included in the public programs
+or source. The creator reads the player's already-converted installation.
+Its resulting private pack contains original game asset DATA (animations,
+graphs, physics configuration and a converted skin/board). Those assets
+retain their original owners' copyrights and are not licensed under the GPL.
+No original game executables, native libraries or Lua scripts are packed.
 This is an unofficial crossover, not affiliated with Electronic Arts.

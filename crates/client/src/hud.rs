@@ -509,10 +509,14 @@ pub fn update(
             HudText::Hint => {
                 if let Some(state) = me.mechanic.as_ref().filter(|_| me.alive) {
                     let mode = w.mechanics.iter().find(|m| m.id == state.id).map_or("Movement pack", |m| m.name.as_str());
-                    format!("{mode}   {}: movement mode   {}: push   {} / {}: steer   {}: jump   {}: brake",
+                    if let Some(native)=&state.external{
+                        let key=settings.action_binding_label(crate::settings::KEY_MOVEMENT_MODE);
+                        let switch=if key.is_empty(){"View".into()}else{format!("View / {key}")};
+                        format!("{mode}   {switch}: CS/skate   A/X: push   B: brake   Left stick: steer   Right stick: tricks   LT/RT: grab   Y: on/off board\n{}  {}   D-pad right: fire   left: reload   up/down: weapons   Start: pause",native.pose.trick,native.pose.score)
+                    }else{format!("{mode}   {}: movement mode   {}: push   {} / {}: steer   {}: jump   {}: brake",
                         settings.action_binding_label(crate::settings::KEY_MOVEMENT_MODE),
                         settings.action_binding_label(0), settings.action_binding_label(2), settings.action_binding_label(3),
-                        settings.action_binding_label(4), settings.action_binding_label(6))
+                        settings.action_binding_label(4), settings.action_binding_label(6))}
                 } else if !me.alive && !local.noclip {
                     match local.spectating.and_then(|s| w.player(s)) {
                         Some(s) => format!("Spectating {}   (LMB: next player)", s.name),
@@ -520,7 +524,8 @@ pub fn update(
                         None => String::new(),
                     }
                 } else if !w.mechanics.is_empty() && me.alive && !competitive {
-                    format!("{}: switch movement mode",settings.action_binding_label(crate::settings::KEY_MOVEMENT_MODE))
+                    let key=settings.action_binding_label(crate::settings::KEY_MOVEMENT_MODE);
+                    if key.is_empty(){"View: switch movement mode (set a keyboard binding in Settings)".into()}else{format!("View / {key}: switch movement mode")}
                 } else if competitive && round.phase == Phase::Live && me.alive {
                     let (mn, mx) = me.bounds();
                     let in_site = w.objectives.site_at(mn, mx);

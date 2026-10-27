@@ -389,6 +389,11 @@ impl Settings {
                 }
             }
         }
+        if !text.lines().any(|line|line.trim()=="movement_binding_version=2")
+            && s.controls_source.starts_with("CS2") && s.binds[KEY_MOVEMENT_MODE].is_none()
+            && !s.binds[..KEY_MOVEMENT_MODE].contains(&Some(KeyCode::KeyX)) && s.console_key!=Some(KeyCode::KeyX) {
+            s.binds[KEY_MOVEMENT_MODE]=Some(KeyCode::KeyX);
+        }
         s
     }
     /// The weapon list describes an effective direct selection binding, never
@@ -432,6 +437,7 @@ impl Settings {
         }
         text.push_str(&format!("menu_blur={}\n", self.menu_blur));
         text.push_str(&format!("controls_source={}\n", self.controls_source.replace(['\r', '\n'], " ")));
+        text.push_str("movement_binding_version=2\n");
         text.push_str(&format!("radar_scale={}\nradar_hud_size={}\nradar_rotate={}\n", self.radar_scale, self.radar_hud_size, self.radar_rotate));
         text.push_str(&format!("closeonbuy={}\n", u8::from(self.close_on_buy)));
         for (i, key) in self.binds.iter().enumerate() {
@@ -588,6 +594,18 @@ pub fn key_name(key: KeyCode) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn imported_missing_mode_binding_is_repaired_once_without_claiming_another_action() {
+        use super::*;
+        let mut old=Settings::default();old.controls_source="CS2 config".into();old.binds[KEY_MOVEMENT_MODE]=None;
+        let text=old.encode().replace("movement_binding_version=2\n","");
+        let repaired=Settings::parse(&text);
+        assert_eq!(repaired.binds[KEY_MOVEMENT_MODE],Some(KeyCode::KeyX));
+        // A subsequent deliberate unbind survives the normal save/load cycle.
+        assert_eq!(Settings::parse(&old.encode()).binds[KEY_MOVEMENT_MODE],None);
+        old.rebind(4,KeyCode::KeyX);
+        assert_eq!(Settings::parse(&old.encode().replace("movement_binding_version=2\n","")).binds[KEY_MOVEMENT_MODE],None);
+    }
     use super::*;
     #[test]
     fn action_row_mouse_bindings_use_canonical_commands_for_every_action_and_button() {

@@ -161,8 +161,11 @@ fn bindings(
             }
         }
     }
+    let movement_binding = settings.binds[settings::KEY_MOVEMENT_MODE];
     if defaults.is_some() {
-        settings.binds.fill(None);
+        // The native CS configuration has no rewrite movement-mode command.
+        // Preserve this independent action while replacing native CS bindings.
+        settings.binds[..settings::KEY_MOVEMENT_MODE].fill(None);
         settings.console_key = None;
         settings.mouse_binds.fill(MouseAction::None);
         settings.wheel_up = WheelAction::None;
@@ -238,6 +241,13 @@ fn bindings(
             report.push_str(&format!(
                 "Unsupported device binding {key:?} = {source_command:?}; retained here\n"
             ));
+        }
+    }
+    if let Some(key) = movement_binding {
+        let claimed = settings.binds[..settings::KEY_MOVEMENT_MODE].contains(&Some(key))
+            || settings.console_key == Some(key);
+        if !claimed {
+            settings.binds[settings::KEY_MOVEMENT_MODE] = Some(key);
         }
     }
     count
@@ -380,6 +390,19 @@ fn publish_completed(temp: &Path, target: &Path) -> std::io::Result<()> {
 mod tests {
     use super::*;
     use std::time::SystemTime;
+    #[test]
+    fn native_radio_binding_cannot_erase_the_rewrite_movement_action() {
+        let defaults=kv::parse(DEFAULTS).unwrap();
+        let native=kv::parse("bindings { x radio2 }").unwrap();
+        let mut settings=Settings::default();
+        let key=settings.binds[settings::KEY_MOVEMENT_MODE];
+        bindings(&mut settings,defaults.block("config").unwrap().block("bindings"),native.block("bindings").unwrap(),&mut String::new());
+        assert_eq!(settings.binds[settings::KEY_MOVEMENT_MODE],key);
+        let native=kv::parse("bindings { x +jump }").unwrap();
+        bindings(&mut settings,None,native.block("bindings").unwrap(),&mut String::new());
+        assert_eq!(settings.binds[settings::KEY_MOVEMENT_MODE],None);
+        assert_eq!(settings.binds[4],key);
+    }
     #[test]
     fn completed_publish_retries_after_partial_write_and_never_clobbers_a_winner() {
         let (data, _, _) = fixture("publish");

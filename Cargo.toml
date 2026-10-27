@@ -26,8 +26,9 @@ members = [
     "crates/packs",
     "crates/mechanics-api",
     "crates/mechanics",
+    "crates/mechanics-link",
 ]
-exclude = ["mods/skate"]
+exclude = ["mods/skate", "mods/skate-runtime"]
 
 [workspace.package]
 version = "0.5.0"
@@ -62,7 +63,7 @@ bevy = { version = "0.19", default-features = false, features = [
     "vorbis",
 ] }
 glam = { version = "0.32.1", features = ["serde"] }
-serde = { version = "1", features = ["derive"] }
+serde = { version = "1", features = ["derive", "rc"] }
 postcard = { version = "1.1", default-features = false, features = ["alloc"] }
 zip = { version = "8.6", default-features = false, features = ["deflate"] }
 # Same versions velopack already pulls in (HTTP, hashes, JSON).
@@ -94,6 +95,7 @@ workshop = { path = "crates/workshop" }
 packs = { path = "crates/packs" }
 mechanics-api = { path = "crates/mechanics-api" }
 mechanics = { path = "crates/mechanics" }
+mechanics-link = { path = "crates/mechanics-link" }
 
 [profile.dev]
 opt-level = 1

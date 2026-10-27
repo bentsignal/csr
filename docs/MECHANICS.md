@@ -1,4 +1,4 @@
-# Mechanics packs: API 1
+# Mechanics packs
 
 Version 1 asset/recipe packs retain their existing data-only behavior. Version
 2 adds `[[mechanics]]` definitions, each providing a custom-origin `mode`
@@ -7,6 +7,12 @@ a `mechanics/*.csrconfig` file and an optional `models/*.csrmesh` rigid visual.
 The visual also has a model ContentId in `[[resources]]` and `provides`.
 All definitions participate in the same strict provides/conflict/hash checks.
 Native libraries, original executables, scripts and WASI remain unsupported.
+
+`api_version = 2` selects an explicitly supported application provider with
+`provider = "skate3-v2"` and a `mechanics/*.csrdata` module. It is a private
+data bundle, not an executable. The installed app chooses its own sibling
+`Skate-Runtime.exe`; pack manifests cannot choose a program or arguments.
+The legacy API 1 WebAssembly contract below remains available.
 
 Installed packs are snapshotted for an offline match. Input selects only the
 next admitted module; it cannot supply a module path or bytes. Simulation owns
@@ -56,12 +62,50 @@ an RGBA color, in Source space relative to the board. It is limited to 8 MiB,
 entry contains external paths, embedded programs or renderer-specific handles.
 V2 may carry bounded `licenses/*.txt`. All special payloads must be declared.
 
+## Trusted process providers (API 2)
+
+`crates/mechanics-link` defines bounded, length-prefixed postcard messages.
+Initialization supplies the admitted data-cache path and immutable CS scene:
+static triangles, compound door/breakable convex parts and derived grind
+splines. Tick frames contain the raw Xbox report, host timestep and live CS
+door/breakable state. Results include movement, physical state, complete world
+bone matrices, native camera and trick/score. Positions use Source inches/Z-up;
+bone matrices use provider metres/Y-up with explicit rig conversion matrices.
+The current message limit is 64 MiB. Provider failures return to CS movement.
+
+Only `World::step` advances this process. It accumulates host time into the
+original native integration clock. A cloneable persistent journal owns every
+frame, the original spawn/momentum, archive hash and provider executable hash.
+SHA-256 prefix receipts distinguish equal-length divergent histories. The
+process is a cache: mismatched/restored history rebuilds the coordinator and
+replays those inputs. Prepared immutable collision/animation metadata are
+cached; doors/breakables update native solid contacts without recompiling the
+map. Restoring long histories can be expensive. Network admission continues
+to reject active mechanics until negotiation/prediction are designed for it.
+
+Rendering interpolates native local bone transforms and camera frames between
+completed native steps, preserving skeleton lengths. It cannot advance physics.
+The same retargeted CS pose supplies authoritative hitboxes; render overstep
+only affects presentation. Mode selection, inventory and damage stay in sim.
+
+`CSRDATA1` bundles are limited to 128 MiB, 2048 files, 240-byte paths and
+64 MiB per entry. The allowlist admits the known converted GLB, animation
+banks, skeleton/collection data, compiled graphs, controller/camera data and
+filtered trick language. Programs, Lua, traversal, case aliases, Windows
+alternate streams and external paths are rejected. Cache paths are checked
+component by component; cached bytes are verified and repaired against the
+bundle. Materialized data lives under the user's data folder, never the
+original install or replaced application folder.
+
 ## Distribution boundary
 
-The host contains only the general API/runtime. The Skate adapter is a separate
-GPL Rust workspace under `mods/skate`, compiled to WebAssembly and embedded in
-the separate GPL pack creator. Its pinned upstream implementation and license
-are preserved. No original game assets are required to build either program.
+The host contains the general API/runtime and trusted-provider connection.
+The full Skate coordinator is a separate GPL Rust workspace under
+`mods/skate-runtime`, shipped as an independent executable. `mods/skate`
+contains the GPL creator and the historical API 1 adapter. Pinned upstream
+implementations, notices, build scripts and locks are preserved. Public
+packages include GPL text and exact corresponding-source links for their
+revision. No original game assets are required to build these programs.
 Pack creators read original content only from a player's prepared installation.
 The ordinary installer/file association/drop path installs their output;
 updating the app preserves it. See [SKATE.md](SKATE.md).

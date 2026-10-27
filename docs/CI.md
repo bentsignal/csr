@@ -56,7 +56,12 @@ watch Git refs to keep their build identity current.
   (`Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`); Windows' default
   fails every step.
 - Build cache: `S:\tools\csr-actions-runner\cargo-target` (`CARGO_TARGET_DIR`
-  in the workflows). Delete it to force a clean build.
+  in the workflows). Independent GPL creator/runtime release caches live under
+  `skate-providers/creator` and `skate-providers/runtime` in that directory,
+  so checkout cleaning retains their Bevy/Rapier dependencies. The provider
+  build script records its source checkout and cleans local packages before
+  reusing that cache from another checkout, matching the main profile-handoff
+  rule. Builds require no Skate assets. Delete a cache to force a clean build.
 - Re-register (for example after moving it):
   `gh api -X POST repos/bentsignal/csr/actions/runners/registration-token --jq .token`,
   then `config.cmd --unattended --url https://github.com/bentsignal/csr --token <token> --name WINSERVE-csr --labels csr,gpu,csgo-legacy --work _work --replace`.

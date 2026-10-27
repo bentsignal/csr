@@ -7,6 +7,7 @@ use glam::{Mat4, Vec3};
 use mdl::hitbox::{HitboxSet, PosedHitbox};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+mod external;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct PoseState {
@@ -44,8 +45,8 @@ pub fn input(player: &Player, tick: u64, rate: u32) -> AnimInput {
     let yaw = velocity.y.atan2(velocity.x).to_degrees();
     let weapon = player.active_weapon();
     AnimInput {
-        // Hold a planted CS pose while riding; combat gestures still use the
-        // authoritative weapon clock. Full Skate-to-CS retargeting is later.
+        // Retain CS grips/combat auxiliaries beneath the native driven pose;
+        // the legacy rigid-board API also uses this planted base animation.
         speed: if player.mechanic.is_some() { 0. } else { speed },
         move_yaw: if speed > 1. {
             (yaw - player.view_angles.y + 180.).rem_euclid(360.) - 180.
@@ -266,6 +267,7 @@ mod tests {
 /// A sideways planted lower body while CS aim/reload/fire stays on the upper
 /// skeleton. Both hit geometry and renderer apply this same crossover pose.
 pub fn apply_movement_pose(player: &Player, bones: &[mdl::skeleton::Bone], pose: &mut [Mat4]) {
+    if external::apply(player,bones,pose,None){return;}
     let Some(state) = &player.mechanic else { return; };
     let turn = Mat4::from_rotation_z((state.angles.y + 90. - player.view_angles.y).to_radians());
     let lift = Mat4::from_translation(Vec3::Z * state.height);
@@ -273,6 +275,10 @@ pub fn apply_movement_pose(player: &Player, bones: &[mdl::skeleton::Bone], pose:
         let lower = ["pelvis", "thigh", "calf", "foot", "toe"].iter().any(|part| bone.name.to_ascii_lowercase().contains(part));
         *transform = lift * if lower { turn * *transform } else { *transform };
     }
+}
+
+pub fn apply_movement_pose_render(player:&Player,bones:&[mdl::skeleton::Bone],pose:&mut [Mat4],overstep_seconds:f32){
+    if !external::apply(player,bones,pose,Some(overstep_seconds)){apply_movement_pose(player,bones,pose);}
 }
 
 pub(crate) fn posed(
