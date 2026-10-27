@@ -39,7 +39,7 @@ fn serve() {
                     }
                     let root = std::path::PathBuf::from(root);
                     // Metadata does not depend on the CS map or initial player.
-                    // Compile that large collision scene once, on Restore.
+                    // Compile the collision scene once, during map preparation.
                     let rt = csr_skate_runtime::Runtime::load(&root)?;
                     let rig = rt.rig();
                     let prepared = csr_skate_runtime::PreparedScene::new(&rt, geometry)?;
@@ -56,6 +56,9 @@ fn serve() {
                 } => {
                     let geometry = scene.as_ref().ok_or("provider not initialized")?;
                     let state = frames.first().map(|f| f.scene.clone()).unwrap_or_default();
+                    if let Some(old) = runtime.take() {
+                        old.recycle_scene_world();
+                    }
                     let mut rt = csr_skate_runtime::Runtime::load_prepared(
                         assets.as_ref().ok_or("assets not initialized")?,
                         geometry.clone(),

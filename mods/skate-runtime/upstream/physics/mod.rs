@@ -212,6 +212,7 @@ mod exchange_tests {
 }
 
 impl GamePhysics {
+    pub(crate) fn csr_take_world(&mut self)->BoardWorld {std::mem::replace(&mut self.world,BoardWorld::new(Vec::new()))}
     pub(crate) fn csr_floor_material(&self)->skate_core::physics::contact::RetailContactMaterial {self.settings.floor_material}
     pub(crate) fn csr_load_prepared(asset_root:&std::path::Path,map:&skate_data::skate_map::SkateMap,world:BoardWorld)->Result<Self,String>{
         Self::load_world_difficulty_prepared(asset_root,ground::Terrain::Course,Some(map),crate::difficulty::Difficulty::Easy,Some(world))

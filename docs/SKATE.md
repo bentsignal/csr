@@ -1,10 +1,17 @@
 # Skate on CS maps
 
 Install a private Skate `.csrpack` by opening it, or choose **Content packs →
-Install pack**. Load an offline CS map. **View / Back** on an Xbox controller,
-or **X** on the keyboard, switches CS/skate without changing your character,
-weapons or ammunition. The keyboard action is **Toggle movement mode** in
-Keyboard / Mouse. App updates preserve your settings and private packs.
+Install pack**. Load an offline CS map. The **Skateboard** joins your inventory
+on the right HUD. Cycle to it with the mouse wheel or Xbox LB/RB, then use
+**left click / RT** to skate. Your CS gun returns after releasing the button.
+Cycle to the board and use it again to return to CS; while skating, D-pad
+Up/Down cycles inventory, and RT uses the board when selected.
+
+**View / Back** on Xbox or **X** on the keyboard remains a direct movement
+shortcut. The keyboard action is **Toggle movement mode** in Keyboard / Mouse.
+Camera travel animates in both directions, follows movement and clips against
+the map. App updates preserve settings and the existing private 0.2.0 pack;
+this follow-up needs no new pack transfer.
 
 Use an Xbox 360, One or Series controller through Windows XInput. Skate uses
 the original rewrite's controller mapping: A/X push, left stick steers, right

@@ -2,6 +2,13 @@
 
 ## October 26: Skate crossover
 
+- [x] Prewarm native collision/data and board rendering with the map; keep
+  expensive preparation in the loading worker and reuse immutable inputs.
+- [x] Add a pack-owned skateboard to inventory cycling and the right HUD;
+  primary use switches modes without consuming ammunition or firing a gun.
+- [x] Animate camera travel both ways, including interrupted switches, actor
+  motion, collision and lifecycle cuts. Existing View/Back/X shortcuts remain.
+
 - [x] Versioned sandboxed movement packs with explicit fixed-tick state and
   collision queries; preserve the existing private pack installer/update data.
 - [x] Separate GPL Skate adapter using public upstream riding/jump calculations

@@ -2,20 +2,22 @@
 
 ## October 26: Skate crossover pivot
 
-### October 27 owner playtest: replace the rushed prototype
+### October 27 owner playtest: inventory and transitions
 
-The owner tried the portable build and rejected its gameplay/presentation:
-the board was upside down, white and rigid, the CS character did not use
-Skate animations, and Xbox controller input was missing. The mode binding
-also became blank. Stop treating the kinematic riding adapter as the desired
-Skate crossover. The owner now requests sustained work without rushing a
-handoff: actual upstream Skate simulation and animations on CS maps with CS
-characters/guns, properly textured/articulated board, Xbox/Xbox 360 controller
-support and reliable mode switching. Preserve normal CS and saved controls.
-Use original converted assets privately; public rewrite code is authorized
-with its GPL obligations and attribution. Verify the actual rendered result
-and controller input path before the next owner handoff. Hardware that is not
-available on WINSERVE must be reported honestly rather than called tested.
+The owner played the full runtime delivered in PR #325 / Dev 1040 and reports
+it is a good first pass. Native physics/animation, textured board, controller
+input and mode switching are accepted as the new baseline. Current follow-up:
+
+1. Remove the first mode-switch hitch on each new map; prepare the provider,
+   map collision and board graphics during loading.
+2. Make the skateboard a selectable inventory item in the right HUD, cycled
+   with weapons. Primary use enters skating; retain convenient controller
+   support and the existing movement shortcut.
+3. Animate the camera between first-person CS and third-person skating in
+   both directions, preserving camera collision and separate authoritative aim.
+
+Preserve the installed private 0.2.0 pack and accepted gameplay. Development
+and rendered checks stay on WINSERVE; deliver through the Dev updater.
 
 The owner requests Skate 3 movement on CS maps with CS characters and guns,
 an easy in-match CS/skate switch, and installation through content packs.

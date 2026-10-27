@@ -34,12 +34,12 @@ use std::{path::Path, sync::Arc};
 
 /// Immutable bank bytes and decoded poses survive world changes.
 pub(crate) struct AnimationSource {
-    banks: skate_data::animation_banks::AnimationBanks,
+    banks: Arc<skate_data::animation_banks::AnimationBanks>,
     evaluator: Arc<PoseEvaluator>,
 }
 impl AnimationSource {
     pub(crate) fn load(root: &Path) -> Result<Arc<Self>, String> {
-        let banks = skate_data::animation_banks::AnimationBanks::load(root)?;
+        let banks = crate::asset_cache::banks(root)?;
         let mut evaluator = PoseEvaluator::from_banks(&banks)?;
         evaluator.load_authored_clips(root)?;
         Ok(Arc::new(Self { banks, evaluator: Arc::new(evaluator) }))

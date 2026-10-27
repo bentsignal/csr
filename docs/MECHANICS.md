@@ -83,6 +83,14 @@ cached; doors/breakables update native solid contacts without recompiling the
 map. Restoring long histories can be expensive. Network admission continues
 to reject active mechanics until negotiation/prediction are designed for it.
 
+Offline packs also expose a selectable inventory tool. Its selected content ID,
+archive hash and primary-use release latch belong to player snapshots, while
+the previous CS weapon remains retained. Primary use is consumed by the tool;
+it cannot also fire that gun. Available tools come only from the match's frozen
+admitted modules. Network admission rejects selected tools as well as active
+mechanics. Immutable provider/map data and board materials are prepared with
+the map; this preparation cannot select a mode or advance player simulation.
+
 Rendering interpolates native local bone transforms and camera frames between
 completed native steps, preserving skeleton lengths. It cannot advance physics.
 The same retargeted CS pose supplies authoritative hitboxes; render overstep

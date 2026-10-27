@@ -101,7 +101,7 @@ impl PushingSettings {
     /// Standalone settings check; game startup shares its already loaded banks.
     pub fn load_stock(data: &Collections, asset_root: &Path) -> Result<Self, String> {
         let mut trees =
-            skate_data::animation_banks::AnimationBanks::load(asset_root)?.metadata()?;
+            crate::asset_cache::banks(asset_root)?.metadata()?;
         Self::load(data, &mut trees)
     }
     pub fn load(data: &Collections, trees: &mut impl PushTreeSource) -> Result<Self, String> {

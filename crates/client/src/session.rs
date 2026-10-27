@@ -166,6 +166,7 @@ impl Selection {
 }
 
 pub(crate) struct LoadedMap {
+    pub movement:Option<crate::movement_modes::Prepared>,
     pub level: level::Level,
     pub remote: Option<crate::remote_join::Admission>,
     pub host: Option<crate::hosting::PreparedHost>,
@@ -275,10 +276,10 @@ impl Loader {
                     Selection::Offline(request) => {
                         let result = load_requested_map(&request, &game_dir, &worker_progress);
                         result
-                            .map(|level| LoadedMap {
-                                level,
-                                remote: None,
-                                host: None,
+                            .and_then(|level| {
+                                let movement=crate::movement_modes::prepare(&level.collision);
+                                if worker_progress.cancelled.load(Ordering::Relaxed){return Err(workshop::CANCELLED.into());}
+                                Ok(LoadedMap {level,movement:Some(movement),remote:None,host:None})
                             })
                             .map_err(|e| e.to_string())
                     }
@@ -325,6 +326,7 @@ impl Loader {
                                 authority.add_bot(names(mine)[i as usize % 8], mine);
                             }
                             Ok(LoadedMap {
+                                movement:None,
                                 level,
                                 remote: None,
                                 host: Some(crate::hosting::PreparedHost {
@@ -354,6 +356,7 @@ impl Loader {
                         )
                         .and_then(|request| request.prepare())
                         .map(|prepared| LoadedMap {
+                            movement:None,
                             level: prepared.level,
                             remote: Some(crate::remote_join::Admission::new(
                                 serial,

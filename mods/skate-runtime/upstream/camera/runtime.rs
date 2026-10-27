@@ -44,7 +44,7 @@ pub(crate) struct CameraRuntime {
 mod tests;
 impl CameraRuntime {
     pub fn load(root: &Path) -> Result<Self, String> {
-        let data = Collections::load(root)?;
+        let data = crate::asset_cache::collections(root)?;
         let values = data.words::<32>("slowmotion_controller", "default", "timescale")?
             .map(f32::from_bits);
         let slow_motion = SlowMotionSettings {

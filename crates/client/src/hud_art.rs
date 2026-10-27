@@ -158,7 +158,7 @@ pub fn update(mut commands: Commands, art: Res<UiAssets>, world: Res<SimWorld>, 
         *visibility = Visibility::Inherited;
     }
     let slot_labels: [String; 5] = std::array::from_fn(|i| settings.selection_binding_label(i as u8 + 1));
-    let signature = format!("{:?}|{}|{}|{:?}|{:?}|{:?}", p.id, p.alive, p.active, p.weapons.iter().map(|wp| &wp.def.class_name).collect::<Vec<_>>(), w.players.iter().map(|p| (p.id, p.team, p.alive)).collect::<Vec<_>>(), slot_labels);
+    let signature = format!("{:?}|{}|{}|{:?}|{:?}|{:?}|{:?}", p.id, p.alive, p.active, p.weapons.iter().map(|wp| &wp.def.class_name).collect::<Vec<_>>(), w.players.iter().map(|p| (p.id, p.team, p.alive)).collect::<Vec<_>>(), slot_labels,p.equipped_mechanic);
     if signature == state.signature { return; }
     state.signature = signature;
     if let Some(root) = state.root.take() { commands.entity(root).despawn(); }
@@ -174,7 +174,7 @@ pub fn update(mut commands: Commands, art: Res<UiAssets>, world: Res<SimWorld>, 
                             for &index in indices {
                                 let weapon = &p.weapons[index];
                                 let key = weapon.def.class_name.trim_start_matches("weapon_");
-                                let color = if index == p.active { Color::WHITE } else { Color::srgba(0.8, 0.82, 0.82, 0.5) };
+                                let color = if index == p.active && p.equipped_mechanic.is_none() { Color::WHITE } else { Color::srgba(0.8, 0.82, 0.82, 0.5) };
                                 let width = if slot == 3 { layout::INVENTORY_ICON_HEIGHT } else { layout::INVENTORY_ICON_WIDTH };
                                 if let Some(image) = art.image(key).or_else(|| art.image("knife_default_ct").filter(|_| key.contains("knife"))) {
                                     icons.spawn((ImageNode { color, ..ImageNode::new(image) }, Node { width: hu(width), height: hu(layout::INVENTORY_ICON_HEIGHT), flex_shrink: 0.0, ..default() }));
@@ -189,7 +189,7 @@ pub fn update(mut commands: Commands, art: Res<UiAssets>, world: Res<SimWorld>, 
                             }
                         });
                         row.spawn((SelectionHint(slot as u8 + 1), Text::new(slot_labels[slot].clone()), TextLayout::new(Justify::Right, LineBreak::NoWrap), TextColor(Color::WHITE), TextFont { font_size: hf(12.0), ..default() }, Node { position_type: PositionType::Absolute, right: hu(-18.0), top: hu(layout::INVENTORY_HINT_TOP), ..default() }));
-                        if indices.contains(&p.active) {
+                        if indices.contains(&p.active) && p.equipped_mechanic.is_none() {
                             let weapon = &p.weapons[p.active];
                             // Only descendants inherit overflow clipping. Keep
                             // the full name on one line, extending left, inside
@@ -199,6 +199,20 @@ pub fn update(mut commands: Commands, art: Res<UiAssets>, world: Res<SimWorld>, 
                             });
                         }
                     });
+                }
+                if !p.is_bot {
+                    for module in &w.mechanics {
+                        let selected=p.equipped_mechanic.as_ref().is_some_and(|item|item.id==module.id);
+                        let color=if selected{Color::WHITE}else{Color::srgba(0.8,0.82,0.82,0.5)};
+                        inventory.spawn(Node{position_type:PositionType::Relative,width:hu(layout::INVENTORY_ICON_WIDTH),height:hu(layout::INVENTORY_PITCH),flex_shrink:0.,..default()}).with_children(|row|{
+                            // An original vector silhouette; all board textures
+                            // and geometry still come only from the private pack.
+                            row.spawn((Node{position_type:PositionType::Absolute,right:hu(4.),top:hu(10.),width:hu(66.),height:hu(8.),..default()},BackgroundColor(color)));
+                            for right in [15.,52.]{row.spawn((Node{position_type:PositionType::Absolute,right:hu(right),top:hu(20.),width:hu(7.),height:hu(6.),..default()},BackgroundColor(color)));}
+                            row.spawn((Text::new("Cycle"),TextColor(color),TextFont{font_size:hf(12.),..default()},Node{position_type:PositionType::Absolute,right:hu(-18.),top:hu(layout::INVENTORY_HINT_TOP),..default()}));
+                            if selected {row.spawn((Text::new(if module.external.is_some(){"Skateboard"}else{&module.name}),TextColor(Color::WHITE),TextFont{font:bevy::text::FontSource::Handle(art.regular.clone()),font_size:hf(12.),..default()},Node{position_type:PositionType::Absolute,right:hu(0.),top:hu(layout::INVENTORY_ICON_HEIGHT),..default()}));}
+                        });
+                    }
                 }
             });
         }

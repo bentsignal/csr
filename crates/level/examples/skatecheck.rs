@@ -155,15 +155,33 @@ fn run() -> Result<(), String> {
     let mut world = sim::World::with_catalog(level.collision.clone(), level.catalog.clone());
     world.set_character_profiles(level.character_profiles.clone());
     world.load_map(&level.bsp, level.overview().as_deref());
+    if let Some(provider)=&module.external {
+        let started=std::time::Instant::now();provider.prepare_world(&world.collision)?;
+        println!("Map provider preparation: {:?}",started.elapsed());
+    }
     world.mechanics.push(module);
     let id = world.add_player("Map skate check", Team::CounterTerrorist);
+    world.step(&[(id, TickInput {
+        weapon_slot: sim::SLOT_PREVIOUS,
+        ..Default::default()
+    })]);
+    if world.player(id).unwrap().equipped_mechanic.is_none() {
+        return Err("map inventory did not select the board".into());
+    }
+    let activation=std::time::Instant::now();
     world.step(&[(
         id,
         TickInput {
-            toggle_mode: true,
+            buttons: movement::buttons::ATTACK,
+            controller: mechanics::link::Controller {
+                connected: true,
+                triggers: [0, 255],
+                ..Default::default()
+            },
             ..Default::default()
         },
     )]);
+    println!("Prepared first activation: {:?}",activation.elapsed());
     let started = std::time::Instant::now();
     let mut foot_error = Vec3::ZERO;
     let mut max_foot_error = 0f32;

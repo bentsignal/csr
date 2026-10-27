@@ -4,6 +4,7 @@
 #![allow(dead_code, unused_imports)]
 #[path = "../upstream/animation_pose/mod.rs"]
 mod animation_pose;
+mod asset_cache;
 mod bridge;
 #[path = "../upstream/camera/mod.rs"]
 mod camera;
@@ -118,6 +119,15 @@ pub struct Runtime {
     language: std::collections::BTreeMap<String, String>,
 }
 impl Runtime {
+    /// Only immutable scene geometry is lent to the next reconstruction. Its
+    /// query methods reset contact scratch; dynamic queries are replaced below.
+    pub fn recycle_scene_world(mut self) {
+        if let Some(scene) = &self.scene {
+            let mut world = self.physics.csr_take_world();
+            world.set_external_queries(None);
+            *scene.world.lock().unwrap() = Some(world);
+        }
+    }
     pub fn load(root: &std::path::Path) -> Result<Self, String> {
         let manifest = skate_data::GameAssets::load(root).map_err(|e| e.to_string())?;
         let graphs = std::sync::Arc::new(graph_runtime::StockGraphs::load(root, &manifest)?);

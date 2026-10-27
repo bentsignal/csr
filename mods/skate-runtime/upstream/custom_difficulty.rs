@@ -122,9 +122,13 @@ impl Tuning {
         else {format!("{}     {:.2}",o.label,v)}
     }
 }
-pub(crate) fn load_collections(root:&Path)->Result<Collections,String> {
-    let mut data=Collections::load(root)?;
+pub(crate) fn load_collections(root:&Path)->Result<std::sync::Arc<Collections>,String> {
+    thread_local!{static TUNED:std::cell::RefCell<Option<(std::path::PathBuf,std::sync::Arc<Collections>)>>=const{std::cell::RefCell::new(None)};}
+    if let Some(data)=TUNED.with(|slot|slot.borrow().as_ref().filter(|(key,_)|key==root).map(|(_,data)|data.clone())){return Ok(data);}
+    let mut data=(*crate::asset_cache::collections(root)?).clone();
     Tuning::load(root,&data)?.overlay(&mut data)?;
+    let data=std::sync::Arc::new(data);
+    TUNED.with(|slot|*slot.borrow_mut()=Some((root.into(),data.clone())));
     Ok(data)
 }
 
