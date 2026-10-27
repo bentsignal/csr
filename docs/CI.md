@@ -1,9 +1,11 @@
 # CI
 
-Builds and tests run on the owner's PC through a self-hosted GitHub Actions
-runner, not on GitHub's machines. Cold builds there took 30 to 50 minutes;
-here the build cache persists, and CS:GO Legacy is installed, so CI can also
-run the real-data checks.
+Builds and tests run on WINSERVE through a self-hosted GitHub Actions runner.
+The build cache persists, and CS:GO Legacy is installed for real-data checks.
+Shawn playtests on his separate gaming PC through the launcher's Dev updates.
+Agents finish delivery after merge using the
+[playtest delivery skill](../.agents/skills/csr-playtest-delivery/SKILL.md);
+the owner does not build or copy executables between machines.
 
 ## What runs
 
