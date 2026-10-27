@@ -1779,7 +1779,7 @@ pub struct ViewModels {
 impl ViewModels {
     /// Use the installed CS hands and a closed weapon grip for the crossover
     /// equipment pose. Original arm geometry/animations never enter Git.
-    pub(crate) fn board_grip(&self, team: sim::Team, meshes:&mut Assets<Mesh>) -> Option<(SkinnedAsset, Vec<glam::Mat4>, glam::Mat4)> {
+    pub(crate) fn board_grip(&self, team: sim::Team, meshes:&mut Assets<Mesh>) -> Option<(SkinnedAsset, Vec<glam::Mat4>, glam::Mat4,glam::Vec3)> {
         let arms=match team {sim::Team::Terrorist=>self.arms_t.as_ref(),_=>self.arms_ct.as_ref()}?;
         let view=self.weapons.get("weapon_knife")?;
         let mut pose=mdl::skeleton::rest_pose(&view.asset.model.bones);
@@ -1812,7 +1812,9 @@ impl ViewModels {
             mesh.insert_indices(bevy::mesh::Indices::U32(indices));
             Some((meshes.add(mesh),material.clone()))
         }).collect();
-        Some((asset,pose.clone(),pose[hand]))
+        let elbow=arms.model.bones.iter().position(|b|{let n=b.name.to_ascii_lowercase();n.contains("r_forearm")||n.contains("right_forearm")}).unwrap_or_else(||arms.model.bones[hand].parent.max(0) as usize);
+        let forearm=pose[hand].inverse().transform_vector3(pose[elbow].w_axis.truncate()-pose[hand].w_axis.truncate()).normalize_or_zero();
+        Some((asset,pose.clone(),pose[hand],forearm))
     }
     /// Model assets retained before instances exist, including arms and cosmetics.
     pub fn assets(&self) -> impl Iterator<Item = &SkinnedAsset> {

@@ -270,8 +270,12 @@ mod tests {
             restored.step(&[(id, TickInput::default())]);
             assert_eq!(w.state_hash(), restored.state_hash());
         }
+        w.player_mut(id).unwrap().mechanic_checkpoint=Some(Checkpoint{id:"mod_mode_test".into(),archive_hash:"hash".into(),target:mechanics::link::Checkpoint{transform:glam::Mat4::IDENTITY.to_cols_array_2d(),on_board:true,foot_forward:true}});
+        w.player_mut(id).unwrap().movement.origin=Vec3::new(500.,30.,20.);
         w.respawn(id);
         assert!(w.player(id).unwrap().mechanic.as_ref().unwrap().reset);
+        assert!(w.player(id).unwrap().mechanic_checkpoint.is_none());
+        assert_eq!(w.player(id).unwrap().mechanic.as_ref().unwrap().cs_return,w.player(id).unwrap().movement);
         w.step(&[(id, TickInput::default())]);
         w.step(&[(id, press)]);
         assert!(w.player(id).unwrap().mechanic.is_none());

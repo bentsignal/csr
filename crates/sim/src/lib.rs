@@ -819,7 +819,7 @@ impl World {
             p.movement = PlayerMove::spawn_at(origin);
             p.equipped_mechanic=None;
             p.mechanic_checkpoint=None;
-            if let Some(state) = &mut p.mechanic { state.reset = true; state.data.fill(0.);state.external=None; }
+            if let Some(state) = &mut p.mechanic { state.reset = true; state.data.fill(0.);state.external=None;state.cs_return=p.movement; }
             p.view_angles = Vec3::new(0.0, spawn.yaw, 0.0);
             p.health = 100;
             p.flash_until = 0.0;

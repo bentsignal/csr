@@ -24,7 +24,7 @@ pub(crate) fn update(
     visuals: Option<Res<crate::movement_modes::Visuals>>,
     mut state: ResMut<BoardAudio>,
     mut sources: ResMut<Assets<AudioSource>>,
-    mut loops: Query<(Entity, &Loop, &mut AudioSink)>,
+    mut loops: Query<(Entity, &Loop, Option<&mut AudioSink>)>,
     settings: Res<crate::settings::Settings>,
     time: Res<Time>,
     windows: Query<&Window>,
@@ -90,7 +90,8 @@ pub(crate) fn update(
                 speed,
             )
         });
-    for (_, kind, mut sink) in &mut loops {
+    for (_, kind, sink) in &mut loops {
+        let Some(mut sink) = sink else { continue };
         let on = match kind.0 {
             "roll" => rolling && !braking,
             "grind" => grinding,

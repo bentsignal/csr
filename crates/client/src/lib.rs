@@ -567,8 +567,8 @@ fn prepare_world(
         main.triangles + skybox.triangles + breakable_builds.iter().map(|(_, _, build)| build.triangles).sum::<usize>() + window_builds.iter().map(|build| build.triangles()).sum::<usize>(),
         skybox.triangles,
     );
-    commands.insert_resource(movement_modes::full_board::MaterialTemplate(world_mesh::material_from_vmt(None,&level.vfs,&mut textures,&mut images,&world_shared,opts.exposure,false)));
-    scene_import::WorldPreparation { textures, shared: world_shared, moving_door_builds }
+    let board_material=world_mesh::material_from_vmt(None,&level.vfs,&mut textures,&mut images,&world_shared,opts.exposure,false);
+    scene_import::WorldPreparation { board_material,textures, shared: world_shared, moving_door_builds }
 }
 
 #[allow(clippy::too_many_arguments)]

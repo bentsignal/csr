@@ -15,7 +15,13 @@ pub(crate) struct HeldBoard {
     started: Option<f32>,
     equipped_at: f32,
     key: Option<(sim::PlayerId, u64, String)>,
-    arms: Option<(sim::Team, SkinnedInstance, Vec<glam::Mat4>, glam::Mat4)>,
+    arms: Option<(
+        sim::Team,
+        SkinnedInstance,
+        Vec<glam::Mat4>,
+        glam::Mat4,
+        Vec3,
+    )>,
 }
 pub(crate) fn update(
     mut commands: Commands,
@@ -34,7 +40,7 @@ pub(crate) fn update(
     characters: Res<crate::characters::CharacterModels>,
 ) {
     held.transform = None;
-    if let Some((_, arms, _, _)) = &held.arms {
+    if let Some((_, arms, _, _, _)) = &held.arms {
         for mesh in &arms.meshes {
             if let Ok(mut v) = visible.get_mut(*mesh) {
                 *v = Visibility::Hidden;
@@ -42,14 +48,13 @@ pub(crate) fn update(
         }
     }
     let mut action = request.after(&mut held.seen);
-    let controller = crate::controller::poll();
-    if controller.connected
-        && controller.buttons & 0x40 != 0
-        && held.controller_previous & 0x40 == 0
-    {
+    // Reuse the tick's XInput publication; inspection needs no extra hardware
+    // polling and cannot alter the admitted controller report.
+    let buttons = local.controller_buttons;
+    if buttons & 0x40 != 0 && held.controller_previous & 0x40 == 0 {
         action = Some(InspectAction::Start);
     }
-    held.controller_previous = controller.buttons;
+    held.controller_previous = buttons;
     let Some(p) = world.0.player(local.id).filter(|p| {
         p.alive
             && p.mechanic.is_none()
@@ -106,25 +111,25 @@ pub(crate) fn update(
     let matrix = Mat4::from_mat3(basis);
     let matrix = Mat4::from_translation(center) * matrix;
     held.transform = Some(matrix);
-    let respawn = held.arms.as_ref().is_none_or(|(team, arms, _, _)| {
+    let respawn = held.arms.as_ref().is_none_or(|(team, arms, _, _, _)| {
         *team != p.team || arms.joints.first().is_none_or(|e| !transforms.contains(*e))
     });
     if respawn {
-        if let Some((_, old, _, _)) = held.arms.take() {
+        if let Some((_, old, _, _, _)) = held.arms.take() {
             for e in old.joints.into_iter().chain(old.meshes) {
                 commands.entity(e).despawn();
             }
         }
-        if let Some((asset, pose, hand)) = models.board_grip(p.team, &mut meshes) {
+        if let Some((asset, pose, hand, forearm)) = models.board_grip(p.team, &mut meshes) {
             let arms = skinning::spawn(&mut commands, &asset, None, Some(&mut materials));
             for e in &arms.meshes {
                 commands.entity(*e).insert(Visibility::Hidden);
             }
-            held.arms = Some((p.team, arms, pose, hand));
+            held.arms = Some((p.team, arms, pose, hand, forearm));
         }
         return;
     }
-    if let Some((_, arms, pose, hand)) = &held.arms {
+    if let Some((_, arms, pose, hand, forearm)) = &held.arms {
         // Wrist closes around the near rail; use the same rigid transform for
         // the board and hand so inspection never lets the grip drift apart.
         let grip = center + basis * Vec3::new(1.5, -0.7, -7.);
@@ -139,7 +144,22 @@ pub(crate) fn update(
         );
         let hand =
             crate::skinning::axis_change() * *hand * crate::skinning::axis_change().inverse();
-        skinning::apply_pose(arms, target * hand.inverse(), pose, &mut transforms);
+        let actual = target
+            .transform_vector3(to_bevy(*forearm))
+            .normalize_or_zero();
+        let toward_body = to_bevy((-f * 0.7 + r * 0.6 - u).normalize());
+        let adjust = if actual.length_squared() > 0.5 {
+            Quat::from_rotation_arc(actual, toward_body)
+        } else {
+            Quat::IDENTITY
+        };
+        let pivot = to_bevy(grip);
+        let arm = Mat4::from_translation(pivot)
+            * Mat4::from_quat(adjust)
+            * Mat4::from_translation(-pivot)
+            * target
+            * hand.inverse();
+        skinning::apply_pose(arms, arm, pose, &mut transforms);
         let (cube, dir, color) = crate::characters::lighting_at_collision(
             &level.0,
             &world.0.collision,
