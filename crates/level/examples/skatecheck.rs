@@ -165,6 +165,8 @@ fn run() -> Result<(), String> {
         },
     )]);
     let started = std::time::Instant::now();
+    let mut foot_error = Vec3::ZERO;
+    let mut max_foot_error = 0f32;
     println!(
         "Map entry: origin={:?} yaw={}",
         world.player(id).unwrap().movement.origin,
@@ -188,6 +190,37 @@ fn run() -> Result<(), String> {
             ..Default::default()
         };
         world.step(&[(id, input)]);
+        if tick == 128 {
+            let p = world.player(id).unwrap();
+            if let (Some(state), Some(profile)) = (
+                p.mechanic.as_ref().and_then(|s| s.external.as_ref()),
+                world.character_profiles().for_team(p.team),
+            ) {
+                let bones = profile.animations.bones();
+                let mut pose = mdl::skeleton::model_space(bones, &mdl::skeleton::rest_pose(bones));
+                sim::model_pose::apply_movement_pose(p, bones, &mut pose);
+                let frame = glam::Mat4::from_rotation_translation(
+                    glam::Quat::from_rotation_z(p.view_angles.y.to_radians()),
+                    p.movement.origin,
+                );
+                let conversion = glam::Mat4::from_cols_array_2d(&state.rig.to_source);
+                for (cs, skate) in [("ankle_L", "LEFTFOOT"), ("ankle_R", "RIGHTFOOT")] {
+                    if let (Some(a), Some(b)) = (
+                        bones.iter().position(|b| b.name == cs),
+                        state.rig.names.iter().position(|n| n == skate),
+                    ) {
+                        let target = conversion.transform_point3(
+                            glam::Mat4::from_cols_array_2d(&state.pose.bones[b])
+                                .w_axis
+                                .truncate(),
+                        );
+                        let actual = frame.transform_point3(pose[a].w_axis.truncate());
+                        foot_error += (actual - target) * 0.5;
+                        max_foot_error = max_foot_error.max(actual.distance(target));
+                    }
+                }
+            }
+        }
     }
     let player = world.player(id).unwrap();
     if let Some(state) = player.mechanic.as_ref().and_then(|s| s.external.as_ref()) {
@@ -213,6 +246,12 @@ fn run() -> Result<(), String> {
         player.movement.origin,
         pack.archive_hash()
     );
+    println!("Retarget average ankle offset: {foot_error:?}");
+    if max_foot_error > 0.1 {
+        return Err(format!(
+            "CS feet miss the native board pose by {max_foot_error:.2} inches"
+        ));
+    }
     println!("failures: 0");
     Ok(())
 }

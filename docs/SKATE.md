@@ -46,6 +46,8 @@ animation/motion/action graphs, original controller gestures, tricks, grinds,
 bails, walking/remounting, camera and scoring. CS characters follow that pose
 with their own body proportions and weapon grips; the board uses the owned
 GLB skin, inverse binds and embedded textures, including truck/wheel bones.
+Leg retargeting solves CS limb lengths to the native ankle targets so its
+longer legs do not push the boots through the board.
 This replaces the initial keyboard/hull/rigid-board prototype.
 
 CS geometry is converted to native metres/Y-up and compiled with the original

@@ -34,6 +34,8 @@ Adaptation points:
 - Completed world bones include the original animation-to-world root, using
   the upstream matrix conversion to normalize native affine padding. The host
   maps modern CS names and Y-up bind anatomy rather than assuming ValveBiped.
+  Its CS leg solve preserves segment lengths while reaching native ankle
+  targets, accounting for the original skater's different proportions.
 - Prepared collision, graph and animation metadata are cached across restores;
   a restore still reconstructs physical state from its authoritative journal.
 - `src/dynamic.rs` cooks CS convex parts once, updates door kinematic poses and

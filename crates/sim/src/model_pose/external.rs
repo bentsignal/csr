@@ -2,7 +2,7 @@
 //! Bind axes come from anatomy: modern CS:GO's bind rig is Y-up although its
 //! gameplay and evaluated animations are Source Z-up. Older ValveBiped works too.
 use crate::Player;
-use glam::{Mat3, Mat4, Quat};
+use glam::{Mat3, Mat4, Quat, Vec3};
 fn mapped(name: &str) -> Option<&'static str> {
     let name = name.rsplit('.').next().unwrap_or(name).to_ascii_lowercase();
     Some(match name.as_str() {
@@ -126,8 +126,114 @@ pub(super) fn apply(
         }
         globals[i] = Mat4::from_rotation_translation(rotation, position);
     }
+    // The CS legs are longer than the original skater's. Rotation-only
+    // retargeting puts their soles through the deck. Solve the existing CS
+    // segments to the completed native ankles, retaining lengths and grips.
+    for (thigh, knee, foot) in [
+        ("LEFTUPLEG", "LEFTLEG", "LEFTFOOT"),
+        ("RIGHTUPLEG", "RIGHTLEG", "RIGHTFOOT"),
+    ] {
+        let (Some(a), Some(b), Some(c)) = (target(thigh), target(knee), target(foot)) else {
+            continue;
+        };
+        let Some(source) = mapping[c] else { continue };
+        let goal = conversion.transform_point3(native[source].w_axis.truncate());
+        let hip = globals[a].w_axis.truncate();
+        let joint = globals[b].w_axis.truncate();
+        let ankle = globals[c].w_axis.truncate();
+        let l1 = hip.distance(joint);
+        let l2 = joint.distance(ankle);
+        let Some(bend) = knee_position(hip, joint, goal, l1, l2) else {
+            continue;
+        };
+        let (_, foot_rotation, _) = globals[c].to_scale_rotation_translation();
+        rotate_chain(
+            bones,
+            &mut globals,
+            a,
+            hip,
+            Quat::from_rotation_arc((joint - hip).normalize(), (bend - hip).normalize()),
+        );
+        let knee = globals[b].w_axis.truncate();
+        let ankle = globals[c].w_axis.truncate();
+        rotate_chain(
+            bones,
+            &mut globals,
+            b,
+            knee,
+            Quat::from_rotation_arc((ankle - knee).normalize(), (goal - knee).normalize()),
+        );
+        let (_, current, ankle) = globals[c].to_scale_rotation_translation();
+        rotate_chain(
+            bones,
+            &mut globals,
+            c,
+            ankle,
+            foot_rotation * current.inverse(),
+        );
+    }
     for (out, global) in pose.iter_mut().zip(globals) {
         *out = inverse * global;
     }
     true
+}
+fn knee_position(hip: Vec3, joint: Vec3, goal: Vec3, l1: f32, l2: f32) -> Option<Vec3> {
+    if l1 < 0.01 || l2 < 0.01 {
+        return None;
+    }
+    let delta = goal - hip;
+    let distance = delta.length();
+    if distance < 0.01 {
+        return None;
+    }
+    let axis = delta / distance;
+    let distance = distance.clamp((l1 - l2).abs() + 0.001, l1 + l2 - 0.001);
+    let along = (l1 * l1 - l2 * l2 + distance * distance) / (2. * distance);
+    let height = (l1 * l1 - along * along).max(0.).sqrt();
+    let pole = joint - hip;
+    let pole = pole - axis * pole.dot(axis);
+    let direction = if pole.length_squared() > 1e-6 {
+        pole.normalize()
+    } else {
+        axis.any_orthonormal_vector()
+    };
+    Some(hip + axis * along + direction * height)
+}
+fn rotate_chain(
+    bones: &[mdl::skeleton::Bone],
+    globals: &mut [Mat4],
+    root: usize,
+    pivot: Vec3,
+    rotation: Quat,
+) {
+    let transform = Mat4::from_rotation_translation(rotation, pivot - rotation * pivot);
+    let mut descendants = vec![false; bones.len()];
+    for i in root..bones.len() {
+        let parent = bones[i].parent;
+        descendants[i] =
+            i == root || (parent >= 0 && (parent as usize) < i && descendants[parent as usize]);
+        if descendants[i] {
+            globals[i] = transform * globals[i];
+        }
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn ankle_target_preserves_segment_lengths_and_unreachable_targets_stay_finite() {
+        let hip = Vec3::new(0., 0., 36.);
+        let joint = Vec3::new(4., 0., 18.);
+        let goal = Vec3::new(0., 5., 4.);
+        let bend = knee_position(hip, joint, goal, 22., 20.).unwrap();
+        assert!((bend.distance(hip) - 22.).abs() < 1e-4);
+        assert!((bend.distance(goal) - 20.).abs() < 1e-4);
+        for goal in [Vec3::new(0., 0., -1000.), hip + Vec3::X * 0.1] {
+            assert!(
+                knee_position(hip, joint, goal, 22., 20.)
+                    .unwrap()
+                    .is_finite()
+            );
+        }
+    }
 }
