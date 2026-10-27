@@ -78,7 +78,7 @@ impl Fixture {
                 name: "Arena".into(),
                 source: packs::MapSource::Pack,
             }],
-            resources: vec![],
+            resources: vec![], mechanics: Vec::new(),
         };
         let bytes = bsp(revision);
         let pack = packs::Pack::from_bytes(

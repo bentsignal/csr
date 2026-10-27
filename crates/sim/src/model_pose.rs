@@ -44,7 +44,9 @@ pub fn input(player: &Player, tick: u64, rate: u32) -> AnimInput {
     let yaw = velocity.y.atan2(velocity.x).to_degrees();
     let weapon = player.active_weapon();
     AnimInput {
-        speed,
+        // Hold a planted CS pose while riding; combat gestures still use the
+        // authoritative weapon clock. Full Skate-to-CS retargeting is later.
+        speed: if player.mechanic.is_some() { 0. } else { speed },
         move_yaw: if speed > 1. {
             (yaw - player.view_angles.y + 180.).rem_euclid(360.) - 180.
         } else {
@@ -261,6 +263,18 @@ mod tests {
     }
 }
 
+/// A sideways planted lower body while CS aim/reload/fire stays on the upper
+/// skeleton. Both hit geometry and renderer apply this same crossover pose.
+pub fn apply_movement_pose(player: &Player, bones: &[mdl::skeleton::Bone], pose: &mut [Mat4]) {
+    let Some(state) = &player.mechanic else { return; };
+    let turn = Mat4::from_rotation_z((state.angles.y + 90. - player.view_angles.y).to_radians());
+    let lift = Mat4::from_translation(Vec3::Z * state.height);
+    for (bone, transform) in bones.iter().zip(pose) {
+        let lower = ["pelvis", "thigh", "calf", "foot", "toe"].iter().any(|part| bone.name.to_ascii_lowercase().contains(part));
+        *transform = lift * if lower { turn * *transform } else { *transform };
+    }
+}
+
 pub(crate) fn posed(
     profile: &Profile,
     player: &Player,
@@ -273,9 +287,10 @@ pub(crate) fn posed(
     let mut state = AnimState {
         move_cycle: player.animation.move_cycle,
     };
-    let pose = profile
+    let mut pose = profile
         .animations
         .evaluate_prepared(&mut state, &input(player, tick, rate), 0.);
+    apply_movement_pose(player, profile.animations.bones(), &mut pose);
     let transform = Mat4::from_rotation_translation(
         glam::Quat::from_rotation_z(player.view_angles.y.to_radians()),
         player.movement.origin,
@@ -336,7 +351,7 @@ impl World {
             .character_hitboxes
             .get(&player.id)
             .is_some_and(|cached| {
-                cached.input == input
+                player.mechanic.is_none() && cached.input == input
                     && cached.cycle == player.animation.move_cycle
                     && cached.origin == player.movement.origin
                     && cached.yaw == player.view_angles.y

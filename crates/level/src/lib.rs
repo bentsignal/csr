@@ -487,7 +487,7 @@ mod tests {
         let manifest = packs::Manifest {
             format_version: 1, id: "test_pack".into(), name: "Test pack".into(), version: "1.0.0".into(),
             origin: "mod".into(), kind: packs::PackKind::Assets, provides: vec![id.to_string()],
-            content_hash: String::new(), min_game_version: "0.0.0".into(), description: String::new(), maps: vec![map.clone()], resources: Vec::new(),
+            content_hash: String::new(), min_game_version: "0.0.0".into(), description: String::new(), maps: vec![map.clone()], resources: Vec::new(), mechanics: Vec::new(),
         };
         let pack = packs::Pack::from_bytes(packs::build(&manifest, &[("maps/test-arena.bsp", &bsp)]).unwrap()).unwrap();
         let level = Level::load_pack(&pack, &map, PathBuf::from("no-game-install"), vfs::Vfs::new()).unwrap();

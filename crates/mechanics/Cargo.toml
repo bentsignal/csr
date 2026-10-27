@@ -1,0 +1,18 @@
+[package]
+name = "mechanics"
+description = "Bounded deterministic WebAssembly movement modules"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+mechanics-api.workspace = true
+movement.workspace = true
+collision.workspace = true
+glam.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+wasmi = { version = "=0.46.0", default-features = false, features = ["std", "prefer-btree-collections"] }
+
+[dev-dependencies]
+wat = "1"

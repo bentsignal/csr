@@ -1,5 +1,18 @@
 # Current owner priorities
 
+## October 26: Skate crossover pivot
+
+The owner requests Skate 3 movement on CS maps with CS characters and guns,
+an easy in-match CS/skate switch, and installation through content packs.
+This supersedes the previous low priority for mod interoperability. Use the
+public `SK8-ENGINE/skate-3-rust-engine` Rust code with its GPL license and
+attribution; the owner explicitly permits its reverse-engineered physics.
+Original game code/assets remain excluded from Git and public releases.
+Shawn's owned Skate copy and converted install in `S:/dev/skate3` may supply
+private runtime content. Provide pack-authoring instructions for game owners.
+Keep mechanics authoritative in `sim`, preserve normal CS and player data,
+and finish delivery through the existing Dev updater.
+
 ## Standing development and delivery workflow
 
 The WINSERVE migration, checkout verification and desktop launcher are complete
