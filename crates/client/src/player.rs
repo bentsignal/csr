@@ -606,6 +606,7 @@ pub fn tick(
     mut probe: ResMut<crate::sound_probe::SoundProbe>,
     mut playtest: Option<ResMut<crate::playtest::Panel>>,
     remote: Option<Res<crate::remote::RemoteClient>>,
+    windows: Query<&Window,With<PrimaryWindow>>,
 ) {
     let _frame_scope = crate::input_latency::frame_scope("simulation");
     if remote.is_some() || front.open() || playtest.as_ref().is_some_and(|p| p.open) {return;}
@@ -622,7 +623,7 @@ pub fn tick(
         blocked: block.0 != 0, captured: captured(&cursor), buy_menu: menu.open,
     });
     let report=crate::controller::poll();
-    if enabled.0&&block.0==0&&captured(&cursor)&&!menu.open {
+    if enabled.0&&block.0==0&&captured(&cursor)&&!menu.open&&windows.iter().any(|w|w.focused) {
         let skating=world.0.player(local.id).is_some_and(|p|p.mechanic.is_some());
         crate::controller::apply(&mut input,report,local.controller_buttons,skating,1./world.0.tick_rate as f32);
         if world.0.mechanics.is_empty(){input.toggle_mode=false;}
@@ -632,7 +633,7 @@ pub fn tick(
     if let Some(me) = world.0.player(local.id).filter(|p| crate::movement_modes::third_person(p)) {
         // Third-person crosshair chooses a world target; CS still admits the
         // muzzle and fires from the player's eye, preserving cover collision.
-        let (camera,forward)=if input.controller.connected {
+        let (camera,forward)=if me.mechanic.as_ref().is_some_and(|s|s.external.is_some()) {
             crate::movement_modes::native_camera(me).map(|(position,forward,_,_)|{
                 let yaw=forward.y.atan2(forward.x).to_degrees();let pitch=(-forward.z).atan2(forward.truncate().length()).to_degrees();
                 input.view_angles=glam::Vec3::new(pitch,yaw,0.);local.pitch=pitch;local.yaw=yaw;(position,forward)
@@ -654,11 +655,15 @@ pub fn tick(
         if let Ok(sequence)=std::env::var("CSR_TEST_SKATE_CONTROLLER") {
             input.controller.connected=true;
             let t=world.0.time();
-            if (0.5..3.).contains(&t){input.controller.buttons=0x1000;}
+            if !sequence.starts_with("stationary")&&(0.5..3.).contains(&t){input.controller.buttons=0x1000;}
             if sequence=="turn"&&(3.0..4.).contains(&t){input.controller.left[0]=22000;}
             if sequence=="ollie"||sequence=="kickflip" {
                 if (3.0..3.6).contains(&t){input.controller.right=[0,-32768];}
                 if (3.6..3.8).contains(&t){input.controller.right=if sequence=="kickflip"{[30000,30000]}else{[0,32767]};}
+            }
+            if sequence=="stationary-ollie"||sequence=="stationary-kickflip" {
+                if (0.8..1.3).contains(&t){input.controller.right=[0,-32768];}
+                if (1.3..1.5).contains(&t){input.controller.right=if sequence.ends_with("kickflip"){[30000,30000]}else{[0,32767]};}
             }
         }
     }
@@ -941,7 +946,7 @@ pub fn update_camera(
     local.render_eye = eye;
     local.render_angles = angles;
     let chase = !local.noclip && world.0.player(local.view_target()).is_some_and(crate::movement_modes::third_person);
-    let native_camera=if chase {world.0.player(local.view_target()).filter(|p|p.last_input.controller.connected).and_then(crate::movement_modes::native_camera)}else{None};
+    let native_camera=if chase {world.0.player(local.view_target()).and_then(|p|crate::movement_modes::native_camera_render(p,world.0.dt()*alpha))}else{None};
     local.render_camera = if chase { crate::movement_modes::camera_eye(eye, angles, &world.0.collision) } else { eye };
     if let Some((position,_,_,_))=native_camera{local.render_camera=position;}
     let fwd = view_forward(angles.x, angles.y);

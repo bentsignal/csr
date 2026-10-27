@@ -6,6 +6,7 @@ use movement::TraceWorld;
 use wasmi::{Caller, Config, Engine, Linker, Module, Store, StoreLimits, StoreLimitsBuilder};
 pub mod external;
 pub mod data;
+pub mod presentation;
 pub use mechanics_link as link;
 #[cfg(test)]
 mod tests;

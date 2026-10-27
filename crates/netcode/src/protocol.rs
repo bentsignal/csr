@@ -12,6 +12,7 @@ use sim::{GameEvent, PlayerId, Snapshot, Team, TickInput};
 // and replicated BSP ladder contact for prediction and foley.
 // Older peers must reject the session before attempting snapshot decoding.
 // v34 adds explicit movement-mode input and replicated module state.
+// v35 adds raw controller reports and full provider journal/pose state.
 // This first pack release is offline; network admission rejects active modules.
 pub const VERSION: u32 = 35;
 pub const PROTOCOL_ID: u64 = 0x4353_5257_0000_0023;

@@ -18,10 +18,12 @@ pub struct Module {
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ExternalState {
     pub session: u64,
+    pub provider_hash: String,
     pub digest: [u8;32],
     pub start: mechanics::link::Start,
     pub history: mechanics::external::Journal,
     pub pose: mechanics::link::Pose,
+    pub previous_pose: mechanics::link::Pose,
     pub rig: mechanics::link::Rig,
 }
 
@@ -78,10 +80,11 @@ pub(crate) fn step(
         let state=player.mechanic.as_mut().unwrap();
         if state.reset {state.external=None;}
         let external=state.external.get_or_insert_with(||Box::new(ExternalState{
-            session:((time.to_bits() as u64)<<32)|player.id as u64,digest:mechanics::external::digest([0;32],&start),start,history:Default::default(),pose:Default::default(),
+            session:((time.to_bits() as u64)<<32)|player.id as u64,provider_hash:program.fingerprint().into(),digest:mechanics::external::digest([0;32],&start),start,history:Default::default(),pose:Default::default(),previous_pose:Default::default(),
             rig:mechanics::link::Rig{names:vec![],parents:vec![],rest:vec![],to_source:[[0.;4];4],bone_basis:[[0.;4];4]},
         }));
         let frame=mechanics::link::Frame{input:input.controller,dt,scene};
+        if external.provider_hash!=program.fingerprint(){return Err("movement runtime changed since this state was recorded".into());}
         let (pose,rig)=program.advance_world(collision,external.session,&external.start,&external.history,external.digest,&frame)?;
         if pose.position.iter().chain(pose.velocity.iter()).any(|v|!v.is_finite()||v.abs()>131072.)
             ||pose.bones.len()>256||pose.bones.iter().flatten().flatten().any(|v|!v.is_finite()) {
@@ -91,9 +94,13 @@ pub(crate) fn step(
         player.movement.origin=Vec3::from_array(pose.position);
         player.movement.velocity=Vec3::from_array(pose.velocity);
         player.movement.on_ground=pose.grounded;
+        player.movement.ground_ticks=if pose.grounded{player.movement.ground_ticks.saturating_add(1)}else{0};
+        player.movement.ducked=false;player.movement.duck_amount=0.;
         player.movement.ladder_normal=None;
         player.movement.old_buttons=input.buttons;
         external.digest=mechanics::external::digest(external.digest,&frame);
+        if pose.generation!=external.pose.generation {external.previous_pose=external.pose.clone();}
+        if pose.discontinuity||pose.period!=external.pose.period||external.previous_pose.generation==0 {external.previous_pose=pose.clone();}
         external.history.push(frame);external.pose=pose;external.rig=rig;state.reset=false;state.height=0.;
         return Ok(MoveEvents{jumped:was_grounded&&!player.movement.on_ground&&player.movement.velocity.z>0.,..Default::default()});
     }

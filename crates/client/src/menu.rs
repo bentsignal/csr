@@ -238,7 +238,7 @@ pub(crate) fn input(
     mut commands: Commands,
     mut menu: ResMut<Menu>,
     mut settings: ResMut<Settings>,
-    (keys, mouse): (Res<ButtonInput<KeyCode>>, Res<ButtonInput<MouseButton>>),
+    (keys, mouse, windows): (Res<ButtonInput<KeyCode>>, Res<ButtonInput<MouseButton>>,Query<&Window,With<PrimaryWindow>>),
     actions: Query<(&Interaction, &Action), Changed<Interaction>>,
     mut exit: MessageWriter<AppExit>,
     (load_request, opts, remote, front): (Res<LoadRequest>, Res<crate::Options>, Option<Res<crate::remote::RemoteClient>>, Option<Res<crate::frontend::Frontend>>),
@@ -250,10 +250,15 @@ pub(crate) fn input(
     mut inventory: ResMut<crate::inventory::Inventory>,
     collection: Res<crate::inventory::Collection>,
     mut previous_open: Local<bool>,
+    mut previous_pad: Local<u16>,
 ) {
     if !enabled.0 {
         return;
     }
+    let pad=crate::controller::poll();
+    let start=windows.iter().any(|w|w.focused)&&pad.buttons&0x10!=0&&*previous_pad&0x10==0;
+    *previous_pad=pad.buttons;
+    let escape=keys.just_pressed(KeyCode::Escape)||start;
     let mut save_controls = false;
     menu.controls_just_closed = false;
     // Native movie callbacks may close the menu between input passes.
@@ -263,7 +268,7 @@ pub(crate) fn input(
         for (button, value) in crate::settings::MOUSE_BUTTONS.iter().enumerate() {
             if !mouse.pressed(*value) || mouse.just_released(*value) { menu.capture_held_mouse &= !(1 << button); }
         }
-        if keys.just_pressed(KeyCode::Escape) {
+        if escape {
             menu.capture = None;
             menu.dirty = true;
         } else if let Some(key) = keys
@@ -285,9 +290,9 @@ pub(crate) fn input(
                 menu.dirty = true;
             }
         }
-    } else if keys.just_pressed(KeyCode::Escape) && menu.classic_controls {
+    } else if escape && menu.classic_controls {
         menu.close_classic_controls();
-    } else if keys.just_pressed(KeyCode::Escape) && !buy.open {
+    } else if escape && !buy.open {
         let movie_options = front.as_ref().and_then(|front| front.options_receiver());
         if menu.escape(movie_options.is_some()) {
             // Options is a child of Pause, although the host page remains

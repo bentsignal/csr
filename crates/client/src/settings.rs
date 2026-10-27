@@ -594,6 +594,18 @@ pub fn key_name(key: KeyCode) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn imported_missing_mode_binding_is_repaired_once_without_claiming_another_action() {
+        use super::*;
+        let mut old=Settings::default();old.controls_source="CS2 config".into();old.binds[KEY_MOVEMENT_MODE]=None;
+        let text=old.encode().replace("movement_binding_version=2\n","");
+        let repaired=Settings::parse(&text);
+        assert_eq!(repaired.binds[KEY_MOVEMENT_MODE],Some(KeyCode::KeyX));
+        // A subsequent deliberate unbind survives the normal save/load cycle.
+        assert_eq!(Settings::parse(&old.encode()).binds[KEY_MOVEMENT_MODE],None);
+        old.rebind(4,KeyCode::KeyX);
+        assert_eq!(Settings::parse(&old.encode().replace("movement_binding_version=2\n","")).binds[KEY_MOVEMENT_MODE],None);
+    }
     use super::*;
     #[test]
     fn action_row_mouse_bindings_use_canonical_commands_for_every_action_and_button() {

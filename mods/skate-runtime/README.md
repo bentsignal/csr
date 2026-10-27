@@ -4,7 +4,7 @@ GPL-3.0-only, isolated executable for the CS crossover. The public upstream
 revision is pinned in Cargo.toml/Cargo.lock and credited in NOTICE. Original
 game files are supplied only by the player's private pack.
 
-`upstream/` contains the original game's Rust host coordinator from
+`upstream/` contains the public rewrite's Rust host coordinator from
 SK8-ENGINE/skate-3-rust-engine at
 `2e16697797c8358d16f747a8259354ff2921041a`: physical player states, full board
 and skeleton solve, action/motion/animation graphs, gesture recognition,
@@ -31,6 +31,15 @@ Adaptation points:
   weld boundary, converts Xbox reports with the original native Pad/map, and
   exposes completed physical bones/camera. The original GLB inverse binds
   provide reference axes for CS retargeting and imported board skinning.
+- Completed world bones include the original animation-to-world root, using
+  the upstream matrix conversion to normalize native affine padding. The host
+  maps modern CS names and Y-up bind anatomy rather than assuming ValveBiped.
+- Prepared collision, graph and animation metadata are cached across restores;
+  a restore still reconstructs physical state from its authoritative journal.
+- `src/dynamic.rs` cooks CS convex parts once, updates door kinematic poses and
+  intact breakables, and feeds original solid contacts and moving queries.
+  `upstream/modding/moving_queries.rs` retains the upstream non-Lua query adapter.
+  CS top/side edges supply derived grind splines rather than Skate course data.
 
 The normal executable accepts only `--stdio-provider-v1`. It receives framed,
 bounded binary messages from `crates/mechanics-link`; it has no UI or game
@@ -41,7 +50,8 @@ executables, Lua, native libraries and external paths.
 CS `World::step` is the only caller. A host timestep accumulates into the
 upstream simulation clock; the physical integration timestep is unchanged.
 The host retains a persistent journal of original spawn/momentum, Xbox reports
-and authoritative CS door/breakable states. The helper is a derived cache:
+and authoritative CS door/breakable states, plus executable/archive hashes.
+The helper is a derived cache:
 restoring another journal reconstructs and replays it. A SHA-256 prefix receipt
 distinguishes branches of equal length. Snapshots do not depend on unrecorded
 process state. Long historical replay can cost time; this provider remains
@@ -57,4 +67,5 @@ The upstream standalone application's embedded tests refer to its renderer,
 full app and private fixtures; this isolated library does not compile that
 application test target. The host's contract checks and private `skatecheck`
 exercise this actual executable, including controller gestures, both host tick
-rates, snapshot replay and mounted CS geometry. No private fixture is in Git.
+rates, snapshot replay, native ledge acquisition, walking/remounting, live
+door/breakable contacts and mounted CS geometry. No private fixture is in Git.

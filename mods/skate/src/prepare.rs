@@ -3,8 +3,6 @@
 //! No disc executables, original code, skater bodies or map data are copied.
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 
-
-
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -36,28 +34,77 @@ config = "mechanics/skate.csrconfig"
 }
 
 fn payload(assets: &Path) -> Result<Vec<(&'static str, Vec<u8>)>, String> {
-    let mut data=Vec::new();
-    for path in ["private/game.json","private/skater.glb","private/stock/skater-collections.json",
-        "private/stock/physics-skeletons.json","private/stock/data/anim/OnBoard.abin","private/stock/data/anim/OffBoard.abin"]{
-        data.push((path.to_string(),fs::read(assets.join(path)).map_err(|e|format!("{path}: {e}"))?));
+    let mut data = Vec::new();
+    for path in [
+        "private/game.json",
+        "private/skater.glb",
+        "private/stock/skater-collections.json",
+        "private/stock/physics-skeletons.json",
+        "private/stock/data/anim/OnBoard.abin",
+        "private/stock/data/anim/OffBoard.abin",
+    ] {
+        data.push((
+            path.to_string(),
+            fs::read(assets.join(path)).map_err(|e| format!("{path}: {e}"))?,
+        ));
     }
-    fn collect(root:&Path,relative:&str,data:&mut Vec<(String,Vec<u8>)>)->Result<(),String>{
-        for entry in fs::read_dir(root.join(relative)).map_err(|e|e.to_string())?{
-            let entry=entry.map_err(|e|e.to_string())?;let path=format!("{relative}/{}",entry.file_name().to_string_lossy());
-            if entry.file_type().map_err(|e|e.to_string())?.is_symlink(){return Err("symlink in prepared data".into());}
-            if entry.path().is_dir(){collect(root,&path,data)?;}else if ["stategraph","pat","shk"].contains(&entry.path().extension().and_then(|s|s.to_str()).unwrap_or("")){data.push((path,fs::read(entry.path()).map_err(|e|e.to_string())?));}
-        }Ok(())
+    fn collect(
+        root: &Path,
+        relative: &str,
+        data: &mut Vec<(String, Vec<u8>)>,
+    ) -> Result<(), String> {
+        for entry in fs::read_dir(root.join(relative)).map_err(|e| e.to_string())? {
+            let entry = entry.map_err(|e| e.to_string())?;
+            let path = format!("{relative}/{}", entry.file_name().to_string_lossy());
+            if entry.file_type().map_err(|e| e.to_string())?.is_symlink() {
+                return Err("symlink in prepared data".into());
+            }
+            if entry.path().is_dir() {
+                collect(root, &path, data)?;
+            } else if ["stategraph", "pat", "shk"].contains(
+                &entry
+                    .path()
+                    .extension()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or(""),
+            ) {
+                data.push((path, fs::read(entry.path()).map_err(|e| e.to_string())?));
+            }
+        }
+        Ok(())
     }
-    for directory in ["private/stock/data/state","private/stock/data/script","private/stock/data/joystick","private/stock/data/camera"]{
-        collect(assets,directory,&mut data)?;
+    for directory in [
+        "private/stock/data/state",
+        "private/stock/data/script",
+        "private/stock/data/joystick",
+        "private/stock/data/camera",
+    ] {
+        collect(assets, directory, &mut data)?;
     }
-    data.sort_by(|a,b|a.0.cmp(&b.0));
-    let bundle=mechanics::data::build(&data)?;
+    let hud: serde_json::Value = serde_json::from_slice(
+        &fs::read(assets.join("private/hud/runtime/trickdisplay.json"))
+            .map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| e.to_string())?;
+    let language = hud["language"]
+        .as_object()
+        .ok_or("converted trick language table missing")?;
+    let language: std::collections::BTreeMap<_, _> = language
+        .iter()
+        .filter(|(key, _)| key.starts_with("ID_TRICK_") || key.starts_with("ID_STANCE"))
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect();
+    data.push((
+        "private/trick-language.json".into(),
+        serde_json::to_vec(&language).map_err(|e| e.to_string())?,
+    ));
+    data.sort_by(|a, b| a.0.cmp(&b.0));
+    let bundle = mechanics::data::build(&data)?;
     Ok(vec![
         ("mechanics/skate.csrdata", bundle),
         (
             "mechanics/skate.csrconfig",
-            serde_json::to_vec(&vec![0f32;256]).unwrap(),
+            serde_json::to_vec(&vec![0f32; 256]).unwrap(),
         ),
         ("licenses/gpl3.txt", include_bytes!("../LICENSE").to_vec()),
         ("licenses/notice.txt", include_bytes!("../NOTICE").to_vec()),

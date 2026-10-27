@@ -9,14 +9,17 @@ use bevy::{
     prelude::*,
 };
 use std::{collections::HashMap, sync::Arc};
-#[path="movement_board.rs"]
+#[path = "movement_board.rs"]
 pub mod full_board;
 
 pub struct Visual {
     pub mesh: Arc<mechanics::VisualMesh>,
 }
 #[derive(Resource, Default)]
-pub struct Visuals(pub HashMap<String, Visual>,pub HashMap<String,Arc<full_board::Model>>);
+pub struct Visuals(
+    pub HashMap<String, Visual>,
+    pub HashMap<String, Arc<full_board::Model>>,
+);
 #[derive(Component)]
 pub struct Board {
     player: sim::PlayerId,
@@ -28,12 +31,32 @@ pub fn third_person(player: &sim::Player) -> bool {
         && player.mechanic.is_some()
         && player.active_weapon().is_none_or(|w| w.zoom_level == 0)
 }
-pub fn native_camera(player:&sim::Player)->Option<(glam::Vec3,glam::Vec3,glam::Vec3,f32)>{
-    let state=player.mechanic.as_ref()?.external.as_ref()?;
-    let camera=glam::Mat4::from_cols_array_2d(state.pose.camera.as_ref()?);
-    Some((camera.w_axis.truncate(),camera.z_axis.truncate().normalize_or_zero(),camera.y_axis.truncate().normalize_or_zero(),state.pose.fov))
+pub fn native_camera(player: &sim::Player) -> Option<(glam::Vec3, glam::Vec3, glam::Vec3, f32)> {
+    let state = player.mechanic.as_ref()?.external.as_ref()?;
+    let camera = glam::Mat4::from_cols_array_2d(state.pose.camera.as_ref()?);
+    Some((
+        camera.w_axis.truncate(),
+        camera.z_axis.truncate().normalize_or_zero(),
+        camera.y_axis.truncate().normalize_or_zero(),
+        state.pose.fov,
+    ))
 }
 
+pub fn native_camera_render(
+    player: &sim::Player,
+    overstep: f32,
+) -> Option<(glam::Vec3, glam::Vec3, glam::Vec3, f32)> {
+    let state = player.mechanic.as_ref()?.external.as_ref()?;
+    let camera = mechanics::presentation::camera(&state.previous_pose, &state.pose, overstep)?;
+    let t = mechanics::presentation::fraction(&state.pose, overstep);
+    let fov = state.previous_pose.fov + (state.pose.fov - state.previous_pose.fov) * t;
+    Some((
+        camera.w_axis.truncate(),
+        camera.z_axis.truncate().normalize_or_zero(),
+        camera.y_axis.truncate().normalize_or_zero(),
+        fov,
+    ))
+}
 pub fn load() -> (Vec<Arc<sim::mechanics::Module>>, Visuals) {
     let mut modules = Vec::new();
     let mut visuals = Visuals::default();
@@ -48,12 +71,26 @@ pub fn load() -> (Vec<Arc<sim::mechanics::Module>>, Visuals) {
                 let config = mechanics::parse_config(
                     &pack.file(&def.config).ok_or("missing mechanics config")?,
                 )?;
-                let (program,external) = if def.api_version==2 {
-                    let root=mechanics::data::materialize(&bytes,std::path::Path::new("mechanics-cache"))?;
-                    visuals.1.insert(def.id.clone(),Arc::new(full_board::Model::load(&root)?));
-                    let executable=std::env::current_exe().map_err(|e|e.to_string())?.with_file_name("Skate-Runtime.exe");
-                    (None,Some(Arc::new(mechanics::external::Program::new(executable,root)?)))
-                } else {(Some(mechanics::Program::compile(&bytes)?),None)};
+                let (program, external) = if def.api_version == 2 {
+                    let root = mechanics::data::materialize(
+                        &bytes,
+                        std::path::Path::new("mechanics-cache"),
+                    )?;
+                    visuals
+                        .1
+                        .insert(def.id.clone(), Arc::new(full_board::Model::load(&root)?));
+                    let executable = std::env::current_exe()
+                        .map_err(|e| e.to_string())?
+                        .with_file_name("Skate-Runtime.exe");
+                    (
+                        None,
+                        Some(Arc::new(mechanics::external::Program::new(
+                            executable, root,
+                        )?)),
+                    )
+                } else {
+                    (Some(mechanics::Program::compile(&bytes)?), None)
+                };
                 if let Some(path) = &def.model {
                     let mesh = mechanics::VisualMesh::parse(
                         &pack.file(path).ok_or("missing mechanics model")?,

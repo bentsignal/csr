@@ -809,7 +809,7 @@ impl World {
         let origin=if hit.start_solid || hit.fraction==1. {spawn.origin} else {hit.end};
         if let Some(p) = self.player_mut(id) {
             p.movement = PlayerMove::spawn_at(origin);
-            if let Some(state) = &mut p.mechanic { state.reset = true; state.data.fill(0.); }
+            if let Some(state) = &mut p.mechanic { state.reset = true; state.data.fill(0.);state.external=None; }
             p.view_angles = Vec3::new(0.0, spawn.yaw, 0.0);
             p.health = 100;
             p.flash_until = 0.0;

@@ -212,6 +212,10 @@ mod exchange_tests {
 }
 
 impl GamePhysics {
+    pub(crate) fn csr_floor_material(&self)->skate_core::physics::contact::RetailContactMaterial {self.settings.floor_material}
+    pub(crate) fn csr_load_prepared(asset_root:&std::path::Path,map:&skate_data::skate_map::SkateMap,world:BoardWorld)->Result<Self,String>{
+        Self::load_world_difficulty_prepared(asset_root,ground::Terrain::Course,Some(map),crate::difficulty::Difficulty::Easy,Some(world))
+    }
     pub(crate) fn csr_replace_world(&mut self, map: &skate_data::skate_map::SkateMap) -> Result<(),String> {
         self.world = crate::skate_world::collision_world(map,self.settings.floor_material)?;
         self.offboard_grab_scene = offboard::grab_scene::Registry::new(&self.world,Vec::new(),Vec::new())?;
@@ -272,6 +276,9 @@ impl GamePhysics {
     }
 
     fn load_world_difficulty(asset_root: &std::path::Path, terrain: ground::Terrain, map: Option<&skate_data::skate_map::SkateMap>, difficulty: crate::difficulty::Difficulty) -> Result<Self, String> {
+        Self::load_world_difficulty_prepared(asset_root,terrain,map,difficulty,None)
+    }
+    fn load_world_difficulty_prepared(asset_root: &std::path::Path, terrain: ground::Terrain, map: Option<&skate_data::skate_map::SkateMap>, difficulty: crate::difficulty::Difficulty, prepared:Option<BoardWorld>) -> Result<Self, String> {
         let data = crate::custom_difficulty::load_collections(asset_root)?;
         let settings = PhysicsSettings::load(&data)?;
         let animation_profile = animation_phase::AnimationProfile::load(&data, difficulty.profile_key())?;
@@ -305,10 +312,10 @@ impl GamePhysics {
             settings.step.simulation,
             BoardMotion::Active,
         );
-        let world = match map {
+        let world = if let Some(world)=prepared {world}else{match map {
             Some(map) => crate::skate_world::collision_world(map, settings.floor_material)?,
             None => terrain.world(settings.floor_material),
-        };
+        }};
         let grind_world = std::sync::Arc::new(if map.is_none() && terrain == ground::Terrain::Course {
             crate::grind_world::StaticProvider::authored(&crate::grind_world::test_rails())?
         } else { crate::grind_world::StaticProvider::new(map)? });

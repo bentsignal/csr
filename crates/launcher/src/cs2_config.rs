@@ -391,6 +391,19 @@ mod tests {
     use super::*;
     use std::time::SystemTime;
     #[test]
+    fn native_radio_binding_cannot_erase_the_rewrite_movement_action() {
+        let defaults=kv::parse(DEFAULTS).unwrap();
+        let native=kv::parse("bindings { x radio2 }").unwrap();
+        let mut settings=Settings::default();
+        let key=settings.binds[settings::KEY_MOVEMENT_MODE];
+        bindings(&mut settings,defaults.block("config").unwrap().block("bindings"),native.block("bindings").unwrap(),&mut String::new());
+        assert_eq!(settings.binds[settings::KEY_MOVEMENT_MODE],key);
+        let native=kv::parse("bindings { x +jump }").unwrap();
+        bindings(&mut settings,None,native.block("bindings").unwrap(),&mut String::new());
+        assert_eq!(settings.binds[settings::KEY_MOVEMENT_MODE],None);
+        assert_eq!(settings.binds[4],key);
+    }
+    #[test]
     fn completed_publish_retries_after_partial_write_and_never_clobbers_a_winner() {
         let (data, _, _) = fixture("publish");
         std::fs::create_dir_all(data.join("config")).unwrap();

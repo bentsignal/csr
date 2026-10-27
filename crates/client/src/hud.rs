@@ -509,7 +509,11 @@ pub fn update(
             HudText::Hint => {
                 if let Some(state) = me.mechanic.as_ref().filter(|_| me.alive) {
                     let mode = w.mechanics.iter().find(|m| m.id == state.id).map_or("Movement pack", |m| m.name.as_str());
-                    if state.external.is_some(){format!("{mode}   View / {}: CS/skate   A/X: push   B: brake   Left stick: steer   Right stick: tricks   LT/RT: grab   Y: on/off board",settings.action_binding_label(crate::settings::KEY_MOVEMENT_MODE))}else{format!("{mode}   {}: movement mode   {}: push   {} / {}: steer   {}: jump   {}: brake",
+                    if let Some(native)=&state.external{
+                        let key=settings.action_binding_label(crate::settings::KEY_MOVEMENT_MODE);
+                        let switch=if key.is_empty(){"View".into()}else{format!("View / {key}")};
+                        format!("{mode}   {switch}: CS/skate   A/X: push   B: brake   Left stick: steer   Right stick: tricks   LT/RT: grab   Y: on/off board\n{}  {}   D-pad right: fire   left: reload   up/down: weapons   Start: pause",native.pose.trick,native.pose.score)
+                    }else{format!("{mode}   {}: movement mode   {}: push   {} / {}: steer   {}: jump   {}: brake",
                         settings.action_binding_label(crate::settings::KEY_MOVEMENT_MODE),
                         settings.action_binding_label(0), settings.action_binding_label(2), settings.action_binding_label(3),
                         settings.action_binding_label(4), settings.action_binding_label(6))}

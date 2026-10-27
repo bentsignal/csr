@@ -360,12 +360,13 @@ pub fn sync(
         };
         let Some(anims) = anims else { continue };
         let mut pose = anims.evaluate_prepared(&mut c.anim, &input, 0.);
-        sim::model_pose::apply_movement_pose(p, anims.bones(), &mut pose);
+        sim::model_pose::apply_movement_pose_render(p, anims.bones(), &mut pose,world.0.dt()*fixed.overstep_fraction());
         c.last_pose.clone_from(&pose);
         c.pose_life = p.life_epoch;
+        let physical=p.mechanic.as_ref().is_some_and(|s|s.external.is_some());
         let world_from_model = Mat4::from_rotation_translation(
-            rotation_to_bevy(mdl::angles_to_mat3(glam::Vec3::new(0.0, render.angles.y, 0.0))),
-            to_bevy(render.origin),
+            rotation_to_bevy(mdl::angles_to_mat3(glam::Vec3::new(0.0, if physical {p.view_angles.y}else{render.angles.y}, 0.0))),
+            to_bevy(if physical {p.movement.origin}else{render.origin}),
         );
         skinning::apply_pose(&c.body, world_from_model, &pose, &mut transforms);
         if let Some(w) = &mut c.weapon {
