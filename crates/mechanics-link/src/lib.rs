@@ -3,7 +3,7 @@
 //! Geometry and poses use Source axes/inches. Controller reports use XInput.
 use serde::{Deserialize, Serialize};
 use std::io::{Read, Write};
-pub const VERSION: u32 = 1;
+pub const VERSION: u32 = 2;
 pub const MAX_MESSAGE: usize = 64 << 20;
 pub type Matrix = [[f32; 4]; 4];
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -48,6 +48,13 @@ pub struct Start {
     pub position: [f32; 3],
     pub velocity: [f32; 3],
     pub yaw: f32,
+    pub checkpoint: Option<Checkpoint>,
+}
+#[derive(Clone,Debug,PartialEq,Serialize,Deserialize)]
+pub struct Checkpoint {
+    pub transform:Matrix,
+    pub on_board:bool,
+    pub foot_forward:bool,
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Frame {
@@ -57,6 +64,7 @@ pub struct Frame {
 }
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Pose {
+    pub checkpoint: Option<Checkpoint>,
     pub generation: u64,
     pub phase: f32,
     pub period: f32,

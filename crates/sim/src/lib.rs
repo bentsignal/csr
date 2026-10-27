@@ -176,6 +176,7 @@ pub struct TickInput {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Player {
     pub mechanic: Option<mechanics::State>,
+    pub mechanic_checkpoint:Option<mechanics::Checkpoint>,
     /// Selected pack-owned tool, separate from the retained CS weapon.
     pub equipped_mechanic: Option<mechanics::inventory::Equipped>,
     pub id: PlayerId,
@@ -689,6 +690,7 @@ impl World {
             movement: PlayerMove::default(),
             view_angles: Vec3::ZERO,
             mechanic: None,
+            mechanic_checkpoint:None,
             equipped_mechanic: None,
             health: 100,
             armor: 0,
@@ -816,6 +818,7 @@ impl World {
         if let Some(p) = self.player_mut(id) {
             p.movement = PlayerMove::spawn_at(origin);
             p.equipped_mechanic=None;
+            p.mechanic_checkpoint=None;
             if let Some(state) = &mut p.mechanic { state.reset = true; state.data.fill(0.);state.external=None; }
             p.view_angles = Vec3::new(0.0, spawn.yaw, 0.0);
             p.health = 100;
@@ -1595,12 +1598,13 @@ impl World {
             }
 
             // Movement.
+            let mode_contacts = player_contact::PlayerWorld::new(collision.as_ref(), &self.players, id, self.rules.solid_teammates);
             if input.toggle_mode && !self.players[i].last_input.toggle_mode && !frozen && !busy {
                 self.players[i].equipped_mechanic=None;
-                mechanics::toggle(&mut self.players[i], &self.mechanics);
+                mechanics::toggle(&mut self.players[i], &self.mechanics, &mode_contacts);
             }
             let tool_consumed_attacks=self.players[i].equipped_mechanic.is_some();
-            mechanics::inventory::use_equipped(&mut self.players[i],&mut input,&self.mechanics,!frozen&&!busy);
+            mechanics::inventory::use_equipped(&mut self.players[i],&mut input,&self.mechanics,!frozen&&!busy,&mode_contacts);
             let max_speed = self.players[i].active_weapon().map_or(250.0, |w| w.max_speed());
             let move_input = MoveInput {
                 view_angles: input.view_angles,
@@ -1622,8 +1626,10 @@ impl World {
                         Ok(events) => p.last_events = events,
                         Err(error) => {
                             eprintln!("Movement pack disabled: {error}");
-                            p.mechanic = None;
-                            p.last_events = contacts.move_player(&mut p.movement, &move_input, &self.config, dt);
+                            if mechanics::return_to_cs::place(p,&contacts) {
+                                p.mechanic = None;
+                                p.last_events = contacts.move_player(&mut p.movement, &move_input, &self.config, dt);
+                            } else { p.last_events=Default::default(); }
                         }
                     }
                 } else if swimming {

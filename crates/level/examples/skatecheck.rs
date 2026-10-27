@@ -479,6 +479,7 @@ fn dynamiccheck(module: &sim::mechanics::Module) -> Result<(), String> {
             });
         }
         let start = Start {
+            checkpoint:None,
             position: [0., 0., 3.5],
             velocity: [240., 0., 0.],
             yaw: 0.,

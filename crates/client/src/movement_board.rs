@@ -1,6 +1,7 @@
 //! Render the imported board with its original skin, inverse binds, textures,
 //! and the coordinator's completed deck/truck/wheel bones. No baked orientation.
 use super::Visuals;
+use crate::material::{WorldMaterial, flags};
 use crate::{coords::to_bevy, player::SimWorld};
 use bevy::{
     asset::RenderAssetUsages,
@@ -10,6 +11,8 @@ use bevy::{
     render::render_resource::{Extent3d, TextureDimension, TextureFormat},
 };
 use std::{path::Path, sync::Arc};
+#[derive(Resource)]
+pub(crate) struct MaterialTemplate(pub WorldMaterial);
 struct Part {
     positions: Vec<[f32; 3]>,
     normals: Vec<[f32; 3]>,
@@ -25,6 +28,7 @@ struct Part {
 pub struct Model {
     parts: Vec<Part>,
     center: Vec3,
+    pub(crate) audio: std::collections::HashMap<String, Arc<[u8]>>,
 }
 impl Model {
     pub fn load(root: &Path) -> Result<Self, String> {
@@ -181,6 +185,15 @@ impl Model {
         Ok(Self {
             parts,
             center: (low + high) * 0.5,
+            audio: ["roll", "pop", "land", "push", "grind", "brake"]
+                .into_iter()
+                .filter_map(|name| {
+                    let bytes =
+                        std::fs::read(root.join(format!("private/crossover-audio/{name}.wav")))
+                            .ok()?;
+                    (bytes.len() <= 4 * 1024 * 1024).then(|| (name.to_string(), Arc::from(bytes)))
+                })
+                .collect(),
         })
     }
 }
@@ -192,16 +205,23 @@ pub struct Instance {
     model: Arc<Model>,
     mesh: Handle<Mesh>,
     display: u8,
+    material: Handle<WorldMaterial>,
+    light_timer: f32,
 }
 pub fn draw(
     mut commands: Commands,
     world: Res<SimWorld>,
     visuals: Option<Res<Visuals>>,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut materials: ResMut<Assets<WorldMaterial>>,
     mut images: ResMut<Assets<Image>>,
     time: Res<Time<Fixed>>,
+    real_time: Res<Time>,
     local: Res<crate::player::LocalPlayer>,
+    held_board: Res<crate::board_presentation::HeldBoard>,
+    level: Res<crate::LoadedLevel>,
+    characters: Res<crate::characters::CharacterModels>,
+    template: Res<MaterialTemplate>,
     mut instances: Query<(Entity, &mut Instance)>,
 ) {
     for (entity, mut instance) in &mut instances {
@@ -214,7 +234,9 @@ pub fn draw(
             .as_ref()
             .filter(|s| s.id == instance.mode)
             .and_then(|s| s.external.as_ref());
-        let held = player.mechanic.is_none()
+        let held = player.id == local.id
+            && held_board.transform.is_some()
+            && player.mechanic.is_none()
             && player
                 .equipped_mechanic
                 .as_ref()
@@ -231,7 +253,8 @@ pub fn draw(
             instance.display = 0;
             continue;
         }
-        let part = &instance.model.parts[instance.part];
+        let model = instance.model.clone();
+        let part = &model.parts[instance.part];
         let transforms = state.map(|state| {
             let sampled = mechanics::presentation::bones(
                 &state.previous_pose,
@@ -258,18 +281,32 @@ pub fn draw(
         });
         // An equipment preview uses the imported rest mesh. Native bone output
         // still owns the board whenever the player is actually riding it.
-        let angles = if player.id == local.id {
-            local.render_angles
-        } else {
-            player.view_angles
-        };
         let eye = if player.id == local.id {
             local.render_eye
         } else {
             player.eye()
         };
-        let (forward, right, up) = movement::angle_vectors(angles);
-        let held_basis = Mat3::from_cols(-right, -forward, up);
+        let held_transform = held_board.transform.unwrap_or(Mat4::IDENTITY);
+        instance.light_timer -= real_time.delta_secs();
+        if instance.light_timer <= 0. {
+            instance.light_timer = 0.10;
+            let at = if held {
+                eye
+            } else {
+                player.movement.origin + Vec3::Z * 8.
+            };
+            let (cube, dir, color) = crate::characters::lighting_at_collision(
+                &level.0,
+                &world.0.collision,
+                characters.sun,
+                at,
+            );
+            if let Some(mut m) = materials.get_mut(&instance.material) {
+                m.params.ambient_cube = cube;
+                m.params.sun_dir = dir;
+                m.params.sun_color = color;
+            }
+        }
         let center = instance.model.center;
         let mut positions = Vec::with_capacity(part.positions.len());
         let mut normals = Vec::with_capacity(part.positions.len());
@@ -287,9 +324,9 @@ pub fn draw(
                     n += m.transform_vector3(Vec3::from_array(part.normals[i])) * w;
                 }
             } else {
-                p = eye + forward * 25. + right * 12. - up * 12.
-                    + held_basis * (Vec3::from_array(part.positions[i]) - center) / 0.0254;
-                n = held_basis * Vec3::from_array(part.normals[i]);
+                p = held_transform
+                    .transform_point3((Vec3::from_array(part.positions[i]) - center) / 0.0254);
+                n = held_transform.transform_vector3(Vec3::from_array(part.normals[i]));
             }
             positions.push(to_bevy(p).to_array());
             normals.push(to_bevy(n.normalize_or_zero()).to_array());
@@ -331,6 +368,8 @@ pub fn draw(
                     vec![[0., 1., 0.]; part.positions.len()],
                 )
                 .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, part.uv.clone())
+                .with_inserted_attribute(Mesh::ATTRIBUTE_UV_1, vec![[0.; 2]; part.positions.len()])
+                .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, vec![[1.; 4]; part.positions.len()])
                 .with_inserted_indices(Indices::U32(part.indices.clone()));
                 let texture = part.texture.as_ref().map(|(width, height, data)| {
                     images.add(Image::new(
@@ -345,23 +384,20 @@ pub fn draw(
                         RenderAssetUsages::default(),
                     ))
                 });
-                let material = materials.add(StandardMaterial {
-                    base_color: Color::srgba(
-                        part.color[0],
-                        part.color[1],
-                        part.color[2],
-                        part.color[3],
-                    ),
-                    base_color_texture: texture,
-                    perceptual_roughness: 0.7,
-                    cull_mode: None,
-                    unlit: true,
-                    ..Default::default()
-                });
+                let mut material = template.0.clone();
+                material.params.flags = flags::DYNAMIC_LIT;
+                material.params.color = Vec4::from_array(part.color);
+                material.params.phong = Vec4::new(28., 0.12, 0., 0.);
+                material.params.rim = Vec4::new(0., 0., 0., 1.);
+                material.cull = false;
+                if let Some(texture) = texture {
+                    material.base = texture;
+                }
+                let material = materials.add(material);
                 let mesh = meshes.add(mesh);
                 commands.spawn((
                     Mesh3d(mesh.clone()),
-                    MeshMaterial3d(material),
+                    MeshMaterial3d(material.clone()),
                     Transform::default(),
                     NoFrustumCulling,
                     Instance {
@@ -371,6 +407,8 @@ pub fn draw(
                         model: model.clone(),
                         mesh,
                         display: 0,
+                        material,
+                        light_timer: 0.,
                     },
                 ));
             }

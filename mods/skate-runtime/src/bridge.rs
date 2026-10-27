@@ -153,6 +153,7 @@ impl PreparedScene {
         let map = map(
             &scene,
             &Start {
+                checkpoint:None,
                 position: [0.; 3],
                 velocity: [0.; 3],
                 yaw: 0.,
@@ -264,6 +265,7 @@ impl Runtime {
         let language = language(root)?;
         Ok(Self {
             physics,
+            marker:crate::session_marker::SessionMarker::load(root,start.checkpoint.clone())?,
             skater,
             controls,
             graphs,
@@ -316,6 +318,7 @@ impl Runtime {
             self.pad
                 .update(if report.connected { &values } else { &[] });
             let actions = skate_core::input::gameplay_map::GameplayActions::from_pad(&self.pad);
+            self.marker.update(if report.connected{report.buttons}else{0},self.physics.period().as_secs_f32(),&self.physics,&mut self.skater);
             self.step(*actions.values(), report.connected)?;
         }
         Ok(self.pose())
@@ -362,6 +365,7 @@ impl Runtime {
         let hud = self.skater.scoring.hud_input();
         let period = self.physics.period().as_secs_f32();
         Pose {
+            checkpoint:self.marker.checkpoint(),
             generation: self.skater.pose_generation,
             phase: (self.accumulator as f32 / period).clamp(0., 1.),
             period,

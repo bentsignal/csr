@@ -15,8 +15,9 @@ use sim::{GameEvent, PlayerId, Snapshot, Team, TickInput};
 // v35 adds raw controller reports and full provider journal/pose state.
 // This first pack release is offline; network admission rejects active modules.
 // v36 retains selected mechanics tools independently of the held CS weapon.
-pub const VERSION: u32 = 36;
-pub const PROTOCOL_ID: u64 = 0x4353_5257_0000_0024;
+// v37 retains a validated CS return placement with each movement mode.
+pub const VERSION: u32 = 37;
+pub const PROTOCOL_ID: u64 = 0x4353_5257_0000_0025;
 pub const CONTROL: u8 = 0;
 pub const INPUT: u8 = 1;
 pub const SNAPSHOT: u8 = 2;
@@ -484,7 +485,7 @@ pub(crate) fn validate_state(
         {
             return Err("invalid snapshot player state".into());
         }
-        if actor.mechanic.is_some() || actor.equipped_mechanic.is_some() {
+        if actor.mechanic.is_some() || actor.equipped_mechanic.is_some() || actor.mechanic_checkpoint.is_some() {
             return Err("movement packs currently require an offline session".into());
         }
         for (slot, weapon) in actor.weapons.iter().enumerate() {

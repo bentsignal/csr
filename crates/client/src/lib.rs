@@ -211,6 +211,8 @@ struct Options(ClientOptions);
 pub struct CsgoPlugin;
 mod movement_modes;
 mod camera_transition;
+mod board_presentation;
+mod board_audio;
 
 impl Plugin for CsgoPlugin {
     fn build(&self, app: &mut App) {
@@ -271,6 +273,8 @@ impl Plugin for CsgoPlugin {
             .init_resource::<tracers::Tracers>()
             .init_resource::<muzzle_flash::Flashes>()
             .init_resource::<tracers::InspectRequest>()
+            .init_resource::<board_presentation::HeldBoard>()
+            .init_resource::<board_audio::BoardAudio>()
             .init_resource::<menu::Menu>()
             .insert_resource(inventory::Inventory::load())
             .init_resource::<player::InputBlockFrames>()
@@ -293,7 +297,7 @@ impl Plugin for CsgoPlugin {
                     sky::follow_camera,
                     visibility::update,
                     effects::draw,
-                    (characters::sync, movement_modes::draw,movement_modes::full_board::draw).chain(),
+                    (characters::sync, movement_modes::draw,board_presentation::update,movement_modes::full_board::draw,board_audio::update).chain(),
                     items::sync,
                     (doors::sync, breakables::sync, window_fade::update).chain(),
                     (viewmodel::update, foley::inspect, utility_fx::update_wick).chain(),
@@ -563,6 +567,7 @@ fn prepare_world(
         main.triangles + skybox.triangles + breakable_builds.iter().map(|(_, _, build)| build.triangles).sum::<usize>() + window_builds.iter().map(|build| build.triangles()).sum::<usize>(),
         skybox.triangles,
     );
+    commands.insert_resource(movement_modes::full_board::MaterialTemplate(world_mesh::material_from_vmt(None,&level.vfs,&mut textures,&mut images,&world_shared,opts.exposure,false)));
     scene_import::WorldPreparation { textures, shared: world_shared, moving_door_builds }
 }
 
