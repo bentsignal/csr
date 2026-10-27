@@ -155,8 +155,13 @@ fn run() -> Result<(), String> {
     let mut world = sim::World::with_catalog(level.collision.clone(), level.catalog.clone());
     world.set_character_profiles(level.character_profiles.clone());
     world.load_map(&level.bsp, level.overview().as_deref());
+    if let Some(provider)=&module.external {
+        let started=std::time::Instant::now();provider.prepare_world(&world.collision)?;
+        println!("Map provider preparation: {:?}",started.elapsed());
+    }
     world.mechanics.push(module);
     let id = world.add_player("Map skate check", Team::CounterTerrorist);
+    let activation=std::time::Instant::now();
     world.step(&[(
         id,
         TickInput {
@@ -164,6 +169,7 @@ fn run() -> Result<(), String> {
             ..Default::default()
         },
     )]);
+    println!("Prepared first activation: {:?}",activation.elapsed());
     let started = std::time::Instant::now();
     let mut foot_error = Vec3::ZERO;
     let mut max_foot_error = 0f32;

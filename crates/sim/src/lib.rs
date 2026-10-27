@@ -176,6 +176,8 @@ pub struct TickInput {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Player {
     pub mechanic: Option<mechanics::State>,
+    /// Selected pack-owned tool, separate from the retained CS weapon.
+    pub equipped_mechanic: Option<mechanics::inventory::Equipped>,
     pub id: PlayerId,
     pub name: String,
     pub team: Team,
@@ -217,9 +219,11 @@ pub struct Player {
 
 impl Player {
     pub fn active_weapon_mut(&mut self) -> Option<&mut WeaponState> {
+        if self.equipped_mechanic.is_some(){return None;}
         self.weapons.get_mut(self.active)
     }
     pub fn active_weapon(&self) -> Option<&WeaponState> {
+        if self.equipped_mechanic.is_some(){return None;}
         self.weapons.get(self.active)
     }
 
@@ -339,6 +343,7 @@ impl Player {
             self.last_active = self.active;
         }
         self.active = index;
+        self.equipped_mechanic=None;
         self.plant_start = None;
         let w = &mut self.weapons[index];
         w.reload_end = None;
@@ -684,6 +689,7 @@ impl World {
             movement: PlayerMove::default(),
             view_angles: Vec3::ZERO,
             mechanic: None,
+            equipped_mechanic: None,
             health: 100,
             armor: 0,
             helmet: false,
@@ -809,6 +815,7 @@ impl World {
         let origin=if hit.start_solid || hit.fraction==1. {spawn.origin} else {hit.end};
         if let Some(p) = self.player_mut(id) {
             p.movement = PlayerMove::spawn_at(origin);
+            p.equipped_mechanic=None;
             if let Some(state) = &mut p.mechanic { state.reset = true; state.data.fill(0.);state.external=None; }
             p.view_angles = Vec3::new(0.0, spawn.yaw, 0.0);
             p.health = 100;
@@ -1513,6 +1520,7 @@ impl World {
             if !think_bots || self.players[i].is_bot {
                 input.rewind_tick = None;
             }
+            let raw_attacks=input.buttons & (buttons::ATTACK|buttons::ATTACK2);
             for weapon in &mut self.players[i].weapons { weapon.advance_suppressor(self.tick, dt); }
             // Buying and dropping.
             {
@@ -1539,28 +1547,24 @@ impl World {
                 let slot = input.weapon_slot;
                 if input.utility!=0 {
                     if let Some(index)=p.weapons.iter().position(|w| w.def.def_index==input.utility && w.def.class==weapons::WeaponClass::Grenade) {
-                        if index!=p.active { p.select(index,time); }
+                        if index!=p.active || p.equipped_mechanic.is_some() { p.select(index,time); }
                     }
                 }
                 if input.utility!=0 { /* selected above */ } else if slot == SLOT_LAST {
                     let last = p.last_active;
-                    if last != p.active {
+                    if p.equipped_mechanic.is_some(){p.select(p.active,time);}
+                    else if last != p.active {
                         p.select(last, time);
                     }
                 } else if matches!(slot, SLOT_NEXT | SLOT_PREVIOUS) {
                     // A wheel command carries direction, not a client-derived
                     // inventory index or slot. Drops/buys above may have changed
                     // the inventory since the input was sampled.
-                    if !p.weapons.is_empty() {
-                        let count = p.weapons.len();
-                        let target = if slot == SLOT_NEXT { (p.active + 1) % count }
-                            else { (p.active + count - 1) % count };
-                        if target != p.active { p.select(target, time); }
-                    }
+                    mechanics::inventory::cycle(p,&self.mechanics,slot==SLOT_NEXT,time);
                 } else if slot >= 1 {
                     let in_slot: Vec<usize> = (0..p.weapons.len()).filter(|&w| weapon::slot(&p.weapons[w].def) == slot).collect();
                     let pressed = p.last_input.weapon_slot != slot;
-                    let target = match in_slot.iter().position(|&w| w == p.active) {
+                    let target = match in_slot.iter().position(|&w| w == p.active && p.equipped_mechanic.is_none()) {
                         Some(k) if pressed && in_slot.len() > 1 => Some(in_slot[(k + 1) % in_slot.len()]),
                         Some(_) => None,
                         None => in_slot.first().copied(),
@@ -1570,7 +1574,7 @@ impl World {
                     }
                 }
                 let pressed_reload = input.buttons & buttons::RELOAD != 0;
-                if let Some(w) = p.weapons.get_mut(p.active) {
+                if let Some(w) = p.active_weapon_mut() {
                     if pressed_reload && w.can_reload() {
                         w.reset_zoom(time);
                         w.begin_reload(time);
@@ -1592,8 +1596,11 @@ impl World {
 
             // Movement.
             if input.toggle_mode && !self.players[i].last_input.toggle_mode && !frozen && !busy {
+                self.players[i].equipped_mechanic=None;
                 mechanics::toggle(&mut self.players[i], &self.mechanics);
             }
+            let tool_consumed_attacks=self.players[i].equipped_mechanic.is_some();
+            mechanics::inventory::use_equipped(&mut self.players[i],&mut input,&self.mechanics,!frozen&&!busy);
             let max_speed = self.players[i].active_weapon().map_or(250.0, |w| w.max_speed());
             let move_input = MoveInput {
                 view_angles: input.view_angles,
@@ -1786,6 +1793,7 @@ impl World {
                 self.pickups(i, time);
             }
             self.players[i].last_input = input;
+            if tool_consumed_attacks {self.players[i].last_input.buttons=(input.buttons & !(buttons::ATTACK|buttons::ATTACK2))|raw_attacks;}
         }
         self.step_utility();
         self.step_ground_items();

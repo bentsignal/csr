@@ -14,7 +14,7 @@ pub(crate) struct GestureInput {
 }
 impl GestureInput {
     pub fn load(root: &Path) -> Result<Self, String> {
-        let data = Collections::load(root)?;
+        let data = crate::asset_cache::collections(root)?;
         let misses = |key| -> Result<u8, String> {
             let field = data.field("recognizer", key, "NumTicksPatternNotInRangeBeforeCulling")?;
             if field.type_name != "EA::Reflection::UInt8" {

@@ -5,6 +5,7 @@ use glam::Vec3;
 use mechanics_api as api;
 use movement::{MoveEvents, TraceWorld, buttons};
 use std::sync::Arc;
+pub mod inventory;
 
 pub struct Module {
     pub id: String,
@@ -48,7 +49,10 @@ pub(crate) fn toggle(player: &mut Player, modules: &[Arc<Module>]) {
         .as_ref()
         .and_then(|s| modules.iter().position(|m| m.id == s.id))
         .map_or(0, |i| i + 1);
-    player.mechanic = modules.get(next).map(|module| State {
+    select(player, modules.get(next));
+}
+pub(crate) fn select(player:&mut Player,module:Option<&Arc<Module>>){
+    player.mechanic = module.map(|module| State {
         id: module.id.clone(),
         archive_hash: module.archive_hash.clone(),
         data: [0.; api::STATE_WORDS],
@@ -196,6 +200,37 @@ mod tests {
         world.mechanics.push(Arc::new(module));
         let id = world.add_player("Test", crate::Team::CounterTerrorist);
         (world, id)
+    }
+    #[test]
+    fn inventory_tool_cycles_uses_and_restores_without_firing_the_retained_weapon(){
+        let (mut w,id)=world(false);
+        let catalog=weapons::Catalog::from_items_game(r#"items_game { items { 7 { name weapon_ak47 baseitem 1 attributes { "primary clip size" 30 "primary reserve ammo max" 90 "is full auto" 1 } } } }"#).unwrap();
+        w.player_mut(id).unwrap().weapons.push(crate::weapon::WeaponState::new(Arc::new(catalog.weapons[0].clone())));
+        let before=w.player(id).unwrap().weapons.clone();
+        w.step(&[(id,TickInput{weapon_slot:crate::SLOT_PREVIOUS,..Default::default()})]);
+        assert!(w.player(id).unwrap().equipped_mechanic.is_some());assert!(w.player(id).unwrap().active_weapon().is_none());
+        let state=w.state();let mut replay=w.clone();replay.restore(state);
+        for _ in 0..8 {
+            let input=TickInput{buttons:buttons::ATTACK,..Default::default()};
+            w.step(&[(id,input)]);replay.step(&[(id,input)]);assert_eq!(w.state_hash(),replay.state_hash());
+            let p=w.player(id).unwrap();assert!(p.mechanic.is_some());assert!(p.equipped_mechanic.as_ref().unwrap().used);assert_eq!(p.shots,0);
+        }
+        w.step(&[(id,TickInput::default())]);
+        assert!(w.player(id).unwrap().equipped_mechanic.is_none());assert!(w.player(id).unwrap().active_weapon().is_some());
+        assert_eq!(w.player(id).unwrap().weapons.iter().map(|w|(w.clip,w.reserve)).collect::<Vec<_>>(),before.iter().map(|w|(w.clip,w.reserve)).collect::<Vec<_>>());
+        w.step(&[(id,TickInput{weapon_slot:crate::SLOT_PREVIOUS,..Default::default()})]);
+        w.step(&[(id,TickInput{buttons:buttons::ATTACK,..Default::default()})]);
+        assert!(w.player(id).unwrap().mechanic.is_none());
+        w.respawn(id);assert!(w.player(id).unwrap().equipped_mechanic.is_none());
+    }
+    #[test]
+    fn held_fire_cannot_activate_a_newly_selected_tool_until_release(){
+        let (mut w,id)=world(false);
+        w.player_mut(id).unwrap().last_input.buttons=buttons::ATTACK;
+        for tick in 0..3 {w.step(&[(id,TickInput{weapon_slot:if tick==0{crate::SLOT_PREVIOUS}else{0},buttons:buttons::ATTACK,..Default::default()})]);assert!(w.player(id).unwrap().mechanic.is_none());}
+        w.step(&[(id,TickInput::default())]);
+        w.step(&[(id,TickInput{buttons:buttons::ATTACK,..Default::default()})]);
+        assert!(w.player(id).unwrap().mechanic.is_some());
     }
     #[test]
     fn toggle_edges_state_restore_and_respawn_share_tick_authority() {

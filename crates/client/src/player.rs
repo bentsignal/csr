@@ -37,6 +37,8 @@ pub struct LocalPlayer {
     pub render_eye: glam::Vec3,
     pub render_camera: glam::Vec3,
     pub render_angles: glam::Vec3,
+    pub camera_transition:crate::camera_transition::Transition,
+    pub render_third_person:bool,
     /// Buttons pressed since the last tick, so short taps are not lost.
     pub latched: u32,
     /// Fresh pointer edges retain their own capture admission when two physical
@@ -79,6 +81,7 @@ impl LocalPlayer {
             render_eye: eye,
             render_camera: eye,
             render_angles: glam::Vec3::new(0.0, yaw, 0.0),
+            camera_transition:Default::default(),render_third_person:false,
             latched: 0,
             pointer_attacks: 0,
             keyboard_attacks: 0,
@@ -106,6 +109,7 @@ impl LocalPlayer {
     /// Discard camera life and unsent controls when an owned session stops
     /// being ready; actor ids and life epochs may repeat after reconnection.
     pub(crate) fn clear_remote_lifecycle(&mut self) {
+        self.camera_transition=Default::default();self.render_third_person=false;
         self.remote_life = 0;
         self.was_alive = false;
         self.spectating = None;
@@ -624,13 +628,13 @@ pub fn tick(
     });
     let report=crate::controller::poll();
     if enabled.0&&block.0==0&&captured(&cursor)&&!menu.open&&windows.iter().any(|w|w.focused) {
-        let skating=world.0.player(local.id).is_some_and(|p|p.mechanic.is_some());
+        let skating=world.0.player(local.id).is_some_and(|p|p.mechanic.is_some()&&p.equipped_mechanic.is_none());
         crate::controller::apply(&mut input,report,local.controller_buttons,skating,1./world.0.tick_rate as f32);
         if world.0.mechanics.is_empty(){input.toggle_mode=false;}
         local.pitch=input.view_angles.x;local.yaw=input.view_angles.y;
     }
     local.controller_buttons=report.buttons;
-    if let Some(me) = world.0.player(local.id).filter(|p| crate::movement_modes::third_person(p)) {
+    if let Some(me) = world.0.player(local.id).filter(|p| crate::movement_modes::third_person(p)||local.camera_transition.active()) {
         // Third-person crosshair chooses a world target; CS still admits the
         // muzzle and fires from the player's eye, preserving cover collision.
         let (camera,forward)=if me.mechanic.as_ref().is_some_and(|s|s.external.is_some()) {
@@ -639,6 +643,7 @@ pub fn tick(
                 input.view_angles=glam::Vec3::new(pitch,yaw,0.);local.pitch=pitch;local.yaw=yaw;(position,forward)
             }).unwrap_or_else(||{let angles=input.view_angles;(crate::movement_modes::camera_eye(me.eye(),angles,&world.0.collision),movement::angle_vectors(angles).0)})
         }else{let angles=input.view_angles;(crate::movement_modes::camera_eye(me.eye(),angles,&world.0.collision),movement::angle_vectors(angles).0)};
+        let (camera,forward)=local.camera_transition.frame().filter(|_|local.camera_transition.active()).map_or((camera,forward),|f|(f.position,crate::coords::to_source(f.rotation*Vec3::NEG_Z)));
         let hit = world.0.collision.trace_box(camera, camera + forward * 8192., glam::Vec3::ZERO, glam::Vec3::ZERO, collision::contents::MASK_SHOT);
         input.aim = Some(sim::AimRay { origin: me.eye() - me.movement.origin, direction: (hit.end - me.eye()).normalize_or_zero() });
     }
@@ -668,6 +673,12 @@ pub fn tick(
         }
     }
     if !enabled.0 && std::env::var_os("CSR_ATTACK2").is_some() { input.buttons |= buttons::ATTACK2; }
+    if !enabled.0 && std::env::var_os("CSR_TEST_SKATE_INVENTORY").is_some(){
+        let tick=world.0.tick;let rate=world.0.tick_rate as u64;let t=world.0.time();
+        input.toggle_mode=false;input.controller.connected=true;
+        if tick==rate/2||tick==rate*3{input.weapon_slot=sim::SLOT_PREVIOUS;}
+        if (1.0..1.05).contains(&t)||(3.2..3.25).contains(&t){input.buttons|=buttons::ATTACK;}
+    }
     // Screenshot-only phase proof through real TickInput. Each five-second
     // cycle holds from 0.5 to 2.5 seconds, then releases all attack buttons.
     if !enabled.0 {
@@ -926,6 +937,7 @@ pub fn update_camera(
     poses: Res<crate::interpolation::RenderPoses>,
     mut cams: Query<(&mut Transform, &mut Projection, Option<&ViewModelCamera>), With<PlayerCamera>>,
     remote: Option<Res<crate::remote::RemoteClient>>,
+    frame_time:Res<Time>,
 ) {
     if remote.as_ref().is_some_and(|r| r.status() != &netcode::remote_session::Status::Ready) { return; }
     let alpha = time.overstep_fraction();
@@ -954,12 +966,26 @@ pub fn update_camera(
         world.0.player(local.view_target()).filter(|p| p.alive).and_then(|p| p.active_weapon())
             .map_or(90.0, |w| w.rendered_fov(world.0.time() + alpha * world.0.dt()))
     };
+    let rotation=if let Some((_,forward,up,_))=native_camera{Transform::default().looking_to(to_bevy(forward),to_bevy(up)).rotation}else{Transform::default().looking_to(fwd,Vec3::Y).rotation};
+    let target_fov=native_camera.map_or_else(||crate::viewmodel::vertical_fov(fov),|(_,_,_,fov)|fov.to_radians());
+    let subject=world.0.player(local.view_target());
+    let anchor=subject.map_or(eye,|p|p.movement.origin);
+    let requested=crate::camera_transition::Frame{position:local.render_camera,rotation,fov:target_fov};
+    let cut=local.noclip||subject.is_none_or(|p|!p.alive);
+    let rendered=local.camera_transition.sample(subject.map_or((0,0),|p|(p.id,p.life_epoch)),chase,anchor,requested,frame_time.delta_secs(),cut);
+    local.render_camera=rendered.position;
+    if local.camera_transition.active(){
+        let hit=world.0.collision.trace_box(eye,local.render_camera,glam::Vec3::splat(-4.),glam::Vec3::splat(4.),collision::contents::MASK_PLAYERSOLID);
+        local.render_camera=if hit.start_solid{eye}else{hit.end};
+    }
+    let position=local.render_camera;local.camera_transition.constrain_position(position);
+    local.render_third_person=(chase||local.camera_transition.active())&&local.render_camera.distance(eye)>18.;
     for (mut cam, mut projection, viewmodel) in &mut cams {
         if viewmodel.is_none() {
-            if let Projection::Perspective(p) = &mut *projection { p.fov = native_camera.map_or_else(||crate::viewmodel::vertical_fov(fov),|(_,_,_,fov)|fov.to_radians()); }
+            if let Projection::Perspective(p) = &mut *projection { p.fov = rendered.fov; }
         }
         cam.translation = to_bevy(if viewmodel.is_none() { local.render_camera } else { eye });
-        if viewmodel.is_none(){if let Some((_,forward,up,_))=native_camera{cam.look_to(to_bevy(forward),to_bevy(up));}else{cam.look_to(fwd,Vec3::Y);}}else{cam.look_to(fwd,Vec3::Y);}
+        if viewmodel.is_none(){cam.rotation=rendered.rotation;}else{cam.look_to(fwd,Vec3::Y);}
     }
 }
 

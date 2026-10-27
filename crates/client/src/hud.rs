@@ -507,7 +507,9 @@ pub fn update(
                 }
             }
             HudText::Hint => {
-                if let Some(state) = me.mechanic.as_ref().filter(|_| me.alive) {
+                if me.alive && me.equipped_mechanic.as_ref().is_some_and(|item|!item.used) {
+                    if me.mechanic.is_some(){"Skateboard   Left click / RT: return to CS".into()}else{"Skateboard   Left click / RT: skate   Wheel / LB-RB: change item".into()}
+                } else if let Some(state) = me.mechanic.as_ref().filter(|_| me.alive) {
                     let mode = w.mechanics.iter().find(|m| m.id == state.id).map_or("Movement pack", |m| m.name.as_str());
                     if let Some(native)=&state.external{
                         let key=settings.action_binding_label(crate::settings::KEY_MOVEMENT_MODE);

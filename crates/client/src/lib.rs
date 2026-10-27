@@ -210,6 +210,7 @@ struct Options(ClientOptions);
 
 pub struct CsgoPlugin;
 mod movement_modes;
+mod camera_transition;
 
 impl Plugin for CsgoPlugin {
     fn build(&self, app: &mut App) {
@@ -605,7 +606,7 @@ fn finish_level(
         world.load_map(&level.bsp, level.overview().as_deref());
         world
     };
-    let (movement_modules, movement_visuals) = if remote { (Vec::new(), movement_modes::Visuals::default()) } else { movement_modes::load() };
+    let (movement_modules, movement_visuals) = loaded.movement.unwrap_or_default();
     world.mechanics = movement_modules;
     commands.insert_resource(movement_visuals);
     let (mine, theirs) = if opts.terrorist {

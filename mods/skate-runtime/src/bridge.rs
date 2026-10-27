@@ -139,6 +139,7 @@ fn map(scene: &Scene, start: &Start, compile: bool) -> SkateMap {
     }
 }
 pub struct PreparedScene {
+    pub(super) world: std::sync::Mutex<Option<skate_core::physics::board_world::BoardWorld>>,
     source: Scene,
     triangles: Vec<skate_core::physics::board_world::WorldTriangle>,
     metadata: skate_core::physics::board_world::query_metadata::QueryMetadata,
@@ -161,10 +162,13 @@ impl PreparedScene {
         let world =
             crate::skate_world::collision_world(&map, runtime.physics.csr_floor_material())?;
         let dynamic = crate::dynamic::Templates::new(&scene)?;
+        let triangles = world.triangles().to_vec();
+        let metadata = world.query_metadata()?.clone();
         Ok(Arc::new(Self {
+            world: std::sync::Mutex::new(Some(world)),
             source: scene,
-            triangles: world.triangles().to_vec(),
-            metadata: world.query_metadata()?.clone(),
+            triangles,
+            metadata,
             graphs: runtime.graphs.clone(),
             animation: runtime.skater.animation.source.clone(),
             bind_pose: runtime.bind_pose.clone(),
@@ -213,13 +217,29 @@ impl Runtime {
         start: &Start,
         state: &SceneState,
     ) -> Result<Self, String> {
+        let timing = std::time::Instant::now();
+        let report = |label: &str| {
+            if std::env::var_os("CSR_SKATE_DIAGNOSTICS").is_some() {
+                eprintln!("SKATE_PREPARE {label} {:?}", timing.elapsed());
+            }
+        };
         let graphs = scene.graphs.clone();
         let map = map(&scene.source, start, false);
-        let world = skate_core::physics::board_world::BoardWorld::with_query_metadata(
-            scene.triangles.clone(),
-            scene.metadata.clone(),
-        )?;
+        let world = match scene
+            .world
+            .lock()
+            .map_err(|_| "scene cache poisoned")?
+            .take()
+        {
+            Some(world) => world,
+            None => skate_core::physics::board_world::BoardWorld::with_query_metadata(
+                scene.triangles.clone(),
+                scene.metadata.clone(),
+            )?,
+        };
+        report("world");
         let mut physics = physics::GamePhysics::csr_load_prepared(root, &map, world)?;
+        report("physics");
         let mut skater = physics::SkaterRuntime::load_for_world(
             root,
             &graphs,
@@ -227,6 +247,7 @@ impl Runtime {
             "easy",
             Some(scene.animation.clone()),
         )?;
+        report("actor");
         // Original teleport owner transfers incoming CS momentum to the whole
         // physical assembly, including skeleton/board; no render correction.
         let transform = Mat4::from_rotation_translation(

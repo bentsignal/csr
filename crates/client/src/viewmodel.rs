@@ -2363,7 +2363,7 @@ pub fn update(
     // Camera, body and weapon movement must describe the same rendered
     // moment. Raw command-state velocity/ground flags are one tick newer.
     let motion = poses.sample_at(p, fixed.overstep_fraction(), world.0.tick, world.0.tick_rate);
-    let show = p.alive && !crate::movement_modes::third_person(p) && !local.noclip && !p.active_weapon().is_some_and(|w| w.hides_viewmodel());
+    let show = p.alive && !crate::movement_modes::third_person(p) && !local.render_third_person && !local.noclip && !p.active_weapon().is_some_and(|w| w.hides_viewmodel());
     if !show || p.id != local.id || local.spectating.is_some()
         || state.knife_inspect.as_ref().is_some_and(|inspect|
             inspect.key.owner != p.id || inspect.key.life != p.life_epoch

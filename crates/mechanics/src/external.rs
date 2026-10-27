@@ -209,6 +209,29 @@ impl Program {
         parent: [u8; 32],
         frame: &Frame,
     ) -> Result<(Pose, Rig), String> {
+        self.with_world_scene(world, |scene, key| {
+            self.advance(scene, key, session, start, history, parent, frame)
+        })
+    }
+    /// Prepare immutable collision and the trusted provider while the map is
+    /// loading. This does not advance or select any player's gameplay state.
+    pub fn prepare_world(
+        &self,
+        world: &std::sync::Arc<collision::CollisionWorld>,
+    ) -> Result<(), String> {
+        self.with_world_scene(world, |scene, key| {
+            let mut guard = self.process.lock().map_err(|_| "provider lock poisoned")?;
+            if guard.as_ref().is_none_or(|p| p.scene != key) {
+                *guard = Some(self.start(scene, key)?);
+            }
+            Ok(())
+        })
+    }
+    fn with_world_scene<T>(
+        &self,
+        world: &std::sync::Arc<collision::CollisionWorld>,
+        run: impl FnOnce(&Scene, usize) -> Result<T, String>,
+    ) -> Result<T, String> {
         let map = collision::CollisionWorld::map_arc(world);
         let key = std::sync::Arc::as_ptr(&map) as usize;
         let mut guard = self
@@ -221,14 +244,6 @@ impl Program {
         {
             *guard = Some((map.clone(), geometry::scene(&map)));
         }
-        self.advance(
-            &guard.as_ref().unwrap().1,
-            key,
-            session,
-            start,
-            history,
-            parent,
-            frame,
-        )
+        run(&guard.as_ref().unwrap().1, key)
     }
 }

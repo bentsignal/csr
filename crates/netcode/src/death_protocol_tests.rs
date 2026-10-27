@@ -125,9 +125,9 @@ fn tracked_receipt_must_already_satisfy_existing_admission_limits() {
 }
 
 #[test]
-fn older_protocol_versions_cannot_admit_a_peer_to_controller_state_v35() {
-    assert_eq!(VERSION, 35);
-    assert_eq!(PROTOCOL_ID, 0x4353_5257_0000_0023);
+fn older_protocol_versions_cannot_admit_a_peer_to_tool_state_v36() {
+    assert_eq!(VERSION, 36);
+    assert_eq!(PROTOCOL_ID, 0x4353_5257_0000_0024);
     let content = ContentManifest {
         map_id: "csgo_map_test".into(),
         map_name: "test".into(),

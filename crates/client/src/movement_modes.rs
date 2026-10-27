@@ -20,6 +20,37 @@ pub struct Visuals(
     pub HashMap<String, Visual>,
     pub HashMap<String, Arc<full_board::Model>>,
 );
+pub(crate) type Prepared = (Vec<Arc<sim::mechanics::Module>>, Visuals);
+pub(crate) fn prepare(world: &Arc<collision::CollisionWorld>) -> Prepared {
+    let (mut modules, mut visuals) = load();
+    modules.retain(|module| {
+        let Some(provider) = &module.external else {
+            return true;
+        };
+        let start = std::time::Instant::now();
+        match provider.prepare_world(world) {
+            Ok(()) => {
+                info!(
+                    "Prepared {} for this map in {:?}",
+                    module.name,
+                    start.elapsed()
+                );
+                true
+            }
+            Err(error) => {
+                warn!("Could not prepare {}: {error}", module.name);
+                false
+            }
+        }
+    });
+    visuals
+        .0
+        .retain(|id, _| modules.iter().any(|m| &m.id == id));
+    visuals
+        .1
+        .retain(|id, _| modules.iter().any(|m| &m.id == id));
+    (modules, visuals)
+}
 #[derive(Component)]
 pub struct Board {
     player: sim::PlayerId,

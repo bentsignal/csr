@@ -42,6 +42,13 @@ Adaptation points:
   intact breakables, and feeds original solid contacts and moving queries.
   `upstream/modding/moving_queries.rs` retains the upstream non-Lua query adapter.
   CS top/side edges supply derived grind splines rather than Skate course data.
+- `src/asset_cache.rs` retains immutable stock collections and animation banks
+  from the frozen admitted bundle. Custom difficulty overlays are cached
+  separately, preserving the original distinction from camera/input data.
+  Actor reconstruction lends the same prepared collision world back to the
+  next runtime; native queries reset their transient contacts before use and
+  dynamic external queries are cleared/replaced. Physical actors and their
+  state are always rebuilt/replayed; no previous player's state is reused.
 
 The normal executable accepts only `--stdio-provider-v1`. It receives framed,
 bounded binary messages from `crates/mechanics-link`; it has no UI or game

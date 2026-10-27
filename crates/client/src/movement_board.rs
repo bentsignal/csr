@@ -24,6 +24,7 @@ struct Part {
 }
 pub struct Model {
     parts: Vec<Part>,
+    center: Vec3,
 }
 impl Model {
     pub fn load(root: &Path) -> Result<Self, String> {
@@ -167,7 +168,20 @@ impl Model {
         if parts.is_empty() {
             return Err("no skinned board found".into());
         }
-        Ok(Self { parts })
+        let low = parts
+            .iter()
+            .flat_map(|p| &p.positions)
+            .map(|p| Vec3::from_array(*p))
+            .fold(Vec3::splat(f32::INFINITY), Vec3::min);
+        let high = parts
+            .iter()
+            .flat_map(|p| &p.positions)
+            .map(|p| Vec3::from_array(*p))
+            .fold(Vec3::splat(f32::NEG_INFINITY), Vec3::max);
+        Ok(Self {
+            parts,
+            center: (low + high) * 0.5,
+        })
     }
 }
 #[derive(Component)]
@@ -177,7 +191,7 @@ pub struct Instance {
     part: usize,
     model: Arc<Model>,
     mesh: Handle<Mesh>,
-    generation: u64,
+    display: u8,
 }
 pub fn draw(
     mut commands: Commands,
@@ -187,157 +201,179 @@ pub fn draw(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut images: ResMut<Assets<Image>>,
     time: Res<Time<Fixed>>,
+    local: Res<crate::player::LocalPlayer>,
     mut instances: Query<(Entity, &mut Instance)>,
 ) {
     for (entity, mut instance) in &mut instances {
-        let state = world
-            .0
-            .player(instance.player)
-            .filter(|p| p.alive)
-            .and_then(|p| p.mechanic.as_ref())
-            .filter(|s| s.id == instance.mode)
-            .and_then(|s| s.external.as_ref());
-        let Some(state) = state else {
+        let Some(player) = world.0.player(instance.player).filter(|p| p.alive) else {
             commands.entity(entity).despawn();
             continue;
         };
-        let sampled = mechanics::presentation::bones(
-            &state.previous_pose,
-            &state.pose,
-            &state.rig,
-            world.0.dt() * time.overstep_fraction(),
-        );
+        let state = player
+            .mechanic
+            .as_ref()
+            .filter(|s| s.id == instance.mode)
+            .and_then(|s| s.external.as_ref());
+        let held = player.mechanic.is_none()
+            && player
+                .equipped_mechanic
+                .as_ref()
+                .is_some_and(|item| item.id == instance.mode);
+        if state.is_none() && !held {
+            if instance.display != 0 {
+                if let Some(mut mesh) = meshes.get_mut(&instance.mesh) {
+                    mesh.insert_attribute(
+                        Mesh::ATTRIBUTE_POSITION,
+                        vec![[0.; 3]; instance.model.parts[instance.part].positions.len()],
+                    );
+                }
+            }
+            instance.display = 0;
+            continue;
+        }
         let part = &instance.model.parts[instance.part];
-        let conversion = Mat4::from_cols_array_2d(&state.rig.to_source);
-        let basis = Mat4::from_cols_array_2d(&state.rig.bone_basis);
-        let transforms: Vec<_> = part
-            .names
-            .iter()
-            .zip(&part.inverse)
-            .map(|(name, inverse)| {
-                state
-                    .rig
-                    .names
-                    .iter()
-                    .position(|n| n == name)
-                    .and_then(|i| sampled.get(i))
-                    .map(|m| conversion * *m * basis * *inverse)
-                    .unwrap_or(Mat4::IDENTITY)
-            })
-            .collect();
+        let transforms = state.map(|state| {
+            let sampled = mechanics::presentation::bones(
+                &state.previous_pose,
+                &state.pose,
+                &state.rig,
+                world.0.dt() * time.overstep_fraction(),
+            );
+            let conversion = Mat4::from_cols_array_2d(&state.rig.to_source);
+            let basis = Mat4::from_cols_array_2d(&state.rig.bone_basis);
+            part.names
+                .iter()
+                .zip(&part.inverse)
+                .map(|(name, inverse)| {
+                    state
+                        .rig
+                        .names
+                        .iter()
+                        .position(|n| n == name)
+                        .and_then(|i| sampled.get(i))
+                        .map(|m| conversion * *m * basis * *inverse)
+                        .unwrap_or(Mat4::IDENTITY)
+                })
+                .collect::<Vec<_>>()
+        });
+        // An equipment preview uses the imported rest mesh. Native bone output
+        // still owns the board whenever the player is actually riding it.
+        let angles = if player.id == local.id {
+            local.render_angles
+        } else {
+            player.view_angles
+        };
+        let eye = if player.id == local.id {
+            local.render_eye
+        } else {
+            player.eye()
+        };
+        let (forward, right, up) = movement::angle_vectors(angles);
+        let held_basis = Mat3::from_cols(-right, -forward, up);
+        let center = instance.model.center;
         let mut positions = Vec::with_capacity(part.positions.len());
-        let mut normals = Vec::with_capacity(part.normals.len());
+        let mut normals = Vec::with_capacity(part.positions.len());
         for i in 0..part.positions.len() {
             let mut p = Vec3::ZERO;
             let mut n = Vec3::ZERO;
-            for j in 0..4 {
-                let w = part.weights[i][j];
-                if w == 0. {
-                    continue;
+            if let Some(transforms) = &transforms {
+                for j in 0..4 {
+                    let w = part.weights[i][j];
+                    if w == 0. {
+                        continue;
+                    }
+                    let m = transforms[part.joints[i][j] as usize];
+                    p += m.transform_point3(Vec3::from_array(part.positions[i])) * w;
+                    n += m.transform_vector3(Vec3::from_array(part.normals[i])) * w;
                 }
-                let m = transforms[part.joints[i][j] as usize];
-                p += m.transform_point3(Vec3::from_array(part.positions[i])) * w;
-                n += m.transform_vector3(Vec3::from_array(part.normals[i])) * w;
+            } else {
+                p = eye + forward * 25. + right * 12. - up * 12.
+                    + held_basis * (Vec3::from_array(part.positions[i]) - center) / 0.0254;
+                n = held_basis * Vec3::from_array(part.normals[i]);
             }
-            positions.push(to_bevy(glam::Vec3::from_array(p.to_array())).to_array());
-            normals
-                .push(to_bevy(glam::Vec3::from_array(n.normalize_or_zero().to_array())).to_array());
-        }
-        if instance.generation == 0
-            && state.pose.generation > 0
-            && std::env::var_os("CSR_SKATE_DIAGNOSTICS").is_some()
-        {
-            let low = positions
-                .iter()
-                .map(|p| Vec3::from_array(*p))
-                .fold(Vec3::splat(f32::INFINITY), Vec3::min);
-            let high = positions
-                .iter()
-                .map(|p| Vec3::from_array(*p))
-                .fold(Vec3::splat(f32::NEG_INFINITY), Vec3::max);
-            info!(
-                "Skate board part={} vertices={} bevy_bounds={low:?}..{high:?} player_source={:?}",
-                instance.part,
-                positions.len(),
-                state.pose.position
-            );
+            positions.push(to_bevy(p).to_array());
+            normals.push(to_bevy(n.normalize_or_zero()).to_array());
         }
         if let Some(mut mesh) = meshes.get_mut(&instance.mesh) {
             mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
             mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
         }
-        instance.generation = state.pose.generation;
+        instance.display = if held { 1 } else { 2 };
     }
     let Some(visuals) = visuals else { return };
-    for player in world.0.players.iter().filter(|p| p.alive) {
-        let Some(state) = player.mechanic.as_ref().filter(|s| s.external.is_some()) else {
-            continue;
-        };
-        if instances
-            .iter()
-            .any(|(_, i)| i.player == player.id && i.mode == state.id)
-        {
-            continue;
-        }
-        let Some(model) = visuals.1.get(&state.id) else {
-            continue;
-        };
-        for (i, part) in model.parts.iter().enumerate() {
-            let mesh = Mesh::new(
-                PrimitiveTopology::TriangleList,
-                RenderAssetUsages::default(),
-            )
-            .with_inserted_attribute(
-                Mesh::ATTRIBUTE_POSITION,
-                vec![[0.; 3]; part.positions.len()],
-            )
-            .with_inserted_attribute(
-                Mesh::ATTRIBUTE_NORMAL,
-                vec![[0., 1., 0.]; part.positions.len()],
-            )
-            .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, part.uv.clone())
-            .with_inserted_indices(Indices::U32(part.indices.clone()));
-            let texture = part.texture.as_ref().map(|(width, height, data)| {
-                images.add(Image::new(
-                    Extent3d {
-                        width: *width,
-                        height: *height,
-                        depth_or_array_layers: 1,
-                    },
-                    TextureDimension::D2,
-                    data.clone(),
-                    TextureFormat::Rgba8UnormSrgb,
+    // Allocate and queue board materials with the map, including before any
+    // mode switch. Inactive meshes have degenerate triangles: no pixels, but
+    // their real material specialization is prepared by the renderer already.
+    for player in world
+        .0
+        .players
+        .iter()
+        .filter(|p| p.alive && (!p.is_bot || p.mechanic.is_some()))
+    {
+        for (mode, model) in &visuals.1 {
+            if instances
+                .iter()
+                .any(|(_, i)| i.player == player.id && i.mode == *mode)
+            {
+                continue;
+            }
+            for (i, part) in model.parts.iter().enumerate() {
+                let mesh = Mesh::new(
+                    PrimitiveTopology::TriangleList,
                     RenderAssetUsages::default(),
-                ))
-            });
-            let material = materials.add(StandardMaterial {
-                base_color: Color::srgba(
-                    part.color[0],
-                    part.color[1],
-                    part.color[2],
-                    part.color[3],
-                ),
-                base_color_texture: texture,
-                perceptual_roughness: 0.7,
-                cull_mode: None,
-                unlit: true,
-                ..Default::default()
-            });
-            let mesh = meshes.add(mesh);
-            commands.spawn((
-                Mesh3d(mesh.clone()),
-                MeshMaterial3d(material),
-                Transform::default(),
-                NoFrustumCulling,
-                Instance {
-                    player: player.id,
-                    mode: state.id.clone(),
-                    part: i,
-                    model: model.clone(),
-                    mesh,
-                    generation: u64::MAX,
-                },
-            ));
+                )
+                .with_inserted_attribute(
+                    Mesh::ATTRIBUTE_POSITION,
+                    vec![[0.; 3]; part.positions.len()],
+                )
+                .with_inserted_attribute(
+                    Mesh::ATTRIBUTE_NORMAL,
+                    vec![[0., 1., 0.]; part.positions.len()],
+                )
+                .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, part.uv.clone())
+                .with_inserted_indices(Indices::U32(part.indices.clone()));
+                let texture = part.texture.as_ref().map(|(width, height, data)| {
+                    images.add(Image::new(
+                        Extent3d {
+                            width: *width,
+                            height: *height,
+                            depth_or_array_layers: 1,
+                        },
+                        TextureDimension::D2,
+                        data.clone(),
+                        TextureFormat::Rgba8UnormSrgb,
+                        RenderAssetUsages::default(),
+                    ))
+                });
+                let material = materials.add(StandardMaterial {
+                    base_color: Color::srgba(
+                        part.color[0],
+                        part.color[1],
+                        part.color[2],
+                        part.color[3],
+                    ),
+                    base_color_texture: texture,
+                    perceptual_roughness: 0.7,
+                    cull_mode: None,
+                    unlit: true,
+                    ..Default::default()
+                });
+                let mesh = meshes.add(mesh);
+                commands.spawn((
+                    Mesh3d(mesh.clone()),
+                    MeshMaterial3d(material),
+                    Transform::default(),
+                    NoFrustumCulling,
+                    Instance {
+                        player: player.id,
+                        mode: mode.clone(),
+                        part: i,
+                        model: model.clone(),
+                        mesh,
+                        display: 0,
+                    },
+                ));
+            }
         }
     }
 }
