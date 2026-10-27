@@ -15,9 +15,11 @@ function Prepare-ProviderCheckout([string]$Manifest,[string]$Target,[string[]]$P
     New-Item -ItemType Directory -Force -Path $Target | Out-Null
     $receipt=Join-Path $Target 'csr-provider-checkout.txt'
     $previous=if(Test-Path -LiteralPath $receipt){(Get-Content -LiteralPath $receipt -Raw).Trim()}else{''}
-    if($previous -ne $repo){
+    if($previous -ne $repo -and (Test-Path -LiteralPath (Join-Path $Target 'release') -PathType Container)){
         # Like the main shared target handoff, clean local code for this
-        # profile while retaining all third-party dependencies.
+        # profile while retaining all third-party dependencies. A fresh target
+        # has no artifacts to clean; let Cargo initialize its CACHEDIR.TAG on
+        # the first build rather than trying to clean an uninitialized folder.
         $cleanArgs=@('clean','--manifest-path',$Manifest,'--target-dir',$Target,'--profile','release')
         foreach($package in $Packages){$cleanArgs+=@('-p',$package)}
         & cargo @cleanArgs | Out-Host
