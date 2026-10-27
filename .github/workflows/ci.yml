@@ -43,7 +43,7 @@ jobs:
       - run: cargo test -p launcher --example movement_replay --locked
       - run: powershell -NoProfile -File tools/fidelity/with-native-slot.ps1
       - run: cargo build --profile play -p launcher --locked
-      - name: Build asset-free Skate pack creator
+      - name: Build asset-free Skate runtime and pack creator
         run: ./tools/build-skate-tools.ps1 -OutputDir (Join-Path $env:CARGO_TARGET_DIR 'skate-tools')
       # Real-data checks against the CS:GO Legacy install on the runner.
       - run: cargo run --profile play -p launcher --locked -- probe de_dust2
