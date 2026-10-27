@@ -29,6 +29,34 @@ Historical map/symptom examples do not narrow an outcome's scope.**
   - Never force-push `master`, rewrite published history or skip hooks.
 - **Report** what was merged or released (PR links) at the end of each task.
 
+## Development and owner playtest delivery
+
+- **Develop and automate on WINSERVE** (`S:\dev\csr`, runner `WINSERVE-csr`).
+  Shawn's gaming PC is for his playtests; do not move builds, CI, or automated
+  game/audio tests back there. Avoid overlapping local Cargo work with CI.
+- **Agents finish delivery.** For a playable batch, implement, verify, merge
+  after green PR CI, then wait for master CI and the automatic Dev release.
+  A merged PR alone does not mean the new build is available on Shawn's PC.
+  Read the repository skill
+  [csr-playtest-delivery](.agents/skills/csr-playtest-delivery/SKILL.md) when
+  delivering a playable batch or working on releases, even if your agent
+  does not discover repository skills automatically.
+- **Owner playtests use current master.** Verify the published Dev build's
+  source SHA and update assets before calling it ready. Never substitute an
+  older Stable release, a branch build, or a local exe for the requested batch.
+  If publishing fails, diagnose and fix it; report any remaining blocker plainly.
+- **Install once, update in the launcher.** Shawn opts into Dev; friends get
+  Stable by default. Normal handoff: open launcher, select Dev if needed,
+  Refresh, then Update & play. Give the published version/source revision,
+  what changed, what to test, and a release link. Supply a verified installer
+  link for first install; do not ask him to build, copy files, or reinstall for
+  each batch. Preserve settings and private content packs across updates.
+- **Own implementation and operations decisions.** Choose build routes,
+  tooling, cleanup, versions and routine release steps within the task. Ask
+  Shawn for design direction and playtest feedback. Dev publishing is automatic
+  after successful master CI; reserve Stable tags for deliberate releases.
+  Documentation-only work needs no owner playtest or extra Stable tag.
+
 ## Hard rules
 
 - **No DMCA exposure.** The repo and public releases contain no third-party
@@ -154,5 +182,5 @@ Debug switches: `CSR_WATCH_BOT=n` (camera on bot n), `CSR_AUTOFIRE=1`,
 - Artwork (icon, Steam library images, installer splash) is drawn in code
   (`crates/launcher/src/art.rs`, `csr art <folder>`); no image files.
 
-CI runs on the owner's PC (self-hosted runner, real-data checks included): `docs/CI.md`.
+CI runs on WINSERVE (self-hosted runner, real-data checks included): `docs/CI.md`.
 Architecture: `docs/ARCHITECTURE.md`. Multi-game plans: `docs/STITCHING.md`.

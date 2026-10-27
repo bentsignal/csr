@@ -1,25 +1,25 @@
 # Current owner priorities
 
-## October 26: desktop launcher and release tracks
+## Standing development and delivery workflow
 
-The owner approved a desktop launcher as the next implementation batch:
-Play, Refresh, visible update/download progress, release notes, a saved Stable
-track by default and an opt-in Dev track for the latest published changes.
-Dev builds come from master after CI passes. Add basic management of existing
-private content packs. Development and automation stay on WINSERVE; owner
-playtests run on the gaming PC using the installed updater. Preserve the
-paused gameplay scopes below.
+The WINSERVE migration, checkout verification and desktop launcher are complete
+(PRs #320-#322). Stable and Dev releases are live. Development and automated
+game/audio tests stay on WINSERVE; owner playtests run on the gaming PC using
+the installed updater. Agents own implementation, git, CI and delivery through
+a verified published Dev update from current master. Shawn should only need
+Dev -> Refresh -> Update & play, then give playtest feedback. Friends use
+Stable by default. Ask for design direction and playtest feedback; choose
+routine build, tooling and release details autonomously.
 
-## October 25: WINSERVE handoff
-
-Finish the WINSERVE CI migration, publish v0.4.0 from current master, and
-verify the development checkout before selecting more gameplay work. Anything
-the owner tests must be built from current master.
+Read `AGENTS.md` and the linked `csr-playtest-delivery` repository skill for
+the standing workflow. This applies across threads, not just the launcher
+setup conversation. Do not requeue the completed setup or launcher batch.
 
 Paused until the owner asks: wallbang damage calibration, sniper crosshair
 blur, AUG/SG depth-of-field quality, sustained standing/crouched run-boost
 tests, and automatic recovery after falling off the surf map. These pauses
-supersede the older active queues below. Ask for the next scope after setup.
+supersede the older active queues below. The owner chooses the next gameplay
+scope; completing delivery does not resume these items.
 
 ## October 24: active implementation after owner playtest
 
