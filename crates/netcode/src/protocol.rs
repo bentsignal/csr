@@ -16,8 +16,10 @@ use sim::{GameEvent, PlayerId, Snapshot, Team, TickInput};
 // This first pack release is offline; network admission rejects active modules.
 // v36 retains selected mechanics tools independently of the held CS weapon.
 // v37 retains a validated CS return placement with each movement mode.
-pub const VERSION: u32 = 37;
-pub const PROTOCOL_ID: u64 = 0x4353_5257_0000_0025;
+// v38 retains explicit transfer grounding, contacted audio material and native
+// trick/marker HUD state. Cosmetic PCM remains outside replicated snapshots.
+pub const VERSION: u32 = 38;
+pub const PROTOCOL_ID: u64 = 0x4353_5257_0000_0026;
 pub const CONTROL: u8 = 0;
 pub const INPUT: u8 = 1;
 pub const SNAPSHOT: u8 = 2;

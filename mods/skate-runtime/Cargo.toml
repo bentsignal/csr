@@ -15,6 +15,8 @@ doctest = false
 bevy = { version = "=0.19.1", default-features = false, features = ["std", "bevy_log"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+hound = "3.5"
+skate-audio = { git = "https://github.com/SK8-ENGINE/skate-3-rust-engine", rev = "2e16697797c8358d16f747a8259354ff2921041a" }
 mechanics-link = { path = "../../crates/mechanics-link" }
 gltf = { version = "1.4", default-features = false, features = ["utils", "names"] }
 skate-core = { git = "https://github.com/SK8-ENGINE/skate-3-rust-engine", rev = "2e16697797c8358d16f747a8259354ff2921041a" }

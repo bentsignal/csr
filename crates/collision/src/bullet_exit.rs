@@ -378,6 +378,10 @@ pub struct BulletExit {
 }
 
 impl CollisionWorld {
+    pub fn rolling_surface(&self,surface:u32)->u8 {
+        if let Some(base)=&self.base{return base.rolling_surface(surface);}
+        self.rolling_surfaces.get(surface as usize).copied().filter(|v|*v!=0).unwrap_or_else(||self.bullet_surface(surface).map_or(b'C',|s|match s.material{13=>b'W',v=>v}))
+    }
     pub fn bullet_surface(&self, surface: u32) -> Option<BulletSurface> {
         if let Some(base) = &self.base { return base.bullet_surface(surface); }
         self.bullet_surfaces.get(surface as usize).copied().flatten()

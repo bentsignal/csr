@@ -13,7 +13,7 @@ fn manifest() -> String {
         r#"format_version = 2
 id = "skate3_riding"
 name = "Skate 3 crossover"
-version = "0.3.0"
+version = "0.4.0"
 origin = "skate3"
 kind = "assets"
 min_game_version = "0.5.0"
@@ -35,6 +35,15 @@ config = "mechanics/skate.csrconfig"
 
 fn payload(assets: &Path) -> Result<Vec<(&'static str, Vec<u8>)>, String> {
     let mut data = Vec::new();
+    let manifest:serde_json::Value=serde_json::from_slice(&fs::read(assets.join("private/audio/audio_manifest.json")).map_err(|e|e.to_string())?).map_err(|e|e.to_string())?;
+    let mut tuning=serde_json::Map::new();
+    for name in ["concrete_smooth_hard","concrete_rough_hard","asphalt_rough_hard","wood_ramp_hard","metal_smooth_hard"] {
+        let entry=manifest["grain_player"]["surfaces"][name].clone();
+        if entry.is_null(){return Err(format!("missing original grain tuning {name}"));}
+        tuning.insert(name.into(),entry);
+        data.push((format!("private/crossover-audio/{name}.wav"),fs::read(assets.join(format!("private/audio/grains/{name}.wav"))).map_err(|e|e.to_string())?));
+    }
+    data.push(("private/crossover-audio/grains.json".into(),serde_json::to_vec(&tuning).map_err(|e|e.to_string())?));
     // Read only the owner's decoded board foley. No original executable,
     // program, speech/music, unrelated banks or map audio is copied.
     for (name,relative) in [
@@ -44,6 +53,9 @@ fn payload(assets: &Path) -> Result<Vec<(&'static str, Vec<u8>)>, String> {
         ("push","banks/sk8_foley/0000.wav"),
         ("grind","banks/GRINDS/0000.wav"),
         ("brake","banks/FOOT_DRAG/0000.wav"),
+        ("marker-open","banks/sk8_menu/0058.wav"),
+        ("marker-set","banks/sk8_menu/0059.wav"),
+        ("marker-return","banks/sk8_menu/0036.wav"),
     ] {
         let path=assets.join("private/audio").join(relative);
         let bytes=fs::read(&path).map_err(|e|format!("Owned board sound {}: {e}. Refresh the converted Skate installation first.",path.display()))?;

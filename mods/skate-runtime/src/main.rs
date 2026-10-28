@@ -69,9 +69,10 @@ fn serve() {
                         rt.advance_host(frame)?;
                     }
                     let pose = rt.pose();
+                    rt.take_audio();
                     runtime = Some(rt);
                     active = Some((session, frames.len() as u64));
-                    Response::Pose(pose)
+                    Response::Pose(pose,vec![])
                 }
                 Request::Advance { session, at, frame } => {
                     if active != Some((session, at)) {
@@ -82,7 +83,8 @@ fn serve() {
                             .ok_or("runtime not initialized")?
                             .advance_host(&frame)?;
                         active = Some((session, at + 1));
-                        Response::Pose(pose)
+                        let audio=runtime.as_mut().unwrap().take_audio();
+                        Response::Pose(pose,audio)
                     }
                 }
             })

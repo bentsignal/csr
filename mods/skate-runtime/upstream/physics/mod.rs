@@ -660,6 +660,25 @@ mod gameplay_gesture_tests;
 mod difficulty_tests;
 
 // The exact original frame coordinator; scheduling/rendering is supplied by CS.
+pub(crate) fn csr_initialize_transfer(physics:&mut GamePhysics,skater:&mut SkaterRuntime,velocity:[f32;3],grounded:bool)->Result<(),String>{
+    player_state::initialize_transfer(physics,skater,grounded)?;
+    let velocity=skate_core::math::Vector3::new(velocity[0],velocity[1],velocity[2]);
+    for body in physics.board.bodies_mut(){body.rates.linear_velocity=velocity;}
+    for body in skater.skeleton.bodies_mut(){body.rates.linear_velocity=velocity;}
+    if !grounded {
+        // An external airborne handoff has no ollie launch to reconstruct.
+        // Continue its ballistic COM trajectory through the native Air path.
+        skater.player_state.post.jump_fix_frames=1000;
+        skater.air_state.use_centre_of_mass_velocity=true;
+        skater.air_state.centre_of_mass_trajectory=skate_core::air::state::AirTrajectory {
+            position:skater.player_input.processed.vectors_544_560_592_608[2].map(f32::from_bits),
+            velocity:[velocity.x,velocity.y,velocity.z,0.],
+            acceleration:[0.,f32::from_bits(0xc11c_cccd),0.,0.],
+            scalar_48:-1.,
+        };
+    }
+    Ok(())
+}
 pub(crate) fn csr_advance(physics: &mut GamePhysics,skater:&mut SkaterRuntime,controls:&mut PlayerControls,
     graphs:&crate::graph_runtime::StockGraphs,actions:&mut dyn skate_core::input::controller::ActionMap,
     available:bool,camera:&mut crate::camera::CameraRuntime)->Result<(),String>{

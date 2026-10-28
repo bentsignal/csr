@@ -106,6 +106,11 @@ pub(crate) fn initialize(
     skater.player_state.initialized = true;
     Ok(())
 }
+pub(crate) fn initialize_transfer(physics:&mut GamePhysics,skater:&mut SkaterRuntime,grounded:bool)->Result<(),String>{
+    initialize(physics,skater)?;
+    if !grounded {transition::set(physics,skater,PhysicalStateId::PhysicsAir)?;}
+    Ok(())
+}
 ///Runs after ProcessInput, before the chosen state's pre-update/force phase.
 pub(crate) fn post_input_and_select(
     physics: &mut GamePhysics,

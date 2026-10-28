@@ -1621,7 +1621,7 @@ impl World {
                 // Dynamic-world fluids use the same collision sweeps as CS movement.
                 let swimming=collision.dynamic.as_ref().is_some_and(|d|d.point_contents(p.movement.origin+Vec3::Z*32.,contents::WATER)!=0);
                 if p.mechanic.is_some() && !swimming && !frozen && !busy {
-                    let scene=::mechanics::link::SceneState {doors:self.doors.iter().map(|d|d.angle).collect(),broken:self.breakables.iter().map(|b|b.broken()).collect()};
+                    let scene=::mechanics::link::SceneState {ground_material:0,doors:self.doors.iter().map(|d|d.angle).collect(),broken:self.breakables.iter().map(|b|b.broken()).collect()};
                     match mechanics::step(p, &input, &self.mechanics, &contacts, dt, time, &collision,scene) {
                         Ok(events) => p.last_events = events,
                         Err(error) => {

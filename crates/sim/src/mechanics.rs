@@ -84,7 +84,7 @@ pub(crate) fn step(
     dt: f32,
     time: f32,
     collision: &Arc<collision::CollisionWorld>,
-    scene: mechanics::link::SceneState,
+    mut scene: mechanics::link::SceneState,
 ) -> Result<MoveEvents, String> {
     let state = player.mechanic.as_ref().ok_or("no active mechanic")?;
     let module = modules
@@ -92,8 +92,10 @@ pub(crate) fn step(
         .find(|m| m.id == state.id && m.archive_hash == state.archive_hash)
         .ok_or("active mechanics pack changed or is unavailable")?;
     if let Some(program) = &module.external {
+        let hit=collision.trace_ray(player.movement.origin+Vec3::Z*8.,player.movement.origin-Vec3::Z*16.,collision::contents::MASK_PLAYERSOLID);
+        scene.ground_material=collision.rolling_surface(hit.surface);
         let checkpoint=player.mechanic_checkpoint.as_ref().filter(|c|c.id==module.id && c.archive_hash==module.archive_hash).map(|c|c.target.clone());
-        let start = mechanics::link::Start { position:player.movement.origin.to_array(),velocity:player.movement.velocity.to_array(),yaw:player.view_angles.y,checkpoint };
+        let start = mechanics::link::Start { grounded:player.movement.on_ground,position:player.movement.origin.to_array(),velocity:player.movement.velocity.to_array(),yaw:player.view_angles.y,checkpoint };
         let state=player.mechanic.as_mut().unwrap();
         if state.reset {state.external=None;}
         let external=state.external.get_or_insert_with(||Box::new(ExternalState{
