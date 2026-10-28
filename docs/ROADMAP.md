@@ -2,9 +2,10 @@
 
 ## October 26: Skate crossover
 
-- [ ] Deliver the surf/skate clip batch: airborne continuity, original surf /
+- [x] Implement the surf/skate clip batch: airborne continuity, original surf /
   trick-deck course, constrained rail grip/inspection, granular material audio,
   contextual scoring/markers and riding combat.
+- [ ] Owner playtest of the surf/skate clip, grip, surface sound and trick HUD.
 
 - [x] Replace the box icon, add held-board hand grip/inspection and map lighting;
   remove unsolicited control text, add private board audio and native markers.
