@@ -370,26 +370,28 @@ fn coursecheck(module:Arc<sim::mechanics::Module>)->Result<(),String>{
     let id=w.add_player("Clip route",Team::CounterTerrorist);
     let mut stage=0;let mut landed_at=None;let mut max_speed=0f32;let mut last_state=0;
     let mut trick=String::new();let mut score=0;
-    for tick in 0..4096 {
+    for tick in 0..12288 {
         let p=w.player(id).unwrap();let pos=p.movement.origin;let vel=p.movement.velocity;
         if let Some(s)=p.mechanic.as_ref().and_then(|s|s.external.as_ref()){
             if !s.pose.trick.is_empty(){trick=s.pose.trick.clone();score=score.max(s.pose.score);}
         }
         let mut input=TickInput{view_angles:Vec3::ZERO,..Default::default()};
         if stage==0 {
-            if pos.x<0. {input.forward_move=450.;}else{input.side_move=-450.;}
-            if pos.x>2650. {input.toggle_mode=true;stage=1;}
+            use level::surf_course::RAMP1_X;
+            if pos.x<RAMP1_X[0] {input.forward_move=450.;}else{input.side_move=-450.;}
+            if pos.x>RAMP1_X[1]+50. {input.toggle_mode=true;stage=1;}
         }else if stage==1 {
             input.controller.connected=true;
-            if p.movement.on_ground && pos.x>2800. && landed_at.is_none(){landed_at=Some(tick);println!("Trick deck landing tick={tick} position={pos:?} velocity={vel:?}");}
+            if p.movement.on_ground && pos.x>level::surf_course::DECK_X[0] && landed_at.is_none(){landed_at=Some(tick);println!("Trick deck landing tick={tick} position={pos:?} velocity={vel:?}");}
             if let Some(at)=landed_at {
                 if (at+40..at+100).contains(&tick){input.controller.right=[0,-32768];}
                 if (at+100..at+126).contains(&tick){input.controller.right=[30000,30000];}
             }
-            if pos.x>5015. {input.toggle_mode=true;stage=2;}
+            if landed_at.is_some_and(|at|tick>at+200) && p.movement.on_ground && pos.x<level::surf_course::KICKER_X[0]-600. && (tick/16)%4==0 {input.controller.buttons|=0x1000;}
+            if pos.x>level::surf_course::KICKER_X[1]+15. {input.toggle_mode=true;stage=2;}
         }else {
             input.side_move=-450.;
-            if pos.x>6000. && pos.z> -100. {println!("Second surf ramp reached tick={tick} position={pos:?} velocity={vel:?} peak={max_speed} trick={trick} score={score}");return if landed_at.is_some() && !trick.is_empty(){Ok(())}else{Err("missed trick deck or trick recognition".into())};}
+            if pos.x>level::surf_course::RAMP2_X[0]+950. && pos.z>level::surf_course::ramp_peak(true,pos.x)-600. {println!("Second surf ramp reached tick={tick} position={pos:?} velocity={vel:?} peak={max_speed} trick={trick} score={score}");return if landed_at.is_some() && !trick.is_empty(){Ok(())}else{Err("missed trick deck or trick recognition".into())};}
         }
         max_speed=max_speed.max(vel.truncate().length());
         if tick%128==0||stage!=last_state{println!("Route tick={tick} stage={stage} position={pos:?} velocity={vel:?}");last_state=stage;}

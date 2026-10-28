@@ -1908,6 +1908,7 @@ pub struct ViewModelState {
     knife_attack: Option<inspection::Playback>,
     elite_fire: Option<EliteFire>,
     board_buttons: u16,
+    board_carry: Option<glam::Mat4>,
 }
 
 impl ViewModelState {
@@ -2760,7 +2761,8 @@ pub fn update(
         clip: clip.clone(), weights: weights.clone(), time: t,
     });
     if let Some(hold) = &view.grenade_hold { hold.apply(grenade, &mut state.pose); }
-    let pose = mdl::skeleton::model_space(&model.bones, &state.pose);
+    let mut pose = mdl::skeleton::model_space(&model.bones, &state.pose);
+    if board { board_grip::carry_wrist(&model.bones, &mut pose); }
 
     // Preserve this frame's camera/aim. Local model presentation is separate
     // from authored clips and never changes the simulated shot direction.
@@ -2784,7 +2786,8 @@ pub fn update(
     } else { settling::Settling::default() };
     let settled_offset = settling.offset(offset);
     let origin = eye + f * settled_offset.x - r * settled_offset.y
-        + u * (settled_offset.z + air_offset) + look_translation;
+        + u * (settled_offset.z + air_offset) + look_translation
+        + if board { board_grip::view_offset(f, r, u) } else { glam::Vec3::ZERO };
     if std::env::var_os("CSR_VIEWMODEL_MOTION_TRACE").is_some() {
         info!("viewmodel motion: time={now:.6} angles={view_angles:?} eye={eye:?} look_translation={look_translation:?} settling_weight={} velocity={:?} on_ground={} settling_translation={:?} air_offset={air_offset}",
             settling.weight, motion.velocity, motion.animation.input.on_ground, settling.translation);
@@ -2812,14 +2815,27 @@ pub fn update(
             _ => models.arms_ct.as_ref(),
         });
         if let Some(a) = arms_model {
-            let arms_pose = skinning::bone_merge(&a.model.bones, &model.bones, &pose);
+            let mut arms_pose = skinning::bone_merge(&a.model.bones, &model.bones, &pose);
+            // The knife clips leave the off hand at rest, floating in view;
+            // the board is carried one-handed, so collapse that arm away.
+            if board { board_grip::hide_left_arm(&a.model.bones, &mut arms_pose); }
             skinning::apply_pose(arms, world_from_model, &arms_pose, &mut transforms);
         }
     }
 
     if board && show {
-        held_board.transform = board_grip::attachment(model, &pose,
-            Mat4::from_translation(origin) * Mat4::from_mat3(rot * settling.rotation));
+        if state.board_carry.is_none() {
+            // Derive the hanging carry once from the knife's idle frame.
+            if let Some(idle) = view.clips.get("ACT_VM_IDLE").and_then(|c| c.first()) {
+                let mut rest = mdl::skeleton::rest_pose(&model.bones);
+                sequence_pose::sample(&idle.clip, 0., &mut rest, |b| idle.weights.get(b).copied().unwrap_or(1.));
+                let mut idle_pose = mdl::skeleton::model_space(&model.bones, &rest);
+                board_grip::carry_wrist(&model.bones, &mut idle_pose);
+                state.board_carry = board_grip::carry(&model.bones, &idle_pose);
+            }
+        }
+        held_board.transform = state.board_carry.and_then(|carry| board_grip::attachment(model, &pose,
+            Mat4::from_translation(origin) * Mat4::from_mat3(rot * settling.rotation), carry));
     }
     for (index, e) in entities.iter().enumerate() {
         let hide_knife = board && index < gun.meshes.len();
