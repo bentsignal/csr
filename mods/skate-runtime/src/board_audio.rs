@@ -348,7 +348,8 @@ impl Host {
         let mut out = vec![0.; frames * 2];
         rt.fill_stereo(&mut out);
         for x in &mut out {
-            *x = x.clamp(-1., 1.);
+            // One bad sample must not fail the session's pose validation.
+            *x = if x.is_finite() { x.clamp(-1., 1.) } else { 0. };
         }
         out
     }
