@@ -363,6 +363,7 @@ fn combatcheck(module:Arc<sim::mechanics::Module>,collision:Arc<collision::Colli
     println!("Riding combat: shots={shots} weapons={selected:?}");
     if shots==0||selected.len()<2{return Err("riding fire / weapon switching failed".into());}Ok(())
 }
+const STEER:(f32,f32)=(60.,40.);
 fn coursecheck(module:Arc<sim::mechanics::Module>)->Result<(),String>{
     let level=level::Level::load(level::surf_course::NAME,None).map_err(|e|e.to_string())?;
     let mut w=sim::World::with_catalog(level.collision.clone(),level.catalog.clone());
@@ -382,6 +383,9 @@ fn coursecheck(module:Arc<sim::mechanics::Module>)->Result<(),String>{
             if pos.x>RAMP1_X[1]+50. {input.toggle_mode=true;stage=1;}
         }else if stage==1 {
             input.controller.connected=true;
+            // Hold the clear lane: steer back toward its centre line.
+            let steer=((pos.y-level::surf_course::LANE_Y)*STEER.0+vel.y*STEER.1).clamp(-24000.,24000.);
+            if p.movement.on_ground {input.controller.left[0]=steer as i16;}
             if p.movement.on_ground && pos.x>level::surf_course::DECK_X[0] && landed_at.is_none(){landed_at=Some(tick);println!("Trick deck landing tick={tick} position={pos:?} velocity={vel:?}");}
             if let Some(at)=landed_at {
                 if (at+40..at+100).contains(&tick){input.controller.right=[0,-32768];}

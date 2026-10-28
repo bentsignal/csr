@@ -686,6 +686,11 @@ pub fn tick(
             input.toggle_mode=(!skating&&(RAMP1_X[1]+50. ..DECK_X[0]).contains(&x))||(skating&&x>KICKER_X[1]+15.);
             input.controller=mechanics::link::Controller{connected:true,..Default::default()};
             if skating {
+                // Hold the plaza's clear lane, as the private route check does.
+                if p.movement.on_ground {
+                    let steer=((p.movement.origin.y-level::surf_course::LANE_Y)*60.+p.movement.velocity.y*40.).clamp(-24000.,24000.);
+                    input.controller.left[0]=steer as i16;
+                }
                 let d=x-DECK_X[0];
                 if (1100. ..1500.).contains(&d){input.controller.right=[0,-32768];}
                 if (1500. ..1680.).contains(&d){input.controller.right=[30000,30000];}

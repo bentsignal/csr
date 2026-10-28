@@ -162,9 +162,10 @@ pub fn load(mut commands: Commands, level: Res<crate::GameData>, mut fonts: ResM
         let name = weapon.class_name.trim_start_matches("weapon_");
         add_equipment_fallback(fs, name, &mut art, &mut images);
     }
-    // Original crossover silhouette: kicked nose/tail, waisted deck outline,
-    // curved side profile, trucks and four wheels in three-quarter view.
-    let board = br#"<svg xmlns="http://www.w3.org/2000/svg" width="128" height="48" viewBox="0 0 128 48"><path fill="white" d="M5 18C3 13 6 7 16 5L109 3C119 3 125 7 122 12L111 20C105 23 99 22 91 22L32 25C19 29 10 26 5 18ZM12 14C23 21 28 20 36 19L98 16C106 16 112 13 116 9L105 15L33 18C26 20 18 18 12 14ZM9 24C17 29 23 30 33 28L104 25C112 25 118 21 121 18L116 26C111 30 104 31 95 31L34 34C23 35 14 33 9 28Z"/><path fill="white" d="M32 29L39 28L42 35L32 37ZM91 26L98 26L102 33L91 35Z"/><ellipse fill="white" cx="31" cy="39" rx="6" ry="7"/><ellipse fill="white" cx="47" cy="37" rx="5" ry="6"/><ellipse fill="white" cx="91" cy="37" rx="6" ry="7"/><ellipse fill="white" cx="108" cy="34" rx="5" ry="6"/></svg>"#;
+    // Original crossover silhouette in the HUD's flat side-profile style, at
+    // the inventory icon's exact 4:1 box: one solid deck with kicked nose and
+    // tail, two trucks and two wheels. Separate solid shapes, no holes.
+    let board = br#"<svg xmlns="http://www.w3.org/2000/svg" width="128" height="32" viewBox="0 0 128 32"><path fill="white" d="M3 5Q6 12 17 12H111Q122 12 125 5Q127 6 126 8Q122 16.5 111 16.5H17Q6 16.5 2 8Q1 6 3 5Z"/><path fill="white" d="M24 16H40L37 19L35 21.5H29L27 19Z"/><path fill="white" d="M88 16H104L101 19L99 21.5H93L91 19Z"/><circle fill="white" cx="32" cy="24.5" r="6"/><circle fill="white" cx="96" cy="24.5" r="6"/></svg>"#;
     if let Some(image)=equipment_svg(board){art.insert("skateboard".into(),images.add(image));}
     info!("Original UI: Stratum regular/bold, {} images", art.len());
     commands.insert_resource(UiAssets { regular, bold, images: art });

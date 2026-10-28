@@ -13,19 +13,24 @@ pub const ID: &str = "mod_map_surf_skate_clip";
 pub const RAMP1_X: [f32; 2] = [-8000., -4800.];
 /// The skate plaza: one flat brush, so no internal seams under the wheels.
 pub const DECK_X: [f32; 2] = [-4600., 3000.];
-pub const DECK_Z: f32 = 300.;
+pub const DECK_Z: f32 = 600.;
 /// The clear riding lane from the landing to the end kicker.
 pub const LANE_Y: f32 = -150.;
 /// The plaza's end kicker, spanning the lane.
 pub const KICKER_X: [f32; 2] = [2760., 3000.];
 pub const RAMP2_X: [f32; 2] = [3050., 8050.];
-pub const FINISH_X: [f32; 2] = [8250., 9450.];
+pub const FINISH_X: [f32; 2] = [8150., 9350.];
 
 const RAMP_SLOPE: f32 = 1.6;
 const RAMP_DROP: f32 = 0.2;
 const RAMP_HALF: f32 = 320.;
 const RAMP1_PEAK: f32 = 1500.;
-const RAMP2_PEAK: f32 = 50.;
+const RAMP2_PEAK: f32 = 350.;
+/// The second ridge sits beside the lane, so a rider leaving the end kicker
+/// comes down onto its surfable (-Y) face rather than over the ridge.
+pub const RAMP2_Y: f32 = 60.;
+/// Ridge line (Y) of a surf ramp.
+pub fn ramp_ridge(second: bool) -> f32 { if second { RAMP2_Y } else { 0. } }
 
 /// Ridge height of a surf ramp at `x`.
 pub fn ramp_peak(second: bool, x: f32) -> f32 {
@@ -350,9 +355,10 @@ impl Builder {
     /// A surf ramp: a chevron slab whose ridge runs along X and descends.
     fn surf_ramp(&mut self, x: [f32; 2], second: bool, material: usize) {
         const THICK: f32 = 24.;
-        let face = move |x: f32, y: f32| ramp_peak(second, x) - RAMP_SLOPE * y.abs();
-        self.solid(x, [-RAMP_HALF, 0.], move |x, y| face(x, y) - THICK, face, material);
-        self.solid(x, [0., RAMP_HALF], move |x, y| face(x, y) - THICK, face, material);
+        let ridge = ramp_ridge(second);
+        let face = move |x: f32, y: f32| ramp_peak(second, x) - RAMP_SLOPE * (y - ridge).abs();
+        self.solid(x, [ridge - RAMP_HALF, ridge], move |x, y| face(x, y) - THICK, face, material);
+        self.solid(x, [ridge, ridge + RAMP_HALF], move |x, y| face(x, y) - THICK, face, material);
     }
     /// A wedge on the deck rising along +X (or falling when `down`).
     fn kicker(&mut self, x: [f32; 2], y: [f32; 2], base: f32, height: f32, down: bool, material: usize) {
@@ -444,8 +450,8 @@ fn geometry() -> Vec<u8> {
     b.block([RAMP1_X[0] - 700., RAMP1_X[0]], [-384., 384.], 1450., |_, _| 1600., DARK);
     b.surf_ramp(RAMP1_X, false, SURF);
 
-    // The plaza. Its edge sits well below the first ramp's lowest lip, so no
-    // surf line can run into its side.
+    // The plaza sits ~260 below the first ridge exit: a landing Skate rides
+    // away from (a 550-unit drop bails). Lines low on the face fall short.
     b.block([DECK_X[0], DECK_X[1]], [-1200., 1200.], z - 150., |_, _| z, CONCRETE);
     // North lane: funbox, rail gap, launch box.
     b.kicker([-3000., -2840.], [200., 520.], z, 24., false, WOOD);
@@ -506,7 +512,9 @@ fn geometry() -> Vec<u8> {
     // End kicker over the lane, launching onto the second surf ramp.
     b.kicker(KICKER_X, [-500., 100.], z, 80., false, WOOD);
     b.surf_ramp(RAMP2_X, true, SURF2);
-    b.block(FINISH_X, [-800., 800.], -1750., |_, _| -1600., DARK);
+    // Level with a ridge exit, so the run ends without CS fall damage.
+    let finish = ramp_peak(true, RAMP2_X[1]) - 150.;
+    b.block(FINISH_X, [-800., 800.], finish - 150., move |_, _| finish, DARK);
     // A broad catch floor makes a missed line recoverable with the marker.
     b.block([-9200., 9700.], [-2300., 2300.], -2150., |_, _| -2000., DARK);
     b.finish()
@@ -538,15 +546,15 @@ mod tests {
         for second in [false, true] {
             let x = if second { RAMP2_X[0] + 1000. } else { RAMP1_X[0] + 1000. };
             let ramp = down(x, LANE_Y, 2400.);
-            let expected = ramp_peak(second, x) - RAMP_SLOPE * LANE_Y.abs();
+            let expected = ramp_peak(second, x) - RAMP_SLOPE * (LANE_Y - ramp_ridge(second)).abs();
             assert!(ramp.fraction < 1. && (ramp.end.z - expected).abs() < 0.2, "{ramp:?}");
             assert!(ramp.normal.z < 0.7 && ramp.normal.z > 0.4);
             assert!(ramp.normal.y < 0., "riders push into the face toward +Y");
         }
         let floor = down(0., LANE_Y, 900.);
         assert!((floor.end.z - DECK_Z).abs() < 0.2);
-        // The first ramp's lowest lip clears the plaza's edge.
-        assert!(ramp_peak(false, RAMP1_X[1]) - RAMP_SLOPE * RAMP_HALF - 24. > DECK_Z + 20.);
+        // Skate survives a ridge exit onto the plaza; a 550-unit drop bails.
+        assert!((150. ..320.).contains(&(ramp_peak(false, RAMP1_X[1]) - DECK_Z)));
         let path = world.trace_box(
             Vec3::new(DECK_X[0] + 100., LANE_Y, DECK_Z + 4.),
             Vec3::new(KICKER_X[0] - 10., LANE_Y, DECK_Z + 4.),
