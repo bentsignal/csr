@@ -662,6 +662,8 @@ pub fn tick(
             let t=world.0.time();
             if !sequence.starts_with("stationary")&&(0.5..3.).contains(&t){input.controller.buttons=0x1000;}
             if sequence=="turn"&&(3.0..4.).contains(&t){input.controller.left[0]=22000;}
+            // Session-marker panel proof: hold LB (the marker modifier).
+            if sequence.ends_with("marker")&&t>=1.{input.controller.buttons|=0x100;}
             if sequence=="ollie"||sequence=="kickflip" {
                 if (3.0..3.6).contains(&t){input.controller.right=[0,-32768];}
                 if (3.6..3.8).contains(&t){input.controller.right=if sequence=="kickflip"{[30000,30000]}else{[0,32767]};}
