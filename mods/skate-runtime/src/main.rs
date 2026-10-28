@@ -47,7 +47,8 @@ fn serve() {
                     scene = Some(prepared);
                     runtime = Some(rt);
                     active = None;
-                    Response::Ready(rig)
+                    let textures = runtime.as_ref().unwrap().hud_textures();
+                    Response::Ready(rig, textures)
                 }
                 Request::Restore {
                     session,
@@ -72,7 +73,8 @@ fn serve() {
                     rt.take_audio();
                     runtime = Some(rt);
                     active = Some((session, frames.len() as u64));
-                    Response::Pose(pose,vec![])
+                    // The next Advance publishes the replayed HUD in full.
+                    Response::Pose(pose,vec![],None)
                 }
                 Request::Advance { session, at, frame } => {
                     if active != Some((session, at)) {
@@ -84,7 +86,8 @@ fn serve() {
                             .advance_host(&frame)?;
                         active = Some((session, at + 1));
                         let audio=runtime.as_mut().unwrap().take_audio();
-                        Response::Pose(pose,audio)
+                        let hud = runtime.as_mut().unwrap().hud_frame();
+                        Response::Pose(pose,audio,hud)
                     }
                 }
             })
