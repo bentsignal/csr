@@ -369,7 +369,7 @@ fn coursecheck(module:Arc<sim::mechanics::Module>)->Result<(),String>{
     let mut w=sim::World::with_catalog(level.collision.clone(),level.catalog.clone());
     w.load_map(&level.bsp,None);w.config.air_accelerate=1000.;w.config.accelerate=10.;w.mechanics.push(module);
     let id=w.add_player("Clip route",Team::CounterTerrorist);
-    let mut stage=0;let mut landed_at=None;let mut max_speed=0f32;let mut last_state=0;
+    let mut stage=0;let mut landed_at=None;let mut max_speed=0f32;let mut last_state=0;let mut switched=0;
     let mut trick=String::new();let mut score=0;
     for tick in 0..12288 {
         let p=w.player(id).unwrap();let pos=p.movement.origin;let vel=p.movement.velocity;
@@ -398,7 +398,8 @@ fn coursecheck(module:Arc<sim::mechanics::Module>)->Result<(),String>{
             if pos.x>level::surf_course::RAMP2_X[0]+950. && pos.z>level::surf_course::ramp_peak(true,pos.x)-600. {println!("Second surf ramp reached tick={tick} position={pos:?} velocity={vel:?} peak={max_speed} trick={trick} score={score}");return if landed_at.is_some() && !trick.is_empty(){Ok(())}else{Err("missed trick deck or trick recognition".into())};}
         }
         max_speed=max_speed.max(vel.truncate().length());
-        if tick%128==0||stage!=last_state{println!("Route tick={tick} stage={stage} position={pos:?} velocity={vel:?}");last_state=stage;}
+        if stage!=last_state{switched=tick;}
+        if tick%128==0||stage!=last_state||tick<switched+8{println!("Route tick={tick} stage={stage} position={pos:?} velocity={vel:?}");last_state=stage;}
         w.step(&[(id,input)]);
         if input.toggle_mode {
             let after=w.player(id).unwrap().movement.velocity;
