@@ -653,7 +653,10 @@ pub fn tick(
         input.buttons |= buttons::ATTACK;
     }
     if !enabled.0 && std::env::var_os("CSR_TEST_MOVEMENT_MODE").is_some() {
-        input.toggle_mode = world.0.tick == 0;
+        // Toggle on alternate early ticks until the mode is active: tick 0 can
+        // precede the local spawn or the prepared movement module.
+        let riding = world.0.player(local.id).is_some_and(|p| p.mechanic.is_some());
+        input.toggle_mode = !riding && world.0.tick % 2 == 0 && world.0.time() < 1.;
         if std::env::var("CSR_TEST_MOVEMENT_MODE").as_deref() == Ok("ride") {
             input.forward_move = if world.0.time() < 1. {450.} else {0.};
         }
