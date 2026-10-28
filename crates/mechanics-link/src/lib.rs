@@ -3,8 +3,10 @@
 //! Geometry and poses use Source axes/inches. Controller reports use XInput.
 use serde::{Deserialize, Serialize};
 use std::io::{Read, Write};
-pub const VERSION: u32 = 3;
+pub const VERSION: u32 = 4;
 pub const MAX_MESSAGE: usize = 64 << 20;
+/// Provider audio sample rate (interleaved stereo frames per second).
+pub const AUDIO_RATE: u32 = 48_000;
 pub type Matrix = [[f32; 4]; 4];
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Controller {
@@ -37,6 +39,10 @@ pub struct Scene {
     pub doors: Vec<Door>,
     pub breakables: Vec<Breakable>,
     pub rails: Vec<Vec<[f32; 3]>>,
+    /// Host rolling-audio family per collision surface id (`Triangle::surface`;
+    /// Source surfaceprop resolved to `A`, `W`, `M`, `R` or its gamematerial).
+    /// Ids past the end use the provider default.
+    pub surfaces: Vec<u8>,
 }
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct SceneState {
@@ -128,6 +134,8 @@ pub enum Request {
 #[derive(Serialize, Deserialize)]
 pub enum Response {
     Ready(Rig),
+    /// Cosmetic board audio rendered since the last pose: interleaved stereo
+    /// (left, right) at [`AUDIO_RATE`], never part of simulation state.
     Pose(Pose, Vec<f32>),
     NeedRestore,
     Error(String),
