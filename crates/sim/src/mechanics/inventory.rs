@@ -11,7 +11,7 @@ pub struct Equipped {
     pub used: bool,
 }
 pub(crate) fn cycle(player: &mut Player, modules: &[Arc<Module>], forward: bool, time: f32) {
-    let tools = if player.is_bot || player.mechanic.is_some() { &[][..] } else { modules };
+    let tools = if player.is_bot { &[][..] } else { modules };
     let guns = player.weapons.len();
     let count = guns + tools.len();
     if count == 0 {

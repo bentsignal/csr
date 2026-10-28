@@ -4,14 +4,16 @@ Install a private Skate `.csrpack` by opening it, or choose **Content packs →
 Install pack**. Load an offline CS map. The **Skateboard** joins your inventory
 on the right HUD. Cycle to it with the mouse wheel or Xbox LB/RB, then use
 **left click / RT** to skate. Your CS gun returns after releasing the button.
-Cycle to the board and use it again to return to CS; while skating, D-pad
-Up/Down cycles inventory, and RT uses the board when selected.
+While skating, D-pad Up/Down cycles CS weapons, Right fires, and Left reloads.
+View / Back or X returns to CS. The D-pad skips the board while riding; mouse
+wheel cycling still reaches it, and using it again returns to CS.
 
 **View / Back** on Xbox or **X** on the keyboard remains a direct movement
 shortcut. The keyboard action is **Toggle movement mode** in Keyboard / Mouse.
 Camera travel animates in both directions, follows movement and clips against
 the map. App updates preserve settings and private packs. The older 0.2.0 pack
-continues to work; install a private 0.3.0 replacement to add skating sounds.
+continues to work; install a private **0.4.0** replacement for material-specific
+granular rolling and marker sounds. A 0.3.0 pack retains its earlier sounds.
 
 The held board uses your CS hands, a shaped equipment icon, and the same map
 ambient/sun lighting as CS models, both held and riding. Use **Inspect**
@@ -24,6 +26,9 @@ Place a session marker with **LB + D-pad Down** while grounded, then hold
 **LB + D-pad Up** to return. The original native eligibility, geometry checks,
 hold timing and actor reset run in the provider. Markers survive CS/Skate mode
 switches in the same life/map and are included in deterministic snapshot replay.
+While holding LB, contextual marker choices and return progress appear near
+the upper left. Placement/return play private original UI cues. Trick names,
+sequence score and multiplier appear at the lower left while scoring.
 Blocked destinations are refused. Vertical walking-camera look is corrected
 without changing the right stick's on-board trick mapping.
 
@@ -46,7 +51,7 @@ controller movement, aiming, firing and weapon selection.
    The installed creator needs no Rust, terminal or manual file copying.
 3. Open the pack to install it, load a CS map, and press View / Back or X.
 
-Use a **0.3.0** pack for the full runtime with board audio (0.2.0 remains
+Use a **0.4.0** pack for the full runtime with surface audio (0.2.0 remains
 compatible without sounds). Recreate a rushed 0.1.0 prototype
 pack with the current creator; it lacks the animation/skin/graph data.
 Installing the replacement updates the same pack ID.
@@ -55,8 +60,9 @@ The creator reads your converted install without modifying it. It includes
 the original board skin/textures and rig reference GLB (which also contains
 the original skater mesh, although only its board is rendered), animation
 banks, skeleton/collection data, compiled state graphs, controller patterns,
-camera definitions, selected trick-name strings and six converted board-foley
-clips for rolling, popping, landing, pushing, grinding and braking. It excludes original
+camera definitions, selected trick-name strings, converted board foley and
+marker cues, and five complete rolling recordings with original grain tuning.
+It excludes original
 executables, native libraries, Lua programs, original game code and Skate
 maps. The resulting file contains original game assets: keep it private,
 outside this repository and public releases. This project does not provide
@@ -77,15 +83,35 @@ CS geometry is converted to native metres/Y-up and compiled with the original
 collision welding, adjacency and query metadata. Doors and intact breakables
 use the upstream solid-contact and moving-query paths. CS ledges do not have
 Skate-authored grind splines: exposed top/side edges provide derived splines,
-an explicit crossover policy. CS materials currently use one native contact
-material; board textures render unlit in the CS renderer. Different character
+an explicit crossover policy. CS materials currently use one native physical
+contact material; board textures and CS arms use map lighting. Different character
 proportions, ledge metadata and camera spaces still need owner playtesting.
-The current sound pass uses private original samples, with pose-driven events
-and rolling/grind/brake loops that follow speed and stop on mode exit/pause.
-It follows the game's master volume and focus mute setting. It does not yet
-reproduce the complete native grain/DSP mix or surface-specific audio.
-Courses/missions, multiplayer mechanics negotiation and complete original-game
+Rolling uses the native two-truck granular player, complete slow-to-fast
+recordings and original speed-position curves. The contacted Source material
+selects concrete, rough concrete/asphalt, wood or metal recordings. Cosmetic
+PCM crosses the trusted provider boundary into a bounded audio stream, outside
+snapshots and state hashes. Recordings are prepared with the map. Foley,
+grind/brake and marker cues use private samples. Master volume and focus mute
+apply. The complete native contact/EQ/environment mix is still future work.
+Missions, multiplayer mechanics negotiation and complete original-game
 parity are not implemented. CS combat/audio remain available.
+
+## Surf / Skate Clip Course
+
+Open **F8 → Tests → Surf / Skate Clip Course** in an offline playtest (also
+listed in the map picker). The generated original pack has identity
+`mod_map_surf_skate_clip` and loads through the validated asset-pack path.
+No third-party map or texture, or compiled BSP, is checked into Git.
+It has a descending blue surf ramp, one continuous wooden trick deck, a short
+gap into another surf ramp, a metal finish deck and a broad catch floor.
+The F8 map action enables surf practice physics.
+
+Run forward off the start, hold toward the first ramp (A / left strafe when
+looking along the course), then switch to Skate in the gap. Land, flick a trick,
+then use View / Back or X after leaving the wooden deck to catch the next ramp.
+F7 restarts the course; native markers remain available. Both handoffs retain
+airborne velocity. The private `skatecheck --route` proof drives this complete
+route through the actual simulators, including a recognized kickflip.
 
 Windows XInput reports are forwarded unchanged to the original Pad/action
 mapping. WINSERVE has no connected physical controller, so automated checks

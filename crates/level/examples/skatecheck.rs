@@ -355,7 +355,7 @@ fn combatcheck(module:Arc<sim::mechanics::Module>,collision:Arc<collision::Colli
     let mut shots=0;let mut selected=std::collections::BTreeSet::new();
     for tick in 0..512 {
         let slot=if tick==128||tick==256{sim::SLOT_NEXT}else{0};
-        w.step(&[(id,TickInput{toggle_mode:tick==0,weapon_slot:slot,buttons:if tick%32==0 && tick>64{movement::buttons::ATTACK}else{0},controller:mechanics::link::Controller{connected:true,..Default::default()},..Default::default()})]);
+        w.step(&[(id,TickInput{toggle_mode:tick==0,weapon_slot:slot,buttons:if tick%32==0 && tick>64{movement::buttons::ATTACK}else{0},controller:mechanics::link::Controller{connected:true,buttons:if slot!=0{1}else if tick%32==0 && tick>64{8}else{0},..Default::default()},..Default::default()})]);
         let p=w.player(id).unwrap();if p.mechanic.is_none()||p.equipped_mechanic.is_some(){return Err("riding weapon cycle selected a board tool or left Skate".into());}
         if let Some(gun)=p.active_weapon(){selected.insert(gun.def.class_name.clone());}
         shots+=w.events.iter().filter(|e|matches!(e,sim::GameEvent::Fire{player,..} if *player==id)).count();
@@ -394,6 +394,11 @@ fn coursecheck(module:Arc<sim::mechanics::Module>)->Result<(),String>{
         max_speed=max_speed.max(vel.truncate().length());
         if tick%128==0||stage!=last_state{println!("Route tick={tick} stage={stage} position={pos:?} velocity={vel:?}");last_state=stage;}
         w.step(&[(id,input)]);
+        if input.toggle_mode {
+            let after=w.player(id).unwrap().movement.velocity;
+            println!("Mode transfer stage={stage}: before={vel:?} after={after:?}");
+            if after.truncate().length()<vel.truncate().length()*0.95 || (after.z-vel.z).abs()>20. {return Err("course handoff discarded airborne velocity".into());}
+        }
     }
     Err(format!("route incomplete at {:?}",w.player(id).unwrap().movement.origin))
 }
@@ -406,6 +411,8 @@ fn markercheck(module:Arc<sim::mechanics::Module>,collision:Arc<collision::Colli
     for _ in 0..128 {w.step(&[(id,TickInput{controller:Controller{connected:true,..Default::default()},..Default::default()})]);}
     w.step(&[(id,TickInput{controller:Controller{connected:true,buttons:0x102,..Default::default()},..Default::default()})]);
     let marker=w.player(id).unwrap().mechanic_checkpoint.clone().ok_or("grounded marker placement failed")?;
+    let ui=&w.player(id).unwrap().mechanic.as_ref().unwrap().external.as_ref().unwrap().pose.marker;
+    if !ui.visible||!ui.can_return||ui.action!=2{return Err("marker placement did not publish its contextual UI / sound event".into());}
     let p=marker.target.transform[3];let expected=Vec3::new(p[0],-p[2],p[1])/0.0254;
     let saved=w.state();let mut replay=w.clone();replay.restore(saved);
     let mut future=Vec::new();
@@ -422,10 +429,12 @@ fn markercheck(module:Arc<sim::mechanics::Module>,collision:Arc<collision::Colli
     if actor.mechanic_checkpoint.as_ref()!=Some(&marker){return Err("CS exit erased session marker".into());}
     w.step(&[(id,TickInput::default())]);
     w.step(&[(id,TickInput{toggle_mode:true,..Default::default()})]);
-    for _ in 0..256 {w.step(&[(id,TickInput{controller:Controller{connected:true,buttons:0x101,..Default::default()},..Default::default()})]);}
+    let mut progress=false;
+    for _ in 0..256 {w.step(&[(id,TickInput{controller:Controller{connected:true,buttons:0x101,..Default::default()},..Default::default()})]);let ui=&w.player(id).unwrap().mechanic.as_ref().unwrap().external.as_ref().unwrap().pose.marker;progress|=ui.progress>0. && ui.progress<1.;}
     let returned=w.player(id).unwrap().movement.origin.truncate().distance(expected.truncate());
     println!("Session marker: travelled={distance:.2}in, return error={returned:.2}in; CS exit hull clear and marker preserved");
     if returned>20. {return Err("session marker did not return through the native actor reset".into());}
+    if !progress||w.player(id).unwrap().mechanic.as_ref().unwrap().external.as_ref().unwrap().pose.marker.action!=3{return Err("marker return did not publish progress / return sound event".into());}
     Ok(())
 }
 fn grindcheck(module: Arc<sim::mechanics::Module>) -> Result<(), String> {

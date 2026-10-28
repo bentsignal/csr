@@ -5,6 +5,7 @@
 //! another Bevy app (the planned multi-game "stitch").
 
 pub mod audio;
+use bevy::audio::AddAudioSource;
 pub mod audio_options;
 mod menu_music;
 pub mod session;
@@ -213,6 +214,8 @@ mod movement_modes;
 mod camera_transition;
 mod board_presentation;
 mod board_audio;
+mod board_hud;
+mod board_stream;
 
 impl Plugin for CsgoPlugin {
     fn build(&self, app: &mut App) {
@@ -275,6 +278,7 @@ impl Plugin for CsgoPlugin {
             .init_resource::<tracers::InspectRequest>()
             .init_resource::<board_presentation::HeldBoard>()
             .init_resource::<board_audio::BoardAudio>()
+            .add_audio_source::<board_stream::Stream>()
             .init_resource::<menu::Menu>()
             .insert_resource(inventory::Inventory::load())
             .init_resource::<player::InputBlockFrames>()
@@ -311,7 +315,7 @@ impl Plugin for CsgoPlugin {
                     (menu::scroll_controls, menu::cards).chain().run_if(frontend::engine_menu_enabled),
                     menu::hover.run_if(frontend::engine_menu_enabled),
                     ui_assets::fonts,
-                    hud::update.run_if(|| std::env::var_os("CSR_NO_HUD").is_none()),
+                    (hud::update,board_hud::update).chain().run_if(|| std::env::var_os("CSR_NO_HUD").is_none()),
                 )
                     .chain()
                     .run_if(remote_join::ready)

@@ -673,6 +673,22 @@ pub fn tick(
         }
     }
     if !enabled.0 && std::env::var_os("CSR_ATTACK2").is_some() { input.buttons |= buttons::ATTACK2; }
+    // Screenshot-only route through ordinary TickInput and both real solvers.
+    // Reuses the existing simulation-time capture; no teleports or velocity edits.
+    if !enabled.0 && playtest.as_ref().is_some_and(|p|p.clip_course) && std::env::var_os("CSR_TEST_SURF_SKATE_ROUTE").is_some(){
+        if let Some(p)=world.0.player(local.id){
+            let x=p.movement.origin.x;let skating=p.mechanic.is_some();
+            input.view_angles=glam::Vec3::ZERO;local.pitch=0.;local.yaw=0.;
+            input.forward_move=if x<0.{450.}else{0.};input.side_move=if !skating && x>=0.{-450.}else{0.};
+            input.toggle_mode=(!skating&&(2650. ..2800.).contains(&x))||(skating&&x>5015.);
+            input.controller=mechanics::link::Controller{connected:true,..Default::default()};
+            if skating {
+                if (3900. ..4300.).contains(&x){input.controller.right=[0,-32768];}
+                if (4300. ..4480.).contains(&x){input.controller.right=[30000,30000];}
+                if (4600. ..4900.).contains(&x){input.controller.buttons=if p.movement.on_ground{0x102}else{0x100};}
+            }
+        }
+    }
     if !enabled.0 && std::env::var_os("CSR_TEST_SKATE_INVENTORY").is_some(){
         let tick=world.0.tick;let rate=world.0.tick_rate as u64;let t=world.0.time();
         input.toggle_mode=false;input.controller.connected=true;

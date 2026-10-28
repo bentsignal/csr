@@ -2,6 +2,10 @@
 
 ## October 26: Skate crossover
 
+- [ ] Deliver the surf/skate clip batch: airborne continuity, original surf /
+  trick-deck course, constrained rail grip/inspection, granular material audio,
+  contextual scoring/markers and riding combat.
+
 - [x] Replace the box icon, add held-board hand grip/inspection and map lighting;
   remove unsolicited control text, add private board audio and native markers.
 - [x] Validate CS return hulls against live geometry; correct walking camera
@@ -21,7 +25,7 @@
   constrained chase view on existing CS maps.
 - [x] Pack creation from an owner's prepared Skate installation, without a
   player-side build or manual copying, with source/license notices.
-- [ ] Complete combined verification and published Dev delivery; owner playtest.
+- [x] Publish the full-runtime baseline through Dev; owner playtest (Dev 1042).
 - [x] Replace initial riding with the full upstream articulated simulation,
   native animation retargeting, textured/articulated board, tricks/grinds,
   wipeouts, walking/remounting, Xbox reports and native camera/scoring.
@@ -29,8 +33,8 @@
   native contacts, derive grindable CS edges, preserve journal replay and
   repair the movement binding erased by native config import.
 - [x] Owner physical-controller playtest of the full runtime (accepted in Dev 1042).
-- [ ] Owner playtest of presentation/audio/marker follow-up. Complete native
-  audio/DSP, course gameplay and multiplayer negotiation remain future work.
+- [x] Owner playtest of presentation/audio/marker follow-up (Dev 1044).
+  Complete native audio/DSP, missions and multiplayer negotiation remain future work.
 
 ## Desktop launcher and delivery (October 26)
 
