@@ -58,7 +58,7 @@ pub(super) fn carry(bones: &[mdl::skeleton::Bone], idle: &[glam::Mat4]) -> Optio
 /// the axle runs across it. The roll is about the forearm's own axis and is
 /// shared by the forearm twist bones, as the installed arm skin expects; a
 /// further hand-local bend can relax the wrist. All on top of every clip.
-const WRIST: [f32; 3] = [0.0, 0.0, 0.0];
+const WRIST: [f32; 3] = [-60.0, 0.0, 0.0];
 pub(super) fn carry_wrist(bones: &[mdl::skeleton::Bone], pose: &mut [glam::Mat4]) {
     let [roll, bend, deviate] = env("CSR_BOARD_WRIST", WRIST);
     if [roll, bend, deviate] == [0.0; 3] { return; }
@@ -86,7 +86,7 @@ pub(super) fn carry_wrist(bones: &[mdl::skeleton::Bone], pose: &mut [glam::Mat4]
 }
 
 /// Where the carried board's arm sits relative to a weapon (forward, right, up).
-const VIEW: [f32; 3] = [0.0, 0.0, 0.0];
+const VIEW: [f32; 3] = [0.0, 0.5, -1.5];
 pub(super) fn view_offset(f: glam::Vec3, r: glam::Vec3, u: glam::Vec3) -> glam::Vec3 {
     let v = env("CSR_BOARD_VIEW", VIEW);
     f * v[0] + r * v[1] + u * v[2]

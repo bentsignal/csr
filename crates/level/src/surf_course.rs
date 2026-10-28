@@ -512,8 +512,8 @@ fn geometry() -> Vec<u8> {
     // End kicker over the lane, launching onto the second surf ramp.
     b.kicker(KICKER_X, [-500., 100.], z, 80., false, WOOD);
     b.surf_ramp(RAMP2_X, true, SURF2);
-    // Level with a ridge exit, so the run ends without CS fall damage.
-    let finish = ramp_peak(true, RAMP2_X[1]) - 150.;
+    // Below the ridge exit so face lines reach it; the drop costs little or no CS fall damage.
+    let finish = ramp_peak(true, RAMP2_X[1]) - 250.;
     b.block(FINISH_X, [-800., 800.], finish - 150., move |_, _| finish, DARK);
     // A broad catch floor makes a missed line recoverable with the marker.
     b.block([-9200., 9700.], [-2300., 2300.], -2150., |_, _| -2000., DARK);
