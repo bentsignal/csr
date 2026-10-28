@@ -6,6 +6,13 @@ use mechanics_api as api;
 use movement::{MoveEvents, TraceWorld, buttons};
 use std::sync::Arc;
 pub mod inventory;
+pub(crate) mod return_to_cs;
+#[derive(Clone,Debug,PartialEq,serde::Serialize,serde::Deserialize)]
+pub struct Checkpoint {
+    pub id:String,
+    pub archive_hash:String,
+    pub target:mechanics::link::Checkpoint,
+}
 
 pub struct Module {
     pub id: String,
@@ -30,6 +37,8 @@ pub struct ExternalState {
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct State {
+    /// Last CS-sized placement checked against live map collision.
+    pub cs_return: movement::PlayerMove,
     pub id: String,
     pub archive_hash: String,
     pub data: [f32; api::STATE_WORDS],
@@ -41,7 +50,7 @@ pub struct State {
     pub external: Option<Box<ExternalState>>,
 }
 
-pub(crate) fn toggle(player: &mut Player, modules: &[Arc<Module>]) {
+pub(crate) fn toggle(player: &mut Player, modules: &[Arc<Module>], world: &dyn TraceWorld) {
     // Cycle through installed modes, then ordinary CS. A sole Skate pack is
     // therefore one key in either direction, with no map or inventory reset.
     let next = player
@@ -49,10 +58,13 @@ pub(crate) fn toggle(player: &mut Player, modules: &[Arc<Module>]) {
         .as_ref()
         .and_then(|s| modules.iter().position(|m| m.id == s.id))
         .map_or(0, |i| i + 1);
-    select(player, modules.get(next));
+    select(player, modules.get(next), world);
 }
-pub(crate) fn select(player:&mut Player,module:Option<&Arc<Module>>){
+pub(crate) fn select(player:&mut Player,module:Option<&Arc<Module>>,world:&dyn TraceWorld){
+    if module.is_none() && !return_to_cs::place(player, world) { return; }
+    let cs_return=player.mechanic.as_ref().map_or(player.movement,|s|s.cs_return);
     player.mechanic = module.map(|module| State {
+        cs_return,
         id: module.id.clone(),
         archive_hash: module.archive_hash.clone(),
         data: [0.; api::STATE_WORDS],
@@ -80,7 +92,8 @@ pub(crate) fn step(
         .find(|m| m.id == state.id && m.archive_hash == state.archive_hash)
         .ok_or("active mechanics pack changed or is unavailable")?;
     if let Some(program) = &module.external {
-        let start = mechanics::link::Start { position:player.movement.origin.to_array(),velocity:player.movement.velocity.to_array(),yaw:player.view_angles.y };
+        let checkpoint=player.mechanic_checkpoint.as_ref().filter(|c|c.id==module.id && c.archive_hash==module.archive_hash).map(|c|c.target.clone());
+        let start = mechanics::link::Start { position:player.movement.origin.to_array(),velocity:player.movement.velocity.to_array(),yaw:player.view_angles.y,checkpoint };
         let state=player.mechanic.as_mut().unwrap();
         if state.reset {state.external=None;}
         let external=state.external.get_or_insert_with(||Box::new(ExternalState{
@@ -94,6 +107,10 @@ pub(crate) fn step(
             ||pose.bones.len()>256||pose.bones.iter().flatten().flatten().any(|v|!v.is_finite()) {
             return Err("invalid provider physical pose".into());
         }
+        if let Some(target)=&pose.checkpoint {
+            if target.transform.iter().flatten().any(|v|!v.is_finite()||v.abs()>131072.){return Err("invalid provider checkpoint".into());}
+            player.mechanic_checkpoint=Some(Checkpoint{id:module.id.clone(),archive_hash:module.archive_hash.clone(),target:target.clone()});
+        }
         let was_grounded=player.movement.on_ground;
         player.movement.origin=Vec3::from_array(pose.position);
         player.movement.velocity=Vec3::from_array(pose.velocity);
@@ -106,6 +123,7 @@ pub(crate) fn step(
         if pose.generation!=external.pose.generation {external.previous_pose=external.pose.clone();}
         if pose.discontinuity||pose.period!=external.pose.period||external.previous_pose.generation==0 {external.previous_pose=pose.clone();}
         external.history.push(frame);external.pose=pose;external.rig=rig;state.reset=false;state.height=0.;
+        return_to_cs::remember(player,world);
         return Ok(MoveEvents{jumped:was_grounded&&!player.movement.on_ground&&player.movement.velocity.z>0.,..Default::default()});
     }
     let mut packet = [0.; api::WORDS];
@@ -166,6 +184,7 @@ pub(crate) fn step(
     state.angles = Vec3::new(out[api::OUT_PITCH], out[api::OUT_YAW], out[api::OUT_ROLL]);
     state.height = out[api::OUT_HEIGHT];
     state.reset = false;
+    return_to_cs::remember(player,world);
     Ok(MoveEvents {
         jumped: previous_grounded && !grounded && player.movement.velocity.z > 0.,
         landed: (!previous_grounded && grounded).then_some(fall_speed.max(0.)),
@@ -251,8 +270,12 @@ mod tests {
             restored.step(&[(id, TickInput::default())]);
             assert_eq!(w.state_hash(), restored.state_hash());
         }
+        w.player_mut(id).unwrap().mechanic_checkpoint=Some(Checkpoint{id:"mod_mode_test".into(),archive_hash:"hash".into(),target:mechanics::link::Checkpoint{transform:glam::Mat4::IDENTITY.to_cols_array_2d(),on_board:true,foot_forward:true}});
+        w.player_mut(id).unwrap().movement.origin=Vec3::new(500.,30.,20.);
         w.respawn(id);
         assert!(w.player(id).unwrap().mechanic.as_ref().unwrap().reset);
+        assert!(w.player(id).unwrap().mechanic_checkpoint.is_none());
+        assert_eq!(w.player(id).unwrap().mechanic.as_ref().unwrap().cs_return,w.player(id).unwrap().movement);
         w.step(&[(id, TickInput::default())]);
         w.step(&[(id, press)]);
         assert!(w.player(id).unwrap().mechanic.is_none());

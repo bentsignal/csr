@@ -205,10 +205,7 @@ pub fn update(mut commands: Commands, art: Res<UiAssets>, world: Res<SimWorld>, 
                         let selected=p.equipped_mechanic.as_ref().is_some_and(|item|item.id==module.id);
                         let color=if selected{Color::WHITE}else{Color::srgba(0.8,0.82,0.82,0.5)};
                         inventory.spawn(Node{position_type:PositionType::Relative,width:hu(layout::INVENTORY_ICON_WIDTH),height:hu(layout::INVENTORY_PITCH),flex_shrink:0.,..default()}).with_children(|row|{
-                            // An original vector silhouette; all board textures
-                            // and geometry still come only from the private pack.
-                            row.spawn((Node{position_type:PositionType::Absolute,right:hu(4.),top:hu(10.),width:hu(66.),height:hu(8.),..default()},BackgroundColor(color)));
-                            for right in [15.,52.]{row.spawn((Node{position_type:PositionType::Absolute,right:hu(right),top:hu(20.),width:hu(7.),height:hu(6.),..default()},BackgroundColor(color)));}
+                            if let Some(image)=art.image("skateboard"){row.spawn((ImageNode{color,..ImageNode::new(image)},Node{width:hu(layout::INVENTORY_ICON_WIDTH),height:hu(layout::INVENTORY_ICON_HEIGHT),..default()}));}
                             row.spawn((Text::new("Cycle"),TextColor(color),TextFont{font_size:hf(12.),..default()},Node{position_type:PositionType::Absolute,right:hu(-18.),top:hu(layout::INVENTORY_HINT_TOP),..default()}));
                             if selected {row.spawn((Text::new(if module.external.is_some(){"Skateboard"}else{&module.name}),TextColor(Color::WHITE),TextFont{font:bevy::text::FontSource::Handle(art.regular.clone()),font_size:hf(12.),..default()},Node{position_type:PositionType::Absolute,right:hu(0.),top:hu(layout::INVENTORY_ICON_HEIGHT),..default()}));}
                         });

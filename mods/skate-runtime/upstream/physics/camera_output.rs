@@ -43,8 +43,10 @@ pub(crate) fn advance(
         feedback,
         skater.centre_of_mass_output,
         CameraPreferences {
-            // User preferences are owned here: ordinary uninverted controls.
-            invert_look: [false; 2],
+            // The native walking-camera vertical axis has the opposite sign
+            // to ordinary CS look. Change only camera publication, leaving
+            // the pad/action/trick inputs untouched.
+            invert_look: [false, skater.player_state.current().category() == 500],
             // Native preferences constructor82DF6294/629C initializes both
             // fields to zero.82DF8E80 only updates its air-side bytes37..39.
             shake_variant: 0,

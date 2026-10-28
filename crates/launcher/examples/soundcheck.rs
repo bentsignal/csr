@@ -1,5 +1,18 @@
 //! Decodes every weapon sound through the same checks + decoder the client uses.
 fn main() {
+    if let Some(path)=std::env::args().nth(1){
+        let pack=packs::Pack::open(std::path::Path::new(&path)).expect("private Skate pack");
+        let definition=&pack.manifest().mechanics[0];
+        let root=mechanics::data::materialize(&pack.file(&definition.module).expect("bundle"),&std::env::temp_dir().join("csr-skate-soundcheck")).expect("private bundle");
+        for name in ["roll","pop","land","push","grind","brake"]{
+            let bytes=std::fs::read(root.join(format!("private/crossover-audio/{name}.wav"))).expect("owned converted board foley");
+            let bytes=client::audio::playable(bytes).expect("playable board foley");
+            let decoder=rodio::Decoder::builder().with_byte_len(bytes.len() as u64).with_data(std::io::Cursor::new(bytes)).build().expect("board audio decoder");
+            let (count,peak)=decoder.fold((0usize,0f32),|(count,peak),sample|(count+1,peak.max(sample.abs())));
+            assert!(count>0 && peak.is_finite() && peak>0.,"{name} must decode non-silent samples");
+            println!("private Skate {name}: {count} decoded samples, peak={peak:.4}");
+        }
+    }
     use rodio::Source;
     let (_, fs) = level::mount_game(None).unwrap();
     let mut paths = fs.archive_paths_with_prefix("sound/weapons/");

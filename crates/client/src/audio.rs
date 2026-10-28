@@ -417,7 +417,7 @@ pub fn playable(bytes: Vec<u8>) -> Option<Vec<u8>> {
     }
 }
 
-fn decoded_audio(bytes: Vec<u8>) -> Option<(Vec<u8>, u16)> {
+pub(crate) fn decoded_audio(bytes: Vec<u8>) -> Option<(Vec<u8>, u16)> {
     use rodio::Source;
     let bytes = playable(bytes)?;
     let decoder = rodio::Decoder::builder().with_byte_len(bytes.len() as u64)

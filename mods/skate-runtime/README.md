@@ -78,3 +78,10 @@ application test target. The host's contract checks and private `skatecheck`
 exercise this actual executable, including controller gestures, both host tick
 rates, snapshot replay, native ledge acquisition, walking/remounting, live
 door/breakable contacts and mounted CS geometry. No private fixture is in Git.
+
+The adapter also runs the upstream session-marker validation, UI hold timing
+and actor-reset path. Explicit Start/Pose checkpoints preserve placed markers
+in host snapshots and across mode changes; no hidden process-global state is
+required. Marker reports are sampled on every host tick so a D-pad press
+between native physics periods is retained. The walking camera alone reverses
+its vertical publication axis; raw pad/trick controls remain unchanged.

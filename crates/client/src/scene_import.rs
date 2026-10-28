@@ -5,6 +5,7 @@ use bevy::ecs::world::CommandQueue;
 use bevy::mesh::skinning::SkinnedMeshInverseBindposes;
 
 pub(crate) struct WorldPreparation {
+    pub board_material:crate::material::WorldMaterial,
     pub textures: textures::TextureCache,
     pub shared: world_mesh::SharedHandles,
     pub moving_door_builds: Vec<(usize, world_mesh::WorldBuild)>,
@@ -213,6 +214,7 @@ impl SceneImport {
                 info!("textures: {} compressed, {} decoded, {} missing",
                     world.textures.stats_compressed, world.textures.stats_decoded, world.textures.stats_missing);
                 let ground = self.ground.take().unwrap().with_load_context(world.textures, world.shared, opts.exposure);
+                commands.insert_resource(crate::movement_modes::full_board::MaterialTemplate(world.board_material));
                 crate::finish_level(commands, self.loaded.take().unwrap(), opts,
                     self.characters.take().unwrap(), self.view_models.take().unwrap(), ground,
                     self.cosmetics.take().unwrap());

@@ -5,6 +5,7 @@
 #[path = "../upstream/animation_pose/mod.rs"]
 mod animation_pose;
 mod asset_cache;
+mod session_marker;
 mod bridge;
 #[path = "../upstream/camera/mod.rs"]
 mod camera;
@@ -106,6 +107,7 @@ mod hud_runtime {
 }
 
 pub struct Runtime {
+    marker:session_marker::SessionMarker,
     physics: physics::GamePhysics,
     skater: physics::SkaterRuntime,
     controls: physics::PlayerControls,
@@ -139,6 +141,7 @@ impl Runtime {
         let bind_pose = bridge::bind_pose(root, &skater)?;
         let language = bridge::language(root)?;
         Ok(Self {
+            marker:session_marker::SessionMarker::load(root,None)?,
             physics,
             skater,
             controls,

@@ -13,7 +13,7 @@ fn manifest() -> String {
         r#"format_version = 2
 id = "skate3_riding"
 name = "Skate 3 crossover"
-version = "0.2.0"
+version = "0.3.0"
 origin = "skate3"
 kind = "assets"
 min_game_version = "0.5.0"
@@ -35,6 +35,21 @@ config = "mechanics/skate.csrconfig"
 
 fn payload(assets: &Path) -> Result<Vec<(&'static str, Vec<u8>)>, String> {
     let mut data = Vec::new();
+    // Read only the owner's decoded board foley. No original executable,
+    // program, speech/music, unrelated banks or map audio is copied.
+    for (name,relative) in [
+        ("roll","grains/concrete_smooth_hard/2.wav"),
+        ("pop","banks/Skate_Collisions/0000.wav"),
+        ("land","banks/Skate_Collisions/0001.wav"),
+        ("push","banks/sk8_foley/0000.wav"),
+        ("grind","banks/GRINDS/0000.wav"),
+        ("brake","banks/FOOT_DRAG/0000.wav"),
+    ] {
+        let path=assets.join("private/audio").join(relative);
+        let bytes=fs::read(&path).map_err(|e|format!("Owned board sound {}: {e}. Refresh the converted Skate installation first.",path.display()))?;
+        if bytes.len()>4*1024*1024 || !bytes.starts_with(b"RIFF") || bytes.get(8..12)!=Some(b"WAVE") {return Err("invalid or oversized decoded Skate sound".into());}
+        data.push((format!("private/crossover-audio/{name}.wav"),bytes));
+    }
     for path in [
         "private/game.json",
         "private/skater.glb",

@@ -58,6 +58,7 @@ pub(crate) fn use_equipped(
     input: &mut TickInput,
     modules: &[Arc<Module>],
     allowed: bool,
+    world: &dyn movement::TraceWorld,
 ) {
     let Some(item) = player.equipped_mechanic.clone() else {
         return;
@@ -70,7 +71,7 @@ pub(crate) fn use_equipped(
     } else if allowed && attack && player.last_input.buttons & buttons::ATTACK == 0 {
         if let Some(module) = modules.iter().find(|m| m.id == item.id && m.archive_hash==item.archive_hash) {
             let stop = player.mechanic.as_ref().is_some_and(|s| s.id == item.id);
-            super::select(player, (!stop).then_some(module));
+            super::select(player, (!stop).then_some(module), world);
             player.equipped_mechanic.as_mut().unwrap().used = true;
         } else {
             player.equipped_mechanic = None;

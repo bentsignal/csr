@@ -153,6 +153,7 @@ impl PreparedScene {
         let map = map(
             &scene,
             &Start {
+                checkpoint:None,
                 position: [0.; 3],
                 velocity: [0.; 3],
                 yaw: 0.,
@@ -264,6 +265,7 @@ impl Runtime {
         let language = language(root)?;
         Ok(Self {
             physics,
+            marker:crate::session_marker::SessionMarker::load(root,start.checkpoint.clone())?,
             skater,
             controls,
             graphs,
@@ -302,6 +304,9 @@ impl Runtime {
             );
         }
         self.scene_state = frame.scene.clone();
+        // Marker UI reads every admitted host report, including reports in
+        // between native physics periods. A short D-pad press must not vanish.
+        self.marker.update(if frame.input.connected{frame.input.buttons}else{0},frame.dt,&self.physics,&mut self.skater);
         self.accumulator += f64::from(frame.dt);
         while self.accumulator + 1e-10 >= self.physics.period().as_secs_f64() {
             self.accumulator -= self.physics.period().as_secs_f64();
@@ -362,6 +367,7 @@ impl Runtime {
         let hud = self.skater.scoring.hud_input();
         let period = self.physics.period().as_secs_f32();
         Pose {
+            checkpoint:self.marker.checkpoint(),
             generation: self.skater.pose_generation,
             phase: (self.accumulator as f32 / period).clamp(0., 1.),
             period,

@@ -2,6 +2,10 @@
 
 ## October 26: Skate crossover
 
+- [x] Replace the box icon, add held-board hand grip/inspection and map lighting;
+  remove unsolicited control text, add private board audio and native markers.
+- [x] Validate CS return hulls against live geometry; correct walking camera
+  vertical look without changing trick inputs.
 - [x] Prewarm native collision/data and board rendering with the map; keep
   expensive preparation in the loading worker and reuse immutable inputs.
 - [x] Add a pack-owned skateboard to inventory cycling and the right HUD;
@@ -24,8 +28,9 @@
 - [x] Compile CS collision with native metadata; bridge doors/breakables into
   native contacts, derive grindable CS edges, preserve journal replay and
   repair the movement binding erased by native config import.
-- [ ] Owner physical-controller playtest of the full runtime. Native Skate
-  audio, course gameplay and multiplayer negotiation remain future work.
+- [x] Owner physical-controller playtest of the full runtime (accepted in Dev 1042).
+- [ ] Owner playtest of presentation/audio/marker follow-up. Complete native
+  audio/DSP, course gameplay and multiplayer negotiation remain future work.
 
 ## Desktop launcher and delivery (October 26)
 
