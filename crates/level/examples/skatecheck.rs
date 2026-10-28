@@ -44,10 +44,15 @@ fn run() -> Result<(), String> {
     let pack = packs::Pack::open(Path::new(&path))?;
     let module = load_module(&pack)?;
     if std::env::args().any(|a|a=="--route"){return coursecheck(module);}
+    if std::env::args().any(|a| a == "--audio") {
+        return audioproof(module);
+    }
     let full = pack.manifest().mechanics[0].api_version == 2;
     if full {
         momentumcheck(&module)?;
-        if pack.manifest().version=="0.4.0"{audiocheck(&module)?;}
+        if pack.manifest().version.as_str() >= "0.5.0" {
+            audiocheck(module.clone())?;
+        }
         grindcheck(module.clone())?;
     }
     let mut collision = collision::CollisionWorld::new();
@@ -319,34 +324,6 @@ fn momentumcheck(module:&sim::mechanics::Module)->Result<(),String>{
         }
     }
     Ok(())
-}
-fn audiocheck(module:&sim::mechanics::Module)->Result<(),String>{
-    use mechanics::link::*;
-    let program=module.external.as_ref().unwrap();
-    let points=[[-5000.,-5000.,0.],[5000.,-5000.,0.],[5000.,5000.,0.],[-5000.,5000.,0.]];
-    let scene=Scene{triangles:vec![Triangle{points:[points[0],points[1],points[2]],surface:0},Triangle{points:[points[0],points[2],points[3]],surface:0}],..Default::default()};
-    let mut hashes=std::collections::BTreeSet::new();
-    for (case,material) in [b'C',b'W',b'M'].into_iter().enumerate(){
-        let start=Start{position:[0.,0.,0.1],velocity:[600.,0.,0.],yaw:0.,grounded:true,checkpoint:None};
-        let mut journal=mechanics::external::Journal::default();let mut hash=mechanics::external::digest([0;32],&start);let mut audio=vec![];
-        let session=1200+case as u64;
-        for _ in 0..256 {
-            let frame=Frame{input:Controller{connected:true,..Default::default()},dt:1./128.,scene:SceneState{ground_material:material,..Default::default()}};
-            program.advance(&scene,1200,session,&start,&journal,hash,&frame)?;
-            audio.extend(program.take_audio(session));
-            hash=mechanics::external::digest(hash,&frame);journal.push(frame);
-        }
-        let rms=(audio.iter().map(|v|v*v).sum::<f32>()/audio.len().max(1) as f32).sqrt();
-        if !rms.is_finite() || rms<0.0001 {return Err(format!("silent granular surface {}: samples={} rms={rms}",material as char,audio.len()));}
-        let digest=mechanics::external::digest([0;32],&audio);hashes.insert(digest);
-        println!("Native grain surface={} samples={} rms={rms:.5} hash={digest:x?}",material as char,audio.len());
-        if let Some(dir)=std::env::var_os("CSR_SKATE_AUDIO_PROOF"){
-            let pcm:Vec<u8>=audio.iter().flat_map(|s|((s.clamp(-1.,1.)*32767.) as i16).to_le_bytes()).collect();
-            let mut wav=b"RIFF".to_vec();wav.extend((pcm.len() as u32+36).to_le_bytes());wav.extend(b"WAVEfmt ");wav.extend(16u32.to_le_bytes());wav.extend(1u16.to_le_bytes());wav.extend(1u16.to_le_bytes());wav.extend(48000u32.to_le_bytes());wav.extend(96000u32.to_le_bytes());wav.extend(2u16.to_le_bytes());wav.extend(16u16.to_le_bytes());wav.extend(b"data");wav.extend((pcm.len() as u32).to_le_bytes());wav.extend(pcm);
-            std::fs::write(std::path::Path::new(&dir).join(format!("rolling-{}.wav",material as char)),wav).map_err(|e|e.to_string())?;
-        }
-    }
-    if hashes.len()!=3{return Err("different ground materials produced identical rolling audio".into());}Ok(())
 }
 fn combatcheck(module:Arc<sim::mechanics::Module>,collision:Arc<collision::CollisionWorld>)->Result<(),String>{
     let catalog=level::Level::load(level::surf_course::NAME,None).map_err(|e|e.to_string())?.catalog;
@@ -725,6 +702,281 @@ fn flipcheck(
     println!("Flick: inverted={inverted}, trick={trick}");
     if !inverted || trick.is_empty() {
         return Err("right-stick flick did not produce an articulated flip trick".into());
+    }
+    Ok(())
+}
+
+/// A flat floor of one host rolling family (`surfaces` char), optionally with a ledge of
+/// another family, exported to the provider like a CS map.
+fn audio_world(floor: u8, ledge: Option<u8>) -> Arc<collision::CollisionWorld> {
+    let mut collision = collision::CollisionWorld::new();
+    let corners = [
+        Vec3::new(-20000., -5000., 0.),
+        Vec3::new(20000., -5000., 0.),
+        Vec3::new(20000., 5000., 0.),
+        Vec3::new(-20000., 5000., 0.),
+    ];
+    for tri in [[0, 1, 2], [0, 2, 3]] {
+        collision.add_triangle(tri.map(|i| corners[i]), collision::contents::SOLID, 0);
+    }
+    if ledge.is_some() {
+        let (low, high) = (Vec3::new(0., 20., 0.), Vec3::new(1500., 80., 32.));
+        let plane = |normal: Vec3, dist: f32| collision::Plane { normal, dist };
+        collision.add_convex(collision::Convex {
+            planes: vec![
+                plane(Vec3::X, high.x),
+                plane(-Vec3::X, -low.x),
+                plane(Vec3::Y, high.y),
+                plane(-Vec3::Y, -low.y),
+                plane(Vec3::Z, high.z),
+                plane(-Vec3::Z, -low.z),
+            ],
+            mins: low,
+            maxs: high,
+            contents: collision::contents::SOLID,
+            surface: 1,
+            plane_surfaces: vec![],
+        });
+    }
+    collision.rolling_surfaces = vec![floor, ledge.unwrap_or(floor)];
+    collision.finalize();
+    Arc::new(collision)
+}
+
+fn write_stereo_wav(path: &Path, samples: &[f32]) -> Result<(), String> {
+    let pcm: Vec<u8> = samples
+        .iter()
+        .flat_map(|s| ((s.clamp(-1., 1.) * 32767.) as i16).to_le_bytes())
+        .collect();
+    let mut wav = b"RIFF".to_vec();
+    wav.extend((pcm.len() as u32 + 36).to_le_bytes());
+    wav.extend(b"WAVEfmt ");
+    wav.extend(16u32.to_le_bytes());
+    wav.extend(1u16.to_le_bytes());
+    wav.extend(2u16.to_le_bytes());
+    wav.extend(48000u32.to_le_bytes());
+    wav.extend((48000u32 * 4).to_le_bytes());
+    wav.extend(4u16.to_le_bytes());
+    wav.extend(16u16.to_le_bytes());
+    wav.extend(b"data");
+    wav.extend((pcm.len() as u32).to_le_bytes());
+    wav.extend(pcm);
+    std::fs::write(path, wav).map_err(|e| e.to_string())
+}
+
+/// RMS and peak of interleaved stereo between two times (s).
+fn level(samples: &[f32], from: f32, to: f32) -> (f32, f32) {
+    let at = |t: f32| ((t.max(0.) * 48000.) as usize * 2).min(samples.len());
+    let s = &samples[at(from)..at(to)];
+    let rms = (s.iter().map(|v| v * v).sum::<f32>() / s.len().max(1) as f32).sqrt();
+    (rms, s.iter().fold(0f32, |p, v| p.max(v.abs())))
+}
+
+/// A scripted Xbox ride: (seconds, label, report) segments in order.
+struct Ride {
+    name: &'static str,
+    floor: u8,
+    ledge: Option<u8>,
+    origin: Vec3,
+    velocity: Vec3,
+    seconds: f32,
+    script: fn(f32) -> (&'static str, mechanics::link::Controller),
+}
+
+/// Rolling, pushes (A), an ollie and a kickflip (right-stick flicks), a foot brake (B) and a
+/// powerslide (left stick past 0.9) on one surface.
+fn street(t: f32) -> (&'static str, mechanics::link::Controller) {
+    let mut c = mechanics::link::Controller {
+        connected: true,
+        ..Default::default()
+    };
+    let label = match t {
+        t if t < 1.5 => "roll",
+        t if t < 3.5 => {
+            c.buttons = 0x1000;
+            "push"
+        }
+        t if t < 4.5 => "roll-fast",
+        t if t < 4.8 => {
+            c.right = [0, -32768];
+            "ollie-crouch"
+        }
+        t if t < 4.95 => {
+            c.right = [0, 32767];
+            "ollie-pop"
+        }
+        t if t < 6.5 => "ollie-air-land",
+        t if t < 6.8 => {
+            c.right = [0, -32768];
+            "kickflip-crouch"
+        }
+        t if t < 6.95 => {
+            c.right = [30000, 30000];
+            "kickflip-flick"
+        }
+        t if t < 8.5 => "kickflip-air-land",
+        t if t < 9.5 => {
+            c.left = [32767, 0];
+            "powerslide"
+        }
+        t if t < 10. => "roll-after-slide",
+        t if t < 11.5 => {
+            c.buttons = 0x2000;
+            "brake"
+        }
+        _ => "stop",
+    };
+    (label, c)
+}
+
+/// Onto the ledge's top edge and along it.
+fn ledge(_: f32) -> (&'static str, mechanics::link::Controller) {
+    (
+        "grind",
+        mechanics::link::Controller {
+            connected: true,
+            ..Default::default()
+        },
+    )
+}
+
+/// Drive one ride through the sim and the provider; returns its stereo PCM and segment spans.
+fn record(
+    module: &Arc<sim::mechanics::Module>,
+    ride: &Ride,
+) -> Result<(Vec<f32>, Vec<(&'static str, f32, f32)>), String> {
+    let mut world = sim::World::new(audio_world(ride.floor, ride.ledge));
+    world.set_tick_rate(128);
+    world.mechanics.push(module.clone());
+    let id = world.add_player("Audio proof", Team::CounterTerrorist);
+    let player = world.player_mut(id).unwrap();
+    player.movement.origin = ride.origin;
+    player.movement.velocity = ride.velocity;
+    let program = module.external.as_ref().ok_or("no provider")?;
+    let (mut audio, mut segments) = (Vec::new(), Vec::<(&'static str, f32, f32)>::new());
+    let mut last = (0u32, false, String::new());
+    let ticks = (ride.seconds * 128.) as u32;
+    for tick in 0..ticks {
+        let t = tick as f32 / 128.;
+        let (label, controller) = (ride.script)(t);
+        if segments.last().is_none_or(|s| s.0 != label) {
+            if let Some(s) = segments.last_mut() {
+                s.2 = t;
+            }
+            segments.push((label, t, ride.seconds));
+            eprintln!("PROOF {} t={t:.3} segment={label}", ride.name);
+        }
+        world.step(&[(
+            id,
+            TickInput {
+                toggle_mode: tick == 0,
+                controller,
+                ..Default::default()
+            },
+        )]);
+        let p = world.player(id).unwrap();
+        let state = p
+            .mechanic
+            .as_ref()
+            .and_then(|s| s.external.as_ref())
+            .ok_or("audio proof runtime failed")?;
+        audio.extend(program.take_audio(state.session));
+        let now = (state.pose.state, state.pose.grounded, state.pose.trick.clone());
+        if now != last {
+            eprintln!(
+                "PROOF {} t={t:.3} state={} grounded={} trick={:?} speed={:.0}",
+                ride.name,
+                now.0,
+                now.1,
+                now.2,
+                p.movement.speed_2d()
+            );
+            last = now;
+        }
+    }
+    Ok((audio, segments))
+}
+
+/// Native audio smoke check: every floor family rolls audibly and differently.
+fn audiocheck(module: Arc<sim::mechanics::Module>) -> Result<(), String> {
+    let mut hashes = std::collections::BTreeSet::new();
+    for floor in [b'C', b'W', b'M'] {
+        let ride = Ride {
+            name: "roll",
+            floor,
+            ledge: None,
+            origin: Vec3::Z * 0.1,
+            velocity: Vec3::X * 300.,
+            seconds: 3.,
+            script: |_| ("roll", mechanics::link::Controller { connected: true, ..Default::default() }),
+        };
+        let (audio, _) = record(&module, &ride)?;
+        let (rms, peak) = level(&audio, 1., 3.);
+        println!("Native rolling floor={} frames={} rms={rms:.5} peak={peak:.4}", floor as char, audio.len() / 2);
+        if !rms.is_finite() || rms < 0.0005 {
+            return Err(format!("silent native rolling on {}", floor as char));
+        }
+        hashes.insert(mechanics::external::digest([0; 32], &audio));
+    }
+    if hashes.len() != 3 {
+        return Err("different floor families produced identical rolling audio".into());
+    }
+    Ok(())
+}
+
+/// `--audio`: scripted rides on concrete, wood and metal plus a metal ledge grind. Writes
+/// `<CSR_SKATE_AUDIO_PROOF>/<ride>.wav` (48 kHz stereo) and prints per-segment RMS / peak; run
+/// with `CSR_SKATE_AUDIO_TRACE=1` for the provider's posts and Splice ids on stderr.
+fn audioproof(module: Arc<sim::mechanics::Module>) -> Result<(), String> {
+    let dir = std::env::var_os("CSR_SKATE_AUDIO_PROOF")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::env::temp_dir().join("csr-skate-audio-proof"));
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let mut rides: Vec<Ride> = [(b'C', "street-concrete"), (b'W', "street-wood"), (b'M', "street-metal")]
+        .into_iter()
+        .map(|(floor, name)| Ride {
+            name,
+            floor,
+            ledge: None,
+            origin: Vec3::Z * 0.1,
+            velocity: Vec3::X * 250.,
+            seconds: 12.,
+            script: street,
+        })
+        .collect();
+    rides.push(Ride {
+        name: "grind-metal-ledge",
+        floor: b'C',
+        ledge: Some(b'M'),
+        origin: Vec3::new(100., 20., 32.1),
+        velocity: Vec3::X * 220.,
+        seconds: 6.,
+        script: ledge,
+    });
+    rides.push(Ride {
+        name: "grind-concrete-ledge",
+        floor: b'C',
+        ledge: Some(b'C'),
+        origin: Vec3::new(100., 20., 32.1),
+        velocity: Vec3::X * 220.,
+        seconds: 6.,
+        script: ledge,
+    });
+    for ride in &rides {
+        let (audio, segments) = record(&module, ride)?;
+        let path = dir.join(format!("{}.wav", ride.name));
+        write_stereo_wav(&path, &audio)?;
+        println!("{} -> {} ({} frames)", ride.name, path.display(), audio.len() / 2);
+        for (label, from, to) in segments {
+            let (rms, peak) = level(&audio, from, to);
+            println!("  {label:<20} {from:6.2}-{to:6.2}s rms={rms:.5} peak={peak:.4}");
+        }
+        let mut windows = String::from("t\trms\tpeak\n");
+        for w in 0..(audio.len() / 2 / 2400) {
+            let (rms, peak) = level(&audio, w as f32 * 0.05, (w + 1) as f32 * 0.05);
+            windows += &format!("{:.2}\t{rms:.5}\t{peak:.5}\n", w as f32 * 0.05);
+        }
+        std::fs::write(dir.join(format!("{}.tsv", ride.name)), windows).map_err(|e| e.to_string())?;
     }
     Ok(())
 }
