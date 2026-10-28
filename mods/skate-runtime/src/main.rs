@@ -57,6 +57,7 @@ fn serve() {
     // prepares; riding stays silent until it is ready (or for good, after an error).
     let mut audio = Audio::Idle;
     let mut host: Option<(u64, csr_skate_runtime::board_audio::Host)> = None;
+    let mut silence = 0f64;
     loop {
         let request = match mechanics_link::receive::<Request>(&mut input) {
             Ok(r) => r,
@@ -139,8 +140,12 @@ fn serve() {
                                 host.as_mut().unwrap().1.frame(assets, rt, frame.dt)
                             }
                             None => {
+                                // Silence for the elapsed time keeps the stream continuous.
                                 rt.discard_audio();
-                                vec![]
+                                silence += f64::from(frame.dt) * f64::from(mechanics_link::AUDIO_RATE);
+                                let frames = silence.floor().min(8192.);
+                                silence -= frames;
+                                vec![0.; frames as usize * 2]
                             }
                         };
                         Response::Pose(pose, samples)

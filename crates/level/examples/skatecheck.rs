@@ -816,7 +816,8 @@ fn street(t: f32) -> (&'static str, mechanics::link::Controller) {
         }
         t if t < 8.5 => "kickflip-air-land",
         t if t < 9.5 => {
-            c.left = [32767, 0];
+            // Past 0.9 deflection, 0.6 rad right of forward: RightSlideStart.
+            c.left = [18500, 27000];
             "powerslide"
         }
         t if t < 10. => "roll-after-slide",
@@ -845,14 +846,19 @@ fn record(
     module: &Arc<sim::mechanics::Module>,
     ride: &Ride,
 ) -> Result<(Vec<f32>, Vec<(&'static str, f32, f32)>), String> {
-    let mut world = sim::World::new(audio_world(ride.floor, ride.ledge));
+    let collision = audio_world(ride.floor, ride.ledge);
+    let program = module.external.as_ref().ok_or("no provider")?;
+    // As map loading does: start the provider for this scene, then give its background audio
+    // decode time to finish (the sim below runs much faster than real time).
+    program.prepare_world(&collision)?;
+    std::thread::sleep(std::time::Duration::from_secs(3));
+    let mut world = sim::World::new(collision);
     world.set_tick_rate(128);
     world.mechanics.push(module.clone());
     let id = world.add_player("Audio proof", Team::CounterTerrorist);
     let player = world.player_mut(id).unwrap();
     player.movement.origin = ride.origin;
     player.movement.velocity = ride.velocity;
-    let program = module.external.as_ref().ok_or("no provider")?;
     let (mut audio, mut segments) = (Vec::new(), Vec::<(&'static str, f32, f32)>::new());
     let mut last = (0u32, false, String::new());
     let ticks = (ride.seconds * 128.) as u32;
