@@ -21,7 +21,11 @@ fn allowed(path: &str) -> bool {
             | "private/stock/data/anim/OnBoard.abin"
             | "private/stock/data/anim/OffBoard.abin"
             | "private/audio/audio_manifest.json"
+            | "private/hud/runtime/trickdisplay.json"
+            | "private/session-marker/hud.json"
     ) || [
+        ("private/hud/assets/data/fe/", "rgba"),
+        ("private/session-marker/texture-", "rgba"),
         ("private/stock/data/state/", "stategraph"),
         ("private/stock/data/script/", "stategraph"),
         ("private/stock/data/joystick/", "pat"),
@@ -50,6 +54,15 @@ fn audio_file(path: &str) -> bool {
         _ => false,
     }
 }
+/// A safe relative bundle path that the provider data allowlist admits.
+pub fn admitted(path: &str) -> bool {
+    path.is_ascii()
+        && !path.bytes().any(|b| b < 32 || b"\\:<>\"|?*".contains(&b))
+        && !path
+            .split('/')
+            .any(|p| p.is_empty() || p == "." || p == ".." || p.ends_with(['.', ' ']))
+        && allowed(path)
+}
 pub fn parse(bytes: &[u8]) -> Result<Vec<(&str, &[u8])>, String> {
     if bytes.len() > MAX_BUNDLE || bytes.get(..8) != Some(MAGIC) {
         return Err("invalid runtime data bundle".into());
@@ -70,14 +83,7 @@ pub fn parse(bytes: &[u8]) -> Result<Vec<(&str, &[u8])>, String> {
         let path = std::str::from_utf8(bytes.get(at..at + pathlen).ok_or("truncated data path")?)
             .map_err(|_| "invalid data path")?;
         at += pathlen;
-        if !path.is_ascii()
-            || path.bytes().any(|b| b < 32 || b"\\:<>\"|?*".contains(&b))
-            || path
-                .split('/')
-                .any(|p| p.is_empty() || p == "." || p == ".." || p.ends_with(['.', ' ']))
-            || !allowed(path)
-            || !names.insert(path.to_ascii_lowercase())
-        {
+        if !admitted(path) || !names.insert(path.to_ascii_lowercase()) {
             return Err("unsafe or unsupported runtime data path".into());
         }
         let data = bytes
@@ -94,6 +100,14 @@ pub fn parse(bytes: &[u8]) -> Result<Vec<(&str, &[u8])>, String> {
                     && (!data.starts_with(b"RIFF") || data.get(8..12) != Some(b"WAVE"))))
         {
             return Err("invalid or oversized board audio data".into());
+        } else if path.ends_with(".rgba") && (data.len() > 16 << 20 || data.len() % 4 != 0) {
+            return Err("invalid or oversized HUD texture".into());
+        } else if (path.starts_with("private/hud/") || path.starts_with("private/session-marker/"))
+            && path.ends_with(".json")
+            && (data.len() > 16 << 20
+                || serde_json::from_slice::<serde::de::IgnoredAny>(data).is_err())
+        {
+            return Err("invalid or oversized HUD data".into());
         }
         files.push((path, data));
     }
@@ -229,6 +243,31 @@ mod tests {
         let mut manifest = files();
         manifest.push(("private/audio/audio_manifest.json".into(), b"not json".to_vec()));
         assert!(build(&manifest).is_err());
+    }
+    #[test]
+    fn original_hud_admits_only_its_display_data_and_rgba_textures() {
+        let mut entries = files();
+        entries.extend([
+            ("private/hud/runtime/trickdisplay.json".into(), b"{}".to_vec()),
+            ("private/session-marker/hud.json".into(), b"{\"version\":1}".to_vec()),
+            ("private/session-marker/texture-0.rgba".into(), vec![0; 16]),
+            (
+                "private/hud/assets/data/fe/fonts/futuraheavy/0000_futuraheavy.Texture.rgba".into(),
+                vec![0; 64],
+            ),
+        ]);
+        assert!(build(&entries).is_ok());
+        for (path, data) in [
+            ("private/hud/runtime/other.json", b"{}".to_vec()),
+            ("private/hud/assets/data/fe/movie.apt", vec![]),
+            ("private/session-marker/texture-0.png", vec![0; 16]),
+            ("private/session-marker/texture-1.rgba", vec![0; 15]),
+            ("private/session-marker/hud.json", b"not json".to_vec()),
+        ] {
+            let mut bad = files();
+            bad.push((path.into(), data));
+            assert!(build(&bad).is_err(), "{path}");
+        }
     }
     #[test]
     fn runtime_bundle_rejects_traversal_aliases_programs_and_truncation() {

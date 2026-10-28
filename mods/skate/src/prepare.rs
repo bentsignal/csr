@@ -198,11 +198,11 @@ fn payload(assets: &Path) -> Result<Vec<(&'static str, Vec<u8>)>, String> {
     ] {
         collect(assets, directory, &mut data)?;
     }
-    let hud: serde_json::Value = serde_json::from_slice(
-        &fs::read(assets.join("private/hud/runtime/trickdisplay.json"))
-            .map_err(|e| e.to_string())?,
-    )
-    .map_err(|e| e.to_string())?;
+    let hud_bytes = fs::read(assets.join("private/hud/runtime/trickdisplay.json"))
+        .map_err(|e| e.to_string())?;
+    let hud: serde_json::Value = serde_json::from_slice(&hud_bytes).map_err(|e| e.to_string())?;
+    hud_display(assets, &mut data)?;
+    data.push(("private/hud/runtime/trickdisplay.json".into(), hud_bytes));
     let language = hud["language"]
         .as_object()
         .ok_or("converted trick language table missing")?;
@@ -226,6 +226,47 @@ fn payload(assets: &Path) -> Result<Vec<(&'static str, Vec<u8>)>, String> {
         ("licenses/gpl3.txt", include_bytes!("../LICENSE").to_vec()),
         ("licenses/notice.txt", include_bytes!("../NOTICE").to_vec()),
     ])
+}
+
+/// The original trick display's font atlases and bitmaps, and the converted
+/// session-marker display list. Only straight RGBA payloads and their JSON
+/// descriptions are read; no movie bytecode files or other screens.
+fn hud_display(assets: &Path, data: &mut Vec<(String, Vec<u8>)>) -> Result<(), String> {
+    fn textures(root: &Path, relative: &str, data: &mut Vec<(String, Vec<u8>)>) -> Result<(), String> {
+        for entry in fs::read_dir(root.join(relative)).map_err(|e| format!("{relative}: {e}"))? {
+            let entry = entry.map_err(|e| e.to_string())?;
+            let path = format!("{relative}/{}", entry.file_name().to_string_lossy());
+            let kind = entry.file_type().map_err(|e| e.to_string())?;
+            if kind.is_symlink() {
+                return Err("symlink in prepared data".into());
+            }
+            if kind.is_dir() {
+                textures(root, &path, data)?;
+            } else if path.ends_with(".rgba") {
+                data.push((path, fs::read(entry.path()).map_err(|e| e.to_string())?));
+            }
+        }
+        Ok(())
+    }
+    textures(assets, "private/hud/assets/data/fe", data)?;
+    let marker = assets.join("private/session-marker");
+    if let Ok(bytes) = fs::read(marker.join("hud.json")) {
+        for entry in fs::read_dir(&marker).map_err(|e| e.to_string())? {
+            let entry = entry.map_err(|e| e.to_string())?;
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if entry.file_type().map_err(|e| e.to_string())?.is_file()
+                && name.starts_with("texture-")
+                && name.ends_with(".rgba")
+            {
+                data.push((
+                    format!("private/session-marker/{name}"),
+                    fs::read(entry.path()).map_err(|e| e.to_string())?,
+                ));
+            }
+        }
+        data.push(("private/session-marker/hud.json".into(), bytes));
+    }
+    Ok(())
 }
 
 fn assets_from_game(game: &Path) -> Result<PathBuf, String> {

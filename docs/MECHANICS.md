@@ -79,7 +79,11 @@ Initialization supplies the admitted data-cache path and immutable CS scene:
 static triangles, compound door/breakable convex parts and derived grind
 splines. Tick frames contain the raw Xbox report, host timestep and live CS
 door/breakable state. Results include movement, physical state, complete world
-bone matrices, native camera and trick/score. Positions use Source inches/Z-up;
+bone matrices, native camera and trick/score. A cosmetic side channel (like
+the PCM stream, never in snapshots) carries the original HUD as textured
+triangle layers in a 1280x720 canvas, sent only when it changes; `Ready`
+names its RGBA textures inside the admitted bundle, which the host reads and
+size-checks itself. Positions use Source inches/Z-up;
 bone matrices use provider metres/Y-up with explicit rig conversion matrices.
 The current message limit is 64 MiB. Provider failures return to CS movement.
 
@@ -108,8 +112,9 @@ only affects presentation. Mode selection, inventory and damage stay in sim.
 
 `CSRDATA1` bundles are limited to 128 MiB, 2048 files, 240-byte paths and
 64 MiB per entry. The allowlist admits the known converted GLB, animation
-banks, skeleton/collection data, compiled graphs, controller/camera data and
-filtered trick language. Programs, Lua, traversal, case aliases, Windows
+banks, skeleton/collection data, compiled graphs, controller/camera data,
+filtered trick language, and the HUD's JSON descriptions and RGBA textures
+(size-checked). Programs, Lua, traversal, case aliases, Windows
 alternate streams and external paths are rejected. Cache paths are checked
 component by component; cached bytes are verified and repaired against the
 bundle. Materialized data lives under the user's data folder, never the

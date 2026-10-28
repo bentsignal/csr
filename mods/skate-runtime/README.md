@@ -24,8 +24,21 @@ Adaptation points:
   solver passes and override filtering remain the upstream implementation.
 - `src/skate_world.rs` retains the original portable collision compiler,
   adjacency welding, edge flags and query metadata, without map rendering.
-- `src/lib.rs` supplies scheduling names and plain HUD/diagnostic transport
-  types referenced by those owners. They contain no gameplay calculations.
+- `src/lib.rs` supplies scheduling names and diagnostic transport types
+  referenced by those owners. They contain no gameplay calculations.
+- The original trick display runs unchanged: `upstream/apt_vm.rs`,
+  `apt_movie.rs`, `apt_display.rs`, `apt_scene.rs`, `apt_text.rs`,
+  `apt_imports.rs` and `hud_runtime.rs` are the upstream files verbatim. The
+  standalone Bevy glue (`scoring_hud.rs`) is not used. `src/hud.rs` loads the
+  same movie/shape/font data, calls `hud_runtime::Runtime::update` once per
+  native physics tick after scoring (as the standalone FixedUpdate does), and
+  publishes `apt_scene::draw` triangles to the host as `HudFrame` layers.
+  The session-marker display list (`private/session-marker/hud.json`) is
+  published as a second layer while the marker modifier is held; its sRGB
+  primitive colours are converted to linear multipliers, as the standalone
+  `ColorMaterial` does. The host only rasterizes. A restore rebuilds the
+  movie and replays it with the journal. HUD failures disable the overlay
+  and never affect physics. The hold-to-return noise pass is not ported.
 - `src/bridge.rs` converts Source inches/Z-up geometry to native metres/Y-up,
   removes host bevel triangles that collapse at the compiler's existing 1 mm
   weld boundary, converts Xbox reports with the original native Pad/map, and

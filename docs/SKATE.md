@@ -26,9 +26,11 @@ Place a session marker with **LB + D-pad Down** while grounded, then hold
 **LB + D-pad Up** to return. The original native eligibility, geometry checks,
 hold timing and actor reset run in the provider. Markers survive CS/Skate mode
 switches in the same life/map and are included in deterministic snapshot replay.
-While holding LB, contextual marker choices and return progress appear near
-the upper left. Placement/return play private original UI cues. Trick names,
-sequence score and multiplier appear at the lower left while scoring.
+While holding LB, the original session-marker panel appears at the upper
+left. Placement/return play private original UI cues. The original trick
+display (trick names, sequence score, multiplier and line meter) runs its own
+movie in the provider and is drawn at the lower left from the pack's fonts and
+bitmaps. Packs made before HUD support show neither panel; recreate the pack.
 Blocked destinations are refused. Vertical walking-camera look is corrected
 without changing the right stick's on-board trick mapping.
 
@@ -61,7 +63,9 @@ the original board skin/textures and rig reference GLB (which also contains
 the original skater mesh, although only its board is rendered), animation
 banks, skeleton/collection data, compiled state graphs, controller patterns,
 camera definitions, selected trick-name strings, converted board foley and
-marker cues, and five complete rolling recordings with original grain tuning.
+marker cues, five complete rolling recordings with original grain tuning, the
+converted trick-display movie data with its font atlases and bitmaps, and the
+converted session-marker display list and textures.
 It excludes original
 executables, native libraries, Lua programs, original game code and Skate
 maps. The resulting file contains original game assets: keep it private,

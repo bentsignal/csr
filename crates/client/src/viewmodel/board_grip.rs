@@ -1,226 +1,119 @@
-//! The installed CS arm posed around an imported board rail.
+//! Held crossover equipment rides on the installed default knife's handle.
+//! The knife's own arms, draw/idle/inspect clips, look lag, bob and settling
+//! therefore move the board exactly like a CS weapon; only the blade is hidden.
+//!
+//! The board is carried by its front truck: the closed fist wraps the hanger
+//! (the knife handle's axis becomes the axle), the deck hangs below the hand
+//! with its nose up and graphic toward the viewer. That hang is derived once
+//! from the knife's idle pose and then held rigidly, so every clip, including
+//! inspection, turns the board with the hand.
 use super::*;
-impl ViewModels {
-    /// Use the installed CS hands and a closed weapon grip for the crossover
-    /// equipment pose. Original arm geometry/animations never enter Git.
-    pub(crate) fn board_grip(
-        &self,
-        team: sim::Team,
-        meshes: &mut Assets<Mesh>,
-    ) -> Option<(SkinnedAsset, crate::board_presentation::Grip)> {
-        let arms = match team {
-            sim::Team::Terrorist => self.arms_t.as_ref(),
-            _ => self.arms_ct.as_ref(),
-        }?;
-        let view = self.weapons.get("weapon_knife")?;
-        let mut pose = mdl::skeleton::rest_pose(&view.asset.model.bones);
-        if let Some(seq) = view.clips.get("ACT_VM_IDLE").and_then(|c| c.first()) {
-            sequence_pose::sample(&seq.clip, 0., &mut pose, |b| {
-                seq.weights.get(b).copied().unwrap_or(1.)
-            });
+
+/// Board-local axes are the imported deck's (X across, Y up through the grip
+/// tape, Z tail to nose), in inches relative to the front truck's hanger.
+/// Forward lean of the hanging deck away from vertical, degrees.
+const LEAN: f32 = 18.0;
+
+fn env<const N: usize>(name: &str, default: [f32; N]) -> [f32; N] {
+    let mut v = default;
+    if let Ok(text) = std::env::var(name) {
+        for (slot, value) in v.iter_mut().zip(text.split_whitespace()) {
+            if let Ok(value) = value.parse::<f32>() { if value.is_finite() { *slot = value; } }
         }
-        let world = mdl::skeleton::model_space(&view.asset.model.bones, &pose);
-        let mut pose = skinning::bone_merge(&arms.model.bones, &view.asset.model.bones, &world);
-        // Knife clips may omit the upper arm. Keep its authored relationship
-        // to the animated forearm rather than mixing a rest-space shoulder
-        // with a weapon-space wrist (which produces a stretched sleeve).
-        let rest = mdl::skeleton::model_space(
-            &arms.model.bones,
-            &mdl::skeleton::rest_pose(&arms.model.bones),
-        );
-        if let Some(elbow) = arms
-            .model
-            .bones
-            .iter()
-            .position(|b| b.name.to_ascii_lowercase().contains("r_forearm"))
-        {
-            let shoulder = arms.model.bones[elbow].parent.max(0) as usize;
-            pose[shoulder] = pose[elbow] * rest[elbow].inverse() * rest[shoulder];
-        }
-        if std::env::var_os("CSR_BOARD_GRIP_TRACE").is_some() {
-            for (i, b) in arms.model.bones.iter().enumerate().filter(|(_, b)| {
-                b.name.to_lowercase().contains("_r_") || b.name.to_lowercase().contains("right")
-            }) {
-                info!(
-                    "BOARD_GRIP bone={i} name={} parent={} position={:?}",
-                    b.name,
-                    b.parent,
-                    pose[i].w_axis.truncate()
-                );
-            }
-        }
-        let hand = arms.model.bones.iter().position(|b| {
-            b.name.to_ascii_lowercase().ends_with("r_hand")
-                || b.name.to_ascii_lowercase().contains("right_hand")
-        })?;
-        let mut asset = arms.clone();
-        // Retain just the gripping arm, including its original weighted fingers
-        // and sleeve. A knife's unused off-hand otherwise floats across view.
-        let right: Vec<_> = arms
-            .model
-            .bones
-            .iter()
-            .enumerate()
-            .map(|(i, _)| {
-                let mut at = i as i32;
-                while at >= 0 {
-                    let bone = &arms.model.bones[at as usize];
-                    let name = bone.name.to_ascii_lowercase();
-                    if name.contains("r_upperarm") {
-                        return true;
-                    }
-                    at = bone.parent;
-                }
-                false
-            })
-            .collect();
-        asset.parts = arms
-            .model
-            .meshes
-            .iter()
-            .zip(&arms.parts)
-            .filter_map(|(source, (_, material))| {
-                let on_right = |i: usize| {
-                    let v = &source.vertices[i];
-                    (0..v.bone_count.clamp(1, 3) as usize)
-                        .filter(|j| right.get(v.bones[*j] as usize).copied().unwrap_or(false))
-                        .map(|j| v.weights[j])
-                        .sum::<f32>()
-                        > 0.5
-                };
-                let mut indices: Vec<_> = source
-                    .indices
-                    .chunks_exact(3)
-                    .filter(|t| t.iter().all(|i| on_right(*i as usize)))
-                    .flatten()
-                    .copied()
-                    .collect();
-                if indices.is_empty() {
-                    return None;
-                }
-                if crate::props::needs_flip(source) {
-                    for t in indices.chunks_exact_mut(3) {
-                        t.swap(1, 2);
-                    }
-                }
-                let mut mesh = Mesh::new(
-                    bevy::mesh::PrimitiveTopology::TriangleList,
-                    bevy::asset::RenderAssetUsages::default(),
-                );
-                mesh.insert_attribute(
-                    Mesh::ATTRIBUTE_POSITION,
-                    source
-                        .vertices
-                        .iter()
-                        .map(|v| to_bevy(v.position).to_array())
-                        .collect::<Vec<_>>(),
-                );
-                mesh.insert_attribute(
-                    Mesh::ATTRIBUTE_NORMAL,
-                    source
-                        .vertices
-                        .iter()
-                        .map(|v| to_bevy(v.normal).to_array())
-                        .collect::<Vec<_>>(),
-                );
-                mesh.insert_attribute(
-                    Mesh::ATTRIBUTE_UV_0,
-                    source
-                        .vertices
-                        .iter()
-                        .map(|v| v.uv.to_array())
-                        .collect::<Vec<_>>(),
-                );
-                let mut joints = vec![];
-                let mut weights = vec![];
-                for v in &source.vertices {
-                    let mut js = [0u16; 4];
-                    let mut ws = [0f32; 4];
-                    for i in 0..v.bone_count.clamp(1, 3) as usize {
-                        js[i] = v.bones[i] as u16;
-                        ws[i] = v.weights[i].max(0.);
-                    }
-                    let sum = ws.iter().sum::<f32>();
-                    if sum > 1e-6 {
-                        ws.iter_mut().for_each(|w| *w /= sum);
-                    } else {
-                        ws[0] = 1.;
-                    }
-                    joints.push(js);
-                    weights.push(ws);
-                }
-                mesh.insert_attribute(
-                    Mesh::ATTRIBUTE_JOINT_INDEX,
-                    bevy::mesh::VertexAttributeValues::Uint16x4(joints),
-                );
-                mesh.insert_attribute(Mesh::ATTRIBUTE_JOINT_WEIGHT, weights);
-                mesh.insert_indices(bevy::mesh::Indices::U32(indices));
-                Some((meshes.add(mesh), material.clone()))
-            })
-            .collect();
-        let elbow = arms
-            .model
-            .bones
-            .iter()
-            .position(|b| {
-                let n = b.name.to_ascii_lowercase();
-                n.contains("r_forearm") || n.contains("right_forearm")
-            })
-            .unwrap_or_else(|| arms.model.bones[hand].parent.max(0) as usize);
-        let shoulder = arms.model.bones[elbow].parent.max(0) as usize;
-        let finger = |suffix: &str| {
-            arms.model
-                .bones
-                .iter()
-                .position(|b| b.name.to_ascii_lowercase().ends_with(suffix))
-        };
-        let index = finger("r_finger1")?;
-        let pinky = finger("r_finger4")?;
-        let across = (pose[pinky].w_axis - pose[index].w_axis)
-            .truncate()
-            .normalize();
-        let knuckles = (pose[index].w_axis + pose[pinky].w_axis).truncate() * 0.5;
-        let forward = (knuckles - pose[hand].w_axis.truncate()).normalize();
-        let forward = (forward - across * forward.dot(across)).normalize();
-        let normal = across.cross(forward).normalize();
-        let mut center = glam::Vec3::ZERO;
-        for suffix in [
-            "r_finger1",
-            "r_finger12",
-            "r_finger2",
-            "r_finger22",
-            "r_finger3",
-            "r_finger32",
-            "r_finger4",
-            "r_finger42",
-        ] {
-            center += pose[finger(suffix)?].w_axis.truncate() / 8.;
-        }
-        let frame = glam::Mat4::from_cols(
-            forward.extend(0.),
-            normal.extend(0.),
-            across.extend(0.),
-            center.extend(1.),
-        );
-        let contact = pose[hand].inverse() * frame;
-        Some((
-            asset,
-            crate::board_presentation::Grip {
-                pose,
-                parents: arms.model.bones.iter().map(|b| b.parent).collect(),
-                twists: arms
-                    .model
-                    .bones
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, b)| b.name.to_ascii_lowercase().contains("r_foretwist"))
-                    .map(|(i, _)| i)
-                    .collect(),
-                hand,
-                elbow,
-                shoulder,
-                contact,
-            },
-        ))
     }
+    v
+}
+
+fn handle(bones: &[mdl::skeleton::Bone]) -> Option<usize> {
+    let name = |b: &mdl::skeleton::Bone| b.name.to_ascii_lowercase();
+    bones.iter().position(|b| name(b) == "v_weapon.knife")
+        .or_else(|| bones.iter().position(|b| { let n = name(b); n.contains("knife") && !n.contains("hand") }))
+        .or_else(|| bones.iter().position(|b| name(b).ends_with("r_hand")))
+}
+
+/// The hanging carry in the handle bone's frame, from the idle model pose.
+pub(super) fn carry(bones: &[mdl::skeleton::Bone], idle: &[glam::Mat4]) -> Option<glam::Mat4> {
+    use glam::Vec3;
+    let held = *idle.get(handle(bones)?)?;
+    let grip = held.w_axis.truncate();
+    let axle = held.z_axis.truncate().normalize_or_zero();
+    let [lean, turn, tx, ty, tz] = env("CSR_BOARD_CARRY", [LEAN, 0.0, 0.0, 0.0, 0.0]);
+    // Model space is X forward, Z up; the eye sits at the model origin.
+    let down = (-Vec3::Z + Vec3::X * lean.to_radians().tan()).normalize();
+    let tail = (down - axle * axle.dot(down)).normalize_or_zero();
+    if axle == Vec3::ZERO || tail == Vec3::ZERO { return None; }
+    let nose = -tail;
+    let mut across = axle;
+    // The deck lies on the far side of the trucks from the viewer.
+    if nose.cross(across).dot(grip) < 0.0 { across = -across; }
+    let up = nose.cross(across);
+    let hang = glam::Mat4::from_cols(across.extend(0.0), up.extend(0.0), nose.extend(0.0), grip.extend(1.0))
+        * glam::Mat4::from_rotation_z(turn.to_radians())
+        * glam::Mat4::from_translation(Vec3::new(tx, ty, tz));
+    let carry = held.inverse() * hang;
+    carry.is_finite().then_some(carry)
+}
+
+/// A carried board turns the forearm over (pronation), levelling the fist so
+/// the axle runs across it. The roll is about the forearm's own axis and is
+/// shared by the forearm twist bones, as the installed arm skin expects; a
+/// further hand-local bend can relax the wrist. All on top of every clip.
+const WRIST: [f32; 3] = [0.0, 0.0, 0.0];
+pub(super) fn carry_wrist(bones: &[mdl::skeleton::Bone], pose: &mut [glam::Mat4]) {
+    let [roll, bend, deviate] = env("CSR_BOARD_WRIST", WRIST);
+    if [roll, bend, deviate] == [0.0; 3] { return; }
+    let name = |i: usize| bones[i].name.to_ascii_lowercase();
+    let Some(hand) = (0..bones.len()).find(|i| name(*i).ends_with("r_hand")) else { return };
+    let Some(&wrist) = pose.get(hand) else { return };
+    let elbow = (0..bones.len()).find(|i| name(*i).ends_with("r_forearm")).and_then(|i| pose.get(i).copied());
+    let at = wrist.w_axis.truncate();
+    let axis = elbow.map_or(glam::Vec3::X, |e| (at - e.w_axis.truncate()).normalize_or(glam::Vec3::X));
+    let twist = glam::Mat4::from_translation(at) * glam::Mat4::from_axis_angle(axis, roll.to_radians())
+        * glam::Mat4::from_translation(-at);
+    let turn = twist * wrist * glam::Mat4::from_quat(glam::Quat::from_euler(glam::EulerRot::ZYX,
+        deviate.to_radians(), bend.to_radians(), 0.0)) * wrist.inverse();
+    let below = |mut i: usize| loop {
+        if i == hand { return true; }
+        let parent = bones[i].parent;
+        if parent < 0 { return false; }
+        i = parent as usize;
+    };
+    let held = handle(bones);
+    for i in 0..bones.len().min(pose.len()) {
+        if below(i) || (Some(i) == held && i != hand) { pose[i] = turn * pose[i]; }
+        else if name(i).ends_with("r_foretwist") { pose[i] = twist * pose[i]; }
+    }
+}
+
+/// Where the carried board's arm sits relative to a weapon (forward, right, up).
+const VIEW: [f32; 3] = [0.0, 0.0, 0.0];
+pub(super) fn view_offset(f: glam::Vec3, r: glam::Vec3, u: glam::Vec3) -> glam::Vec3 {
+    let v = env("CSR_BOARD_VIEW", VIEW);
+    f * v[0] + r * v[1] + u * v[2]
+}
+
+/// Collapse every left-arm bone far below the shoulders, out of view.
+pub(super) fn hide_left_arm(bones: &[mdl::skeleton::Bone], pose: &mut [glam::Mat4]) {
+    let left = |i: usize| { let n = bones[i].name.to_ascii_lowercase(); n.contains("_l_") || n.contains("left") };
+    let Some(root) = (0..bones.len()).find(|i| left(*i)) else { return };
+    let anchor = pose[root].w_axis.truncate() - glam::Vec3::Z * 40.;
+    for i in 0..bones.len().min(pose.len()) {
+        if left(i) { pose[i] = glam::Mat4::from_translation(anchor) * glam::Mat4::from_scale(glam::Vec3::splat(1e-4)); }
+    }
+}
+
+/// Source-space transform from hanger-relative board inches to this frame's world pose.
+pub(super) fn attachment(model: &mdl::Model, pose: &[glam::Mat4], source_from_model: glam::Mat4,
+    carry: glam::Mat4) -> Option<glam::Mat4> {
+    let bone = handle(&model.bones)?;
+    if std::env::var_os("CSR_BOARD_GRIP_TRACE").is_some() {
+        static ONCE: std::sync::Once = std::sync::Once::new();
+        ONCE.call_once(|| for (i, b) in model.bones.iter().enumerate() {
+            let m = pose[i];
+            info!("BOARD_GRIP bone={i} name={} parent={} at={:?} x={:?} y={:?} z={:?}", b.name, b.parent,
+                m.w_axis.truncate(), m.x_axis.truncate(), m.y_axis.truncate(), m.z_axis.truncate());
+        });
+    }
+    let m = source_from_model * pose.get(bone)? * carry;
+    m.is_finite().then_some(m)
 }

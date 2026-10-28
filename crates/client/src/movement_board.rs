@@ -184,21 +184,23 @@ impl Model {
             .fold(Vec3::splat(f32::NEG_INFINITY), Vec3::max);
         if std::env::var_os("CSR_BOARD_GRIP_TRACE").is_some(){info!("BOARD_GRIP board bounds metres={low:?}..{high:?}");}
         let center=(low+high)*0.5;
-        // Intersect the actual triangles: a long deck quad need not have any
-        // vertices at its middle. Sampling only vertices falls back incorrectly.
-        let mut middle=vec![];
-        for part in &parts {for tri in part.indices.chunks_exact(3){for edge in 0..3 {
-            let a=Vec3::from_array(part.positions[tri[edge] as usize]);let b=Vec3::from_array(part.positions[tri[(edge+1)%3] as usize]);
-            if (b.z-a.z).abs()>1e-6 {let t=(center.z-a.z)/(b.z-a.z);if (0. ..=1.).contains(&t){middle.push(a.lerp(b,t));}}
-        }}}
-        let edge=middle.iter().map(|p|p.x).fold(f32::INFINITY,f32::min);
-        let rail:Vec<_>=middle.into_iter().filter(|p|p.x<edge+0.003).collect();
-        let grip=if rail.is_empty(){Vec3::new(-3.9,1.8,0.)}else{
-            let bottom=rail.iter().map(|p|p.y).fold(f32::INFINITY,f32::min);
-            let top=rail.iter().map(|p|p.y).fold(f32::NEG_INFINITY,f32::max);
-            (Vec3::new(edge,(top+bottom)*0.5,center.z)-center)/0.0254+Vec3::X*0.2
-        };
-        if std::env::var_os("CSR_BOARD_GRIP_TRACE").is_some(){info!("BOARD_GRIP measured rail contact inches={grip:?}");}
+        // Carried by a truck: the closed hand wraps that truck's hanger, the
+        // lowest part of the truck geometry, midway between its wheels.
+        let mut trucks:std::collections::BTreeMap<String,(Vec3,Vec3)>=Default::default();
+        for part in &parts {for (i,p) in part.positions.iter().enumerate() {
+            let j=(0..4).max_by(|a,b|part.weights[i][*a].total_cmp(&part.weights[i][*b])).unwrap_or(0);
+            let name=&part.names[part.joints[i][j] as usize];
+            if name.contains("TRUCK") {
+                let e=trucks.entry(name.clone()).or_insert((Vec3::splat(f32::INFINITY),Vec3::splat(f32::NEG_INFINITY)));
+                e.0=e.0.min(Vec3::from_array(*p));e.1=e.1.max(Vec3::from_array(*p));
+            }
+        }}
+        let grip=trucks.values().max_by(|a,b|(a.0.z+a.1.z).total_cmp(&(b.0.z+b.1.z))).map_or(Vec3::new(0.,-1.,7.), |(lo,hi)|
+            (Vec3::new(center.x,lo.y+0.009,(lo.z+hi.z)*0.5)-center)/0.0254);
+        if std::env::var_os("CSR_BOARD_GRIP_TRACE").is_some(){
+            for (name,(lo,hi)) in &trucks {info!("BOARD_GRIP truck {name} inches={:?}..{:?}",(*lo-center)/0.0254,(*hi-center)/0.0254);}
+            info!("BOARD_GRIP hanger grip inches={grip:?}");
+        }
         Ok(Self {
             parts,
             center,
@@ -334,7 +336,7 @@ pub fn draw(
                 }
             } else {
                 p = held_transform
-                    .transform_point3((Vec3::from_array(part.positions[i]) - center) / 0.0254);
+                    .transform_point3((Vec3::from_array(part.positions[i]) - center) / 0.0254 - model.grip);
                 n = held_transform.transform_vector3(Vec3::from_array(part.normals[i]));
             }
             positions.push(to_bevy(p).to_array());
@@ -344,7 +346,16 @@ pub fn draw(
             mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
             mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
         }
-        instance.display = if held { 1 } else { 2 };
+        let display = if held { 1 } else { 2 };
+        if instance.display != display {
+            // Held like a weapon: viewmodel FOV/depth, never clipping walls.
+            commands.entity(entity).insert(if held {
+                crate::viewmodel::layer()
+            } else {
+                bevy::camera::visibility::RenderLayers::layer(0)
+            });
+        }
+        instance.display = display;
     }
     let Some(visuals) = visuals else { return };
     // Allocate and queue board materials with the map, including before any

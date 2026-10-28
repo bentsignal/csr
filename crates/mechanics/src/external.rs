@@ -10,6 +10,7 @@ use std::{
     time::Duration,
 };
 pub mod geometry;
+pub mod hud;
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Journal {
     chunks: Vec<std::sync::Arc<[Frame]>>,
@@ -45,6 +46,7 @@ pub fn digest(parent: [u8; 32], value: &impl serde::Serialize) -> [u8; 32] {
 
 pub struct Program {
     audio:Mutex<(u64,std::collections::VecDeque<f32>)>,
+    hud: hud::Overlay,
     executable: PathBuf,
     assets: PathBuf,
     fingerprint: String,
@@ -85,6 +87,7 @@ impl Program {
         );
         Ok(Self {
             audio:Mutex::new((0,Default::default())),
+            hud: Default::default(),
             executable,
             assets,
             fingerprint,
@@ -144,7 +147,10 @@ impl Program {
             assets: self.assets.to_string_lossy().into_owned(),
             scene: scene.clone(),
         })? {
-            Response::Ready(rig) => p.rig = rig,
+            Response::Ready(rig, textures) => {
+                p.rig = rig;
+                self.hud.textures(&self.assets, &textures);
+            }
             Response::Error(e) => return Err(e),
             _ => return Err("provider initialization rejected".into()),
         }
@@ -182,14 +188,17 @@ impl Program {
                     start: start.clone(),
                     frames: history.to_vec(),
                 })? {
-                    Response::Pose(_,_) => {if let Ok(mut a)=self.audio.lock(){a.1.clear();}}
+                    Response::Pose(_,_,_) => {if let Ok(mut a)=self.audio.lock(){a.1.clear();}}
                     Response::Error(e) => return Err(e),
                     _ => return Err("provider restore rejected".into()),
                 }
                 response = p.exchange(&request)?;
             }
             match response {
-                Response::Pose(pose,audio) => {
+                Response::Pose(pose,audio,hud) => {
+                    if let Some(frame) = hud {
+                        self.hud.publish(session, frame);
+                    }
                     if audio.len()>16384 || audio.len()%2!=0 || audio.iter().any(|s|!s.is_finite()||s.abs()>1.) {return Err("invalid provider audio".into());}
                     if let Ok(mut a)=self.audio.lock(){
                         if a.0!=session {a.0=session;a.1.clear();}
@@ -220,6 +229,15 @@ impl Program {
         self.with_world_scene(world, |scene, key| {
             self.advance(scene, key, session, start, history, parent, frame)
         })
+    }
+    /// Latest provider HUD for this session. Cosmetic only, like the PCM
+    /// stream: never retained in snapshots or replay hashes.
+    pub fn hud(&self, session: u64) -> Option<std::sync::Arc<mechanics_link::HudFrame>> {
+        self.hud.frame(session)
+    }
+    /// Decoded texture table that the current HUD frames index.
+    pub fn hud_textures(&self) -> std::sync::Arc<Vec<hud::Image>> {
+        self.hud.images()
     }
     /// Cosmetic stream only; never retained in snapshots or replay hashes.
     pub fn take_audio(&self,session:u64)->Vec<f32>{

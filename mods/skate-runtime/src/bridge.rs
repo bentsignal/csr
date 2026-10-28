@@ -295,6 +295,7 @@ impl Runtime {
             audio_seen: Default::default(),
             physics,
             marker:crate::session_marker::SessionMarker::load(root,start.checkpoint.clone())?,
+            hud: crate::hud::Hud::new(root, skater.scoring.hud_input()),
             skater,
             controls,
             graphs,
@@ -357,6 +358,8 @@ impl Runtime {
                 .update(if report.connected { &values } else { &[] });
             let actions = skate_core::input::gameplay_map::GameplayActions::from_pad(&self.pad);
             self.step(*actions.values(), report.connected)?;
+            // Scoring resets its trick flags at the next native tick.
+            self.hud.update(&self.skater.scoring);
         }
         let pose=self.pose();
         Ok(pose)
