@@ -13,6 +13,7 @@ struct Marker {
     foot_forward: bool,
 }
 pub(crate) struct SessionMarker {
+    pub ui:mechanics_link::MarkerUi,
     saved: Option<Marker>,
     hold: state::Hold,
     validation: validation::Validation,
@@ -25,6 +26,7 @@ impl SessionMarker {
         saved: Option<mechanics_link::Checkpoint>,
     ) -> Result<Self, String> {
         Ok(Self {
+            ui:Default::default(),
             saved: saved.map(|m| Marker {
                 transform: m.transform,
                 on_board: m.on_board,
@@ -51,6 +53,8 @@ impl SessionMarker {
         skater: &mut crate::physics::SkaterRuntime,
     ) {
         let modifier = buttons & 0x100 != 0;
+        if modifier && !self.ui.visible {self.ui.event+=1;self.ui.action=1;}
+        self.ui.visible=modifier;
         let set = modifier && buttons & 2 != 0 && self.previous & 2 == 0;
         let held = modifier && buttons & 1 != 0;
         self.previous = buttons;
@@ -93,6 +97,7 @@ impl SessionMarker {
                 transform[3]
             );
         }
+        self.ui.can_place=allowed && p.surface_default_mode != 8 && self.validation.check(physics.world(),transform[3]);
         if set
             && allowed
             && p.surface_default_mode != 8
@@ -103,6 +108,7 @@ impl SessionMarker {
                 on_board,
                 foot_forward: skater.animation.foot_forward(),
             });
+            self.ui.event+=1;self.ui.action=2;
         }
         let usable = self
             .saved
@@ -112,6 +118,7 @@ impl SessionMarker {
             && state != 702
             && !(physics.board_wiping_out && p.skeleton.teleport_pending_604 != 0)
             && skater.player_input.pending_teleport().is_none();
+        self.ui.can_return=usable;
         let distance = self.saved.map_or(0., |m| {
             bevy::math::Vec3::from_slice(&skater.animated_skeleton.roots.animation_to_world[3][..3])
                 .distance(bevy::math::Vec3::from_slice(&m.transform[3][..3]))
@@ -119,7 +126,9 @@ impl SessionMarker {
         self.ui_time += f64::from(dt);
         while self.ui_time + 1e-10 >= 1. / 60. {
             self.ui_time -= 1. / 60.;
-            if self.hold.update(held, usable, distance, ready).relocate {
+            let step=self.hold.update(held, usable, distance, ready);
+            self.ui.progress=step.progress;
+            if step.relocate {
                 if let Some(target) = self.saved {
                     if skater
                         .player_input
@@ -127,6 +136,7 @@ impl SessionMarker {
                         .is_ok()
                     {
                         skater.animation.restore_foot_forward(target.foot_forward);
+                        self.ui.event+=1;self.ui.action=3;
                         skater
                             .teleport_state
                             .request_manual(target.transform, target.on_board);

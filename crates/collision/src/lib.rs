@@ -245,6 +245,8 @@ pub struct CollisionWorld {
     /// Mounted, resolved ballistic definitions, indexed by surface ID.
     /// Runtime pose overlays read these from their immutable base world.
     pub bullet_surfaces: Vec<Option<bullet_exit::BulletSurface>>,
+    /// Host rolling-audio family, resolved from mounted surfaceprops.
+    pub rolling_surfaces:Vec<u8>,
     /// BSP world-model leaf contents for ballistic exit clearance only.
     /// Absent for synthetic worlds; runtime overlays consult their base.
     bullet_solid_space: Option<std::sync::Arc<bullet_exit::BspSolidSpace>>,

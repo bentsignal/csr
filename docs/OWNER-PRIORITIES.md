@@ -2,22 +2,25 @@
 
 ## October 26: Skate crossover pivot
 
-### October 27: Skate presentation, sound and session usability
+### October 27 evening: Surf / Skate continuity and believable presentation
 
-Dev 1042 / PR #326 is accepted as a better baseline: inventory selection,
-map preparation and camera transitions are delivered. Owner's next batch:
+Dev 1044 / PR #327 is accepted as a substantial improvement. Lighting, removal
+of the permanent controls overlay, markers/respawn and safe CS exits work.
+The next test specifically targets a surf/skate clip:
 
-1. Replace the rectangular HUD icon with a shaped skateboard silhouette.
-2. Give the held board a deliberate hand grip and inspection animation.
-3. Light the held and ridden board from the map's ambient cubes and visible sun.
-4. Remove unsolicited Skate control text from the gameplay HUD.
-5. Add owned skating audio through a replacement private pack.
-6. Support the original place/return session marker controls, including across
-   CS/Skate switches; keep destination collision validation.
-7. Never admit an embedded CS hull when leaving Skate, including on slopes,
-   around props and under low ceilings. Preserve airborne switching.
-8. Correct vertical camera look while walking in Skate mode without changing
-   on-board right-stick trick inputs.
+1. Preserve airborne momentum both ways. Surf a ramp, switch to Skate, land and
+   trick on a flat deck, then switch back onto another ramp. Build a course.
+2. Correct actual hand/board contact away from the trucks. Inspection must turn
+   the hand with the board, with a believable forearm entering view. Inspect
+   rendered poses rather than accepting only transform calculations.
+3. Make rolling audio believable for the contacted material and speed, using
+   owned recordings and the public rewrite's native granular player.
+4. Show trick names, score and multiplier at bottom left. Show marker choices
+   and progress at top left only while holding its bumper; add marker sounds.
+5. Switch CS weapons and fire while riding toward the crosshair. Preserve
+   original stick/trigger Skate controls and accepted controller walking look.
+
+The owner removed the rush and wants the hand/board corrected before testing.
 
 Keep all original assets private. Preserve accepted skating/CS behavior and
 settings. Development/verification stays on WINSERVE; deliver through Dev.

@@ -1563,7 +1563,10 @@ impl World {
                     // A wheel command carries direction, not a client-derived
                     // inventory index or slot. Drops/buys above may have changed
                     // the inventory since the input was sampled.
-                    mechanics::inventory::cycle(p,&self.mechanics,slot==SLOT_NEXT,time);
+                    // The riding D-pad is a weapon-only layer. Ordinary wheel
+                    // cycling still reaches the board for its existing primary use.
+                    let guns_only=p.mechanic.is_some() && input.controller.connected && input.controller.buttons&3!=0 && input.controller.buttons&0x100==0;
+                    mechanics::inventory::cycle(p,if guns_only{&[]}else{&self.mechanics},slot==SLOT_NEXT,time);
                 } else if slot >= 1 {
                     let in_slot: Vec<usize> = (0..p.weapons.len()).filter(|&w| weapon::slot(&p.weapons[w].def) == slot).collect();
                     let pressed = p.last_input.weapon_slot != slot;
@@ -1621,7 +1624,7 @@ impl World {
                 // Dynamic-world fluids use the same collision sweeps as CS movement.
                 let swimming=collision.dynamic.as_ref().is_some_and(|d|d.point_contents(p.movement.origin+Vec3::Z*32.,contents::WATER)!=0);
                 if p.mechanic.is_some() && !swimming && !frozen && !busy {
-                    let scene=::mechanics::link::SceneState {doors:self.doors.iter().map(|d|d.angle).collect(),broken:self.breakables.iter().map(|b|b.broken()).collect()};
+                    let scene=::mechanics::link::SceneState {ground_material:0,doors:self.doors.iter().map(|d|d.angle).collect(),broken:self.breakables.iter().map(|b|b.broken()).collect()};
                     match mechanics::step(p, &input, &self.mechanics, &contacts, dt, time, &collision,scene) {
                         Ok(events) => p.last_events = events,
                         Err(error) => {

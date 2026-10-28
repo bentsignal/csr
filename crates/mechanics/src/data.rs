@@ -22,6 +22,15 @@ fn allowed(path: &str) -> bool {
             | "private/crossover-audio/push.wav"
             | "private/crossover-audio/grind.wav"
             | "private/crossover-audio/brake.wav"
+            | "private/crossover-audio/marker-open.wav"
+            | "private/crossover-audio/marker-set.wav"
+            | "private/crossover-audio/marker-return.wav"
+            | "private/crossover-audio/grains.json"
+            | "private/crossover-audio/concrete_smooth_hard.wav"
+            | "private/crossover-audio/concrete_rough_hard.wav"
+            | "private/crossover-audio/asphalt_rough_hard.wav"
+            | "private/crossover-audio/wood_ramp_hard.wav"
+            | "private/crossover-audio/metal_smooth_hard.wav"
     ) || [
         ("private/stock/data/state/", "stategraph"),
         ("private/stock/data/script/", "stategraph"),
@@ -66,7 +75,9 @@ pub fn parse(bytes: &[u8]) -> Result<Vec<(&str, &[u8])>, String> {
             .get(at..at + size)
             .ok_or("truncated runtime data file")?;
         at += size;
-        if path.starts_with("private/crossover-audio/") && (data.len()>4*1024*1024 || !data.starts_with(b"RIFF") || data.get(8..12)!=Some(b"WAVE")) {
+        if path=="private/crossover-audio/grains.json" {
+            if data.len()>64*1024 || serde_json::from_slice::<serde_json::Value>(data).is_err(){return Err("invalid grain tuning data".into());}
+        }else if path.starts_with("private/crossover-audio/") && (data.len()>4*1024*1024 || !data.starts_with(b"RIFF") || data.get(8..12)!=Some(b"WAVE")) {
             return Err("invalid or oversized board audio data".into());
         }
         files.push((path, data));

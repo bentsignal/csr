@@ -106,7 +106,9 @@ mod hud_runtime {
     }
 }
 
+mod rolling_audio;
 pub struct Runtime {
+    audio:rolling_audio::Rolling,
     marker:session_marker::SessionMarker,
     physics: physics::GamePhysics,
     skater: physics::SkaterRuntime,
@@ -141,6 +143,7 @@ impl Runtime {
         let bind_pose = bridge::bind_pose(root, &skater)?;
         let language = bridge::language(root)?;
         Ok(Self {
+            audio:rolling_audio::Rolling::new(rolling_audio::Bank::load(root)?),
             marker:session_marker::SessionMarker::load(root,None)?,
             physics,
             skater,

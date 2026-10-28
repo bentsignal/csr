@@ -29,6 +29,8 @@ pub struct Model {
     parts: Vec<Part>,
     center: Vec3,
     pub(crate) audio: std::collections::HashMap<String, Arc<[u8]>>,
+    pub(crate) native_audio:bool,
+    pub(crate) grip:Vec3,
 }
 impl Model {
     pub fn load(root: &Path) -> Result<Self, String> {
@@ -182,10 +184,29 @@ impl Model {
             .flat_map(|p| &p.positions)
             .map(|p| Vec3::from_array(*p))
             .fold(Vec3::splat(f32::NEG_INFINITY), Vec3::max);
+        if std::env::var_os("CSR_BOARD_GRIP_TRACE").is_some(){info!("BOARD_GRIP board bounds metres={low:?}..{high:?}");}
+        let center=(low+high)*0.5;
+        // Intersect the actual triangles: a long deck quad need not have any
+        // vertices at its middle. Sampling only vertices falls back incorrectly.
+        let mut middle=vec![];
+        for part in &parts {for tri in part.indices.chunks_exact(3){for edge in 0..3 {
+            let a=Vec3::from_array(part.positions[tri[edge] as usize]);let b=Vec3::from_array(part.positions[tri[(edge+1)%3] as usize]);
+            if (b.z-a.z).abs()>1e-6 {let t=(center.z-a.z)/(b.z-a.z);if (0. ..=1.).contains(&t){middle.push(a.lerp(b,t));}}
+        }}}
+        let edge=middle.iter().map(|p|p.x).fold(f32::INFINITY,f32::min);
+        let rail:Vec<_>=middle.into_iter().filter(|p|p.x<edge+0.003).collect();
+        let grip=if rail.is_empty(){Vec3::new(-3.9,1.8,0.)}else{
+            let bottom=rail.iter().map(|p|p.y).fold(f32::INFINITY,f32::min);
+            let top=rail.iter().map(|p|p.y).fold(f32::NEG_INFINITY,f32::max);
+            (Vec3::new(edge,(top+bottom)*0.5,center.z)-center)/0.0254+Vec3::X*0.2
+        };
+        if std::env::var_os("CSR_BOARD_GRIP_TRACE").is_some(){info!("BOARD_GRIP measured rail contact inches={grip:?}");}
         Ok(Self {
             parts,
-            center: (low + high) * 0.5,
-            audio: ["roll", "pop", "land", "push", "grind", "brake"]
+            center,
+            grip,
+            native_audio:root.join("private/crossover-audio/grains.json").is_file(),
+            audio: ["roll", "pop", "land", "push", "grind", "brake","marker-open","marker-set","marker-return"]
                 .into_iter()
                 .filter_map(|name| {
                     let bytes =

@@ -8,6 +8,7 @@ mod wallbang;
 #[derive(Resource, Default)]
 pub(crate) struct Panel {
     pub(crate) open: bool,
+    pub(crate) clip_course:bool,
     pub(crate) weapon: Option<u32>,
     pub(crate) slot: Option<u8>,
     selected_weapon: Option<String>,
@@ -65,6 +66,7 @@ pub(crate) fn install(app: &mut App) {
 }
 fn enter(mut panel: ResMut<Panel>, opts: Res<crate::Options>, remote: Option<Res<crate::remote::RemoteClient>>, level: Option<Res<crate::LoadedLevel>>) {
     panel.enter_match(opts.0.playtest, remote.is_some());
+    panel.clip_course=opts.0.map==level::surf_course::NAME;
     panel.lanes = if panel.offline_playtest { level.as_ref().map(|level| {
         let mut lanes=if level.0.name.starts_with("surf_") {Vec::new()} else {wallbang::lanes(&level.0)};
         let partners=wallbang::partner_lanes(&level.0);
@@ -421,12 +423,15 @@ fn draw(
             button(&mut commands,body,"Stationary target / tune headshot feedback",Action::Lane(index),art.regular.clone());
         }
     }
+    if panel.page==Page::Tests {
+        button(&mut commands,body,"Surf / Skate Clip Course",Action::Map(level::surf_course::NAME.into()),art.regular.clone());
+    }
     if panel.page==Page::Tests && panel.surf_available {
         button(&mut commands,body,"Surf map / Solo",Action::Map("surf_ski_3_nova_kg_v6".into()),art.regular.clone());
-        if panel.surf_active {
+    }
+    if panel.page==Page::Tests && panel.surf_active {
             button(&mut commands,body,"Surf practice physics (air 1000 / ground 10)",Action::SurfPhysics(true),art.regular.clone());
             button(&mut commands,body,"Competitive movement physics",Action::SurfPhysics(false),art.regular.clone());
-        }
     }
     let mut section = "";
     let mut row = body;
@@ -484,7 +489,9 @@ pub(crate) fn take_look(panel: &mut Panel) -> Option<glam::Vec2> { panel.look.ta
 
 pub(crate) fn observe_step(panel: &mut Panel, world: &sim::World, local: sim::PlayerId) {
     if panel.surf_active && panel.lane.is_none() && world.tick%8==0 {
-        if let Some(p)=world.player(local) {
+        if panel.clip_course {
+            if !panel.result.is_empty(){panel.result.clear();panel.dirty=true;}
+        }else if let Some(p)=world.player(local) {
             panel.result=format!("Surf | speed {:.0} | F7 restart / F8 controls",p.movement.speed_2d()); panel.dirty=true;
         }
     }

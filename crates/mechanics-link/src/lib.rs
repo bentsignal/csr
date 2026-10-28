@@ -3,7 +3,7 @@
 //! Geometry and poses use Source axes/inches. Controller reports use XInput.
 use serde::{Deserialize, Serialize};
 use std::io::{Read, Write};
-pub const VERSION: u32 = 2;
+pub const VERSION: u32 = 3;
 pub const MAX_MESSAGE: usize = 64 << 20;
 pub type Matrix = [[f32; 4]; 4];
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -40,11 +40,14 @@ pub struct Scene {
 }
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct SceneState {
+    /// Contacted host rolling-audio family (resolved from Source surfaceprops).
+    pub ground_material: u8,
     pub doors: Vec<f32>,
     pub broken: Vec<bool>,
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Start {
+    pub grounded:bool,
     pub position: [f32; 3],
     pub velocity: [f32; 3],
     pub yaw: f32,
@@ -63,7 +66,20 @@ pub struct Frame {
     pub scene: SceneState,
 }
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct MarkerUi {
+    pub visible:bool,
+    pub can_place:bool,
+    pub can_return:bool,
+    pub progress:f32,
+    pub event:u64,
+    /// 1=open, 2=placed, 3=return accepted.
+    pub action:u8,
+}
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Pose {
+    pub marker:MarkerUi,
+    pub line_score:i32,
+    pub multiplier:f32,
     pub checkpoint: Option<Checkpoint>,
     pub generation: u64,
     pub phase: f32,
@@ -112,7 +128,7 @@ pub enum Request {
 #[derive(Serialize, Deserialize)]
 pub enum Response {
     Ready(Rig),
-    Pose(Pose),
+    Pose(Pose, Vec<f32>),
     NeedRestore,
     Error(String),
 }

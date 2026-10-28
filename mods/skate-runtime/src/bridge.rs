@@ -139,6 +139,7 @@ fn map(scene: &Scene, start: &Start, compile: bool) -> SkateMap {
     }
 }
 pub struct PreparedScene {
+    audio:Option<Arc<crate::rolling_audio::Bank>>,
     pub(super) world: std::sync::Mutex<Option<skate_core::physics::board_world::BoardWorld>>,
     source: Scene,
     triangles: Vec<skate_core::physics::board_world::WorldTriangle>,
@@ -153,6 +154,7 @@ impl PreparedScene {
         let map = map(
             &scene,
             &Start {
+                grounded:true,
                 checkpoint:None,
                 position: [0.; 3],
                 velocity: [0.; 3],
@@ -166,6 +168,7 @@ impl PreparedScene {
         let triangles = world.triangles().to_vec();
         let metadata = world.query_metadata()?.clone();
         Ok(Arc::new(Self {
+            audio:runtime.audio.bank(),
             world: std::sync::Mutex::new(Some(world)),
             source: scene,
             triangles,
@@ -241,7 +244,7 @@ impl Runtime {
         report("world");
         let mut physics = physics::GamePhysics::csr_load_prepared(root, &map, world)?;
         report("physics");
-        let mut skater = physics::SkaterRuntime::load_for_world(
+        let skater = physics::SkaterRuntime::load_for_world(
             root,
             &graphs,
             &physics,
@@ -251,11 +254,9 @@ impl Runtime {
         report("actor");
         // Original teleport owner transfers incoming CS momentum to the whole
         // physical assembly, including skeleton/board; no render correction.
-        let transform = Mat4::from_rotation_translation(
-            bevy::math::Quat::from_rotation_y(map.heading),
-            Vec3::from_array(map.spawn),
-        );
-        skater.travel(transform.to_cols_array_2d(), Some(native(start.velocity)))?;
+        // This actor is already constructed at the requested map spawn. A
+        // second teleport would reset the assembly again two native ticks
+        // later and erase incoming surf momentum.
         let controls = physics::PlayerControls::load(root)?;
         let camera = camera::CameraRuntime::load(root)?;
         let bind_pose = scene.bind_pose.clone();
@@ -263,7 +264,8 @@ impl Runtime {
             .dynamic
             .apply(state, state, 1. / 128., &mut physics, &skater);
         let language = language(root)?;
-        Ok(Self {
+        let mut runtime=Self {
+            audio:crate::rolling_audio::Rolling::new(scene.audio.clone()),
             physics,
             marker:crate::session_marker::SessionMarker::load(root,start.checkpoint.clone())?,
             skater,
@@ -276,7 +278,13 @@ impl Runtime {
             scene_state: state.clone(),
             bind_pose,
             language,
-        })
+        };
+        // The native actor emits its construction reset during its first
+        // publications. Complete that lifecycle before admitting CS momentum;
+        // otherwise a later reset silently zeros the new assembly's velocity.
+        for _ in 0..3 {runtime.step([0.;18],true)?;}
+        physics::csr_initialize_transfer(&mut runtime.physics,&mut runtime.skater,native(start.velocity),start.grounded)?;
+        Ok(runtime)
     }
     pub fn rig(&self) -> Rig {
         let frames = &self.skater.animation.evaluator.frames;
@@ -323,8 +331,12 @@ impl Runtime {
             let actions = skate_core::input::gameplay_map::GameplayActions::from_pad(&self.pad);
             self.step(*actions.values(), report.connected)?;
         }
-        Ok(self.pose())
+        let pose=self.pose();
+        let speed=Vec3::from_array(pose.velocity).length()*METERS;
+        self.audio.advance(frame.dt,frame.scene.ground_material,pose.grounded && matches!(pose.state,100..=105),speed);
+        Ok(pose)
     }
+    pub fn take_audio(&mut self)->Vec<f32>{self.audio.take()}
     pub fn pose(&self) -> Pose {
         let root =
             crate::animation::native_matrix(self.skater.animated_skeleton.roots.animation_to_world);
@@ -367,6 +379,9 @@ impl Runtime {
         let hud = self.skater.scoring.hud_input();
         let period = self.physics.period().as_secs_f32();
         Pose {
+            marker:self.marker.ui.clone(),
+            line_score:hud.line_score,
+            multiplier:hud.multiplier,
             checkpoint:self.marker.checkpoint(),
             generation: self.skater.pose_generation,
             phase: (self.accumulator as f32 / period).clamp(0., 1.),

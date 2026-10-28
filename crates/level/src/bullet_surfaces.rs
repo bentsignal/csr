@@ -47,18 +47,35 @@ pub(super) fn load(world: &mut CollisionWorld, fs: &vfs::Vfs) {
             }
         }
     }
-    world.bullet_surfaces = world.surfaces.iter().map(|surface| {
-        let prop = if surface.to_ascii_lowercase().ends_with(".mdl") {
+    let props:Vec<_> = world.surfaces.iter().map(|surface| {
+        if surface.to_ascii_lowercase().ends_with(".mdl") {
             fs.read(surface).and_then(|bytes| mdl::Model::load_header(&bytes).ok()).map(|model| model.surface_prop)
         } else {
             vmt::Material::load(surface, &|path| fs.read_string(path))
                 .map(|material| material.surface_prop().unwrap_or("default").to_string())
-        }?;
+        }
+    }).collect();
+    world.rolling_surfaces=props.iter().map(|prop|prop.as_deref().map_or(0,|p|rolling_class(&raw,p))).collect();
+    world.bullet_surfaces=props.iter().map(|prop|{
+        let prop=prop.as_deref()?;
         // A successfully loaded VMT without $surfaceprop uses the mounted
         // default declaration. Missing assets and explicit unknown properties
         // remain opaque; neither model names nor texture names imply material.
-        resolve(&raw, &prop)
+        resolve(&raw, prop)
     }).collect();
+}
+
+fn rolling_class(raw:&Definitions,prop:&str)->u8{
+    let mut name=prop.to_ascii_lowercase();let mut seen=Vec::new();
+    for _ in 0..16 {
+        if seen.contains(&name){break;}seen.push(name.clone());
+        if name.starts_with("asphalt"){return b'A';}
+        if name.starts_with("wood"){return b'W';}
+        if ["metal","grate","vent","chainlink"].iter().any(|p|name.starts_with(p)){return b'M';}
+        if ["rock","brick","dirt","sand","gravel"].iter().any(|p|name.starts_with(p))||name.contains("rough"){return b'R';}
+        if let Some(base)=raw.get(&name).and_then(|b|b.str("base")){name=base.to_ascii_lowercase();}else{break;}
+    }
+    resolve(raw,prop).map_or(0,|s|match s.material {13=>b'W',v=>v})
 }
 
 pub(super) fn bind(world: &CollisionWorld, previous: Option<[u8; 20]>) -> Option<[u8; 20]> {
@@ -91,6 +108,16 @@ mod installed;
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn rolling_uses_authored_props_and_bases_including_numeric_dense_wood(){
+        let doc=kv::parse(r#""default" {"gamematerial" "C" "penetrationmodifier" "1" "damagemodifier" "0.5"} "customfloor" {"base" "asphalt"} "asphalt" {"base" "default"} "wood_dense" {"gamematerial" "13"}"#).unwrap();
+        let raw=doc.iter().filter_map(|(n,v)|v.as_block().map(|b|(n.to_owned(),b.clone()))).collect();
+        assert_eq!(rolling_class(&raw,"customfloor"),b'A');
+        assert_eq!(rolling_class(&raw,"wood_dense"),b'W');
+        assert_eq!(rolling_class(&raw,"metalgrate"),b'M');
+        assert_eq!(rolling_class(&raw,"concrete_rough"),b'R');
+        assert_eq!(rolling_class(&raw,"default"),b'C');
+    }
 
     #[test]
     fn explicit_inheritance_default_missing_and_bad_values() {

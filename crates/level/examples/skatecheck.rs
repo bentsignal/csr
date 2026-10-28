@@ -43,8 +43,11 @@ fn run() -> Result<(), String> {
         .ok_or("Usage: skatecheck <private pack.csrpack> [map]")?;
     let pack = packs::Pack::open(Path::new(&path))?;
     let module = load_module(&pack)?;
+    if std::env::args().any(|a|a=="--route"){return coursecheck(module);}
     let full = pack.manifest().mechanics[0].api_version == 2;
     if full {
+        momentumcheck(&module)?;
+        if pack.manifest().version=="0.4.0"{audiocheck(&module)?;}
         grindcheck(module.clone())?;
     }
     let mut collision = collision::CollisionWorld::new();
@@ -60,6 +63,7 @@ fn run() -> Result<(), String> {
     collision.finalize();
     let collision = Arc::new(collision);
     if full {
+        combatcheck(module.clone(),collision.clone())?;
         markercheck(module.clone(),collision.clone())?;
         offboardcheck(module.clone(), collision.clone())?;
         flipcheck(module.clone(), collision.clone())?;
@@ -299,6 +303,105 @@ fn controller(t: f32) -> mechanics::link::Controller {
     }
     report
 }
+fn momentumcheck(module:&sim::mechanics::Module)->Result<(),String>{
+    use mechanics::link::{Scene,Start,Frame,Controller};
+    let program=module.external.as_ref().unwrap();
+    let scene=Scene::default();
+    for (case,vertical) in [450.,-700.].into_iter().enumerate(){
+        let start=Start{grounded:false,position:[0.,0.,1200.],velocity:[1400.,240.,vertical],yaw:0.,checkpoint:None};
+        let mut journal=mechanics::external::Journal::default();let mut hash=mechanics::external::digest([0;32],&start);
+        for tick in 0..32 {
+            let frame=Frame{input:Controller{connected:true,..Default::default()},dt:1./128.,scene:Default::default()};
+            let (pose,_)=program.advance(&scene,900+case,900+case as u64,&start,&journal,hash,&frame)?;
+            if pose.velocity[0]<1250. || pose.velocity[1]<180. || pose.velocity[2].signum()!=vertical.signum(){return Err(format!("air transfer lost momentum at {tick}: {:?}",pose.velocity));}
+            if tick==31{println!("Air transfer {case}: position={:?} velocity={:?}",pose.position,pose.velocity);}
+            hash=mechanics::external::digest(hash,&frame);journal.push(frame);
+        }
+    }
+    Ok(())
+}
+fn audiocheck(module:&sim::mechanics::Module)->Result<(),String>{
+    use mechanics::link::*;
+    let program=module.external.as_ref().unwrap();
+    let points=[[-5000.,-5000.,0.],[5000.,-5000.,0.],[5000.,5000.,0.],[-5000.,5000.,0.]];
+    let scene=Scene{triangles:vec![Triangle{points:[points[0],points[1],points[2]],surface:0},Triangle{points:[points[0],points[2],points[3]],surface:0}],..Default::default()};
+    let mut hashes=std::collections::BTreeSet::new();
+    for (case,material) in [b'C',b'W',b'M'].into_iter().enumerate(){
+        let start=Start{position:[0.,0.,0.1],velocity:[600.,0.,0.],yaw:0.,grounded:true,checkpoint:None};
+        let mut journal=mechanics::external::Journal::default();let mut hash=mechanics::external::digest([0;32],&start);let mut audio=vec![];
+        let session=1200+case as u64;
+        for _ in 0..256 {
+            let frame=Frame{input:Controller{connected:true,..Default::default()},dt:1./128.,scene:SceneState{ground_material:material,..Default::default()}};
+            program.advance(&scene,1200,session,&start,&journal,hash,&frame)?;
+            audio.extend(program.take_audio(session));
+            hash=mechanics::external::digest(hash,&frame);journal.push(frame);
+        }
+        let rms=(audio.iter().map(|v|v*v).sum::<f32>()/audio.len().max(1) as f32).sqrt();
+        if !rms.is_finite() || rms<0.0001 {return Err(format!("silent granular surface {}: samples={} rms={rms}",material as char,audio.len()));}
+        let digest=mechanics::external::digest([0;32],&audio);hashes.insert(digest);
+        println!("Native grain surface={} samples={} rms={rms:.5} hash={digest:x?}",material as char,audio.len());
+        if let Some(dir)=std::env::var_os("CSR_SKATE_AUDIO_PROOF"){
+            let pcm:Vec<u8>=audio.iter().flat_map(|s|((s.clamp(-1.,1.)*32767.) as i16).to_le_bytes()).collect();
+            let mut wav=b"RIFF".to_vec();wav.extend((pcm.len() as u32+36).to_le_bytes());wav.extend(b"WAVEfmt ");wav.extend(16u32.to_le_bytes());wav.extend(1u16.to_le_bytes());wav.extend(1u16.to_le_bytes());wav.extend(48000u32.to_le_bytes());wav.extend(96000u32.to_le_bytes());wav.extend(2u16.to_le_bytes());wav.extend(16u16.to_le_bytes());wav.extend(b"data");wav.extend((pcm.len() as u32).to_le_bytes());wav.extend(pcm);
+            std::fs::write(std::path::Path::new(&dir).join(format!("rolling-{}.wav",material as char)),wav).map_err(|e|e.to_string())?;
+        }
+    }
+    if hashes.len()!=3{return Err("different ground materials produced identical rolling audio".into());}Ok(())
+}
+fn combatcheck(module:Arc<sim::mechanics::Module>,collision:Arc<collision::CollisionWorld>)->Result<(),String>{
+    let catalog=level::Level::load(level::surf_course::NAME,None).map_err(|e|e.to_string())?.catalog;
+    let mut w=sim::World::with_catalog(collision,catalog);w.mechanics.push(module);let id=w.add_player("Riding combat",Team::CounterTerrorist);
+    w.player_mut(id).unwrap().movement.origin=Vec3::Z*0.1;
+    let mut shots=0;let mut selected=std::collections::BTreeSet::new();
+    for tick in 0..512 {
+        let slot=if tick==128||tick==256{sim::SLOT_NEXT}else{0};
+        w.step(&[(id,TickInput{toggle_mode:tick==0,weapon_slot:slot,buttons:if tick%32==0 && tick>64{movement::buttons::ATTACK}else{0},controller:mechanics::link::Controller{connected:true,buttons:if slot!=0{1}else if tick%32==0 && tick>64{8}else{0},..Default::default()},..Default::default()})]);
+        let p=w.player(id).unwrap();if p.mechanic.is_none()||p.equipped_mechanic.is_some(){return Err("riding weapon cycle selected a board tool or left Skate".into());}
+        if let Some(gun)=p.active_weapon(){selected.insert(gun.def.class_name.clone());}
+        shots+=w.events.iter().filter(|e|matches!(e,sim::GameEvent::Fire{player,..} if *player==id)).count();
+    }
+    println!("Riding combat: shots={shots} weapons={selected:?}");
+    if shots==0||selected.len()<2{return Err("riding fire / weapon switching failed".into());}Ok(())
+}
+fn coursecheck(module:Arc<sim::mechanics::Module>)->Result<(),String>{
+    let level=level::Level::load(level::surf_course::NAME,None).map_err(|e|e.to_string())?;
+    let mut w=sim::World::with_catalog(level.collision.clone(),level.catalog.clone());
+    w.load_map(&level.bsp,None);w.config.air_accelerate=1000.;w.config.accelerate=10.;w.mechanics.push(module);
+    let id=w.add_player("Clip route",Team::CounterTerrorist);
+    let mut stage=0;let mut landed_at=None;let mut max_speed=0f32;let mut last_state=0;
+    let mut trick=String::new();let mut score=0;
+    for tick in 0..4096 {
+        let p=w.player(id).unwrap();let pos=p.movement.origin;let vel=p.movement.velocity;
+        if let Some(s)=p.mechanic.as_ref().and_then(|s|s.external.as_ref()){
+            if !s.pose.trick.is_empty(){trick=s.pose.trick.clone();score=score.max(s.pose.score);}
+        }
+        let mut input=TickInput{view_angles:Vec3::ZERO,..Default::default()};
+        if stage==0 {
+            if pos.x<0. {input.forward_move=450.;}else{input.side_move=-450.;}
+            if pos.x>2650. {input.toggle_mode=true;stage=1;}
+        }else if stage==1 {
+            input.controller.connected=true;
+            if p.movement.on_ground && pos.x>2800. && landed_at.is_none(){landed_at=Some(tick);println!("Trick deck landing tick={tick} position={pos:?} velocity={vel:?}");}
+            if let Some(at)=landed_at {
+                if (at+40..at+100).contains(&tick){input.controller.right=[0,-32768];}
+                if (at+100..at+126).contains(&tick){input.controller.right=[30000,30000];}
+            }
+            if pos.x>5015. {input.toggle_mode=true;stage=2;}
+        }else {
+            input.side_move=-450.;
+            if pos.x>6000. && pos.z> -100. {println!("Second surf ramp reached tick={tick} position={pos:?} velocity={vel:?} peak={max_speed} trick={trick} score={score}");return if landed_at.is_some() && !trick.is_empty(){Ok(())}else{Err("missed trick deck or trick recognition".into())};}
+        }
+        max_speed=max_speed.max(vel.truncate().length());
+        if tick%128==0||stage!=last_state{println!("Route tick={tick} stage={stage} position={pos:?} velocity={vel:?}");last_state=stage;}
+        w.step(&[(id,input)]);
+        if input.toggle_mode {
+            let after=w.player(id).unwrap().movement.velocity;
+            println!("Mode transfer stage={stage}: before={vel:?} after={after:?}");
+            if after.truncate().length()<vel.truncate().length()*0.95 || (after.z-vel.z).abs()>20. {return Err("course handoff discarded airborne velocity".into());}
+        }
+    }
+    Err(format!("route incomplete at {:?}",w.player(id).unwrap().movement.origin))
+}
 fn markercheck(module:Arc<sim::mechanics::Module>,collision:Arc<collision::CollisionWorld>)->Result<(),String>{
     use mechanics::link::Controller;
     let mut w=sim::World::new(collision.clone());w.mechanics.push(module);
@@ -308,6 +411,8 @@ fn markercheck(module:Arc<sim::mechanics::Module>,collision:Arc<collision::Colli
     for _ in 0..128 {w.step(&[(id,TickInput{controller:Controller{connected:true,..Default::default()},..Default::default()})]);}
     w.step(&[(id,TickInput{controller:Controller{connected:true,buttons:0x102,..Default::default()},..Default::default()})]);
     let marker=w.player(id).unwrap().mechanic_checkpoint.clone().ok_or("grounded marker placement failed")?;
+    let ui=&w.player(id).unwrap().mechanic.as_ref().unwrap().external.as_ref().unwrap().pose.marker;
+    if !ui.visible||!ui.can_return||ui.action!=2{return Err("marker placement did not publish its contextual UI / sound event".into());}
     let p=marker.target.transform[3];let expected=Vec3::new(p[0],-p[2],p[1])/0.0254;
     let saved=w.state();let mut replay=w.clone();replay.restore(saved);
     let mut future=Vec::new();
@@ -324,10 +429,12 @@ fn markercheck(module:Arc<sim::mechanics::Module>,collision:Arc<collision::Colli
     if actor.mechanic_checkpoint.as_ref()!=Some(&marker){return Err("CS exit erased session marker".into());}
     w.step(&[(id,TickInput::default())]);
     w.step(&[(id,TickInput{toggle_mode:true,..Default::default()})]);
-    for _ in 0..256 {w.step(&[(id,TickInput{controller:Controller{connected:true,buttons:0x101,..Default::default()},..Default::default()})]);}
+    let mut progress=false;
+    for _ in 0..256 {w.step(&[(id,TickInput{controller:Controller{connected:true,buttons:0x101,..Default::default()},..Default::default()})]);let ui=&w.player(id).unwrap().mechanic.as_ref().unwrap().external.as_ref().unwrap().pose.marker;progress|=ui.progress>0. && ui.progress<1.;}
     let returned=w.player(id).unwrap().movement.origin.truncate().distance(expected.truncate());
     println!("Session marker: travelled={distance:.2}in, return error={returned:.2}in; CS exit hull clear and marker preserved");
     if returned>20. {return Err("session marker did not return through the native actor reset".into());}
+    if !progress||w.player(id).unwrap().mechanic.as_ref().unwrap().external.as_ref().unwrap().pose.marker.action!=3{return Err("marker return did not publish progress / return sound event".into());}
     Ok(())
 }
 fn grindcheck(module: Arc<sim::mechanics::Module>) -> Result<(), String> {
@@ -524,6 +631,7 @@ fn dynamiccheck(module: &sim::mechanics::Module) -> Result<(), String> {
             });
         }
         let start = Start {
+            grounded:true,
             checkpoint:None,
             position: [0., 0., 3.5],
             velocity: [240., 0., 0.],
@@ -541,6 +649,7 @@ fn dynamiccheck(module: &sim::mechanics::Module) -> Result<(), String> {
                 },
                 dt: 1. / 128.,
                 scene: SceneState {
+                    ground_material:0,
                     doors: vec![if removed { 90. } else { 0. }],
                     broken: vec![removed],
                 },

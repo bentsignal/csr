@@ -44,6 +44,7 @@ pub fn digest(parent: [u8; 32], value: &impl serde::Serialize) -> [u8; 32] {
 }
 
 pub struct Program {
+    audio:Mutex<(u64,std::collections::VecDeque<f32>)>,
     executable: PathBuf,
     assets: PathBuf,
     fingerprint: String,
@@ -83,6 +84,7 @@ impl Program {
             Sha256::digest(std::fs::read(&executable).map_err(|e| e.to_string())?)
         );
         Ok(Self {
+            audio:Mutex::new((0,Default::default())),
             executable,
             assets,
             fingerprint,
@@ -180,14 +182,19 @@ impl Program {
                     start: start.clone(),
                     frames: history.to_vec(),
                 })? {
-                    Response::Pose(_) => {}
+                    Response::Pose(_,_) => {if let Ok(mut a)=self.audio.lock(){a.1.clear();}}
                     Response::Error(e) => return Err(e),
                     _ => return Err("provider restore rejected".into()),
                 }
                 response = p.exchange(&request)?;
             }
             match response {
-                Response::Pose(pose) => {
+                Response::Pose(pose,audio) => {
+                    if audio.len()>8192 || audio.iter().any(|s|!s.is_finite()||s.abs()>1.) {return Err("invalid provider audio".into());}
+                    if let Ok(mut a)=self.audio.lock(){
+                        if a.0!=session {a.0=session;a.1.clear();}
+                        a.1.extend(audio);while a.1.len()>12000 {a.1.pop_front();}
+                    }
                     p.expected = Some((session, history.len() + 1, digest(parent, frame)));
                     Ok((pose, p.rig.clone()))
                 }
@@ -212,6 +219,10 @@ impl Program {
         self.with_world_scene(world, |scene, key| {
             self.advance(scene, key, session, start, history, parent, frame)
         })
+    }
+    /// Cosmetic stream only; never retained in snapshots or replay hashes.
+    pub fn take_audio(&self,session:u64)->Vec<f32>{
+        self.audio.lock().ok().filter(|a|a.0==session).map(|mut a|a.1.drain(..).collect()).unwrap_or_default()
     }
     /// Prepare immutable collision and the trusted provider while the map is
     /// loading. This does not advance or select any player's gameplay state.

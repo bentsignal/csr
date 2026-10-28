@@ -98,6 +98,15 @@ pub fn apply(
 mod tests {
     use super::*;
     #[test]
+    fn riding_combat_and_marker_modifier_share_dpad_without_stealing_tricks(){
+        let report=Controller{connected:true,buttons:9,triggers:[200,255],right:[32767,-32768],..Default::default()};
+        let mut input=sim::TickInput::default();apply(&mut input,report,0,true,1./128.);
+        assert_ne!(input.buttons&movement::buttons::ATTACK,0);assert_eq!(input.weapon_slot,sim::SLOT_NEXT);assert_eq!(input.controller,report);
+        let mut held=sim::TickInput::default();apply(&mut held,report,report.buttons,true,1./128.);assert_eq!(held.weapon_slot,0);
+        let mut marker=sim::TickInput::default();apply(&mut marker,Controller{buttons:report.buttons|0x100,..report},0,true,1./128.);
+        assert_eq!(marker.buttons,0);assert_eq!(marker.weapon_slot,0);
+    }
+    #[test]
     fn skate_reports_keep_flicks_triggers_and_face_buttons() {
         let report = Controller {
             connected: true,

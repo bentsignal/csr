@@ -4,7 +4,7 @@ fn main() {
         let pack=packs::Pack::open(std::path::Path::new(&path)).expect("private Skate pack");
         let definition=&pack.manifest().mechanics[0];
         let root=mechanics::data::materialize(&pack.file(&definition.module).expect("bundle"),&std::env::temp_dir().join("csr-skate-soundcheck")).expect("private bundle");
-        for name in ["roll","pop","land","push","grind","brake"]{
+        for name in ["roll","pop","land","push","grind","brake","marker-open","marker-set","marker-return","concrete_smooth_hard","concrete_rough_hard","asphalt_rough_hard","wood_ramp_hard","metal_smooth_hard"]{
             let bytes=std::fs::read(root.join(format!("private/crossover-audio/{name}.wav"))).expect("owned converted board foley");
             let bytes=client::audio::playable(bytes).expect("playable board foley");
             let decoder=rodio::Decoder::builder().with_byte_len(bytes.len() as u64).with_data(std::io::Cursor::new(bytes)).build().expect("board audio decoder");
