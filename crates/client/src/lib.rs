@@ -301,10 +301,11 @@ impl Plugin for CsgoPlugin {
                     sky::follow_camera,
                     visibility::update,
                     effects::draw,
-                    (characters::sync, movement_modes::draw,board_presentation::update,movement_modes::full_board::draw,board_audio::update).chain(),
+                    // The held board is drawn from this frame's posed knife handle.
+                    (viewmodel::update, foley::inspect, utility_fx::update_wick).chain(),
+                    (characters::sync, movement_modes::draw,movement_modes::full_board::draw,board_audio::update).chain(),
                     items::sync,
                     (doors::sync, breakables::sync, window_fade::update).chain(),
-                    (viewmodel::update, foley::inspect, utility_fx::update_wick).chain(),
                     (tracers::draw, muzzle_flash::draw).chain(),
                     scope::update,
                     buymenu::draw,

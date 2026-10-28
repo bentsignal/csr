@@ -356,7 +356,16 @@ pub fn draw(
             mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
             mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
         }
-        instance.display = if held { 1 } else { 2 };
+        let display = if held { 1 } else { 2 };
+        if instance.display != display {
+            // Held like a weapon: viewmodel FOV/depth, never clipping walls.
+            commands.entity(entity).insert(if held {
+                crate::viewmodel::layer()
+            } else {
+                bevy::camera::visibility::RenderLayers::layer(0)
+            });
+        }
+        instance.display = display;
     }
     let Some(visuals) = visuals else { return };
     // Allocate and queue board materials with the map, including before any

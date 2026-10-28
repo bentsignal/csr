@@ -35,6 +35,12 @@ pub const VIEWMODEL_FOV: f32 = 60.0;
 /// CS:GO `viewmodel_offset_x/y/z` defaults: right, forward, up.
 pub const VIEWMODEL_OFFSET: glam::Vec3 = glam::Vec3::new(1.0, 1.0, -1.0);
 
+/// Cached-instance identity for held crossover equipment. Its arms, clips
+/// and look/bob/settle motion are the installed default knife's; the knife
+/// mesh itself stays hidden and the equipment is attached to its handle.
+pub(crate) const BOARD_KEY: &str = "csr_held_board";
+const BOARD_VIEW: &str = "weapon_knife";
+fn view_name(name: &str) -> &str { if name == BOARD_KEY { BOARD_VIEW } else { name } }
 pub const T_ARMS: &str = "models/weapons/t_arms_phoenix.mdl";
 pub const CT_ARMS: &str = "models/weapons/ct_arms_sas.mdl";
 
@@ -1901,6 +1907,7 @@ pub struct ViewModelState {
     inspection: inspection::Inspection,
     knife_attack: Option<inspection::Playback>,
     elite_fire: Option<EliteFire>,
+    board_buttons: u16,
 }
 
 impl ViewModelState {
@@ -2326,7 +2333,7 @@ pub fn update(
     local: Res<LocalPlayer>,
     models: Res<ViewModels>,
     mut state: ResMut<ViewModelState>,
-    (request,inventory): (Res<crate::tracers::InspectRequest>,Res<crate::cosmetics::Inventory>),
+    (request,inventory,mut held_board): (Res<crate::tracers::InspectRequest>,Res<crate::cosmetics::Inventory>,ResMut<crate::board_presentation::HeldBoard>),
     (mut muzzles, mut wick, mut optic): (ResMut<crate::tracers::Muzzles>, ResMut<HeldWick>, Option<ResMut<crate::scope::OpticAperture>>),
     mut materials: ResMut<Assets<WorldMaterial>>,
     effects: Res<crate::effects::Effects>,
@@ -2339,6 +2346,7 @@ pub fn update(
     mut visibility: Query<&mut Visibility>,
 ) {
     let _frame_scope = crate::input_latency::frame_scope("viewmodel");
+    held_board.transform = None;
     muzzles.first=None;
     muzzles.first_pair=None;
     // Clear before every early return, including death, noclip and switching.
@@ -2380,10 +2388,16 @@ pub fn update(
         state.air_lowering.clear();
     }
     let w = p.active_weapon();
+    // Held crossover equipment (never while riding it or holding a weapon).
+    let board = w.is_none() && p.mechanic.is_none()
+        && p.equipped_mechanic.as_ref().is_some_and(|i| !i.used)
+        && models.weapons.contains_key(BOARD_VIEW);
+    let board_def = board.then(|| level.0.catalog.weapons.iter().find(|d| d.class_name == BOARD_VIEW)).flatten();
     let shared_motion = show && p.id == local.id && local.spectating.is_none()
         && p.tracked.is_none() && p.aim.is_none()
-        && w.is_some_and(|w| w.zoom_level == 0
-            && look_motion::shared_profile(level.0.item_schema_sha1(), &w.def));
+        && (w.is_some_and(|w| w.zoom_level == 0
+            && look_motion::shared_profile(level.0.item_schema_sha1(), &w.def))
+            || board_def.is_some_and(|def| look_motion::shared_profile(level.0.item_schema_sha1(), def)));
     // Record the viewing life on every frame, including the deferred-instance
     // frame below. Skipping a look reversal while switching weapons loses a
     // sample that is still needed when the measured delay reaches that frame.
@@ -2397,8 +2411,9 @@ pub fn update(
     let air_offset = if shared_motion && p.movement.ladder_normal.is_none() {
         state.air_lowering.sample(now, !motion.animation.input.on_ground)
     } else { state.air_lowering.clear(); 0. };
-    let active = p.active_weapon().map(|w| w.def.class_name.clone()).unwrap_or_default();
-    let knife_draw_index = state.knife_draw_index(p, models.weapons.get(&active));
+    let active = if board { BOARD_KEY.to_string() }
+        else { p.active_weapon().map(|w| w.def.class_name.clone()).unwrap_or_default() };
+    let knife_draw_index = state.knife_draw_index(p, models.weapons.get(view_name(&active)));
     if knife_draw_index.is_some() && state.knife_draw_seen != state.knife_draw_serial {
         // Tick foley can observe an intervening switch which rendering never
         // presents. Its new deployment still resets playback, even when the
@@ -2418,7 +2433,7 @@ pub fn update(
                 despawn(&mut commands, &a);
             }
         }
-        if let Some(view) = models.weapons.get(&active) {
+        if let Some(view) = models.weapons.get(view_name(&active)) {
             let gun = skinning::spawn(&mut commands, &view.asset, Some(layer()), Some(&mut *materials));
             crate::skin_finish::tag(&mut commands,&gun,crate::skin_finish::Target::View);
             crate::decorations::tag(&mut commands,&view.asset,&gun,crate::skin_finish::Target::View,VIEWMODEL_LAYER);
@@ -2449,7 +2464,7 @@ pub fn update(
         }
         return;
     }
-    if let Some(view) = models.weapons.get(&active) {
+    if let Some(view) = models.weapons.get(view_name(&active)) {
         if state.begin_life(p.life_epoch, &view.asset.model.bones, now,
             effects.attack_serial, request.serial()) {
             if let Some(index) = knife_draw_index {
@@ -2477,7 +2492,7 @@ pub fn update(
         state.elite_fire = None;
         return;
     }
-    let Some(view) = models.weapons.get(&name) else {
+    let Some(view) = models.weapons.get(view_name(&name)) else {
         state.knife_inspect = None;
         state.knife_reinspect = None;
         return;
@@ -2582,6 +2597,15 @@ pub fn update(
                     duration: seq.clip.duration(), sounds: seq.sounds.clone(),
                 });
         }
+    }
+    // Held equipment inspects with the knife's own clip (keyboard or stick click).
+    let pad_inspect = local.controller_buttons & 0x40 != 0 && state.board_buttons & 0x40 == 0;
+    state.board_buttons = local.controller_buttons;
+    let board_inspect = inspect_action == Some(crate::tracers::InspectAction::Start)
+        || pad_inspect || std::env::var_os("CSR_TEST_BOARD_INSPECT").is_some();
+    if board && board_inspect && state.activity != "INSPECT" && view.clips.contains_key("INSPECT") {
+        state.activity = "INSPECT".into(); state.started = now; state.clip_index = 0;
+        state.inspect_transition = state.inspect_transition.wrapping_add(1);
     }
     if state.activity=="INSPECT" && w.is_some_and(|w|w.zoom_level>0) {state.activity="ACT_VM_IDLE".into();state.started=now;}
     if !reloading || state.activity != "ACT_VM_RELOAD" || grenade.is_some() || suppressor.is_some() {
@@ -2793,18 +2817,23 @@ pub fn update(
         }
     }
 
+    if board && show {
+        held_board.transform = board_grip::attachment(model, &pose,
+            Mat4::from_translation(origin) * Mat4::from_mat3(rot * settling.rotation));
+    }
     for (index, e) in entities.iter().enumerate() {
+        let hide_knife = board && index < gun.meshes.len();
         let clear_lens = p.active_weapon().is_some_and(|w| w.zoom_level > 0 && w.def.class == weapons::WeaponClass::Rifle)
-            && models.weapons.get(&name).and_then(|view| view.asset.model.meshes.get(index).map(|mesh| {
+            && models.weapons.get(view_name(&name)).and_then(|view| view.asset.model.meshes.get(index).map(|mesh| {
                 let model = &view.asset.model;
                 let material = model.skins.first().and_then(|s| s.get(mesh.material)).copied().unwrap_or(mesh.material);
                 model.textures.get(material).is_some_and(|m| m.starts_with("scope_") || m.contains("scope_glass"))
             })).unwrap_or(false);
-        let hide_suppressor = index < gun.meshes.len() && models.weapons.get(&name).is_some_and(|view|
+        let hide_suppressor = index < gun.meshes.len() && models.weapons.get(view_name(&name)).is_some_and(|view|
             skinning::suppressor_mesh_hidden(&view.asset.model, index, p.active_weapon().is_some_and(|w|
                 w.suppressor_visible(world.0.time() + fixed.overstep_fraction() * world.0.dt(), world.0.dt()))));
         if let Ok(mut v) = visibility.get_mut(*e) {
-            *v = if show && !clear_lens && !hide_suppressor { Visibility::Inherited } else { Visibility::Hidden };
+            *v = if show && !clear_lens && !hide_suppressor && !hide_knife { Visibility::Inherited } else { Visibility::Hidden };
         }
     }
 
