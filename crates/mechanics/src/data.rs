@@ -31,7 +31,11 @@ fn allowed(path: &str) -> bool {
             | "private/crossover-audio/asphalt_rough_hard.wav"
             | "private/crossover-audio/wood_ramp_hard.wav"
             | "private/crossover-audio/metal_smooth_hard.wav"
+            | "private/hud/runtime/trickdisplay.json"
+            | "private/session-marker/hud.json"
     ) || [
+        ("private/hud/assets/data/fe/", "rgba"),
+        ("private/session-marker/texture-", "rgba"),
         ("private/stock/data/state/", "stategraph"),
         ("private/stock/data/script/", "stategraph"),
         ("private/stock/data/joystick/", "pat"),
@@ -40,6 +44,15 @@ fn allowed(path: &str) -> bool {
     ]
     .iter()
     .any(|(prefix, extension)| path.starts_with(prefix) && path.ends_with(&format!(".{extension}")))
+}
+/// A safe relative bundle path that the provider data allowlist admits.
+pub fn admitted(path: &str) -> bool {
+    path.is_ascii()
+        && !path.bytes().any(|b| b < 32 || b"\\:<>\"|?*".contains(&b))
+        && !path
+            .split('/')
+            .any(|p| p.is_empty() || p == "." || p == ".." || p.ends_with(['.', ' ']))
+        && allowed(path)
 }
 pub fn parse(bytes: &[u8]) -> Result<Vec<(&str, &[u8])>, String> {
     if bytes.len() > 128 << 20 || bytes.get(..8) != Some(MAGIC) {
@@ -61,14 +74,7 @@ pub fn parse(bytes: &[u8]) -> Result<Vec<(&str, &[u8])>, String> {
         let path = std::str::from_utf8(bytes.get(at..at + pathlen).ok_or("truncated data path")?)
             .map_err(|_| "invalid data path")?;
         at += pathlen;
-        if !path.is_ascii()
-            || path.bytes().any(|b| b < 32 || b"\\:<>\"|?*".contains(&b))
-            || path
-                .split('/')
-                .any(|p| p.is_empty() || p == "." || p == ".." || p.ends_with(['.', ' ']))
-            || !allowed(path)
-            || !names.insert(path.to_ascii_lowercase())
-        {
+        if !admitted(path) || !names.insert(path.to_ascii_lowercase()) {
             return Err("unsafe or unsupported runtime data path".into());
         }
         let data = bytes
@@ -79,6 +85,14 @@ pub fn parse(bytes: &[u8]) -> Result<Vec<(&str, &[u8])>, String> {
             if data.len()>64*1024 || serde_json::from_slice::<serde_json::Value>(data).is_err(){return Err("invalid grain tuning data".into());}
         }else if path.starts_with("private/crossover-audio/") && (data.len()>4*1024*1024 || !data.starts_with(b"RIFF") || data.get(8..12)!=Some(b"WAVE")) {
             return Err("invalid or oversized board audio data".into());
+        } else if path.ends_with(".rgba") && (data.len() > 16 << 20 || data.len() % 4 != 0) {
+            return Err("invalid or oversized HUD texture".into());
+        } else if (path.starts_with("private/hud/") || path.starts_with("private/session-marker/"))
+            && path.ends_with(".json")
+            && (data.len() > 16 << 20
+                || serde_json::from_slice::<serde::de::IgnoredAny>(data).is_err())
+        {
+            return Err("invalid or oversized HUD data".into());
         }
         files.push((path, data));
     }
@@ -180,6 +194,31 @@ mod tests {
         }
         entries.last_mut().unwrap().1=b"not wave data".to_vec();assert!(build(&entries).is_err());
         entries.last_mut().unwrap().1=vec![0;4*1024*1024+1];assert!(build(&entries).is_err());
+    }
+    #[test]
+    fn original_hud_admits_only_its_display_data_and_rgba_textures() {
+        let mut entries = files();
+        entries.extend([
+            ("private/hud/runtime/trickdisplay.json".into(), b"{}".to_vec()),
+            ("private/session-marker/hud.json".into(), b"{\"version\":1}".to_vec()),
+            ("private/session-marker/texture-0.rgba".into(), vec![0; 16]),
+            (
+                "private/hud/assets/data/fe/fonts/futuraheavy/0000_futuraheavy.Texture.rgba".into(),
+                vec![0; 64],
+            ),
+        ]);
+        assert!(build(&entries).is_ok());
+        for (path, data) in [
+            ("private/hud/runtime/other.json", b"{}".to_vec()),
+            ("private/hud/assets/data/fe/movie.apt", vec![]),
+            ("private/session-marker/texture-0.png", vec![0; 16]),
+            ("private/session-marker/texture-1.rgba", vec![0; 15]),
+            ("private/session-marker/hud.json", b"not json".to_vec()),
+        ] {
+            let mut bad = files();
+            bad.push((path.into(), data));
+            assert!(build(&bad).is_err(), "{path}");
+        }
     }
     #[test]
     fn runtime_bundle_rejects_traversal_aliases_programs_and_truncation() {

@@ -80,36 +80,29 @@ mod animation {
         )
     }
 }
-mod apt_vm {
-    // The scoring owner publishes these plain values to its optional HUD. The
-    // headless runtime exposes scoring separately and runs no APT bytecode.
-    #[derive(Clone, Debug, PartialEq)]
-    pub enum Value {
-        Text(String),
-        Bool(bool),
-    }
-}
-mod hud_runtime {
-    pub struct Input {
-        pub sequence_score: i32,
-        pub line_score: i32,
-        pub sequence_timer: i32,
-        pub line_time: f32,
-        pub line_capacity: f32,
-        pub multiplier: f32,
-        pub clean: bool,
-        pub sketchy: bool,
-        pub stance: [bool; 4],
-        pub trick_name: String,
-        pub trick_metrics: [crate::apt_vm::Value; 5],
-        pub context_tricks: Vec<crate::apt_vm::Value>,
-    }
-}
+// Original APT trick display: bounded ActionScript VM, movie timeline and
+// display-list traversal. The CS host only draws the published triangles.
+#[path = "../upstream/apt_display.rs"]
+mod apt_display;
+#[path = "../upstream/apt_imports.rs"]
+mod apt_imports;
+#[path = "../upstream/apt_movie.rs"]
+mod apt_movie;
+#[path = "../upstream/apt_scene.rs"]
+mod apt_scene;
+#[path = "../upstream/apt_text.rs"]
+mod apt_text;
+#[path = "../upstream/apt_vm.rs"]
+mod apt_vm;
+mod hud;
+#[path = "../upstream/hud_runtime.rs"]
+mod hud_runtime;
 
 mod rolling_audio;
 pub struct Runtime {
     audio:rolling_audio::Rolling,
     marker:session_marker::SessionMarker,
+    hud: hud::Hud,
     physics: physics::GamePhysics,
     skater: physics::SkaterRuntime,
     controls: physics::PlayerControls,
@@ -145,6 +138,7 @@ impl Runtime {
         Ok(Self {
             audio:rolling_audio::Rolling::new(rolling_audio::Bank::load(root)?),
             marker:session_marker::SessionMarker::load(root,None)?,
+            hud: hud::Hud::new(root, skater.scoring.hud_input()),
             physics,
             skater,
             controls,

@@ -328,6 +328,7 @@ impl Plugin for CsgoPlugin {
         menu::install_controls_retirement(app);
         if let Err(error) = remote_render_gate::install(app) { error!("Remote render preparation unavailable: {error:?}"); }
         shadow_diagnostic::install(app);
+        board_hud::install(app);
         skinning_bounds::install(app);
         console::install(app);
         playtest::install(app);
