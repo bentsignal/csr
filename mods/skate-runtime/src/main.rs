@@ -15,6 +15,37 @@ fn main() {
         .join()
         .expect("Skate simulation owner panicked");
 }
+enum Audio {
+    Idle,
+    Loading(std::thread::JoinHandle<Result<csr_skate_runtime::board_audio::Assets, String>>),
+    Ready(csr_skate_runtime::board_audio::Assets),
+    Failed,
+}
+impl Audio {
+    /// The decoded assets once the loader has finished (never blocks the request thread).
+    fn ready(&mut self) -> Option<&csr_skate_runtime::board_audio::Assets> {
+        if matches!(self, Audio::Loading(h) if h.is_finished()) {
+            let Audio::Loading(handle) = std::mem::replace(self, Audio::Failed) else {
+                unreachable!()
+            };
+            *self = match handle.join() {
+                Ok(Ok(assets)) => Audio::Ready(assets),
+                Ok(Err(e)) => {
+                    eprintln!("Skate board audio unavailable: {e}");
+                    Audio::Failed
+                }
+                Err(_) => {
+                    eprintln!("Skate board audio loader panicked");
+                    Audio::Failed
+                }
+            };
+        }
+        match self {
+            Audio::Ready(assets) => Some(assets),
+            _ => None,
+        }
+    }
+}
 fn serve() {
     let mut input = std::io::stdin().lock();
     let mut output = std::io::stdout().lock();
@@ -22,6 +53,10 @@ fn serve() {
     let mut scene = None;
     let mut active = None;
     let mut runtime: Option<csr_skate_runtime::Runtime> = None;
+    // The owner's board audio decodes once per process, off the request thread, while the map
+    // prepares; riding stays silent until it is ready (or for good, after an error).
+    let mut audio = Audio::Idle;
+    let mut host: Option<(u64, csr_skate_runtime::board_audio::Host)> = None;
     loop {
         let request = match mechanics_link::receive::<Request>(&mut input) {
             Ok(r) => r,
@@ -43,6 +78,13 @@ fn serve() {
                     let rt = csr_skate_runtime::Runtime::load(&root)?;
                     let rig = rt.rig();
                     let prepared = csr_skate_runtime::PreparedScene::new(&rt, geometry)?;
+                    if matches!(audio, Audio::Idle) {
+                        let root = root.clone();
+                        audio = Audio::Loading(std::thread::spawn(move || {
+                            csr_skate_runtime::board_audio::Assets::load(&root)
+                        }));
+                    }
+                    host = None;
                     assets = Some(root);
                     scene = Some(prepared);
                     runtime = Some(rt);
@@ -69,7 +111,13 @@ fn serve() {
                         rt.advance_host(frame)?;
                     }
                     let pose = rt.pose();
-                    rt.take_audio();
+                    // The replay's steps were heard (or belong to another session).
+                    rt.discard_audio();
+                    if host.as_ref().is_some_and(|(s, _)| *s == session) {
+                        host.as_mut().unwrap().1.cut(&rt);
+                    } else {
+                        host = None;
+                    }
                     runtime = Some(rt);
                     active = Some((session, frames.len() as u64));
                     Response::Pose(pose,vec![])
@@ -78,13 +126,24 @@ fn serve() {
                     if active != Some((session, at)) {
                         Response::NeedRestore
                     } else {
-                        let pose = runtime
-                            .as_mut()
-                            .ok_or("runtime not initialized")?
-                            .advance_host(&frame)?;
+                        let rt = runtime.as_mut().ok_or("runtime not initialized")?;
+                        let pose = rt.advance_host(&frame)?;
                         active = Some((session, at + 1));
-                        let audio=runtime.as_mut().unwrap().take_audio();
-                        Response::Pose(pose,audio)
+                        let samples = match audio.ready() {
+                            Some(assets) => {
+                                if host.as_ref().is_none_or(|(s, _)| *s != session) {
+                                    let mut fresh = csr_skate_runtime::board_audio::Host::new(assets);
+                                    fresh.cut(rt);
+                                    host = Some((session, fresh));
+                                }
+                                host.as_mut().unwrap().1.frame(assets, rt, frame.dt)
+                            }
+                            None => {
+                                rt.discard_audio();
+                                vec![]
+                            }
+                        };
+                        Response::Pose(pose, samples)
                     }
                 }
             })

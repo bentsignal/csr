@@ -106,9 +106,14 @@ mod hud_runtime {
     }
 }
 
-mod rolling_audio;
+#[path = "../upstream/game_audio/mod.rs"]
+mod game_audio;
+pub mod board_audio;
 pub struct Runtime {
-    audio:rolling_audio::Rolling,
+    /// The upstream audio observer's per-skater memory and its published steps (rebuilt by every
+    /// restore replay, like the physical state it reads).
+    audio_cues: game_audio::skate_events::Cues,
+    audio_seen: game_audio::skate_events::Seen,
     marker:session_marker::SessionMarker,
     physics: physics::GamePhysics,
     skater: physics::SkaterRuntime,
@@ -143,7 +148,8 @@ impl Runtime {
         let bind_pose = bridge::bind_pose(root, &skater)?;
         let language = bridge::language(root)?;
         Ok(Self {
-            audio:rolling_audio::Rolling::new(rolling_audio::Bank::load(root)?),
+            audio_cues: Default::default(),
+            audio_seen: Default::default(),
             marker:session_marker::SessionMarker::load(root,None)?,
             physics,
             skater,
@@ -178,7 +184,21 @@ impl Runtime {
             &mut actions,
             available,
             &mut self.camera,
-        )
+        )?;
+        // The upstream `skate_events::observe`, after every physics step (presentation only).
+        let dt = self.physics.period().as_secs_f32();
+        game_audio::skate_events::observe(
+            &self.physics,
+            &mut self.skater,
+            &mut self.audio_cues,
+            &mut self.audio_seen,
+            dt,
+        );
+        Ok(())
+    }
+    /// Drop the audio steps published so far (a restore replay's: never heard).
+    pub fn discard_audio(&mut self) {
+        self.audio_cues.take_steps();
     }
     pub fn diagnostic(&self) -> String {
         let deck = &self.physics.board.bodies()[skate_core::physics::board::BodyId::Deck.index()];
