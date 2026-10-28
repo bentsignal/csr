@@ -28,8 +28,6 @@ struct Part {
 pub struct Model {
     parts: Vec<Part>,
     center: Vec3,
-    pub(crate) audio: std::collections::HashMap<String, Arc<[u8]>>,
-    pub(crate) native_audio:bool,
     pub(crate) grip:Vec3,
 }
 impl Model {
@@ -207,16 +205,6 @@ impl Model {
             parts,
             center,
             grip,
-            native_audio:root.join("private/crossover-audio/grains.json").is_file(),
-            audio: ["roll", "pop", "land", "push", "grind", "brake","marker-open","marker-set","marker-return"]
-                .into_iter()
-                .filter_map(|name| {
-                    let bytes =
-                        std::fs::read(root.join(format!("private/crossover-audio/{name}.wav")))
-                            .ok()?;
-                    (bytes.len() <= 4 * 1024 * 1024).then(|| (name.to_string(), Arc::from(bytes)))
-                })
-                .collect(),
         })
     }
 }

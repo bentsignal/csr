@@ -98,3 +98,28 @@ in host snapshots and across mode changes; no hidden process-global state is
 required. Marker reports are sampled on every host tick so a D-pad press
 between native physics periods is retained. The walking camera alone reverses
 its vertical publication axis; raw pad/trick controls remain unchanged.
+
+Board audio is the upstream native player audio, unchanged in its calculations.
+`upstream/game_audio/` holds `skate_events`, `player_audio`, `grain_bed`,
+`frontend` and a trimmed `library` from `skate-game/src/game_audio`:
+
+- Bevy systems, the state log, tests and the mod overlay/rule layers are removed;
+  `mod.rs` keeps the upstream `native` host clock/flag holds verbatim and
+  pass-through stand-ins for the mod event and rule types (no mods run here).
+- `skate_events::observe` is a plain function the runtime calls after every
+  physics step; it takes the latched animation audio events exactly as upstream.
+- `library` reads only the board inputs of the owner's audio manifest (AEMS
+  projects/banks, Splice trees, grains, wheel spins, vault tuning, `fe` records).
+- `grain_bed::Bed::fresh` rebuilds a local bed sharing decoded recordings.
+- `src/board_audio.rs` decodes the owner's audio once per process (off the
+  request thread), boots the runtime in upstream order for each riding session
+  and runs the upstream frame schedule per admitted host frame: seams, inputs,
+  process, console MixMap evaluations, update, reverb owner, grain bed and
+  front-end object. The listener is the native gameplay camera. Output is
+  rendered for the frame's elapsed host time as 48 kHz interleaved stereo.
+  Restore replays discard their audio steps and count as a camera cut.
+- CS collision surfaces carry the host's rolling family (asphalt, wood, metal,
+  rough, gamematerial) as the native 7-bit audio tag; physics bits stay 0.
+- The session marker's open/place/go-to/refused presses play retail's `fe`
+  records through the same runtime. `CSR_SKATE_AUDIO_TRACE=1` logs posts,
+  releases, Splice starts and grain binds on stderr (`=2` adds voices).

@@ -13,7 +13,7 @@ fn manifest() -> String {
         r#"format_version = 2
 id = "skate3_riding"
 name = "Skate 3 crossover"
-version = "0.4.0"
+version = "0.5.0"
 origin = "skate3"
 kind = "assets"
 min_game_version = "0.5.0"
@@ -33,35 +33,125 @@ config = "mechanics/skate.csrconfig"
     )
 }
 
+/// The AEMS banks the native board/player audio loads (the public rewrite's
+/// `player_audio::BANKS` and `OPTIONAL_BANKS` plus its two boot utilities).
+const AUDIO_BANKS: &[&str] = &[
+    "emitter_utility",
+    "Common",
+    "GRINDS",
+    "sense_of_speed",
+    "FOOT_DRAG",
+    "WHEEL_SKID_BANK",
+    "Brd_Squeaks",
+    "Seams_Bank",
+    "fstep_skateshoe1_sm",
+    "Foley_Cloth",
+    "Bodyslide",
+    "PatchBank_Rolling_Surfaces",
+    "PatchBank_SpiderCracks",
+    "PatchBank_Objects",
+    "PatchBank_RocksBounce",
+    "Rolling_Rattles",
+    "board_scrapes",
+    "Sk8_Air_Flip_Tricks",
+    "Treatments",
+];
+/// Splice one-shot trees: board contacts, metal collisions, shoe foley
+/// (`player_audio::SPLICE_BANKS`); the front-end bank is added from the manifest.
+const SPLICE_BANKS: &[&str] = &["Skate_Collisions", "Skate_Metal", "sk8_foley"];
+
+/// The owner's decoded board audio in its install layout with a trimmed
+/// manifest: only the skater's banks, grains, wheel spins and their tuning.
+/// No speech, music, ambience, world emitters or unrelated banks are copied.
+fn audio(assets: &Path, data: &mut Vec<(String, Vec<u8>)>) -> Result<(), String> {
+    use serde_json::{Map, Value, json};
+    let root = assets.join("private/audio");
+    let refresh = |what: &str| {
+        format!("Owned Skate audio {what} is missing. Refresh the converted Skate installation first.")
+    };
+    let manifest: Value = serde_json::from_slice(
+        &fs::read(root.join("audio_manifest.json")).map_err(|_| refresh("manifest"))?,
+    )
+    .map_err(|e| e.to_string())?;
+    if manifest["version"].as_u64() != Some(5) {
+        return Err(refresh("(native AEMS export)"));
+    }
+    let text = |v: &Value| v.as_str().map(str::to_owned);
+    let aems = &manifest["aems"];
+    let projects: Vec<String> = aems["projects"]
+        .as_array()
+        .ok_or_else(|| refresh("AEMS project list"))?
+        .iter()
+        .filter_map(text)
+        .collect();
+    let mixmap = text(&aems["mixmap"]).ok_or_else(|| refresh("MixMap"))?;
+    let frontend = manifest["frontend"].clone();
+    let frontend_bank = text(&frontend["bank"]).ok_or_else(|| refresh("front-end sounds"))?;
+    let mut abk = Map::new();
+    for stem in AUDIO_BANKS {
+        abk.insert((*stem).into(), Value::String(text(&aems["banks"][*stem]).ok_or_else(|| refresh(stem))?));
+    }
+    let mut splice = Map::new();
+    for stem in SPLICE_BANKS.iter().copied().chain([frontend_bank.as_str()]) {
+        splice.insert(stem.into(), Value::String(text(&aems["splice"][stem]).ok_or_else(|| refresh(stem))?));
+    }
+    let entries = |v: &Value| -> Vec<Value> {
+        v.as_array()
+            .map(|a| a.iter().filter_map(|e| text(&e["file"])).map(|f| json!({ "file": f })).collect())
+            .unwrap_or_default()
+    };
+    let mut banks = Map::new();
+    for stem in AUDIO_BANKS.iter().copied().chain(SPLICE_BANKS.iter().copied()).chain([frontend_bank.as_str()]) {
+        banks.insert(stem.into(), Value::Array(entries(&manifest["banks"][stem])));
+    }
+    let mut grains = Map::new();
+    for (name, g) in manifest["grains"].as_object().ok_or_else(|| refresh("grains"))? {
+        if let (Some(file), Some(grain)) = (text(&g["file"]), text(&g["grain"])) {
+            grains.insert(name.clone(), json!({ "file": file, "grain": grain }));
+        }
+    }
+    let mut wheels = Map::new();
+    for name in ["Whls_spins_Jump_1", "Whls_spins_Man_1"] {
+        let file = text(&manifest["wheels"][name]["file"]).ok_or_else(|| refresh(name))?;
+        wheels.insert(name.into(), json!({ "file": file }));
+    }
+    let trimmed = json!({
+        "version": 5,
+        "grains": grains,
+        "wheels": wheels,
+        "banks": banks,
+        "aems": { "projects": projects, "banks": abk, "mixmap": mixmap, "splice": splice },
+        "grain_player": manifest["grain_player"],
+        "player_tuning": manifest["player_tuning"],
+        "bus_tuning": manifest["bus_tuning"],
+        "frontend": frontend,
+    });
+    let mut files = std::collections::BTreeSet::new();
+    files.extend(projects.iter().cloned());
+    files.insert(mixmap);
+    files.extend(abk.values().chain(splice.values()).filter_map(text));
+    for list in banks.values() {
+        files.extend(list.as_array().into_iter().flatten().filter_map(|e| text(&e["file"])));
+    }
+    for g in grains.values().chain(wheels.values()) {
+        files.extend(text(&g["file"]));
+        files.extend(text(&g["grain"]));
+    }
+    for file in files {
+        let path = root.join(&file);
+        let bytes = fs::read(&path).map_err(|e| format!("Owned Skate audio {}: {e}. Refresh the converted Skate installation first.", path.display()))?;
+        data.push((format!("private/audio/{file}"), bytes));
+    }
+    data.push((
+        "private/audio/audio_manifest.json".into(),
+        serde_json::to_vec(&trimmed).map_err(|e| e.to_string())?,
+    ));
+    Ok(())
+}
+
 fn payload(assets: &Path) -> Result<Vec<(&'static str, Vec<u8>)>, String> {
     let mut data = Vec::new();
-    let manifest:serde_json::Value=serde_json::from_slice(&fs::read(assets.join("private/audio/audio_manifest.json")).map_err(|e|e.to_string())?).map_err(|e|e.to_string())?;
-    let mut tuning=serde_json::Map::new();
-    for name in ["concrete_smooth_hard","concrete_rough_hard","asphalt_rough_hard","wood_ramp_hard","metal_smooth_hard"] {
-        let entry=manifest["grain_player"]["surfaces"][name].clone();
-        if entry.is_null(){return Err(format!("missing original grain tuning {name}"));}
-        tuning.insert(name.into(),entry);
-        data.push((format!("private/crossover-audio/{name}.wav"),fs::read(assets.join(format!("private/audio/grains/{name}.wav"))).map_err(|e|e.to_string())?));
-    }
-    data.push(("private/crossover-audio/grains.json".into(),serde_json::to_vec(&tuning).map_err(|e|e.to_string())?));
-    // Read only the owner's decoded board foley. No original executable,
-    // program, speech/music, unrelated banks or map audio is copied.
-    for (name,relative) in [
-        ("roll","grains/concrete_smooth_hard/2.wav"),
-        ("pop","banks/Skate_Collisions/0000.wav"),
-        ("land","banks/Skate_Collisions/0001.wav"),
-        ("push","banks/sk8_foley/0000.wav"),
-        ("grind","banks/GRINDS/0000.wav"),
-        ("brake","banks/FOOT_DRAG/0000.wav"),
-        ("marker-open","banks/sk8_menu/0058.wav"),
-        ("marker-set","banks/sk8_menu/0059.wav"),
-        ("marker-return","banks/sk8_menu/0036.wav"),
-    ] {
-        let path=assets.join("private/audio").join(relative);
-        let bytes=fs::read(&path).map_err(|e|format!("Owned board sound {}: {e}. Refresh the converted Skate installation first.",path.display()))?;
-        if bytes.len()>4*1024*1024 || !bytes.starts_with(b"RIFF") || bytes.get(8..12)!=Some(b"WAVE") {return Err("invalid or oversized decoded Skate sound".into());}
-        data.push((format!("private/crossover-audio/{name}.wav"),bytes));
-    }
+    audio(assets, &mut data)?;
     for path in [
         "private/game.json",
         "private/skater.glb",

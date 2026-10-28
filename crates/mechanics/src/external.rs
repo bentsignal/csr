@@ -199,10 +199,11 @@ impl Program {
                     if let Some(frame) = hud {
                         self.hud.publish(session, frame);
                     }
-                    if audio.len()>8192 || audio.iter().any(|s|!s.is_finite()||s.abs()>1.) {return Err("invalid provider audio".into());}
+                    if audio.len()>16384 || audio.len()%2!=0 || audio.iter().any(|s|!s.is_finite()||s.abs()>1.) {return Err("invalid provider audio".into());}
                     if let Ok(mut a)=self.audio.lock(){
                         if a.0!=session {a.0=session;a.1.clear();}
-                        a.1.extend(audio);while a.1.len()>12000 {a.1.pop_front();}
+                        // Interleaved stereo: keep at most 250 ms, dropping whole frames.
+                        a.1.extend(audio);let excess=a.1.len().saturating_sub(24000);a.1.drain(..excess);
                     }
                     p.expected = Some((session, history.len() + 1, digest(parent, frame)));
                     Ok((pose, p.rig.clone()))

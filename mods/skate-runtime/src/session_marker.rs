@@ -14,6 +14,8 @@ struct Marker {
 }
 pub(crate) struct SessionMarker {
     pub ui:mechanics_link::MarkerUi,
+    /// Refused Place Marker presses so far (the front-end error sound).
+    pub refused: u64,
     saved: Option<Marker>,
     hold: state::Hold,
     validation: validation::Validation,
@@ -35,6 +37,7 @@ impl SessionMarker {
             hold: Default::default(),
             validation: validation::Validation::load(root)?,
             previous: 0,
+            refused: 0,
             ui_time: 0.,
         })
     }
@@ -109,6 +112,9 @@ impl SessionMarker {
                 foot_forward: skater.animation.foot_forward(),
             });
             self.ui.event+=1;self.ui.action=2;
+        } else if set {
+            // Place Marker refused here: retail's marker error record (audio only).
+            self.refused += 1;
         }
         let usable = self
             .saved
