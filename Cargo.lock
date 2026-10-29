@@ -3984,6 +3984,7 @@ dependencies = [
  "mechanics",
  "movement",
  "nav",
+ "pack-authoring",
  "packs",
  "sha1",
  "sim",
@@ -4214,8 +4215,10 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "ureq",
  "wasmi",
  "wat",
+ "zip",
 ]
 
 [[package]]
@@ -5062,6 +5065,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8c7c9e0d9b23589f26070720bac724174bfec1083e82f7854cdd0267518343c0"
 dependencies = [
  "num-traits",
+]
+
+[[package]]
+name = "pack-authoring"
+version = "0.5.0"
+dependencies = [
+ "bsp",
+ "collision",
+ "glam 0.32.1",
+ "movement",
+ "packs",
 ]
 
 [[package]]

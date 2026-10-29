@@ -678,40 +678,6 @@ pub fn tick(
         }
     }
     if !enabled.0 && std::env::var_os("CSR_ATTACK2").is_some() { input.buttons |= buttons::ATTACK2; }
-    // Screenshot-only route through ordinary TickInput and both real solvers.
-    // Reuses the existing simulation-time capture; no teleports or velocity edits.
-    if !enabled.0 && playtest.as_ref().is_some_and(|p|p.clip_course) && std::env::var_os("CSR_TEST_SURF_SKATE_ROUTE").is_some(){
-        if let Some(p)=world.0.player(local.id){
-            let x=p.movement.origin.x;let skating=p.mechanic.is_some();
-            input.view_angles=glam::Vec3::ZERO;local.pitch=0.;local.yaw=0.;
-            use level::surf_course::{RAMP1_X,DECK_X,KICKER_X};
-            input.forward_move=if x<RAMP1_X[0]{450.}else{0.};input.side_move=if !skating && x>=RAMP1_X[0]{-450.}else{0.};
-            if !skating && x>=RAMP1_X[0] {
-                let second=x>DECK_X[1];
-                let ridge=level::surf_course::ramp_ridge(second);
-                let face=level::surf_course::ramp_peak(second,x)-1.6*(p.movement.origin.y-ridge).abs();
-                if p.movement.origin.z>face+100. {
-                    input.side_move=((p.movement.origin.y+100.)*5.+p.movement.velocity.y*2.).clamp(-450.,450.);
-                    if !second {input.forward_move=450.;}
-                }
-            }
-            input.toggle_mode=(!skating&&(RAMP1_X[1]+50. ..DECK_X[0]).contains(&x))||(skating&&x>KICKER_X[1]+15.);
-            input.controller=mechanics::link::Controller{connected:true,..Default::default()};
-            if skating {
-                // Hold the plaza's clear lane, as the private route check does.
-                if p.movement.on_ground {
-                    let steer=((p.movement.origin.y-level::surf_course::LANE_Y)*60.+p.movement.velocity.y*40.).clamp(-24000.,24000.);
-                    input.controller.left[0]=steer as i16;
-                }
-                let d=x-DECK_X[0];
-                if (1100. ..1500.).contains(&d){input.controller.right=[0,-32768];}
-                if (1500. ..1680.).contains(&d){input.controller.right=[30000,30000];}
-                if (1800. ..2100.).contains(&d){input.controller.buttons=if p.movement.on_ground{0x102}else{0x100};}
-                // Push down the long plaza, then roll into the end kicker.
-                if d>2400. && x<KICKER_X[0]-600. && p.movement.on_ground && (world.0.tick/16)%4==0 {input.controller.buttons|=0x1000;}
-            }
-        }
-    }
     if !enabled.0 && std::env::var_os("CSR_TEST_SKATE_INVENTORY").is_some(){
         let tick=world.0.tick;let rate=world.0.tick_rate as u64;let t=world.0.time();
         input.toggle_mode=false;input.controller.connected=true;

@@ -277,7 +277,7 @@ impl Loader {
                         let result = load_requested_map(&request, &game_dir, &worker_progress);
                         result
                             .and_then(|level| {
-                                let movement=crate::movement_modes::prepare(&level.collision);
+                                let movement=crate::movement_modes::prepare(&level.collision)?;
                                 if worker_progress.cancelled.load(Ordering::Relaxed){return Err(workshop::CANCELLED.into());}
                                 Ok(LoadedMap {level,movement:Some(movement),remote:None,host:None})
                             })

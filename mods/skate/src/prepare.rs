@@ -13,13 +13,19 @@ fn manifest() -> String {
         r#"format_version = 2
 id = "skate3_riding"
 name = "Skate 3 crossover"
-version = "0.5.0"
+version = "0.6.0"
 origin = "skate3"
 kind = "assets"
 min_game_version = "0.5.0"
-provides = ["skate3_mode_riding"]
+provides = ["skate3_mode_riding", "skate3_map_surf_skate_clip"]
 description = "Full Skate simulation, animations and Xbox controls on CS maps. View or X switches modes."
 content_hash = "sha256:{}"
+
+[[maps]]
+id = "skate3_map_surf_skate_clip"
+bsp = "surf_skate_clip"
+name = "Surf / Skate Clip Course"
+source = "pack"
 
 [[mechanics]]
 id = "skate3_mode_riding"
@@ -312,9 +318,10 @@ fn assets_from_game(game: &Path) -> Result<PathBuf, String> {
 
 fn create(game: &Path, output: &Path) -> Result<(), String> {
     let assets = assets_from_game(game)?;
-    let files = payload(&assets)?;
+    let mut files: Vec<(String, Vec<u8>)> = payload(&assets)?.into_iter().map(|(p,b)|(p.into(),b)).collect();
+    files.extend(pack_authoring::surf_course::files());
     let manifest = packs::Manifest::parse(&manifest())?;
-    let files: Vec<_> = files.iter().map(|(p, b)| (*p, b.as_slice())).collect();
+    let files: Vec<_> = files.iter().map(|(p, b)| (p.as_str(), b.as_slice())).collect();
     let bytes = packs::build(&manifest, &files)?;
     let mut file = fs::OpenOptions::new()
         .write(true)

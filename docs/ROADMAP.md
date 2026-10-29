@@ -1,5 +1,12 @@
 # Roadmap
 
+## October 29: player flow and pack separation
+
+- [ ] Default to the home screen; keep F8 available but closed in Dev matches.
+- [ ] Separate developer authoring and optional providers from the base app.
+- [ ] Supply the surf/skate course through a pack and list pack maps in Play.
+- [ ] Verify clean no-pack, install, Play, return home and removal flows.
+
 ## October 26: Skate crossover
 
 - [x] Replace abrupt skate wedges with curved transitions; remove internal

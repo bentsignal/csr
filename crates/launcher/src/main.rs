@@ -38,6 +38,7 @@ mod update;
 use std::path::PathBuf;
 
 fn main() {
+    mechanics::providers::configure_source(option_env!("CSR_BUILD_SHA").unwrap_or("source"));
     // Installer hooks and pending updates; must run before anything else.
     update::startup();
     let mut args: Vec<String> = std::env::args().skip(1).collect();
@@ -248,6 +249,10 @@ fn parse_play(map: &str, args: &[String]) -> Result<client::ClientOptions, Strin
                 opts.deathmatch = true;
                 opts.direct = true;
             }
+            "--dev-tools" => {
+                opts.playtest = true;
+                opts.dev_menu_start_closed = true;
+            }
             "--playtest" => {
                 opts.playtest = true;
                 opts.grenade_practice = true;
@@ -287,6 +292,13 @@ fn parse_play(map: &str, args: &[String]) -> Result<client::ClientOptions, Strin
 #[cfg(test)]
 mod tests {
     use super::parse_play;
+
+    #[test]
+    fn dev_tools_do_not_bypass_home_or_enable_practice_rules() {
+        let opts=parse_play("de_dust2", &["--dev-tools".into()]).unwrap();
+        assert!(opts.playtest && opts.dev_menu_start_closed);
+        assert!(!opts.direct && !opts.deathmatch && !opts.grenade_practice);
+    }
 
     #[test]
     fn size_override_tracks_presence_and_requires_positive_integer_dimensions() {

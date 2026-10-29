@@ -16,7 +16,7 @@ path = "src/prepare.rs"
 required-features = ["authoring"]
 
 [features]
-authoring = ["dep:skate-data", "dep:gltf", "dep:serde_json", "dep:packs", "dep:mechanics"]
+authoring = ["dep:skate-data", "dep:gltf", "dep:serde_json", "dep:packs", "dep:mechanics", "dep:pack-authoring"]
 
 [dependencies]
 mechanics-api = { path = "../../crates/mechanics-api" }
@@ -27,6 +27,7 @@ gltf = { version = "1.4", default-features = false, features = ["utils", "names"
 serde_json = { version = "1", optional = true }
 packs = { path = "../../crates/packs", optional = true }
 mechanics = { path = "../../crates/mechanics", optional = true }
+pack-authoring = { path = "../../tools/pack-authoring", optional = true }
 
 [profile.release]
 opt-level = 2

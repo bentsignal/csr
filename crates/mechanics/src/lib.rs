@@ -269,3 +269,4 @@ fn trace(mut caller: Caller<'_, Host<'_>>, pointer: i32) -> Result<i32, wasmi::E
         .map_err(|e| wasmi::Error::new(e.to_string()))?;
     Ok(0)
 }
+pub mod providers;

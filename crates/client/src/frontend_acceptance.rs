@@ -80,6 +80,7 @@ struct Proof {
     release: Option<Release>, gate: Stable, pending_capture: Option<Receipt>, settled_capture: bool,
     waiting_capture: bool, capture_error: Option<String>, baseline: Option<Settings>,
     probes: MovieSamples, capture_id: u64, tick: u64,
+    pack_selection: Option<(String,String)>,
 }
 impl Default for Proof {
     fn default() -> Self {
@@ -88,7 +89,7 @@ impl Default for Proof {
             output: std::env::var_os("CSR_TEST_FLOW_OUTPUT").map(PathBuf::from).unwrap_or_default(),
             validated: false, finished: false, pending: None, release: None, gate: default(),
             pending_capture: None, settled_capture: false, waiting_capture: false,
-            capture_error: None, baseline: None, probes: default(), capture_id: 0, tick: 0 }
+            capture_error: None, baseline: None, probes: default(), capture_id: 0, tick: 0, pack_selection:None }
     }
 }
 impl Proof {
@@ -290,7 +291,9 @@ fn control_point(nodes: &Query<Layout>, wanted: impl Fn(&Action) -> bool, window
 fn update(mut proof: ResMut<Proof>, front: Res<Frontend>, options: Res<crate::Options>, settings: Res<Settings>,
     menu: Res<Menu>, state: Res<State<AppState>>, clock: Res<Time<Virtual>>, frames: Res<bevy::diagnostic::FrameCount>,
     window: Single<&Window, With<PrimaryWindow>>, nodes: Query<Layout>, world: Option<Res<SimWorld>>,
-    hud: Query<(&Visibility, &InheritedVisibility, &Node, &ComputedNode), With<crate::combat_hud::Surface>>, mut commands: Commands, mut exit: MessageWriter<AppExit>) {
+    hud: Query<(&Visibility, &InheritedVisibility, &Node, &ComputedNode), With<crate::combat_hud::Surface>>, mut commands: Commands, mut exit: MessageWriter<AppExit>,
+    pack_nodes: Query<(&ComputedNode,&UiGlobalTransform,&crate::pack_ui::Action)>,
+    pack_state: (Option<Res<crate::LoadedLevel>>,Option<Res<crate::playtest::Panel>>)) {
     if proof.finished { return; }
     if let Some(error) = proof.capture_error.take() { proof.fail(&mut exit, error); return; }
     if proof.start.elapsed() > Duration::from_secs(240) || proof.entered.elapsed() > Duration::from_secs(40) {
@@ -301,7 +304,7 @@ fn update(mut proof: ResMut<Proof>, front: Res<Frontend>, options: Res<crate::Op
     if let Some(error) = &front.failed { proof.fail(&mut exit, error); return; }
     if !proof.validated {
         let validate = || -> Result<(), String> {
-            if !matches!(proof.case.as_str(), "home-options" | "match-options" | "controls") { return Err("unknown CSR_TEST_FLOW_CASE".into()); }
+            if !matches!(proof.case.as_str(), "home-options" | "match-options" | "controls" | "pack-play") { return Err("unknown CSR_TEST_FLOW_CASE".into()); }
             private_data(&proof.output)?;
             if options.0.screenshot.is_some() || options.0.direct || settings.fullscreen {
                 return Err("normal windowed menu startup required, no --direct/--screenshot".into());
@@ -324,6 +327,46 @@ fn update(mut proof: ResMut<Proof>, front: Res<Frontend>, options: Res<crate::Op
         // The old flow owns only the first authored match launch. Its own
         // bounded deadline remains active; acceptance phase 0 starts on Match.
         proof.entered = Instant::now(); return;
+    }
+    if proof.case=="pack-play" {
+        let phase=proof.phase;
+        if phase<2 {
+            let label=if phase==0 {"PLAY"}else{"OFFLINE WITH BOTS"};
+            let serial=sample_movie(&mut proof,&front,"MainMenu",label);
+            let point=movie_point(&proof.probes.sample,&window);
+            let valid=*state.get()==AppState::Menu && front.home_presented() && point.is_some();
+            if proof.admitted(valid,serial,&mut commands,&window) {
+                movie_click(&front,point.unwrap()); proof.next();
+            }
+        } else if phase==2 {
+            let viewport=Rect::from_corners(Vec2::ZERO,Vec2::new(window.physical_width() as f32,window.physical_height() as f32));
+            let item=pack_nodes.iter().find_map(|(node,transform,action)| {
+                let crate::pack_ui::Action::Play(entry,id)=action else{return None;};
+                let bounds=rect(node,transform);
+                (node.size().min_element()>0. && viewport.contains(bounds.min) && viewport.contains(bounds.max))
+                    .then(||(bounds.center(),id.to_string(),entry.archive_hash().to_string()))
+            });
+            if proof.admitted(front.play_picker_presented() && item.is_some(),Some(frames.0 as u64),&mut commands,&window) {
+                let (point,id,hash)=item.unwrap(); proof.pack_selection=Some((id,hash));
+                proof.issue(PublicInput::Click(point)); proof.next();
+            }
+        } else if phase==3 {
+            let selected=pack_state.0.as_ref().zip(proof.pack_selection.as_ref()).is_some_and(|(level,(id,hash))|
+                level.0.id.to_string()==*id && level.0.pack_archive_hash()==Some(hash.as_str()));
+            let closed=pack_state.1.as_ref().is_some_and(|p|!p.open);
+            let valid=*state.get()==AppState::Match && selected && closed && !clock.is_paused();
+            if proof.admitted(valid,Some(frames.0 as u64),&mut commands,&window) {
+                if !options.0.dev_menu_start_closed {proof.fail(&mut exit,"normal Dev tools entry required");return;}
+                proof.issue(PublicInput::Key(KeyCode::KeyX)); proof.next();
+            }
+        } else {
+            let active=world.as_ref().is_some_and(|w|w.0.players.iter().any(|p|!p.is_bot && p.mechanic.is_some()));
+            if proof.admitted(active,Some(frames.0 as u64),&mut commands,&window) {
+                info!("pack Play: Home -> native Play picker -> hash-bound pack map -> closed F8 -> native movement; failures: 0");
+                finish(&mut proof,&mut exit);
+            }
+        }
+        return;
     }
     if proof.case == "controls" && ((2..=16).contains(&proof.phase) || proof.phase == 20) {
         controls(&mut proof, &settings, &menu, &nodes, &window, frames.0, &mut commands, &mut exit); return;

@@ -1,7 +1,6 @@
 //! Map loading shared by the headless simulation and the renderer.
 
 pub mod maps;
-pub mod surf_course;
 pub mod bot_profiles;
 mod character_profiles;
 mod breakable_digest;
@@ -99,7 +98,6 @@ fn fetch_old_map(map: &workshop::OldMap) -> Result<(), LoadError> {
 impl Level {
     /// Loads `maps/<name>.bsp` and builds its collision world.
     pub fn load(name: &str, game_dir: Option<&Path>) -> Result<Level, LoadError> {
-        if name == surf_course::NAME { return Self::load_id(&surf_course::ID.parse().unwrap(),game_dir); }
         if let Ok(id) = name.parse::<ContentId>() {
             return Self::load_id(&id, game_dir);
         }
@@ -109,6 +107,15 @@ impl Level {
         let mount_time = t.elapsed().as_secs_f32();
         let map_path = format!("maps/{name}.bsp");
         if !fs.exists(&map_path) {
+            let store=packs::Installed::current();
+            let catalog=store.catalog();
+            let mut matches=catalog.entries.iter().flat_map(|entry| entry.manifest().maps.iter()
+                .filter(move |map| map.bsp==name).map(move |map|(entry,map)));
+            if let Some((entry,map))=matches.next() {
+                if matches.next().is_some() { return Err(LoadError::Io("Ambiguous pack map; select its ContentId".into())); }
+                let id=map.id.parse().map_err(|e|LoadError::Io(format!("{e}")))?;
+                return Self::load_catalog_map(&store,entry,&id,Some(&game_dir));
+            }
             if let Some(old) = workshop::find(name) {
                 fetch_old_map(old)?;
             }
@@ -121,11 +128,6 @@ impl Level {
     /// Canonical identity loading for menu selections and remote map requests.
     /// Built-in names come from install/archive definitions, never ID.name.
     pub fn load_id(id: &ContentId, game_dir: Option<&Path>) -> Result<Level, LoadError> {
-        if id.to_string()==surf_course::ID {
-            let pack=surf_course::pack().map_err(LoadError::Io)?;
-            let (game_dir,fs)=mount_game(game_dir)?;
-            return Self::load_pack(&pack,&pack.manifest().maps[0],game_dir,fs);
-        }
         if id.kind != ContentKind::Map { return Err(LoadError::Io(format!("{id} is not a map"))); }
         match &id.origin {
             GameOrigin::Csgo => {

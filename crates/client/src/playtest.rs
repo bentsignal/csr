@@ -66,7 +66,8 @@ pub(crate) fn install(app: &mut App) {
 }
 fn enter(mut panel: ResMut<Panel>, opts: Res<crate::Options>, remote: Option<Res<crate::remote::RemoteClient>>, level: Option<Res<crate::LoadedLevel>>) {
     panel.enter_match(opts.0.playtest, remote.is_some());
-    panel.clip_course=opts.0.map==level::surf_course::NAME;
+    if opts.0.dev_menu_start_closed { panel.open=false; }
+    panel.clip_course=level.as_ref().is_some_and(|l| l.0.id.origin!=content::GameOrigin::Csgo);
     panel.lanes = if panel.offline_playtest { level.as_ref().map(|level| {
         let mut lanes=if level.0.name.starts_with("surf_") {Vec::new()} else {wallbang::lanes(&level.0)};
         let partners=wallbang::partner_lanes(&level.0);
@@ -77,7 +78,7 @@ fn enter(mut panel: ResMut<Panel>, opts: Res<crate::Options>, remote: Option<Res
         lanes.extend(partners); lanes
     }).unwrap_or_default() } else { Vec::new() };
     panel.surf_available = level.as_ref().is_some_and(|l| l.0.vfs.exists("maps/surf_ski_3_nova_kg_v6.bsp"));
-    panel.surf_active = panel.offline_playtest && opts.0.map.starts_with("surf_");
+    panel.surf_active = panel.offline_playtest && level.as_ref().is_some_and(|l|l.0.name.starts_with("surf_"));
     panel.pending_surf = panel.surf_active.then_some(true);
     panel.old_movement = None;
     if opts.0.screenshot.is_some() && panel.offline_playtest {
@@ -423,9 +424,6 @@ fn draw(
             button(&mut commands,body,"Stationary target / tune headshot feedback",Action::Lane(index),art.regular.clone());
         }
     }
-    if panel.page==Page::Tests {
-        button(&mut commands,body,"Surf / Skate Clip Course",Action::Map(level::surf_course::NAME.into()),art.regular.clone());
-    }
     if panel.page==Page::Tests && panel.surf_available {
         button(&mut commands,body,"Surf map / Solo",Action::Map("surf_ski_3_nova_kg_v6".into()),art.regular.clone());
     }
@@ -528,6 +526,18 @@ pub(crate) fn observe_step(panel: &mut Panel, world: &sim::World, local: sim::Pl
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn developer_match_entry_keeps_tools_available_without_opening_the_panel() {
+        use bevy::prelude::*;
+        let mut app=App::new();
+        app.insert_resource(crate::Options(crate::ClientOptions {
+            playtest:true, dev_menu_start_closed:true, ..default()
+        })).init_resource::<super::Panel>().add_systems(Update,super::enter);
+        app.update();
+        let panel=app.world().resource::<super::Panel>();
+        assert!(panel.offline_playtest);
+        assert!(!panel.open);
+    }
     use super::*;
     fn pause_world() -> (sim::World, sim::PlayerId, sim::PlayerId) {
         let v = glam::Vec3::new;

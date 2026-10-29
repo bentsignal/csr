@@ -327,7 +327,7 @@ fn momentumcheck(module:&sim::mechanics::Module)->Result<(),String>{
     Ok(())
 }
 fn combatcheck(module:Arc<sim::mechanics::Module>,collision:Arc<collision::CollisionWorld>)->Result<(),String>{
-    let catalog=level::Level::load(level::surf_course::NAME,None).map_err(|e|e.to_string())?.catalog;
+    let catalog=course_level()?.catalog;
     let mut w=sim::World::with_catalog(collision,catalog);w.mechanics.push(module);let id=w.add_player("Riding combat",Team::CounterTerrorist);
     w.player_mut(id).unwrap().movement.origin=Vec3::Z*0.1;
     let mut shots=0;let mut selected=std::collections::BTreeSet::new();
@@ -344,8 +344,8 @@ fn combatcheck(module:Arc<sim::mechanics::Module>,collision:Arc<collision::Colli
 const STEER:(f32,f32)=(60.,40.);
 fn rampcheck(module:Arc<sim::mechanics::Module>)->Result<(),String>{
     use mechanics::link::{Start,Frame,Controller};
-    use level::surf_course::*;
-    let level=level::Level::load(NAME,None).map_err(|e|e.to_string())?;
+    use pack_authoring::surf_course::*;
+    let level=course_level()?;
     let scene=mechanics::external::geometry::scene(&level.collision);
     let program=module.external.as_ref().unwrap();
     let cases: [(&str,[f32;3],f32,f32);14]=[("funbox",[-3200.,360.,DECK_Z+3.5],0.,-2700.),
@@ -404,7 +404,7 @@ fn rampcheck(module:Arc<sim::mechanics::Module>)->Result<(),String>{
     Ok(())
 }
 fn coursecheck(module:Arc<sim::mechanics::Module>)->Result<(),String>{
-    let level=level::Level::load(level::surf_course::NAME,None).map_err(|e|e.to_string())?;
+    let level=course_level()?;
     let mut w=sim::World::with_catalog(level.collision.clone(),level.catalog.clone());
     w.load_map(&level.bsp,None);w.config.air_accelerate=1000.;w.config.accelerate=10.;w.mechanics.push(module);
     let id=w.add_player("Clip route",Team::CounterTerrorist);
@@ -418,28 +418,28 @@ fn coursecheck(module:Arc<sim::mechanics::Module>)->Result<(),String>{
         }
         let mut input=TickInput{view_angles:Vec3::ZERO,..Default::default()};
         if stage==0 {
-            use level::surf_course::RAMP1_X;
+            use pack_authoring::surf_course::RAMP1_X;
             if pos.x<RAMP1_X[0] {input.forward_move=450.;}
-            else if pos.z>level::surf_course::ramp_peak(false,pos.x)+150. {
+            else if pos.z>pack_authoring::surf_course::ramp_peak(false,pos.x)+150. {
                 input.forward_move=450.;input.side_move=((pos.y+100.)*5.+vel.y*2.).clamp(-450.,450.);
             }else{input.side_move=-450.;}
             if pos.x>RAMP1_X[1]+50. {input.toggle_mode=true;stage=1;}
         }else if stage==1 {
             input.controller.connected=true;
             // Hold the clear lane: steer back toward its centre line.
-            let steer=((pos.y-level::surf_course::LANE_Y)*STEER.0+vel.y*STEER.1).clamp(-24000.,24000.);
+            let steer=((pos.y-pack_authoring::surf_course::LANE_Y)*STEER.0+vel.y*STEER.1).clamp(-24000.,24000.);
             if p.movement.on_ground {input.controller.left[0]=steer as i16;}
-            if p.movement.on_ground && pos.x>level::surf_course::DECK_X[0] && landed_at.is_none(){landed_at=Some(tick);println!("Trick deck landing tick={tick} position={pos:?} velocity={vel:?}");}
+            if p.movement.on_ground && pos.x>pack_authoring::surf_course::DECK_X[0] && landed_at.is_none(){landed_at=Some(tick);println!("Trick deck landing tick={tick} position={pos:?} velocity={vel:?}");}
             if let Some(at)=landed_at {
                 if (at+40..at+100).contains(&tick){input.controller.right=[0,-32768];}
                 if (at+100..at+126).contains(&tick){input.controller.right=[30000,30000];}
             }
-            if landed_at.is_some_and(|at|tick>at+200) && p.movement.on_ground && pos.x<level::surf_course::KICKER_X[0]-600. && (tick/16)%4==0 {input.controller.buttons|=0x1000;}
-            if pos.x>level::surf_course::KICKER_X[1]+15. {input.toggle_mode=true;stage=2;}
+            if landed_at.is_some_and(|at|tick>at+200) && p.movement.on_ground && pos.x<pack_authoring::surf_course::KICKER_X[0]-600. && (tick/16)%4==0 {input.controller.buttons|=0x1000;}
+            if pos.x>pack_authoring::surf_course::KICKER_X[1]+15. {input.toggle_mode=true;stage=2;}
         }else {
-            let face=level::surf_course::ramp_peak(true,pos.x)-1.6*(pos.y-level::surf_course::RAMP2_Y).abs();
+            let face=pack_authoring::surf_course::ramp_peak(true,pos.x)-1.6*(pos.y-pack_authoring::surf_course::RAMP2_Y).abs();
             input.side_move=if pos.z>face+100. {((pos.y+100.)*5.+vel.y*2.).clamp(-450.,450.)}else{-450.};
-            if pos.x>level::surf_course::FINISH_X[0]+100. && p.movement.on_ground {println!("Final runout reached tick={tick} position={pos:?} velocity={vel:?} peak={max_speed} trick={trick} score={score}");return if landed_at.is_some() && !trick.is_empty(){Ok(())}else{Err("missed trick deck or trick recognition".into())};}
+            if pos.x>pack_authoring::surf_course::FINISH_X[0]+100. && p.movement.on_ground {println!("Final runout reached tick={tick} position={pos:?} velocity={vel:?} peak={max_speed} trick={trick} score={score}");return if landed_at.is_some() && !trick.is_empty(){Ok(())}else{Err("missed trick deck or trick recognition".into())};}
         }
         max_speed=max_speed.max(vel.truncate().length());
         if stage!=last_state{switched=tick;}
@@ -1065,4 +1065,10 @@ fn main() {
         eprintln!("{error}");
         std::process::exit(1);
     }
+}
+
+fn course_level()->Result<level::Level,String>{
+ let pack=pack_authoring::surf_course::pack()?;
+ let (dir,fs)=level::mount_game(None).map_err(|e|e.to_string())?;
+ level::Level::load_pack(&pack,&pack.manifest().maps[0],dir,fs).map_err(|e|e.to_string())
 }

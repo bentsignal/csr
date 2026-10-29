@@ -48,13 +48,14 @@ controller movement, aiming, firing and weapon selection.
 1. Own Skate 3 and prepare your copy with the
    [Skate 3 Rust Engine](https://github.com/SK8-ENGINE/skate-3-rust-engine).
    Follow its local Xbox 360 ISO / extracted `default.xex` conversion workflow.
-2. Choose **Content packs → Create Skate pack** in CSGO Rewrite. Select
-   `skate3rust.exe` in that prepared installation, then a new output `.csrpack`.
-   The installed creator needs no Rust, terminal or manual file copying.
+2. Developers download the separate **Skate-Authoring-windows-x64.zip** from
+   the matching release and run `Skate-Pack-Creator.exe`. Select `skate3rust.exe`
+   in that prepared installation, then a new output `.csrpack`. The creator
+   is developer tooling and is never bundled into the player client or menus.
 3. Open the pack to install it, load a CS map, and press View / Back or X.
 
-Use a **0.4.0** pack for the full runtime with surface audio (0.2.0 remains
-compatible without sounds). Recreate a rushed 0.1.0 prototype
+Use a **0.6.0** pack to include the course in Play; older full-runtime packs
+still enable skating on other maps. Recreate a rushed 0.1.0 prototype
 pack with the current creator; it lacks the animation/skin/graph data.
 Installing the replacement updates the same pack ID.
 
@@ -102,16 +103,18 @@ parity are not implemented. CS combat/audio remain available.
 
 ## Surf / Skate Clip Course
 
-Open **F8 → Tests → Surf / Skate Clip Course** in an offline playtest (also
-listed in the map picker). The generated original pack has identity
-`mod_map_surf_skate_clip` and loads through the validated asset-pack path.
+Install the private **0.6** pack, then open **Play → Offline with bots →
+Content pack maps → Surf / Skate Clip Course**. The map is included in that
+pack as `skate3_map_surf_skate_clip`; removing the pack removes its Play entry.
+There is no built-in course fallback. The developer-only original map builder
+lives in `tools/pack-authoring`.
 No third-party map or texture, or compiled BSP, is checked into Git.
 It has a high starting platform, a descending blue surf ramp, a 13,600-unit
 concrete plaza with curved wood ramps, rails, ledges, a bank and a quarter
 pipe, a 900-unit ramp-to-ramp gap, a 400-unit exit transfer into the second
 surf ramp, a 5,800-unit finish deck and a broad catch floor. Stay fast for the
 big gap; the south lane bypasses it and missed jumps have a flat catch area.
-The F8 map action enables surf practice physics.
+The course itself supplies bounded surf movement settings. F8 is optional.
 
 Run forward off the start, hold toward the first ramp (A / left strafe when
 looking along the course), then switch to Skate in the gap. Land, flick a trick,

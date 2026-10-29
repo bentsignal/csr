@@ -152,6 +152,7 @@ pub struct ClientOptions {
     pub grenade_practice: bool,
     /// Offline in-game armory and scenario controls.
     pub playtest: bool,
+    pub dev_menu_start_closed: bool,
     pub direct: bool,
 }
 
@@ -172,6 +173,7 @@ impl Default for ClientOptions {
             deathmatch: false,
             grenade_practice: false,
             playtest: false,
+            dev_menu_start_closed: false,
             direct: false,
         }
     }
@@ -368,7 +370,7 @@ pub fn run(opts: ClientOptions) -> i32 {
             .set(WindowPlugin {
                 close_when_requested: false,
                 primary_window: Some(Window {
-                    title: format!("CSGO Rewrite — {}", opts.map),
+                    title: "CSGO Rewrite".into(),
                     resolution,
                     mode: window_mode,
                     present_mode: input_latency::present_mode(video_settings.vsync),

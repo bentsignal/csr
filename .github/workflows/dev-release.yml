@@ -81,7 +81,7 @@ jobs:
           if ($master -ne $env:CSR_BUILD_SHA) { Write-Host 'Newer master is waiting for CI; skipping this superseded build.'; exit 0 }
           $tag = "v$env:CSR_DEV_VERSION"
           $zip = Get-ChildItem dist -Filter "CSGO-Rewrite-$env:CSR_DEV_VERSION-windows-x64.zip" | Select-Object -First 1
-          gh release create $tag $zip.FullName --target $env:CSR_BUILD_SHA --title "CSGO Rewrite Dev $env:CSR_DEV_VERSION" --notes-file dist-dev-notes.md --draft --prerelease --latest=false
+          gh release create $tag $zip.FullName dist/Skate-Runtime-windows-x64.zip dist/Skate-Authoring-windows-x64.zip --target $env:CSR_BUILD_SHA --title "CSGO Rewrite Dev $env:CSR_DEV_VERSION" --notes-file dist-dev-notes.md --draft --prerelease --latest=false
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           vpk upload github --repoUrl "https://github.com/$env:GITHUB_REPOSITORY" --token $env:GH_TOKEN `
             --outputDir dist\velopack --tag $tag --releaseName "CSGO Rewrite Dev $env:CSR_DEV_VERSION" --merge --pre --publish

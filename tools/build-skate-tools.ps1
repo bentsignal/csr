@@ -32,7 +32,7 @@ try {
     # Like the game installer, the creator must work without separately
     # installing the MSVC runtime on a friend's machine.
     $env:RUSTFLAGS='-C target-feature=+crt-static'
-    $creatorReceipt=Prepare-ProviderCheckout $manifest $target @('csr-skate','mechanics','mechanics-api','mechanics-link','movement','collision','mdl','bsp','kv','packs','content','vfs','vpk')
+    $creatorReceipt=Prepare-ProviderCheckout $manifest $target @('csr-skate','pack-authoring','mechanics','mechanics-api','mechanics-link','movement','collision','mdl','bsp','kv','packs','content','vfs','vpk')
     & cargo build --manifest-path $manifest --target-dir $target --release --locked --features authoring --bin prepare-skate-pack
     if($LASTEXITCODE -ne 0){throw 'Building the Skate pack creator failed'}
     [IO.File]::WriteAllText($creatorReceipt,$repo)
@@ -54,6 +54,7 @@ $sourceRevision=(& git -C $repo rev-parse HEAD).Trim()
 Corresponding GPL source for Skate-Runtime.exe and Skate-Pack-Creator.exe:
 https://github.com/bentsignal/csr/tree/$sourceRevision/mods/skate-runtime
 https://github.com/bentsignal/csr/tree/$sourceRevision/mods/skate
+https://github.com/bentsignal/csr/tree/$sourceRevision/tools/pack-authoring
 Build scripts and dependency locks are in the same source revision.
 Build: tools/build-skate-tools.ps1 -OutputDir C:/private/skate-tools
 Upstream source and attribution: Skate-NOTICE.txt; license: Skate-GPL-3.0.txt.

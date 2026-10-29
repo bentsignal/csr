@@ -1,5 +1,21 @@
 # Current owner priorities
 
+## October 29: normal player entry and optional packs
+
+Start at the real home screen, including Dev builds. Keep F8 available for
+explicit development work, closed by default, without forcing practice rules
+or Dust II on launch. Exercise the regular Play flow as the primary entry.
+Installed pack maps belong in a Content pack maps section of Play and must
+disappear when their providing pack is removed. Preserve the accepted Skate
+course, physics, presentation and controller behavior.
+
+Authoring tools stay in the monorepo's developer-only tooling, not player
+menus or default downloads. The base app ships the generic pack connection
+layer; native providers are separate optional downloads requested by installed
+packs. No Skate creator, runtime executable or built-in Skate course belongs
+in the base installer. Keep original assets private and retain GPL notices
+with the optional downloads. Finish through the normal Dev updater.
+
 ## October 26: Skate crossover pivot
 
 ### October 28 follow-up: rideable transitions and bigger transfers

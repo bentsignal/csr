@@ -166,7 +166,6 @@ pub(crate) fn setup(
     if maps.is_empty() {
         maps.push(opts.0.map.clone());
     }
-    if !maps.iter().any(|m|m==level::surf_course::NAME){maps.push(level::surf_course::NAME.into());}
     menu.map = maps.iter().position(|p| p == &opts.0.map).unwrap_or(0);
     menu.maps = maps;
     menu.deathmatch = opts.0.deathmatch || menu.maps[menu.map].starts_with("cs_");
