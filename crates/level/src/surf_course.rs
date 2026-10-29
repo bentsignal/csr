@@ -12,14 +12,18 @@ pub const ID: &str = "mod_map_surf_skate_clip";
 /// First surf ramp, along +X. Riders surf its -Y face, pushing toward +Y.
 pub const RAMP1_X: [f32; 2] = [-8000., -4800.];
 /// The skate plaza: one flat brush, so no internal seams under the wheels.
-pub const DECK_X: [f32; 2] = [-4600., 3000.];
+pub const DECK_X: [f32; 2] = [-4600., 9000.];
 pub const DECK_Z: f32 = 600.;
+pub const START_Z: f32 = 3600.;
 /// The clear riding lane from the landing to the end kicker.
 pub const LANE_Y: f32 = -150.;
 /// The plaza's end kicker, spanning the lane.
-pub const KICKER_X: [f32; 2] = [2760., 3000.];
-pub const RAMP2_X: [f32; 2] = [3050., 8050.];
-pub const FINISH_X: [f32; 2] = [8150., 9350.];
+pub const KICKER_X: [f32; 2] = [8200., 9000.];
+pub const RAMP2_X: [f32; 2] = [9400., 15200.];
+pub const FINISH_X: [f32; 2] = [15300., 21100.];
+pub const GAP_LAUNCH: [f32; 2] = [3000., 3900.];
+pub const GAP_LANDING: [f32; 2] = [4800., 5700.];
+pub const GAP_HEIGHT: f32 = 200.;
 
 const RAMP_SLOPE: f32 = 1.6;
 const RAMP_DROP: f32 = 0.2;
@@ -66,7 +70,7 @@ pub fn pack() -> Result<packs::Pack, String> {
         format_version: 1,
         id: "csr_surf_skate_course".into(),
         name: "Surf / Skate Clip Course".into(),
-        version: "2.0.0".into(),
+        version: "3.0.0".into(),
         origin: "mod".into(),
         kind: packs::PackKind::Assets,
         provides: vec![ID.into()],
@@ -360,13 +364,29 @@ impl Builder {
         self.solid(x, [ridge - RAMP_HALF, ridge], move |x, y| face(x, y) - THICK, face, material);
         self.solid(x, [ridge, ridge + RAMP_HALF], move |x, y| face(x, y) - THICK, face, material);
     }
-    /// A wedge on the deck rising along +X (or falling when `down`).
+    /// Circular wheel transition, tangent to the floor at its foot. Facets
+    /// stay below one degree; they share endpoints (never overlap).
     fn kicker(&mut self, x: [f32; 2], y: [f32; 2], base: f32, height: f32, down: bool, material: usize) {
-        let rise = move |px: f32, _: f32| {
-            let t = ((px - x[0]) / (x[1] - x[0])).clamp(0., 1.);
-            base + height * if down { 1. - t } else { t }
-        };
-        self.block(x, y, base, rise, material);
+        let length = x[1] - x[0];
+        let radius = (length * length + height * height) / (2. * height);
+        let angle = (length / radius).asin();
+        let steps = (angle.to_degrees() / 0.75).ceil() as usize;
+        let points: Vec<_> = (0..=steps).map(|i| {
+            let a = angle * i as f32 / steps as f32;
+            let (dx, h) = (radius * a.sin(), radius * (1. - a.cos()));
+            (if down { x[1] - dx } else { x[0] + dx }, base + h)
+        }).collect();
+        self.profile(&points, y, base - 8., false, material);
+    }
+    fn profile(&mut self, points: &[(f32, f32)], span: [f32; 2], bottom: f32, along_y: bool, material: usize) {
+        for pair in points.windows(2) {
+            let [(mut a, mut za), (mut b, mut zb)] = [pair[0], pair[1]];
+            if a > b { std::mem::swap(&mut a, &mut b); std::mem::swap(&mut za, &mut zb); }
+            let slope = (zb - za) / (b - a);
+            let top = move |x, y| za + ((if along_y { y } else { x }) - a) * slope;
+            if along_y { self.block(span, [a, b], bottom, top, material); }
+            else { self.block([a, b], span, bottom, top, material); }
+        }
     }
     fn finish(mut self) -> Vec<u8> {
         let mut entities = String::from(
@@ -375,8 +395,8 @@ impl Builder {
         for team in ["info_player_counterterrorist", "info_player_terrorist"] {
             for i in 0..5 {
                 entities += &format!(
-                    "{{\n\"classname\" \"{team}\"\n\"origin\" \"{} -128 1602\"\n\"angles\" \"0 0 0\"\n}}\n",
-                    RAMP1_X[0] as i32 - 300 - i * 40
+                    "{{\n\"classname\" \"{team}\"\n\"origin\" \"{} -128 {}\"\n\"angles\" \"0 0 0\"\n}}\n",
+                    RAMP1_X[0] as i32 - 300 - i * 40, START_Z + 2.
                 );
             }
         }
@@ -436,7 +456,7 @@ impl Builder {
         bytes
     }
 }
-const BOUNDS: [(i16, i16); 3] = [(-9300, 9800), (-2400, 2400), (-2200, 2400)];
+const BOUNDS: [(i16, i16); 3] = [(-9300, 21500), (-2400, 2400), (-2600, 4200)];
 fn bounds(b: &mut [u8], min: usize, max: usize) {
     for (i, (lo, hi)) in BOUNDS.into_iter().enumerate() {
         put16(b, min + i * 2, lo as u16);
@@ -447,12 +467,12 @@ fn geometry() -> Vec<u8> {
     let mut b = Builder::new();
     let z = DECK_Z;
     // Start deck and the first surf ramp.
-    b.block([RAMP1_X[0] - 700., RAMP1_X[0]], [-384., 384.], 1450., |_, _| 1600., DARK);
+    b.block([RAMP1_X[0] - 1000., RAMP1_X[0]], [-600., 600.], START_Z - 150., |_, _| START_Z, DARK);
     b.surf_ramp(RAMP1_X, false, SURF);
 
     // The plaza sits ~260 below the first ridge exit: a landing Skate rides
     // away from (a 550-unit drop bails). Lines low on the face fall short.
-    b.block([DECK_X[0], DECK_X[1]], [-1200., 1200.], z - 150., |_, _| z, CONCRETE);
+    b.block([DECK_X[0], DECK_X[1]], [-1600., 1600.], z - 150., |_, _| z, CONCRETE);
     // North lane: funbox, rail gap, launch box.
     b.kicker([-3000., -2840.], [200., 520.], z, 24., false, WOOD);
     b.block([-2840., -2260.], [200., 520.], z, |_, _| z + 24., CONCRETE);
@@ -470,9 +490,9 @@ fn geometry() -> Vec<u8> {
     b.kicker([1300., 1460.], [220., 500.], z, 36., false, WOOD);
     b.kicker([1760., 1960.], [220., 500.], z, 36., true, WOOD);
     // Light posts along both edges give the plaza scale and a sense of speed.
-    for i in 0..10 {
+    for i in 0..18 {
         let x = DECK_X[0] + 400. + i as f32 * 760.;
-        for y in [-1185., 1185.] {
+        for y in [-1585., 1585.] {
             b.block([x - 5., x + 5.], [y - 5., y + 5.], z, |_, _| z + 260., DARK);
         }
     }
@@ -495,28 +515,32 @@ fn geometry() -> Vec<u8> {
     b.block([1400., 2300.], [-1000., -700.], z, |_, _| z + 16., PAINT);
     b.block([1400., 2300.], [-1000., -700.], z + 16., |_, _| z + 18., METAL);
     // Far side: a long bank, then a quarter pipe with a deck behind it.
-    b.block([-2400., -400.], [900., 1200.], z, |_, y| z + (y - 900.) * 0.6, CONCRETE);
-    let radius = 110.;
+    let bank: Vec<_> = (0..=80).map(|i| {
+        let t = i as f32 / 80.;
+        (900. + 600. * t, z + 180. * (1. - (t * std::f32::consts::PI).cos()) * 0.5)
+    }).collect();
+    b.profile(&bank, [-2400., -400.], z - 8., true, CONCRETE);
+    let radius = 520.;
     let arc = |deg: f32| (900. + radius * deg.to_radians().sin(), z + radius * (1. - deg.to_radians().cos()));
-    for i in 0..6 {
-        let (y0, z0) = arc(i as f32 * 14.);
-        let (y1, z1) = arc((i + 1) as f32 * 14.);
-        let slope = (z1 - z0) / (y1 - y0);
-        // Each facet starts under its predecessor, hiding its seam face.
-        let start = if i == 0 { y0 } else { y0 - 6. };
-        b.block([400., 2000.], [start, y1], z, move |_, y| z0 + (y - y0) * slope, WOOD);
-    }
+    let pipe: Vec<_> = (0..=112).map(|i| arc(i as f32 * 0.75)).collect();
+    b.profile(&pipe, [400., 2000.], z - 8., true, WOOD);
     let (lip, top) = arc(84.);
     b.block([400., 2000.], [lip, lip + 90.], z, |_, _| top, CONCRETE);
     b.block([400., 2000.], [lip - 3., lip + 3.], top, |_, _| top + 2., METAL);
     // End kicker over the lane, launching onto the second surf ramp.
-    b.kicker(KICKER_X, [-500., 100.], z, 80., false, WOOD);
+    // A wide, higher transfer with a full 900-unit gap. A clear bypass lane
+    // remains south of it; missed jumps land on the plaza rather than a pit.
+    b.kicker(GAP_LAUNCH, [-350., 800.], z, GAP_HEIGHT, false, WOOD);
+    // Lower landing lip gives a fast flat-deck approach a forgiving catch;
+    // it must not become a 200-unit vertical wall across the flight path.
+    b.kicker(GAP_LANDING, [-350., 800.], z, 100., true, WOOD);
+    b.kicker(KICKER_X, [-600., 300.], z, 180., false, WOOD);
     b.surf_ramp(RAMP2_X, true, SURF2);
     // Below the ridge exit so face lines reach it; the drop costs little or no CS fall damage.
     let finish = ramp_peak(true, RAMP2_X[1]) - 250.;
     b.block(FINISH_X, [-800., 800.], finish - 150., move |_, _| finish, DARK);
     // A broad catch floor makes a missed line recoverable with the marker.
-    b.block([-9200., 9700.], [-2300., 2300.], -2150., |_, _| -2000., DARK);
+    b.block([-9200., 21400.], [-2300., 2300.], -2550., |_, _| -2400., DARK);
     b.finish()
 }
 
@@ -556,8 +580,8 @@ mod tests {
         // Skate survives a ridge exit onto the plaza; a 550-unit drop bails.
         assert!((150. ..320.).contains(&(ramp_peak(false, RAMP1_X[1]) - DECK_Z)));
         let path = world.trace_box(
-            Vec3::new(DECK_X[0] + 100., LANE_Y, DECK_Z + 4.),
-            Vec3::new(KICKER_X[0] - 10., LANE_Y, DECK_Z + 4.),
+            Vec3::new(DECK_X[0] + 100., -500., DECK_Z + 4.),
+            Vec3::new(KICKER_X[0] - 10., -500., DECK_Z + 4.),
             movement::STAND_MINS,
             movement::STAND_MAXS,
             collision::contents::MASK_PLAYERSOLID,
@@ -567,7 +591,10 @@ mod tests {
             "the riding lane must have no walls or internal seams"
         );
         let kicker = down((KICKER_X[0] + KICKER_X[1]) * 0.5, LANE_Y, 900.);
-        assert!((kicker.end.z - (DECK_Z + 40.)).abs() < 0.5, "{kicker:?}");
+        assert!(kicker.end.z > DECK_Z + 35. && kicker.end.z < DECK_Z + 55., "{kicker:?}");
+        let foot = down(KICKER_X[0] + 4., LANE_Y, 900.);
+        assert!(foot.normal.z > 0.999 && foot.end.z < DECK_Z + 0.1, "tangent foot: {foot:?}");
+        assert!(START_Z - ramp_peak(false, RAMP1_X[0]) > 2000.);
         let rail = down(-1100., 360., 900.);
         assert!((rail.end.z - (DECK_Z + 20.)).abs() < 0.2, "{rail:?}");
     }

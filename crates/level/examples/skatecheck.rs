@@ -43,6 +43,7 @@ fn run() -> Result<(), String> {
         .ok_or("Usage: skatecheck <private pack.csrpack> [map]")?;
     let pack = packs::Pack::open(Path::new(&path))?;
     let module = load_module(&pack)?;
+    if std::env::args().any(|a|a=="--ramps"){return rampcheck(module);}
     if std::env::args().any(|a|a=="--route"){return coursecheck(module);}
     if std::env::args().any(|a| a == "--audio") {
         return audioproof(module);
@@ -341,6 +342,67 @@ fn combatcheck(module:Arc<sim::mechanics::Module>,collision:Arc<collision::Colli
     if shots==0||selected.len()<2{return Err("riding fire / weapon switching failed".into());}Ok(())
 }
 const STEER:(f32,f32)=(60.,40.);
+fn rampcheck(module:Arc<sim::mechanics::Module>)->Result<(),String>{
+    use mechanics::link::{Start,Frame,Controller};
+    use level::surf_course::*;
+    let level=level::Level::load(NAME,None).map_err(|e|e.to_string())?;
+    let scene=mechanics::external::geometry::scene(&level.collision);
+    let program=module.external.as_ref().unwrap();
+    let cases: [(&str,[f32;3],f32,f32);14]=[("funbox",[-3200.,360.,DECK_Z+3.5],0.,-2700.),
+        ("rail launch",[-1800.,270.,DECK_Z+3.5],0.,-1400.),
+        ("launch box",[0.,360.,DECK_Z+3.5],0.,500.),
+        ("small gap",[1100.,360.,DECK_Z+3.5],0.,1500.),
+        ("stair approach",[-260.,-1100.,DECK_Z+3.5],0.,250.),
+        ("bank",[-1400.,700.,DECK_Z+3.5],90.,1250.),
+        ("quarter pipe",[1200.,700.,DECK_Z+3.5],90.,1150.),
+        ("big gap",[GAP_LAUNCH[0]-200.,0.,DECK_Z+3.5],0.,GAP_LAUNCH[1]+100.),
+        ("exit kicker",[KICKER_X[0]-200.,LANE_Y,DECK_Z+3.5],0.,KICKER_X[1]+100.),
+        ("funbox return",[-1900.,360.,DECK_Z+3.5],180.,-2400.),
+        ("rail return",[-440.,270.,DECK_Z+3.5],180.,-850.),
+        ("launch box return",[1140.,360.,DECK_Z+3.5],180.,650.),
+        ("small gap return",[2160.,360.,DECK_Z+3.5],180.,1720.),
+        ("big gap return",[GAP_LANDING[1]+200.,0.,DECK_Z+3.5],180.,GAP_LANDING[0]-100.)];
+    for (case,(name,position,yaw,target)) in cases.into_iter().enumerate(){
+        for (rate_index,speed) in [240.,500.,850.].into_iter().enumerate(){
+            let heading=yaw.to_radians();
+            let start=Start{grounded:true,position,velocity:[speed*heading.cos(),speed*heading.sin(),0.],yaw,checkpoint:None};
+            let mut journal=mechanics::external::Journal::default();let mut hash=mechanics::external::digest([0;32],&start);
+            let session=1000+(case*10+rate_index) as u64;
+            let mut reached=false;let mut last=Default::default();
+            for tick in 0..2048 {
+                let frame=Frame{input:Controller{connected:true,buttons:if speed<300. && tick%128<32{0x1000}else{0},..Default::default()},dt:1./128.,scene:Default::default()};
+                let (pose,_)=program.advance(&scene,501,session,&start,&journal,hash,&frame)?;
+                let along=pose.position[if yaw==90.{1}else{0}];
+                if pose.state==300 || (500..600).contains(&pose.state) {return Err(format!("{name} speed={speed} bailed tick={tick} state={} at {:?}",pose.state,pose.position));}
+                hash=mechanics::external::digest(hash,&frame);journal.push(frame);
+                last=pose;
+                if (yaw==180. && along<target)||(yaw!=180. && along>target) {reached=true;break;}
+            }
+            println!("Ramp {name} speed={speed}: reached={reached} state={} position={:?} velocity={:?}",last.state,last.position,last.velocity);
+            if !reached {return Err(format!("{name} speed={speed} failed to ride through the transition"));}
+        }
+    }
+    let start=Start{grounded:true,position:[-8100.,-128.,START_Z+3.5],velocity:[350.,0.,0.],yaw:0.,checkpoint:None};
+    let mut journal=mechanics::external::Journal::default();let mut hash=mechanics::external::digest([0;32],&start);
+    let mut air_ticks=0;
+    let mut dropped=false;
+    for tick in 0..1024 {
+        let mut input=Controller{connected:true,..Default::default()};
+        if (100..150).contains(&tick){input.right=[0,-32768];}
+        if (150..175).contains(&tick){input.right=[30000,30000];}
+        let frame=Frame{input,dt:1./128.,scene:Default::default()};
+        let (pose,_)=program.advance(&scene,501,2000,&start,&journal,hash,&frame)?;
+        if !pose.grounded {air_ticks+=1;}
+        if pose.state==300 {return Err("starting drop bailed before the surf handoff".into());}
+        hash=mechanics::external::digest(hash,&frame);journal.push(frame);
+        if pose.position[2]<1800. {
+            println!("Starting drop: air_time={:.2}s position={:?} velocity={:?} trick={:?}",air_ticks as f32/128.,pose.position,pose.velocity,pose.trick);
+            dropped=true;break;
+        }
+    }
+    if !dropped||air_ticks<256 {return Err("starting drop did not allow two seconds of airborne skating".into());}
+    Ok(())
+}
 fn coursecheck(module:Arc<sim::mechanics::Module>)->Result<(),String>{
     let level=level::Level::load(level::surf_course::NAME,None).map_err(|e|e.to_string())?;
     let mut w=sim::World::with_catalog(level.collision.clone(),level.catalog.clone());
@@ -351,12 +413,16 @@ fn coursecheck(module:Arc<sim::mechanics::Module>)->Result<(),String>{
     for tick in 0..12288 {
         let p=w.player(id).unwrap();let pos=p.movement.origin;let vel=p.movement.velocity;
         if let Some(s)=p.mechanic.as_ref().and_then(|s|s.external.as_ref()){
+            if s.pose.state==300 || (500..600).contains(&s.pose.state) {return Err(format!("course rider bailed at {pos:?} state={}",s.pose.state));}
             if !s.pose.trick.is_empty(){trick=s.pose.trick.clone();score=score.max(s.pose.score);}
         }
         let mut input=TickInput{view_angles:Vec3::ZERO,..Default::default()};
         if stage==0 {
             use level::surf_course::RAMP1_X;
-            if pos.x<RAMP1_X[0] {input.forward_move=450.;}else{input.side_move=-450.;}
+            if pos.x<RAMP1_X[0] {input.forward_move=450.;}
+            else if pos.z>level::surf_course::ramp_peak(false,pos.x)+150. {
+                input.forward_move=450.;input.side_move=((pos.y+100.)*5.+vel.y*2.).clamp(-450.,450.);
+            }else{input.side_move=-450.;}
             if pos.x>RAMP1_X[1]+50. {input.toggle_mode=true;stage=1;}
         }else if stage==1 {
             input.controller.connected=true;
@@ -371,8 +437,9 @@ fn coursecheck(module:Arc<sim::mechanics::Module>)->Result<(),String>{
             if landed_at.is_some_and(|at|tick>at+200) && p.movement.on_ground && pos.x<level::surf_course::KICKER_X[0]-600. && (tick/16)%4==0 {input.controller.buttons|=0x1000;}
             if pos.x>level::surf_course::KICKER_X[1]+15. {input.toggle_mode=true;stage=2;}
         }else {
-            input.side_move=-450.;
-            if pos.x>level::surf_course::RAMP2_X[0]+950. && pos.z>level::surf_course::ramp_peak(true,pos.x)-600. {println!("Second surf ramp reached tick={tick} position={pos:?} velocity={vel:?} peak={max_speed} trick={trick} score={score}");return if landed_at.is_some() && !trick.is_empty(){Ok(())}else{Err("missed trick deck or trick recognition".into())};}
+            let face=level::surf_course::ramp_peak(true,pos.x)-1.6*(pos.y-level::surf_course::RAMP2_Y).abs();
+            input.side_move=if pos.z>face+100. {((pos.y+100.)*5.+vel.y*2.).clamp(-450.,450.)}else{-450.};
+            if pos.x>level::surf_course::FINISH_X[0]+100. && p.movement.on_ground {println!("Final runout reached tick={tick} position={pos:?} velocity={vel:?} peak={max_speed} trick={trick} score={score}");return if landed_at.is_some() && !trick.is_empty(){Ok(())}else{Err("missed trick deck or trick recognition".into())};}
         }
         max_speed=max_speed.max(vel.truncate().length());
         if stage!=last_state{switched=tick;}
