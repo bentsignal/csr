@@ -41,8 +41,13 @@ what you pressed, expected versus observed behaviour, and whether it repeats.
 - Original Stratum regular/bold fonts decode in memory from the installed VFONT
   files. HUD art, equipment silhouettes, team badges, character images and radar
   textures are read from the install at runtime.
-- Radial buy menu supports mouse wedges, keys 1–9, and right-click/0 to go back.
-  Prices, ownership and availability still use simulation rules.
+- The buy menu is a flat grid (owner direction 2026-10-29): CS:GO's six
+  categories as columns with every team item visible, click a tile or press
+  the category then item number (0/right-click goes back). Content packs add
+  tabs; the Skate pack's skateboard is free and equips through
+  `Purchase::Mechanic`. Prices, ownership and availability still use
+  simulation rules. Screenshot fixtures: `CSR_BUY_MENU=n` (armed column),
+  `CSR_BUY_PAGE=n` (tab), `CSR_TEST_MONEY=n`.
 - HUD includes the map overview, living teammate positions, team avatars and
   weapon silhouettes. The scoreboard uses original fonts and team badges.
 - Hit markers are optional in Game Settings and disabled by default. Blood,
