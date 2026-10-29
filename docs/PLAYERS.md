@@ -39,9 +39,10 @@ UPDATES
 -------
 Open CSGO Rewrite to see the launcher. It checks for updates automatically;
 Refresh checks again. Downloads show progress. When an update is ready,
-choose Apply update, or Update & play to install it and start the game.
+the Play button becomes Update & play: it installs the update and starts the
+game. Update only installs it without starting the game.
 You never need to download the installer again. If the update service is
-unavailable, you can still play your installed version. Play installed also
+unavailable, you can still play your installed version. Play also
 lets you start without waiting for an update check or download to finish.
 
 Stable is the default release track, recommended for friends. Choose Dev to
@@ -89,8 +90,9 @@ opens the game, or shows a notification if the game is already running.
 Cancelling before installation finishes keeps the previous pack version.
 Packs are kept with your other data and survive game updates.
 The Content packs button on the home screen opens the installed pack list.
-The desktop launcher's Content packs tab also lists installed packs, installs
-new .csrpack files, removes selected packs and opens the packs folder.
+The desktop launcher's Content packs page also lists installed packs, installs
+new .csrpack files, removes packs (click Remove, then Confirm) and opens the
+packs folder.
 Choose a pack and map, then Play. Install opens a file picker; dropping a
 .csrpack file onto the game window also starts installation.
 
