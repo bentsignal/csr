@@ -686,6 +686,15 @@ pub fn tick(
             input.view_angles=glam::Vec3::ZERO;local.pitch=0.;local.yaw=0.;
             use level::surf_course::{RAMP1_X,DECK_X,KICKER_X};
             input.forward_move=if x<RAMP1_X[0]{450.}else{0.};input.side_move=if !skating && x>=RAMP1_X[0]{-450.}else{0.};
+            if !skating && x>=RAMP1_X[0] {
+                let second=x>DECK_X[1];
+                let ridge=level::surf_course::ramp_ridge(second);
+                let face=level::surf_course::ramp_peak(second,x)-1.6*(p.movement.origin.y-ridge).abs();
+                if p.movement.origin.z>face+100. {
+                    input.side_move=((p.movement.origin.y+100.)*5.+p.movement.velocity.y*2.).clamp(-450.,450.);
+                    if !second {input.forward_move=450.;}
+                }
+            }
             input.toggle_mode=(!skating&&(RAMP1_X[1]+50. ..DECK_X[0]).contains(&x))||(skating&&x>KICKER_X[1]+15.);
             input.controller=mechanics::link::Controller{connected:true,..Default::default()};
             if skating {

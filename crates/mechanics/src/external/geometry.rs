@@ -65,7 +65,7 @@ fn convex(solid: &Convex) -> Vec<Triangle> {
 }
 pub fn scene(world: &CollisionWorld) -> Scene {
     let map = world.static_world();
-    let mut triangles: Vec<_> = map.convexes.iter().flat_map(convex).collect();
+    let mut triangles = union::exterior(&map.convexes);
     triangles.extend(
         map.triangles
             .iter()
@@ -130,6 +130,7 @@ fn surfaces<'a>(world: &CollisionWorld, triangles: impl Iterator<Item = &'a Tria
     (0..count).map(|s| world.rolling_surface(s)).collect()
 }
 mod rails;
+mod union;
 fn points(solid: &Convex) -> Vec<[f32; 3]> {
     let mut seen = std::collections::BTreeSet::new();
     convex(solid)

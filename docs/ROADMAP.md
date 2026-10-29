@@ -2,6 +2,11 @@
 
 ## October 26: Skate crossover
 
+- [x] Replace abrupt skate wedges with curved transitions; remove internal
+  static brush faces from the Skate collision mesh. Raise the start, expand
+  the plaza and ramp gap, widen the exit transfer and extend the runout.
+- [ ] Owner playtest of curved ramps and the expanded surf/skate course.
+
 - [x] Implement the surf/skate clip batch: airborne continuity, original surf /
   trick-deck course, constrained rail grip/inspection, granular material audio,
   contextual scoring/markers and riding combat.
