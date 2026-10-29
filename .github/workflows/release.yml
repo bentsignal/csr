@@ -55,7 +55,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $zip = Get-ChildItem dist -Filter 'CSGO-Rewrite-*-windows-x64.zip' | Select-Object -First 1
-          gh release create $env:GITHUB_REF_NAME $zip.FullName --title "CSGO Rewrite $env:GITHUB_REF_NAME" --generate-notes --draft --latest
+          gh release create $env:GITHUB_REF_NAME $zip.FullName dist/Skate-Runtime-windows-x64.zip dist/Skate-Authoring-windows-x64.zip --title "CSGO Rewrite $env:GITHUB_REF_NAME" --notes "Source: $env:CSR_BUILD_SHA" --generate-notes --draft --latest
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           # Adds Setup.exe, the update packages and the feed to the same release.
           vpk upload github --repoUrl "https://github.com/$env:GITHUB_REPOSITORY" --token $env:GH_TOKEN `

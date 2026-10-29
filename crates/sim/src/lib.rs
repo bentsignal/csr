@@ -631,6 +631,14 @@ impl World {
     pub fn load_map(&mut self, map: &bsp::Bsp, overview: Option<&str>) {
         self.load_spawns(map);
         self.objectives = Objectives::from_bsp(map, &self.spawns, overview);
+        // Map-authored movement settings are data, not developer-menu state.
+        // Bounds prevent untrusted maps from introducing non-finite physics.
+        if let Some(world)=map.entities_of_class("worldspawn").next() {
+            if let Some(value)=world.str("csr_airaccelerate").and_then(|s|s.parse::<f32>().ok())
+                .filter(|v|v.is_finite() && (0. ..=1000.).contains(v)) {self.config.air_accelerate=value;}
+            if let Some(value)=world.str("csr_accelerate").and_then(|s|s.parse::<f32>().ok())
+                .filter(|v|v.is_finite() && (0. ..=100.).contains(v)) {self.config.accelerate=value;}
+        }
     }
 
     /// Switches rule sets. Competitive starts a fresh match: call it after

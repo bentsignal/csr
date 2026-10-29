@@ -58,7 +58,7 @@ const SURF2: usize = 4;
 const PAINT: usize = 5;
 const DARK: usize = 6;
 
-pub fn pack() -> Result<packs::Pack, String> {
+pub fn files() -> Vec<(String, Vec<u8>)> {
     let mut files = vec![(format!("maps/{NAME}.bsp"), geometry())];
     for (name, surface) in MATERIALS {
         files.push((format!("materials/csr_course/{name}.vmt"), format!(
@@ -66,6 +66,10 @@ pub fn pack() -> Result<packs::Pack, String> {
         ).into_bytes()));
         files.push((format!("materials/csr_course/{name}.vtf"), texture(name)));
     }
+    files
+}
+pub fn pack() -> Result<packs::Pack, String> {
+    let files = files();
     let manifest = packs::Manifest {
         format_version: 1,
         id: "csr_surf_skate_course".into(),
@@ -390,7 +394,7 @@ impl Builder {
     }
     fn finish(mut self) -> Vec<u8> {
         let mut entities = String::from(
-            "{\n\"classname\" \"worldspawn\"\n\"skyname\" \"sky_dust\"\n}\n{\n\"classname\" \"light_environment\"\n\"angles\" \"0 35 0\"\n\"pitch\" \"-55\"\n\"_light\" \"255 245 225 230\"\n\"_ambient\" \"170 190 210 100\"\n}\n",
+            "{\n\"classname\" \"worldspawn\"\n\"csr_airaccelerate\" \"1000\"\n\"csr_accelerate\" \"10\"\n\"skyname\" \"sky_dust\"\n}\n{\n\"classname\" \"light_environment\"\n\"angles\" \"0 35 0\"\n\"pitch\" \"-55\"\n\"_light\" \"255 245 225 230\"\n\"_ambient\" \"170 190 210 100\"\n}\n",
         );
         for team in ["info_player_counterterrorist", "info_player_terrorist"] {
             for i in 0..5 {
@@ -547,6 +551,15 @@ fn geometry() -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn authored_movement_settings_load_without_developer_tools() {
+        let pack=pack().unwrap();
+        let map=bsp::Bsp::parse(&pack.file(&format!("maps/{NAME}.bsp")).unwrap()).unwrap();
+        let mut world=sim::World::new(std::sync::Arc::new(collision::CollisionWorld::new()));
+        world.load_map(&map,None);
+        assert_eq!(world.config.air_accelerate,1000.);
+        assert_eq!(world.config.accelerate,10.);
+    }
     #[test]
     fn generated_pack_keeps_surf_brushes_and_clear_landings() {
         let pack = pack().unwrap();

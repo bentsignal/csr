@@ -84,8 +84,17 @@ New-Item -ItemType Directory -Force $out | Out-Null
 Copy-Item $exe (Join-Path $out "$name.exe")
 Copy-Item 'docs\PLAYERS.md' (Join-Path $out 'README.txt')
 Copy-Item 'LICENSE' (Join-Path $out 'LICENSE.txt') -ErrorAction SilentlyContinue
-& (Join-Path $root 'tools/build-skate-tools.ps1') -OutputDir $out
-Copy-Item -LiteralPath 'docs/SKATE.md' -Destination (Join-Path $out 'Skate-README.txt')
+# Optional provider and developer tools are separate release downloads. None
+# enter the base installer or update package. Packs request a matching runtime.
+$optional = Join-Path $dist 'optional-skate'
+Remove-PackageFolder $optional
+& (Join-Path $root 'tools/build-skate-tools.ps1') -OutputDir $optional
+if ($LASTEXITCODE -ne 0) { throw 'Optional content tools build failed' }
+$runtimeZip = Join-Path $dist 'Skate-Runtime-windows-x64.zip'
+$authoringZip = Join-Path $dist 'Skate-Authoring-windows-x64.zip'
+Compress-Archive -LiteralPath @((Join-Path $optional 'Skate-Runtime.exe'),(Join-Path $optional 'Skate-GPL-3.0.txt'),(Join-Path $optional 'Skate-NOTICE.txt'),(Join-Path $optional 'Skate-SOURCE.txt')) -DestinationPath $runtimeZip -Force
+Copy-Item -LiteralPath 'docs/SKATE.md' -Destination (Join-Path $optional 'README.txt')
+Compress-Archive -Path (Join-Path $optional '*') -DestinationPath $authoringZip -Force
 if (-not $ReleaseNotes) { $ReleaseNotes = Join-Path $root 'docs\LAUNCHER-RELEASE-NOTES.md' }
 if (-not (Test-Path -LiteralPath $ReleaseNotes -PathType Leaf)) { throw 'Release notes file is missing' }
 Copy-Item -LiteralPath $ReleaseNotes -Destination (Join-Path $out 'RELEASE-NOTES.md')

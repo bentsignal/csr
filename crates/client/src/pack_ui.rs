@@ -29,6 +29,7 @@ pub(crate) struct PackUi {
     was_menu: bool,
     exit: Option<AppExit>,
     feedback: f64,
+    play_maps: bool,
 }
 impl Default for PackUi {
     fn default() -> Self {
@@ -46,6 +47,7 @@ impl Default for PackUi {
             was_menu: false,
             exit: None,
             feedback: 0.,
+            play_maps: false,
         }
     }
 }
@@ -59,7 +61,6 @@ pub(crate) enum Action {
     Open,
     Close,
     Import,
-    CreateSkate,
     Cancel,
     Refresh,
     Previous,
@@ -81,7 +82,7 @@ pub(crate) fn scroll(
             bevy::input::mouse::MouseScrollUnit::Pixel => event.y,
         })
         .sum();
-    if ui.open {
+    if ui.open || (ui.play_maps && ui.hover) {
         for (node, mut position) in &mut areas {
             let maximum =
                 ((node.content_size().y - node.size().y) * node.inverse_scale_factor()).max(0.);
@@ -171,16 +172,6 @@ pub(crate) fn update(
                 Action::Import if backend.picker.is_none() => {
                     backend.picker = Some(PackPicker::start())
                 }
-                Action::CreateSkate => {
-                    let result = std::env::current_exe().map_err(|e| e.to_string()).and_then(|exe| {
-                        let creator = exe.parent().ok_or("Cannot find the installed app folder")?.join("Skate-Pack-Creator.exe");
-                        std::process::Command::new(creator).spawn().map(|_| ()).map_err(|e|e.to_string())
-                    });
-                    backend.flow.notice = match result {
-                        Ok(()) => "Choose your prepared Skate installation in the pack creator. Open the saved .csrpack to install it.".into(),
-                        Err(error) => format!("The Skate pack creator could not open: {error}"),
-                    };
-                }
                 Action::Cancel => {
                     let picker_only = backend.picker.is_some() && !backend.flow.busy();
                     if let Some(picker) = &mut backend.picker {
@@ -200,6 +191,7 @@ pub(crate) fn update(
                     options.map = id.to_string();
                     options.direct = true;
                     options.deathmatch = true;
+                    options.bots = 0;
                     *request.0.lock().unwrap() = Some(crate::menu::MapRequest {
                         options,
                         pack: Some((backend.flow.store(), entry.clone(), id.clone())),
@@ -309,9 +301,11 @@ pub(crate) fn draw(
         backend.flow.status()
     };
     let feedback = !menu && ui.feedback > 0.;
+    let pack_maps = menu && front.play_picker_presented() && count>0;
+    ui.play_maps=pack_maps;
     let front_camera = menu || *state.get() == AppState::Loading || movie_menu.open();
     let key = format!(
-        "{:?}:{front_camera}:{}:{}:{}:{status}:{}:{feedback}",
+        "{:?}:{front_camera}:{}:{}:{}:{status}:{}:{feedback}:{pack_maps}",
         state.get(),
         ui.open,
         ui.page,
@@ -333,15 +327,15 @@ pub(crate) fn draw(
             Persistent,
             Node {
                 position_type: PositionType::Absolute,
-                right: px(24),
-                top: if feedback { px(80) } else { Val::Auto },
-                bottom: if feedback { Val::Auto } else { px(20) },
+                right: if pack_maps { px(12) } else { px(24) },
+                top: if pack_maps { percent(14) } else if feedback { px(80) } else { Val::Auto },
+                bottom: if feedback || pack_maps { Val::Auto } else { px(20) },
                 flex_direction: FlexDirection::Column,
                 row_gap: px(10),
                 width: if ui.open || feedback {
                     percent(90)
                 } else {
-                    px(180)
+                    if pack_maps { percent(14) } else { px(180) }
                 },
                 max_width: px(700),
                 padding: UiRect::all(px(14)),
@@ -362,6 +356,20 @@ pub(crate) fn draw(
         return;
     }
     if !ui.open {
+        if pack_maps {
+            text(&mut commands,root,"Content pack maps",font.clone(),18.);
+            for (entry,map) in backend.flow.catalog.entries.iter()
+                .flat_map(|e|e.manifest().maps.iter().map(move |m|(e,m))).skip(ui.page*8).take(8) {
+                if let Ok(id)=map.id.parse() {
+                    button(&mut commands,root,&caption(&map.name),Action::Play(entry.clone(),id),font.clone());
+                }
+            }
+            if pages>1 {
+                button(&mut commands,root,"Previous maps",Action::Previous,font.clone());
+                button(&mut commands,root,"Next maps",Action::Next,font);
+            }
+            return;
+        }
         button(&mut commands, root, "Content packs", Action::Open, font);
         return;
     }
@@ -387,7 +395,6 @@ pub(crate) fn draw(
     commands.entity(root).add_children(&[controls]);
     for (label, action) in [
         ("Install pack", Action::Import),
-        ("Create Skate pack", Action::CreateSkate),
         ("Refresh", Action::Refresh),
         ("Cancel", Action::Cancel),
         ("Close", Action::Close),

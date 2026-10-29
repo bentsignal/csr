@@ -32,6 +32,7 @@ struct Data {
     state: AppState,
     menu_open: bool,
     controls_open: bool,
+    pack_maps_open: bool,
     loading: String,
     loading_map: Option<LoadingContext>,
     player_name: String,
@@ -47,7 +48,7 @@ impl Data {
     fn fork_worker(&self) -> Self {
         Self { fs: self.fs.clone(), settings: self.settings.clone(), inventory: self.inventory.clone(),
             localization: self.localization.clone(), game_modes: self.game_modes.clone(),
-            state: self.state, menu_open: self.menu_open, controls_open: false, loading: self.loading.clone(),
+            state: self.state, menu_open: self.menu_open, controls_open: false, pack_maps_open: false, loading: self.loading.clone(),
             loading_map: self.loading_map.clone(), player_name: self.player_name.clone(),
             movie_ready: HashSet::new(), home_bootstrapped: false, home_retired: false,
             pause_surface: Default::default(), flow_roots: Default::default(), deferred_pause: Default::default() }
@@ -277,7 +278,7 @@ impl Bridge {
     fn reset_navigation(&mut self, calls: &mut Calls) {
         self.close_quit(calls);
         self.close_options(calls);
-        self.offline_open = false;
+        self.offline_open = false; self.data.lock().unwrap().pack_maps_open=false;
         self.offline.query(None);
         self.lobby.lock().unwrap().cancel();
         for element in ["OptionsMenu", "StartSinglePlayer", "LobbyBrowser", "LobbyScreen"] {
@@ -585,7 +586,7 @@ impl Engine for Bridge {
             let mut lobby = self.lobby.lock().unwrap();
             match object {
                 "StartSinglePlayer" => {
-                    self.offline_open = false;
+                    self.offline_open = false; self.data.lock().unwrap().pack_maps_open=false;
                     self.offline.query(None);
                     lobby.chooser_unloaded();
                     if lobby.phase() == crate::frontend_lobby::Phase::Lobby {
@@ -857,7 +858,7 @@ impl Engine for Bridge {
             }
             self.close_quit(calls);
             self.close_options(calls);
-            self.offline_open = false;
+            self.offline_open = false; self.data.lock().unwrap().pack_maps_open=false;
             self.offline.query(None);
             if arg(1) == "bHidePanel" {
                 calls.call("_global.MainMenuMovie", "hidePanelImmediate", vec![]);
@@ -899,7 +900,7 @@ impl Engine for Bridge {
                 }
                 "OpenCreateSinglePlayerGameDialog" => {
                     self.data.lock().unwrap().pause_surface.await_page("StartSinglePlayer");
-                    self.offline_open = true;
+                    self.offline_open = true; self.data.lock().unwrap().pack_maps_open=true;
                     self.lobby.lock().unwrap().cancel();
                     for element in ["LobbyBrowser", "LobbyScreen"] {
                         if let Some(path) = self.roots.get(element) { calls.set(path, "_visible", false.into()); }
@@ -1220,6 +1221,10 @@ impl Frontend {
     }
 
     pub(crate) fn has_classic_menu(&self) -> bool { self.failed.is_none() }
+    pub(crate) fn play_picker_presented(&self) -> bool {
+        let data=self.data.lock().unwrap();
+        data.state==AppState::Menu && data.pack_maps_open && data.movie_ready.contains("StartSinglePlayer")
+    }
     pub(crate) fn home_bootstrapped(&self) -> bool { self.data.lock().unwrap().home_bootstrapped }
     pub(crate) fn pause_presented(&self) -> bool {
         self.worker_kind == WorkerKind::Match && self.pause_surface_visible()
@@ -1360,7 +1365,7 @@ pub(crate) fn setup(
         game_modes: crate::frontend_game::load(&data.vfs, &installed),
         state: AppState::Menu,
         menu_open: menu.open(),
-        controls_open: false,
+        controls_open: false, pack_maps_open: false,
         loading: String::new(),
         loading_map: None,
         player_name: "You".into(),
@@ -2459,7 +2464,7 @@ mod tests {
         let worker = CachedWorker::new(Data {
             inventory: InventoryView::new(&fs), fs, settings: Settings::default(),
             localization: Default::default(), game_modes: Default::default(),
-            state: AppState::Match, menu_open: true, controls_open: false, loading: String::new(),
+            state: AppState::Match, menu_open: true, controls_open: false, pack_maps_open: false, loading: String::new(),
             loading_map: None, player_name: "Fixture".into(), movie_ready: Default::default(),
             home_bootstrapped: false, home_retired: false,
             pause_surface: Default::default(), flow_roots: Default::default(), deferred_pause: Default::default(),
@@ -2723,7 +2728,7 @@ mod tests {
         let data = Arc::new(Mutex::new(Data {
             inventory: InventoryView::new(&fs), fs, settings: Settings::default(),
             localization: Default::default(), game_modes: modes.clone(),
-            state: AppState::Menu, menu_open: true, controls_open: false, loading: String::new(), loading_map: None, player_name: "You".into(), movie_ready: HashSet::new(), home_bootstrapped: false, home_retired: false, pause_surface: Default::default(),
+            state: AppState::Menu, menu_open: true, controls_open: false, pack_maps_open: false, loading: String::new(), loading_map: None, player_name: "You".into(), movie_ready: HashSet::new(), home_bootstrapped: false, home_retired: false, pause_surface: Default::default(),
         flow_roots: Default::default(), deferred_pause: Default::default(),
         }));
         let mut scene = Scene::new(Catalog::installed(&crate::ClientOptions::default(), &["de_dust2".into()]));
@@ -2814,7 +2819,7 @@ mod tests {
                 let data = Arc::new(Mutex::new(Data {
                     inventory: InventoryView::new(&fs), fs, settings: Settings::default(),
                     localization: Default::default(), game_modes: Default::default(),
-                    state, menu_open: true, controls_open: false, loading: String::new(), loading_map: None,
+                    state, menu_open: true, controls_open: false, pack_maps_open: false, loading: String::new(), loading_map: None,
                     player_name: "Fixture".into(), movie_ready: Default::default(),
                     home_bootstrapped: false, home_retired: false,
                     pause_surface: Default::default(), flow_roots: Default::default(), deferred_pause: Default::default(),
@@ -2861,7 +2866,7 @@ mod tests {
         let data = Arc::new(Mutex::new(Data {
             inventory: InventoryView::new(&fs), fs, settings: Settings::default(),
             localization: Default::default(), game_modes: Default::default(),
-            state: AppState::Menu, menu_open: true, controls_open: false, loading: String::new(),
+            state: AppState::Menu, menu_open: true, controls_open: false, pack_maps_open: false, loading: String::new(),
             loading_map: None, player_name: "You".into(), movie_ready: Default::default(),
             home_bootstrapped: true, home_retired: false,
             pause_surface: Default::default(), flow_roots: Default::default(), deferred_pause: Default::default(),
@@ -2947,7 +2952,7 @@ mod tests {
         let data = Arc::new(Mutex::new(Data {
             inventory: InventoryView::new(&fs), fs, settings: Settings::default(),
             localization: Default::default(), game_modes: Default::default(),
-            state: AppState::Menu, menu_open: true, controls_open: false, loading: String::new(),
+            state: AppState::Menu, menu_open: true, controls_open: false, pack_maps_open: false, loading: String::new(),
             loading_map: None, player_name: "You".into(), movie_ready: Default::default(), home_bootstrapped: false, home_retired: false,
             pause_surface: Default::default(), flow_roots: Default::default(), deferred_pause: Default::default(),
         }));
@@ -2983,7 +2988,7 @@ mod tests {
         let data = Arc::new(Mutex::new(Data {
             inventory: InventoryView::new(&fs), fs, settings: Settings::default(),
             localization: Default::default(), game_modes: Default::default(),
-            state: AppState::Menu, menu_open: true, controls_open: false, loading: String::new(),
+            state: AppState::Menu, menu_open: true, controls_open: false, pack_maps_open: false, loading: String::new(),
             loading_map: None, player_name: "You".into(), movie_ready: Default::default(),
             home_bootstrapped: false, home_retired: false,
             pause_surface: Default::default(), flow_roots: Default::default(), deferred_pause: Default::default(),
@@ -3042,7 +3047,7 @@ mod tests {
             localization: crate::localize::Localization::default().into(),
             game_modes: kv::Block::new(),
             state: AppState::Menu,
-            menu_open: false, controls_open: false,
+            menu_open: false, controls_open: false, pack_maps_open: false,
             loading: String::new(),
             loading_map: None,
             player_name: "You".into(),

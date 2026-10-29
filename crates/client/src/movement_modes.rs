@@ -21,12 +21,10 @@ pub struct Visuals(
     pub HashMap<String, Arc<full_board::Model>>,
 );
 pub(crate) type Prepared = (Vec<Arc<sim::mechanics::Module>>, Visuals);
-pub(crate) fn prepare(world: &Arc<collision::CollisionWorld>) -> Prepared {
-    let (mut modules, mut visuals) = load();
-    modules.retain(|module| {
-        let Some(provider) = &module.external else {
-            return true;
-        };
+pub(crate) fn prepare(world: &Arc<collision::CollisionWorld>) -> Result<Prepared,String> {
+    let (mut modules, mut visuals) = load()?;
+    for module in &modules {
+        let Some(provider) = &module.external else { continue; };
         let start = std::time::Instant::now();
         match provider.prepare_world(world) {
             Ok(()) => {
@@ -35,21 +33,19 @@ pub(crate) fn prepare(world: &Arc<collision::CollisionWorld>) -> Prepared {
                     module.name,
                     start.elapsed()
                 );
-                true
             }
             Err(error) => {
-                warn!("Could not prepare {}: {error}", module.name);
-                false
+                return Err(format!("Could not prepare {}: {error}", module.name));
             }
         }
-    });
+    }
     visuals
         .0
         .retain(|id, _| modules.iter().any(|m| &m.id == id));
     visuals
         .1
         .retain(|id, _| modules.iter().any(|m| &m.id == id));
-    (modules, visuals)
+    Ok((modules, visuals))
 }
 #[derive(Component)]
 pub struct Board {
@@ -88,7 +84,7 @@ pub fn native_camera_render(
         fov,
     ))
 }
-pub fn load() -> (Vec<Arc<sim::mechanics::Module>>, Visuals) {
+pub fn load() -> Result<(Vec<Arc<sim::mechanics::Module>>, Visuals),String> {
     let mut modules = Vec::new();
     let mut visuals = Visuals::default();
     let (packs, errors) = packs::Installed::current().load();
@@ -110,9 +106,9 @@ pub fn load() -> (Vec<Arc<sim::mechanics::Module>>, Visuals) {
                     visuals
                         .1
                         .insert(def.id.clone(), Arc::new(full_board::Model::load(&root)?));
-                    let executable = std::env::current_exe()
-                        .map_err(|e| e.to_string())?
-                        .with_file_name("Skate-Runtime.exe");
+                    let executable = mechanics::providers::executable(
+                        def.provider.as_deref().ok_or("missing content runtime")?
+                    )?;
                     (
                         None,
                         Some(Arc::new(mechanics::external::Program::new(
@@ -144,11 +140,11 @@ pub fn load() -> (Vec<Arc<sim::mechanics::Module>>, Visuals) {
             })();
             match result {
                 Ok(module) => modules.push(module),
-                Err(error) => warn!("{}: {error}", def.name),
+                Err(error) => return Err(format!("{}: {error}",def.name)),
             }
         }
     }
-    (modules, visuals)
+    Ok((modules, visuals))
 }
 
 pub fn camera_eye(

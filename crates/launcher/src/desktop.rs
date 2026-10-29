@@ -173,7 +173,7 @@ fn launch(root: &Path, track: Track) -> Result<Child, String> {
     let mut command = Command::new(std::env::current_exe().map_err(|e| e.to_string())?);
     command.args(["play", "de_dust2"]).env("CSR_DATA_DIR", root);
     if track == Track::Dev {
-        command.arg("--playtest");
+        command.arg("--dev-tools");
     }
     command.stdout(fs::File::create(root.join("logs/game.out.log")).map_err(|e| e.to_string())?);
     command.stderr(fs::File::create(root.join("logs/game.log")).map_err(|e| e.to_string())?);
@@ -383,14 +383,6 @@ pub fn run(args: &[String]) -> Result<(), String> {
                     });
                     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
                     let _ = Command::new("explorer.exe").arg(dir).spawn();
-                }
-                "create-skate" => {
-                    let creator = std::env::current_exe().map_err(|e|e.to_string())?
-                        .parent().ok_or("Cannot find the installed app folder")?.join("Skate-Pack-Creator.exe");
-                    state.status = match Command::new(creator).spawn() {
-                        Ok(_) => "Choose your prepared Skate installation. Open the saved .csrpack to install it.".into(),
-                        Err(error) => format!("Could not open the Skate pack creator: {error}"),
-                    };
                 }
                 "refresh" | "track" if !state.busy => {
                     if action.action == "track" {

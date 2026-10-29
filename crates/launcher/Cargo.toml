@@ -11,6 +11,7 @@ name = "csr"
 path = "src/main.rs"
 
 [dependencies]
+mechanics.workspace = true
 kv.workspace = true
 vpk.workspace = true
 vfs.workspace = true

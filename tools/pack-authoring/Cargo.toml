@@ -1,0 +1,16 @@
+[package]
+name = "pack-authoring"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Developer-only content pack authoring; never linked into the player client"
+
+[dependencies]
+packs.workspace = true
+glam.workspace = true
+
+[dev-dependencies]
+sim.workspace = true
+bsp.workspace = true
+collision.workspace = true
+movement.workspace = true
