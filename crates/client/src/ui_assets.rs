@@ -162,6 +162,11 @@ pub fn load(mut commands: Commands, level: Res<crate::GameData>, mut fonts: ResM
         let name = weapon.class_name.trim_start_matches("weapon_");
         add_equipment_fallback(fs, name, &mut art, &mut images);
     }
+    // Buy menu tiles: the original equipment silhouettes at full raster size.
+    for name in level.catalog.weapons.iter().filter(|w| w.price > 0)
+        .map(|w| w.class_name.trim_start_matches("weapon_")).chain(["kevlar", "assaultsuit", "defuser"]) {
+        if let Some(image) = equipment_image(fs, name) { art.insert(format!("buy-{name}"), images.add(image)); }
+    }
     // Original crossover silhouette in the HUD's flat side-profile style, at
     // the inventory icon's exact 4:1 box: one solid deck with kicked nose and
     // tail, two trucks and two wheels. Separate solid shapes, no holes.
@@ -171,8 +176,12 @@ pub fn load(mut commands: Commands, level: Res<crate::GameData>, mut fonts: ResM
     commands.insert_resource(UiAssets { regular, bold, images: art });
 }
 
+/// Text that already chose its Stratum weight (e.g. resolution-scaled sizes).
+#[derive(Component)]
+pub struct OwnFont;
+
 /// Covers text spawned later by menus, too. Runs before Bevy's text layout.
-pub fn fonts(assets: Res<UiAssets>, mut text: Query<&mut TextFont, Added<TextFont>>) {
+pub fn fonts(assets: Res<UiAssets>, mut text: Query<&mut TextFont, (Added<TextFont>, Without<OwnFont>)>) {
     for mut font in &mut text {
         let bold = match font.font_size {
             FontSize::Px(size) => size >= 24.0,

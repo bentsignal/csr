@@ -836,6 +836,14 @@ fn smoke_test(
         if std::env::var("CSR_TEST_SWITCH").as_deref() != Ok("buy-close") || *frame == 1 {
             menu.open = true;
             menu.category = cat.checked_sub(1);
+            // CSR_BUY_PAGE=n: the menu tab (0 = WEAPONS, then pack pages).
+            menu.page = std::env::var("CSR_BUY_PAGE").ok().and_then(|v| v.parse().ok()).unwrap_or(0);
+        }
+    }
+    // CSR_TEST_MONEY=n: screenshot-only fixture holding a rich or poor buy state.
+    {
+        if let (Some(money), Some(world), Some(l)) = (std::env::var("CSR_TEST_MONEY").ok().and_then(|v| v.parse::<i32>().ok()), world.as_mut(), local.as_ref()) {
+            if let Some(p) = world.0.player_mut(l.id) { p.money = money; }
         }
     }
     let mut local = local;
