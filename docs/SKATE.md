@@ -106,16 +106,21 @@ Open **F8 → Tests → Surf / Skate Clip Course** in an offline playtest (also
 listed in the map picker). The generated original pack has identity
 `mod_map_surf_skate_clip` and loads through the validated asset-pack path.
 No third-party map or texture, or compiled BSP, is checked into Git.
-It has a descending blue surf ramp, one continuous wooden trick deck, a short
-gap into another surf ramp, a metal finish deck and a broad catch floor.
+It has a high starting platform, a descending blue surf ramp, a 13,600-unit
+concrete plaza with curved wood ramps, rails, ledges, a bank and a quarter
+pipe, a 900-unit ramp-to-ramp gap, a 400-unit exit transfer into the second
+surf ramp, a 5,800-unit finish deck and a broad catch floor. Stay fast for the
+big gap; the south lane bypasses it and missed jumps have a flat catch area.
 The F8 map action enables surf practice physics.
 
 Run forward off the start, hold toward the first ramp (A / left strafe when
 looking along the course), then switch to Skate in the gap. Land, flick a trick,
-then use View / Back or X after leaving the wooden deck to catch the next ramp.
+then use View / Back or X after leaving the end kicker to catch the next ramp.
 F7 restarts the course; native markers remain available. Both handoffs retain
 airborne velocity. The private `skatecheck --route` proof drives this complete
-route through the actual simulators, including a recognized kickflip.
+route through the actual simulators, including a recognized kickflip, the
+large skate gap and the final runout. `skatecheck --ramps` rides every ramp
+approach at multiple speeds, including the reverse landing transitions.
 
 Windows XInput reports are forwarded unchanged to the original Pad/action
 mapping. WINSERVE has no connected physical controller, so automated checks

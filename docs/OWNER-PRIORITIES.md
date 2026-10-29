@@ -2,6 +2,17 @@
 
 ## October 26: Skate crossover pivot
 
+### October 28 follow-up: rideable transitions and bigger transfers
+
+Dev 1048's real HUD/audio and presentation are accepted as a substantial
+improvement. This pass addresses the owner's remaining course feedback:
+curved, floor-tangent transitions on every skate ramp (including the bank,
+quarter pipe and end kicker); a much higher starting deck for airborne
+tricks before switching to surf; a longer plaza with a larger ramp-to-ramp
+transfer; a wider exit gap and a longer final runout. Static brush exports
+must exclude buried faces so section joins do not trip native Skate contacts.
+Keep the accepted presentation and the existing private 0.5 pack compatible.
+
 ### October 28: real Skate 3 presentation, a better course, natural carry
 
 Dev 1046 / PR #328's surf/skate clip course is accepted as a good proof of
