@@ -269,6 +269,13 @@ pub fn run(launcher: Launcher) -> Result<(), String> {
     if let Some(path) = capture {
         app.insert_resource(Capture { path, requested: false });
     }
+    if let Ok(script) = std::env::var("CSR_LAUNCHER_CLICKS") {
+        let clicks = script
+            .split(';')
+            .filter_map(|p| p.split_once(',').and_then(|(x, y)| Some(Vec2::new(x.trim().parse().ok()?, y.trim().parse().ok()?))))
+            .collect();
+        app.insert_resource(Clicks { queue: clicks, step: 0, at: 0.0 }).add_systems(First, drive_clicks);
+    }
     match app.run() {
         AppExit::Success => Ok(()),
         AppExit::Error(code) => Err(format!("The launcher window failed ({code}).")),
@@ -794,7 +801,14 @@ fn spawn_packs(list: &mut ChildSpawnerCommands, f: &Fonts, packs: &[PackRow], co
 
 // --- Systems ----------------------------------------------------------------------
 
-fn pump(mut backend: ResMut<Backend>, mut ui: ResMut<UiState>, time: Res<Time>, mut settings: ResMut<WinitSettings>, capture: Option<Res<Capture>>) {
+fn pump(
+    mut backend: ResMut<Backend>,
+    mut ui: ResMut<UiState>,
+    time: Res<Time>,
+    mut settings: ResMut<WinitSettings>,
+    capture: Option<Res<Capture>>,
+    clicks: Option<Res<Clicks>>,
+) {
     let now = time.elapsed_secs();
     let presence = now - ui.last_presence >= 1.0;
     if presence {
@@ -802,7 +816,7 @@ fn pump(mut backend: ResMut<Backend>, mut ui: ResMut<UiState>, time: Res<Time>, 
     }
     let l = &mut backend.0;
     l.pump(presence);
-    if capture.is_some() || ui.frames < 3 {
+    if capture.is_some() || clicks.is_some() || ui.frames < 3 {
         return;
     }
     let animating = (l.busy && l.progress < 0) || (l.installing && l.install_progress < 0);
@@ -1158,6 +1172,48 @@ fn reveal(mut ui: ResMut<UiState>, mut window: Single<&mut Window, With<PrimaryW
         if ui.frames == 3 {
             window.visible = true;
         }
+    }
+}
+
+/// `CSR_LAUNCHER_CLICKS="x,y;x,y"`: clicks at logical window positions, two
+/// seconds apart, through Bevy's own input path (cursor, button messages, UI
+/// hit testing). For automated checks on desktops where real input is
+/// unavailable.
+#[derive(Resource)]
+struct Clicks {
+    queue: Vec<Vec2>,
+    step: u32,
+    at: f32,
+}
+
+fn drive_clicks(
+    mut clicks: ResMut<Clicks>,
+    time: Res<Time>,
+    mut window: Single<(Entity, &mut Window), With<PrimaryWindow>>,
+    mut buttons: MessageWriter<bevy::input::mouse::MouseButtonInput>,
+) {
+    use bevy::input::{ButtonState, mouse::MouseButtonInput};
+    let Some(&target) = clicks.queue.first() else { return };
+    let now = time.elapsed_secs();
+    if now - clicks.at < 2.0 {
+        return;
+    }
+    let (entity, ref mut window) = *window;
+    window.set_cursor_position(Some(target));
+    let state = match clicks.step {
+        0 => None,
+        1 => Some(ButtonState::Pressed),
+        _ => Some(ButtonState::Released),
+    };
+    if let Some(state) = state {
+        buttons.write(MouseButtonInput { button: MouseButton::Left, state, window: entity });
+    }
+    clicks.step += 1;
+    if clicks.step > 3 {
+        eprintln!("launcher test click at {target}");
+        clicks.queue.remove(0);
+        clicks.step = 0;
+        clicks.at = now;
     }
 }
 
