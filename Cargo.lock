@@ -5076,6 +5076,7 @@ dependencies = [
  "glam 0.32.1",
  "movement",
  "packs",
+ "sim",
 ]
 
 [[package]]

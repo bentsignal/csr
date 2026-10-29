@@ -69,7 +69,8 @@ fn main() {
               --direct                Skip the menu and enter the match\n\
               --team t|ct             Your side (default: ct)\n\
               --deathmatch            Respawns and a fixed loadout\n\
-              --playtest              In-game weapon, knife, map and bot controls\n\
+              --dev-tools             Enable F8 tools while starting at Home\n\
+              --playtest              Start an offline dev match with F8 open\n\
               --grenade-practice      Full reusable grenade set, offline respawns\n\
               --bots N                Enemy bots; N-1 teammates (default: 5)\n\
               --size W H              Windowed size override (otherwise saved; screenshots: 1600 900)\n\

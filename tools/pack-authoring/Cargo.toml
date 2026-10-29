@@ -10,6 +10,7 @@ packs.workspace = true
 glam.workspace = true
 
 [dev-dependencies]
+sim.workspace = true
 bsp.workspace = true
 collision.workspace = true
 movement.workspace = true

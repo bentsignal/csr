@@ -552,6 +552,15 @@ fn geometry() -> Vec<u8> {
 mod tests {
     use super::*;
     #[test]
+    fn authored_movement_settings_load_without_developer_tools() {
+        let pack=pack().unwrap();
+        let map=bsp::Bsp::parse(&pack.file(&format!("maps/{NAME}.bsp")).unwrap()).unwrap();
+        let mut world=sim::World::new(std::sync::Arc::new(collision::CollisionWorld::new()));
+        world.load_map(&map,None);
+        assert_eq!(world.config.air_accelerate,1000.);
+        assert_eq!(world.config.accelerate,10.);
+    }
+    #[test]
     fn generated_pack_keeps_surf_brushes_and_clear_landings() {
         let pack = pack().unwrap();
         let map = bsp::Bsp::parse(&pack.file(&format!("maps/{NAME}.bsp")).unwrap()).unwrap();
