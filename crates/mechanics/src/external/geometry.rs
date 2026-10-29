@@ -75,7 +75,7 @@ pub fn scene(world: &CollisionWorld) -> Scene {
                 surface: t.surface,
             }),
     );
-    let doors = map
+    let doors: Vec<Door> = map
         .doors
         .iter()
         .map(|d| {
@@ -103,12 +103,31 @@ pub fn scene(world: &CollisionWorld) -> Scene {
         parts: b.solids.iter().map(points).collect(),
     }));
     let rails = rails::extract(map, &triangles);
+    let surfaces = surfaces(
+        world,
+        triangles
+            .iter()
+            .chain(doors.iter().flat_map(|d| &d.triangles))
+            .chain(breakables.iter().flat_map(|b| &b.triangles)),
+    );
     Scene {
         triangles,
         doors,
         breakables,
         rails,
+        surfaces,
     }
+}
+/// The host's rolling-audio family of every surface id the exported triangles
+/// use (presentation only; physics friction never reads it).
+fn surfaces<'a>(world: &CollisionWorld, triangles: impl Iterator<Item = &'a Triangle>) -> Vec<u8> {
+    const MAX_SURFACES: u32 = 1 << 16;
+    let count = triangles
+        .map(|t| t.surface)
+        .filter(|&s| s < MAX_SURFACES)
+        .max()
+        .map_or(0, |s| s + 1);
+    (0..count).map(|s| world.rolling_surface(s)).collect()
 }
 mod rails;
 fn points(solid: &Convex) -> Vec<[f32; 3]> {

@@ -76,6 +76,14 @@ pub(crate) fn select(player:&mut Player,module:Option<&Arc<Module>>,world:&dyn T
     player.movement.ladder_normal = None;
 }
 
+/// Mounting while moving (e.g. leaving a surf ramp) lands the board along the
+/// travel direction, not wherever the strafing view happened to point; a
+/// sideways deck would skid off the carried speed.
+fn entry_yaw(player: &Player) -> f32 {
+    let travel = player.movement.velocity.truncate();
+    if travel.length() > 60. { travel.y.atan2(travel.x).to_degrees() } else { player.view_angles.y }
+}
+
 pub(crate) fn step(
     player: &mut Player,
     input: &TickInput,
@@ -95,7 +103,7 @@ pub(crate) fn step(
         let hit=collision.trace_ray(player.movement.origin+Vec3::Z*8.,player.movement.origin-Vec3::Z*16.,collision::contents::MASK_PLAYERSOLID);
         scene.ground_material=collision.rolling_surface(hit.surface);
         let checkpoint=player.mechanic_checkpoint.as_ref().filter(|c|c.id==module.id && c.archive_hash==module.archive_hash).map(|c|c.target.clone());
-        let start = mechanics::link::Start { grounded:player.movement.on_ground,position:player.movement.origin.to_array(),velocity:player.movement.velocity.to_array(),yaw:player.view_angles.y,checkpoint };
+        let start = mechanics::link::Start { grounded:player.movement.on_ground,position:player.movement.origin.to_array(),velocity:player.movement.velocity.to_array(),yaw:entry_yaw(player),checkpoint };
         let state=player.mechanic.as_mut().unwrap();
         if state.reset {state.external=None;}
         let external=state.external.get_or_insert_with(||Box::new(ExternalState{

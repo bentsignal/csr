@@ -10,6 +10,7 @@ struct Assets {
     root: PathBuf,
     collections: Option<Arc<skate_data::collections::Collections>>,
     banks: Option<Arc<skate_data::animation_banks::AnimationBanks>>,
+    hud: Option<Arc<crate::hud::Source>>,
 }
 thread_local! {static DATA:RefCell<Option<Assets>>=const{RefCell::new(None)};}
 fn access<T>(
@@ -23,6 +24,7 @@ fn access<T>(
                 root: root.into(),
                 collections: None,
                 banks: None,
+                hud: None,
             });
         }
         read(slot.as_mut().unwrap())
@@ -49,4 +51,13 @@ pub(crate) fn banks(
         }
         Ok(a.banks.as_ref().unwrap().clone())
     })
+}
+/// Original HUD display data (presentation only), parsed once per bundle.
+pub(crate) fn hud(root: &Path) -> Arc<crate::hud::Source> {
+    access(root, |a| {
+        Ok(a.hud
+            .get_or_insert_with(|| Arc::new(crate::hud::Source::load(root)))
+            .clone())
+    })
+    .expect("HUD cache access is infallible")
 }

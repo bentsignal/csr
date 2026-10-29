@@ -45,6 +45,29 @@ fn native(p: [f32; 3]) -> [f32; 3] {
 fn source(p: [f32; 3]) -> [f32; 3] {
     [p[0] / METERS, -p[2] / METERS, p[1] / METERS]
 }
+/// The native 7-bit audio surface tag (collision material + 1; the vault's `Sk8::AudioSurfaceMap`)
+/// for a host surface's rolling family. Source surfaceprops resolve to `A`sphalt, `W`ood, `M`etal
+/// (grate/vent/chainlink names), `R`ough (rock/brick/dirt/sand/gravel) or their gamematerial.
+/// Only audio reads the tag: rolling grain or patch, pop/landing/collision sets, grind family.
+pub(crate) fn audio_tag(family: u8) -> u32 {
+    match family.to_ascii_uppercase() {
+        // asphalt_smooth (rolling surface 3).
+        b'A' => 1,
+        // concrete_rough (surface 2).
+        b'R' => 4,
+        // Solid wood (surface 5, wood_ramp; not the hollow plywood ramp tags 6/7).
+        b'W' => 47,
+        // metal_smooth (surface 9).
+        b'M' | b'V' => 9,
+        // Grate: rolling surface 13 (its Class_rolling patch).
+        b'G' => 37,
+        // Dirt, sand, grass, snow, foliage: rolling surface 8 (its Class_rolling patch).
+        b'D' | b'N' | b'J' | b'K' | b'O' => 8,
+        // Concrete, tile, glass, plastic, computer, slosh and everything else: concrete_smooth
+        // (surface 4); no host surface (0) is the same default.
+        _ => 3,
+    }
+}
 fn map(scene: &Scene, start: &Start, compile: bool) -> SkateMap {
     // The upstream collision compiler welds at 1 mm. Remove triangles that
     // collapse at that exact boundary before asking it to compile the host
@@ -77,10 +100,11 @@ fn map(scene: &Scene, start: &Start, compile: bool) -> SkateMap {
             if !seen.insert(key) {
                 return None;
             }
+            let tag = audio_tag(scene.surfaces.get(t.surface as usize).copied().unwrap_or(0));
             Some(Collision {
                 points,
-                surface: 0,
-                material: 1,
+                surface: tag,
+                material: tag + 1,
                 native_edges: None,
             })
         })
@@ -97,24 +121,28 @@ fn map(scene: &Scene, start: &Start, compile: bool) -> SkateMap {
         spawn: native(start.position),
         heading: (start.yaw + 90.).to_radians(),
         environment: vec![],
-        materials: vec![Material {
-            name: "host".into(),
-            flags: 0,
-            friction: 1.,
-            restitution: 0.,
-            color: [1.; 3],
-            roughness: 1.,
-            emissive: 0.,
-            textures: [0; 5],
-            indirect_strength: 1.,
-            alpha_mode: 0,
-            alpha_cutoff: 0.5,
-            audio: 0,
-            physics: 0,
-            pattern: 0,
-            depth_layer: None,
-            retail_definition: None,
-        }],
+        // One material per 7-bit audio tag (material index = tag + 1). Physics and seam-pattern
+        // bits stay 0, so contact friction, water and surface physics are unchanged.
+        materials: (0..128)
+            .map(|audio| Material {
+                name: "host".into(),
+                flags: 0,
+                friction: 1.,
+                restitution: 0.,
+                color: [1.; 3],
+                roughness: 1.,
+                emissive: 0.,
+                textures: [0; 5],
+                indirect_strength: 1.,
+                alpha_mode: 0,
+                alpha_cutoff: 0.5,
+                audio,
+                physics: 0,
+                pattern: 0,
+                depth_layer: None,
+                retail_definition: None,
+            })
+            .collect(),
         textures: vec![],
         geometry: Geometry {
             vertices: vec![],
@@ -139,7 +167,6 @@ fn map(scene: &Scene, start: &Start, compile: bool) -> SkateMap {
     }
 }
 pub struct PreparedScene {
-    audio:Option<Arc<crate::rolling_audio::Bank>>,
     pub(super) world: std::sync::Mutex<Option<skate_core::physics::board_world::BoardWorld>>,
     source: Scene,
     triangles: Vec<skate_core::physics::board_world::WorldTriangle>,
@@ -168,7 +195,6 @@ impl PreparedScene {
         let triangles = world.triangles().to_vec();
         let metadata = world.query_metadata()?.clone();
         Ok(Arc::new(Self {
-            audio:runtime.audio.bank(),
             world: std::sync::Mutex::new(Some(world)),
             source: scene,
             triangles,
@@ -265,9 +291,11 @@ impl Runtime {
             .apply(state, state, 1. / 128., &mut physics, &skater);
         let language = language(root)?;
         let mut runtime=Self {
-            audio:crate::rolling_audio::Rolling::new(scene.audio.clone()),
+            audio_cues: Default::default(),
+            audio_seen: Default::default(),
             physics,
             marker:crate::session_marker::SessionMarker::load(root,start.checkpoint.clone())?,
+            hud: crate::hud::Hud::new(root, skater.scoring.hud_input()),
             skater,
             controls,
             graphs,
@@ -330,13 +358,12 @@ impl Runtime {
                 .update(if report.connected { &values } else { &[] });
             let actions = skate_core::input::gameplay_map::GameplayActions::from_pad(&self.pad);
             self.step(*actions.values(), report.connected)?;
+            // Scoring resets its trick flags at the next native tick.
+            self.hud.update(&self.skater.scoring);
         }
         let pose=self.pose();
-        let speed=Vec3::from_array(pose.velocity).length()*METERS;
-        self.audio.advance(frame.dt,frame.scene.ground_material,pose.grounded && matches!(pose.state,100..=105),speed);
         Ok(pose)
     }
-    pub fn take_audio(&mut self)->Vec<f32>{self.audio.take()}
     pub fn pose(&self) -> Pose {
         let root =
             crate::animation::native_matrix(self.skater.animated_skeleton.roots.animation_to_world);

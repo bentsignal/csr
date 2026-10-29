@@ -3,8 +3,10 @@
 //! Geometry and poses use Source axes/inches. Controller reports use XInput.
 use serde::{Deserialize, Serialize};
 use std::io::{Read, Write};
-pub const VERSION: u32 = 3;
+pub const VERSION: u32 = 5;
 pub const MAX_MESSAGE: usize = 64 << 20;
+/// Provider audio sample rate (interleaved stereo frames per second).
+pub const AUDIO_RATE: u32 = 48_000;
 pub type Matrix = [[f32; 4]; 4];
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Controller {
@@ -37,6 +39,10 @@ pub struct Scene {
     pub doors: Vec<Door>,
     pub breakables: Vec<Breakable>,
     pub rails: Vec<Vec<[f32; 3]>>,
+    /// Host rolling-audio family per collision surface id (`Triangle::surface`;
+    /// Source surfaceprop resolved to `A`, `W`, `M`, `R` or its gamematerial).
+    /// Ids past the end use the provider default.
+    pub surfaces: Vec<u8>,
 }
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct SceneState {
@@ -125,10 +131,55 @@ pub enum Request {
         frame: Frame,
     },
 }
+/// Provider-owned presentation texture, read by the host from the admitted
+/// data bundle (straight-alpha sRGB RGBA8, `width * height * 4` bytes).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct HudTexture {
+    pub path: String,
+    pub width: u32,
+    pub height: u32,
+}
+/// How a layer's 1280x720 canvas maps onto the host window.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum HudFit {
+    /// Non-uniform stretch over the whole window.
+    Stretch,
+    /// Uniform `min(w/1280, h/720)` scale anchored at the top-left corner.
+    ContainTopLeft,
+}
+/// Triangle list `vertices[first..first + count]`, drawn in order as
+/// `clamp(texel * multiply + add, 0, 1)` with straight-alpha blending. Texels
+/// are sRGB-decoded; an absent texture samples opaque white.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct HudDraw {
+    pub texture: Option<u16>,
+    pub multiply: [f32; 4],
+    pub add: [f32; 4],
+    pub first: u32,
+    pub count: u32,
+}
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct HudLayer {
+    pub fit: HudFit,
+    pub draws: Vec<HudDraw>,
+    /// Canvas x, y (pixels, y down) and texture u, v.
+    pub vertices: Vec<[f32; 4]>,
+}
+/// Cosmetic overlay, sent only when it changes. Never part of simulation state.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct HudFrame {
+    pub revision: u64,
+    pub layers: Vec<HudLayer>,
+}
+pub const HUD_CANVAS: [f32; 2] = [1280., 720.];
 #[derive(Serialize, Deserialize)]
 pub enum Response {
-    Ready(Rig),
-    Pose(Pose, Vec<f32>),
+    /// The provider's HUD texture table, indexed by `HudDraw::texture`.
+    Ready(Rig, Vec<HudTexture>),
+    /// Pose, the cosmetic board audio rendered since the last pose (interleaved
+    /// stereo, left/right, at [`AUDIO_RATE`]; never part of simulation state),
+    /// and the HUD when it changed since the last Advance.
+    Pose(Pose, Vec<f32>, Option<HudFrame>),
     NeedRestore,
     Error(String),
 }

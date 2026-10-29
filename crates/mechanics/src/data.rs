@@ -6,6 +6,10 @@ use std::{
     path::{Path, PathBuf},
 };
 const MAGIC: &[u8; 8] = b"CSRDATA1";
+/// Bundle bounds: the full simulation data plus the owner's decoded board audio
+/// (one WAV per bank sample; Skate_Collisions alone has 1101).
+const MAX_BUNDLE: usize = 256 << 20;
+const MAX_FILES: usize = 4096;
 fn allowed(path: &str) -> bool {
     matches!(
         path,
@@ -16,22 +20,12 @@ fn allowed(path: &str) -> bool {
             | "private/stock/skater-collections.json"
             | "private/stock/data/anim/OnBoard.abin"
             | "private/stock/data/anim/OffBoard.abin"
-            | "private/crossover-audio/roll.wav"
-            | "private/crossover-audio/pop.wav"
-            | "private/crossover-audio/land.wav"
-            | "private/crossover-audio/push.wav"
-            | "private/crossover-audio/grind.wav"
-            | "private/crossover-audio/brake.wav"
-            | "private/crossover-audio/marker-open.wav"
-            | "private/crossover-audio/marker-set.wav"
-            | "private/crossover-audio/marker-return.wav"
-            | "private/crossover-audio/grains.json"
-            | "private/crossover-audio/concrete_smooth_hard.wav"
-            | "private/crossover-audio/concrete_rough_hard.wav"
-            | "private/crossover-audio/asphalt_rough_hard.wav"
-            | "private/crossover-audio/wood_ramp_hard.wav"
-            | "private/crossover-audio/metal_smooth_hard.wav"
+            | "private/audio/audio_manifest.json"
+            | "private/hud/runtime/trickdisplay.json"
+            | "private/session-marker/hud.json"
     ) || [
+        ("private/hud/assets/data/fe/", "rgba"),
+        ("private/session-marker/texture-", "rgba"),
         ("private/stock/data/state/", "stategraph"),
         ("private/stock/data/script/", "stategraph"),
         ("private/stock/data/joystick/", "pat"),
@@ -40,9 +34,37 @@ fn allowed(path: &str) -> bool {
     ]
     .iter()
     .any(|(prefix, extension)| path.starts_with(prefix) && path.ends_with(&format!(".{extension}")))
+        || audio_file(path)
+}
+/// The owner's decoded board audio in its install layout (`private/audio/...`): AEMS
+/// projects/banks/MixMap/Splice trees, one folder of WAVs per bank, grain members and wheel
+/// spins. Fixed depth per folder; no other names or extensions.
+fn audio_file(path: &str) -> bool {
+    let Some(rest) = path.strip_prefix("private/audio/") else {
+        return false;
+    };
+    let (folder, name) = rest.split_once('/').unwrap_or(("", rest));
+    let extension = name.rsplit_once('.').map_or("", |(_, e)| e);
+    let flat = !name.contains('/');
+    match folder {
+        "aems" => flat && matches!(extension, "abk" | "csi" | "mxb" | "splc"),
+        "banks" => name.split('/').count() == 2 && extension == "wav",
+        "grains" => flat && matches!(extension, "wav" | "grain"),
+        "wheels" => flat && extension == "wav",
+        _ => false,
+    }
+}
+/// A safe relative bundle path that the provider data allowlist admits.
+pub fn admitted(path: &str) -> bool {
+    path.is_ascii()
+        && !path.bytes().any(|b| b < 32 || b"\\:<>\"|?*".contains(&b))
+        && !path
+            .split('/')
+            .any(|p| p.is_empty() || p == "." || p == ".." || p.ends_with(['.', ' ']))
+        && allowed(path)
 }
 pub fn parse(bytes: &[u8]) -> Result<Vec<(&str, &[u8])>, String> {
-    if bytes.len() > 128 << 20 || bytes.get(..8) != Some(MAGIC) {
+    if bytes.len() > MAX_BUNDLE || bytes.get(..8) != Some(MAGIC) {
         return Err("invalid runtime data bundle".into());
     }
     let mut at = 8;
@@ -55,30 +77,37 @@ pub fn parse(bytes: &[u8]) -> Result<Vec<(&str, &[u8])>, String> {
         let pathlen = u16::from_le_bytes(size[..2].try_into().unwrap()) as usize;
         let size = u32::from_le_bytes(size[2..].try_into().unwrap()) as usize;
         at += 6;
-        if pathlen > 240 || size > 64 << 20 || files.len() >= 2048 {
+        if pathlen > 240 || size > 64 << 20 || files.len() >= MAX_FILES {
             return Err("runtime data limit exceeded".into());
         }
         let path = std::str::from_utf8(bytes.get(at..at + pathlen).ok_or("truncated data path")?)
             .map_err(|_| "invalid data path")?;
         at += pathlen;
-        if !path.is_ascii()
-            || path.bytes().any(|b| b < 32 || b"\\:<>\"|?*".contains(&b))
-            || path
-                .split('/')
-                .any(|p| p.is_empty() || p == "." || p == ".." || p.ends_with(['.', ' ']))
-            || !allowed(path)
-            || !names.insert(path.to_ascii_lowercase())
-        {
+        if !admitted(path) || !names.insert(path.to_ascii_lowercase()) {
             return Err("unsafe or unsupported runtime data path".into());
         }
         let data = bytes
             .get(at..at + size)
             .ok_or("truncated runtime data file")?;
         at += size;
-        if path=="private/crossover-audio/grains.json" {
-            if data.len()>64*1024 || serde_json::from_slice::<serde_json::Value>(data).is_err(){return Err("invalid grain tuning data".into());}
-        }else if path.starts_with("private/crossover-audio/") && (data.len()>4*1024*1024 || !data.starts_with(b"RIFF") || data.get(8..12)!=Some(b"WAVE")) {
+        if path == "private/audio/audio_manifest.json" {
+            if data.len() > 8 << 20 || serde_json::from_slice::<serde_json::Value>(data).is_err() {
+                return Err("invalid board audio manifest".into());
+            }
+        } else if path.starts_with("private/audio/")
+            && (data.len() > 16 << 20
+                || (path.ends_with(".wav")
+                    && (!data.starts_with(b"RIFF") || data.get(8..12) != Some(b"WAVE"))))
+        {
             return Err("invalid or oversized board audio data".into());
+        } else if path.ends_with(".rgba") && (data.len() > 16 << 20 || data.len() % 4 != 0) {
+            return Err("invalid or oversized HUD texture".into());
+        } else if (path.starts_with("private/hud/") || path.starts_with("private/session-marker/"))
+            && path.ends_with(".json")
+            && (data.len() > 16 << 20
+                || serde_json::from_slice::<serde::de::IgnoredAny>(data).is_err())
+        {
+            return Err("invalid or oversized HUD data".into());
         }
         files.push((path, data));
     }
@@ -118,6 +147,8 @@ pub fn materialize(bytes: &[u8], cache: &Path) -> Result<PathBuf, String> {
     if !root.starts_with(&cache) {
         return Err("runtime cache leaves data directory".into());
     }
+    // Directories verified during this call (thousands of bank samples share a few).
+    let mut verified = std::collections::HashSet::new();
     for (path, data) in files {
         let file = root.join(path);
         let parent = file.parent().ok_or("invalid cache path")?;
@@ -130,6 +161,9 @@ pub fn materialize(bytes: &[u8], cache: &Path) -> Result<PathBuf, String> {
             .components()
         {
             checked.push(component);
+            if verified.contains(&checked) {
+                continue;
+            }
             if !checked.exists() {
                 std::fs::create_dir(&checked).map_err(|e| e.to_string())?;
             }
@@ -140,6 +174,7 @@ pub fn materialize(bytes: &[u8], cache: &Path) -> Result<PathBuf, String> {
             {
                 return Err("runtime cache path leaves bundle".into());
             }
+            verified.insert(checked.clone());
         }
         if file.exists()
             && !file
@@ -172,14 +207,67 @@ mod tests {
     }
     #[test]
     fn board_audio_admits_only_bounded_wave_files_at_known_paths() {
-        let mut entries=files();
-        entries.push(("private/crossover-audio/roll.wav".into(),b"RIFF0000WAVE".to_vec()));
-        assert!(build(&entries).is_ok());
-        for path in ["private/crossover-audio/code.wav.exe","private/crossover-audio/other.wav","private/crossover-audio/../roll.wav"] {
-            let mut bad=files();bad.push((path.into(),b"RIFF0000WAVE".to_vec()));assert!(build(&bad).is_err());
+        let mut entries = files();
+        for (path, bytes) in [
+            ("private/audio/aems/GRINDS.abk", b"bank".to_vec()),
+            ("private/audio/aems/SK8_AEMS_Foley.csi", b"project".to_vec()),
+            ("private/audio/aems/MixMapSK8.mxb", b"mixmap".to_vec()),
+            ("private/audio/aems/Skate_Collisions.splc", b"tree".to_vec()),
+            ("private/audio/grains/wood_ramp_hard.grain", b"grain".to_vec()),
+            ("private/audio/grains/wood_ramp_hard.wav", b"RIFF0000WAVE".to_vec()),
+            ("private/audio/wheels/Whls_spins_Jump_1.wav", b"RIFF0000WAVE".to_vec()),
+            ("private/audio/audio_manifest.json", b"{\"version\":5}".to_vec()),
+            ("private/audio/banks/Skate_Collisions/1097.wav", b"RIFF0000WAVE".to_vec()),
+        ] {
+            entries.push((path.into(), bytes));
         }
-        entries.last_mut().unwrap().1=b"not wave data".to_vec();assert!(build(&entries).is_err());
-        entries.last_mut().unwrap().1=vec![0;4*1024*1024+1];assert!(build(&entries).is_err());
+        assert!(build(&entries).is_ok());
+        for path in [
+            "private/audio/banks/GRINDS/0000.wav.exe",
+            "private/audio/banks/0000.wav",
+            "private/audio/banks/GRINDS/nested/0000.wav",
+            "private/audio/aems/nested/GRINDS.abk",
+            "private/audio/aems/runtime.dll",
+            "private/audio/speech/take.wav",
+            "private/audio/grains/../roll.wav",
+            "private/crossover-audio/roll.wav",
+        ] {
+            let mut bad = files();
+            bad.push((path.into(), b"RIFF0000WAVE".to_vec()));
+            assert!(build(&bad).is_err(), "{path}");
+        }
+        entries.last_mut().unwrap().1 = b"not wave data".to_vec();
+        assert!(build(&entries).is_err());
+        entries.last_mut().unwrap().1 = vec![0; (16 << 20) + 1];
+        assert!(build(&entries).is_err());
+        let mut manifest = files();
+        manifest.push(("private/audio/audio_manifest.json".into(), b"not json".to_vec()));
+        assert!(build(&manifest).is_err());
+    }
+    #[test]
+    fn original_hud_admits_only_its_display_data_and_rgba_textures() {
+        let mut entries = files();
+        entries.extend([
+            ("private/hud/runtime/trickdisplay.json".into(), b"{}".to_vec()),
+            ("private/session-marker/hud.json".into(), b"{\"version\":1}".to_vec()),
+            ("private/session-marker/texture-0.rgba".into(), vec![0; 16]),
+            (
+                "private/hud/assets/data/fe/fonts/futuraheavy/0000_futuraheavy.Texture.rgba".into(),
+                vec![0; 64],
+            ),
+        ]);
+        assert!(build(&entries).is_ok());
+        for (path, data) in [
+            ("private/hud/runtime/other.json", b"{}".to_vec()),
+            ("private/hud/assets/data/fe/movie.apt", vec![]),
+            ("private/session-marker/texture-0.png", vec![0; 16]),
+            ("private/session-marker/texture-1.rgba", vec![0; 15]),
+            ("private/session-marker/hud.json", b"not json".to_vec()),
+        ] {
+            let mut bad = files();
+            bad.push((path.into(), data));
+            assert!(build(&bad).is_err(), "{path}");
+        }
     }
     #[test]
     fn runtime_bundle_rejects_traversal_aliases_programs_and_truncation() {

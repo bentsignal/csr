@@ -2,25 +2,31 @@
 
 ## October 26: Skate crossover pivot
 
-### October 27 evening: Surf / Skate continuity and believable presentation
+### October 28: real Skate 3 presentation, a better course, natural carry
 
-Dev 1044 / PR #327 is accepted as a substantial improvement. Lighting, removal
-of the permanent controls overlay, markers/respawn and safe CS exits work.
-The next test specifically targets a surf/skate clip:
+Dev 1046 / PR #328's surf/skate clip course is accepted as a good proof of
+concept. Riding combat and momentum across switches work. Next test:
 
-1. Preserve airborne momentum both ways. Surf a ramp, switch to Skate, land and
-   trick on a flat deck, then switch back onto another ramp. Build a course.
-2. Correct actual hand/board contact away from the trucks. Inspection must turn
-   the hand with the board, with a believable forearm entering view. Inspect
-   rendered poses rather than accepting only transform calculations.
-3. Make rolling audio believable for the contacted material and speed, using
-   owned recordings and the public rewrite's native granular player.
-4. Show trick names, score and multiplier at bottom left. Show marker choices
-   and progress at top left only while holding its bumper; add marker sounds.
-5. Switch CS weapons and fire while riding toward the crosshair. Preserve
-   original stick/trigger Skate controls and accepted controller walking look.
+1. Course: less ugly ramps, much longer flat skating stretches and more
+   interesting features (e.g. a ramp with a rail between), then a launch onto
+   the second surf ramp with good speed.
+2. Mode switches must feel smooth, not just preserve most momentum.
+3. Board audio must be upstream-exact: per-surface rolling, ollie pop, flip
+   flick, landings, grinds, pushes, brakes. Not guessed clips.
+4. Use the actual Skate 3 HUD (the original trick display and marker panel
+   from the owner's data, rendered as the public rewrite renders them), not a
+   re-creation.
+5. Hold the board like a person carries one, with the same view sway/lag as
+   CS weapons and an inspection that does not break the wrist. Fix the
+   glitchy board HUD icon.
 
-The owner removed the rush and wants the hand/board corrected before testing.
+Landed for that test: the held board uses the default knife's arms, clips,
+look lag and settling, carried by the front truck with the forearm rolled to
+level the axle; the provider runs the original APT trick display and marker
+panel and streams their draw lists; the provider runs upstream player audio
+(see that PR); the course has chevron surf ramps, a 7600-unit plaza (funbox,
+rail gap, ledges, manual pad, stairs and handrail, gap, bank, quarter pipe)
+and an end kicker; mounting while moving faces the board along its travel.
 
 Keep all original assets private. Preserve accepted skating/CS behavior and
 settings. Development/verification stays on WINSERVE; deliver through Dev.

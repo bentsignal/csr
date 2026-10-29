@@ -653,7 +653,10 @@ pub fn tick(
         input.buttons |= buttons::ATTACK;
     }
     if !enabled.0 && std::env::var_os("CSR_TEST_MOVEMENT_MODE").is_some() {
-        input.toggle_mode = world.0.tick == 0;
+        // Toggle on alternate early ticks until the mode is active: tick 0 can
+        // precede the local spawn or the prepared movement module.
+        let riding = world.0.player(local.id).is_some_and(|p| p.mechanic.is_some());
+        input.toggle_mode = !riding && world.0.tick % 2 == 0 && world.0.time() < 1.;
         if std::env::var("CSR_TEST_MOVEMENT_MODE").as_deref() == Ok("ride") {
             input.forward_move = if world.0.time() < 1. {450.} else {0.};
         }
@@ -662,6 +665,8 @@ pub fn tick(
             let t=world.0.time();
             if !sequence.starts_with("stationary")&&(0.5..3.).contains(&t){input.controller.buttons=0x1000;}
             if sequence=="turn"&&(3.0..4.).contains(&t){input.controller.left[0]=22000;}
+            // Session-marker panel proof: hold LB (the marker modifier).
+            if sequence.ends_with("marker")&&t>=1.{input.controller.buttons|=0x100;}
             if sequence=="ollie"||sequence=="kickflip" {
                 if (3.0..3.6).contains(&t){input.controller.right=[0,-32768];}
                 if (3.6..3.8).contains(&t){input.controller.right=if sequence=="kickflip"{[30000,30000]}else{[0,32767]};}
@@ -679,20 +684,30 @@ pub fn tick(
         if let Some(p)=world.0.player(local.id){
             let x=p.movement.origin.x;let skating=p.mechanic.is_some();
             input.view_angles=glam::Vec3::ZERO;local.pitch=0.;local.yaw=0.;
-            input.forward_move=if x<0.{450.}else{0.};input.side_move=if !skating && x>=0.{-450.}else{0.};
-            input.toggle_mode=(!skating&&(2650. ..2800.).contains(&x))||(skating&&x>5015.);
+            use level::surf_course::{RAMP1_X,DECK_X,KICKER_X};
+            input.forward_move=if x<RAMP1_X[0]{450.}else{0.};input.side_move=if !skating && x>=RAMP1_X[0]{-450.}else{0.};
+            input.toggle_mode=(!skating&&(RAMP1_X[1]+50. ..DECK_X[0]).contains(&x))||(skating&&x>KICKER_X[1]+15.);
             input.controller=mechanics::link::Controller{connected:true,..Default::default()};
             if skating {
-                if (3900. ..4300.).contains(&x){input.controller.right=[0,-32768];}
-                if (4300. ..4480.).contains(&x){input.controller.right=[30000,30000];}
-                if (4600. ..4900.).contains(&x){input.controller.buttons=if p.movement.on_ground{0x102}else{0x100};}
+                // Hold the plaza's clear lane, as the private route check does.
+                if p.movement.on_ground {
+                    let steer=((p.movement.origin.y-level::surf_course::LANE_Y)*60.+p.movement.velocity.y*40.).clamp(-24000.,24000.);
+                    input.controller.left[0]=steer as i16;
+                }
+                let d=x-DECK_X[0];
+                if (1100. ..1500.).contains(&d){input.controller.right=[0,-32768];}
+                if (1500. ..1680.).contains(&d){input.controller.right=[30000,30000];}
+                if (1800. ..2100.).contains(&d){input.controller.buttons=if p.movement.on_ground{0x102}else{0x100};}
+                // Push down the long plaza, then roll into the end kicker.
+                if d>2400. && x<KICKER_X[0]-600. && p.movement.on_ground && (world.0.tick/16)%4==0 {input.controller.buttons|=0x1000;}
             }
         }
     }
     if !enabled.0 && std::env::var_os("CSR_TEST_SKATE_INVENTORY").is_some(){
         let tick=world.0.tick;let rate=world.0.tick_rate as u64;let t=world.0.time();
         input.toggle_mode=false;input.controller.connected=true;
-        if tick==rate/2||tick==rate*3{input.weapon_slot=sim::SLOT_PREVIOUS;}
+        let hold=std::env::var_os("CSR_TEST_BOARD_HOLD").is_some();
+        if tick==rate/2||(tick==rate*3&&!hold){input.weapon_slot=sim::SLOT_PREVIOUS;}
         if std::env::var_os("CSR_TEST_BOARD_HOLD").is_none() && ((1.0..1.05).contains(&t)||(3.2..3.25).contains(&t)){input.buttons|=buttons::ATTACK;}
     }
     // Screenshot-only phase proof through real TickInput. Each five-second
