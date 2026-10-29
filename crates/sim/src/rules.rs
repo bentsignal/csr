@@ -290,6 +290,16 @@ pub enum Purchase {
     Kevlar,
     KevlarHelmet,
     DefuseKit,
+    /// A content-pack inventory tool (e.g. the Skate pack's board), named by
+    /// [`mechanic_key`] of its pack mechanic id. Equips it into the hand like
+    /// the inventory cycle does; packs currently define no price, so it is free.
+    Mechanic(u32),
+}
+
+/// Stable wire key of a pack mechanic id (FNV-1a), independent of the order
+/// in which peers happened to load their packs.
+pub fn mechanic_key(id: &str) -> u32 {
+    id.bytes().fold(0x811c_9dc5_u32, |hash, byte| (hash ^ byte as u32).wrapping_mul(0x0100_0193))
 }
 
 /// Equipment prices (`item_kevlar`, `item_assaultsuit`, `item_defuser`).
