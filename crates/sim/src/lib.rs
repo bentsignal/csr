@@ -1295,6 +1295,21 @@ impl World {
                 }
                 rules::DEFUSE_KIT_PRICE
             }
+            Purchase::Mechanic(key) => {
+                // Humans only, exactly like the inventory cycle that offers tools.
+                let module = self.mechanics.iter().find(|m| rules::mechanic_key(&m.id) == key).ok_or(BuyError::Unknown)?;
+                if p.is_bot {
+                    return Err(BuyError::Unknown);
+                }
+                if p.equipped_mechanic.as_ref().is_some_and(|e| e.id == module.id)
+                    || p.mechanic.as_ref().is_some_and(|s| s.id == module.id) {
+                    return Err(BuyError::AlreadyOwned);
+                }
+                if p.active_weapon().is_some_and(|w| w.grenade_throw.is_some_and(|s| s.phase == utility::ThrowPhase::Throwing)) {
+                    return Err(BuyError::NotAllowedNow);
+                }
+                0
+            }
         };
         if cost > p.money {
             return Err(BuyError::NotEnoughMoney);
@@ -1342,6 +1357,10 @@ impl World {
                 self.players[i].helmet = true;
             }
             Purchase::DefuseKit => self.players[i].defuse_kit = true,
+            Purchase::Mechanic(key) => {
+                let module = self.mechanics.iter().find(|m| rules::mechanic_key(&m.id) == key).cloned().ok_or(BuyError::Unknown)?;
+                mechanics::inventory::equip(&mut self.players[i], &module, time);
+            }
             Purchase::None => {}
         }
         self.events.push(GameEvent::Purchase { player: id, item });

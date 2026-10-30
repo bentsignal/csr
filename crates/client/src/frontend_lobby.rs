@@ -4,9 +4,6 @@ use crate::menu::MapRequest;
 use scaleform::{Calls, Value};
 use std::collections::HashMap;
 
-pub(super) const ADDRESS_NOTICE: &str =
-    "Start the server, then open Pause and choose Invite friends.";
-
 /// Map requests originate in a trusted catalog. Native text only indexes it;
 /// it never constructs a filesystem/archive path or a pack identity.
 pub(super) struct Catalog {
@@ -453,6 +450,11 @@ impl Scene {
             "PrimeTooltip",
         ] {
             calls.set(&format!("{panel}.{caption}"), "_visible", false.into());
+        }
+        // The lobby's Steam friends and missions columns have no counterpart
+        // here; hide them after showPanel, which re-shows its floating panels.
+        for panel in ["FriendsListerPanel", "MissionsPanel"] {
+            calls.set(&format!("{path}.LobbyPanel.Panels.{panel}"), "_visible", false.into());
         }
     }
     pub fn show_picker(&self, path: &str, calls: &mut Calls) {

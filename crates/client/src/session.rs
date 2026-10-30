@@ -636,7 +636,7 @@ pub(crate) fn match_ready(
     } else {
         loader.title.clone()
     };
-    window.title = format!("CSGO Rewrite — {}", title.name);
+    window.title = format!("Counter-Strike Rust — {}", title.name);
 }
 
 pub(crate) fn clear_match(world: &mut World) {

@@ -245,7 +245,7 @@ impl Plugin for CsgoPlugin {
             .add_observer(session::own_entity::<bevy::audio::AudioPlayer>)
             .insert_resource(Time::<Fixed>::from_hz(sim::DEFAULT_TICK_RATE as f64))
             .add_systems(Startup, (ui_assets::load, case_ui::setup, menu_scene::setup, menu::setup, frontend::setup, server_browser::setup, host_sharing_ui::setup).chain())
-            .add_systems(Update, (frontend::update, host_sharing_ui::update, pack_ui::update, server_browser::update, server_browser::input, server_browser::draw, pack_ui::scroll, pack_ui::draw, frontend::input, frontend::cancel_loading).chain())
+            .add_systems(Update, (frontend::update, host_sharing_ui::update, pack_ui::update, pack_ui::sync_play_maps, server_browser::update, server_browser::input, server_browser::draw, pack_ui::scroll, pack_ui::draw, frontend::input, frontend::cancel_loading).chain())
             .add_systems(Last, (hosting::gate_exit, host_sharing_ui::gate_exit, server_browser::gate_exit, pack_ui::gate_exit).chain().after(bevy::window::ExitSystems))
             .add_systems(Update, (menu::apply, audio::update, menu_music::update, menu_music::update_gain).chain().after(player::update_camera))
             .add_systems(Last, audio::prune)
@@ -370,7 +370,7 @@ pub fn run(opts: ClientOptions) -> i32 {
             .set(WindowPlugin {
                 close_when_requested: false,
                 primary_window: Some(Window {
-                    title: "CSGO Rewrite".into(),
+                    title: "Counter-Strike Rust".into(),
                     resolution,
                     mode: window_mode,
                     present_mode: input_latency::present_mode(video_settings.vsync),
@@ -402,6 +402,9 @@ pub fn run(opts: ClientOptions) -> i32 {
     input_latency::install_frame_log(&mut app);
     #[cfg(feature = "targeted-render-trace")]
     targeted_render_trace::install(&mut app);
+    if opts.screenshot.is_some() && std::env::var_os("CSR_TEST_CLICKS").is_some() {
+        app.add_systems(Update, frontend_flow::scripted_clicks.after(frontend::update));
+    }
     if frontend_flow::enabled() {
         if frontend_acceptance::enabled() {
             frontend_acceptance::install(&mut app);
@@ -836,6 +839,14 @@ fn smoke_test(
         if std::env::var("CSR_TEST_SWITCH").as_deref() != Ok("buy-close") || *frame == 1 {
             menu.open = true;
             menu.category = cat.checked_sub(1);
+            // CSR_BUY_PAGE=n: the menu tab (0 = WEAPONS, then pack pages).
+            menu.page = std::env::var("CSR_BUY_PAGE").ok().and_then(|v| v.parse().ok()).unwrap_or(0);
+        }
+    }
+    // CSR_TEST_MONEY=n: screenshot-only fixture holding a rich or poor buy state.
+    {
+        if let (Some(money), Some(world), Some(l)) = (std::env::var("CSR_TEST_MONEY").ok().and_then(|v| v.parse::<i32>().ok()), world.as_mut(), local.as_ref()) {
+            if let Some(p) = world.0.player_mut(l.id) { p.money = money; }
         }
     }
     let mut local = local;

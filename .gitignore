@@ -19,8 +19,6 @@
 /config/launcher.instance.lock
 /config/launcher.json
 /config/launcher.tmp
-/config/launcher-window.ps1
-/config/launcher-state.json
 
 /worlds/
 

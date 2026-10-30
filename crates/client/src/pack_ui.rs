@@ -301,7 +301,9 @@ pub(crate) fn draw(
         backend.flow.status()
     };
     let feedback = !menu && ui.feedback > 0.;
-    let pack_maps = menu && front.play_picker_presented() && count>0;
+    // Pack maps are tiles on the play screen's Content Packs tab; Home has no
+    // extra widgets. The manager appears only while an install it owns runs.
+    let pack_maps = false;
     ui.play_maps=pack_maps;
     let front_camera = menu || *state.get() == AppState::Loading || movie_menu.open();
     let key = format!(
@@ -319,7 +321,7 @@ pub(crate) fn draw(
     if let Some(root) = ui.root.take() {
         commands.entity(root).despawn();
     }
-    if !menu && !feedback {
+    if (!menu || !ui.open) && !feedback {
         return;
     }
     let root = commands
@@ -768,4 +770,16 @@ pub(crate) fn proof(
         10 if proof.entered.elapsed().as_secs() >= 1 => { info!("pack flow: install -> catalog -> pointer Play -> bound match -> background install -> Home -> malformed rollback; failures: 0"); exit.write(AppExit::Success); proof.next(); },
         _ => {},
     }
+}
+
+/// Offer every installed pack's maps on the play screen's Content Packs tab,
+/// refreshed whenever the installed catalog changes (install/remove/refresh).
+pub(crate) fn sync_play_maps(mut ui: ResMut<PackUi>, front: Res<Frontend>, mut seen: Local<Option<u64>>) {
+    let backend = ui.backend.get_mut().unwrap();
+    if *seen == Some(backend.flow.revision) { return; }
+    *seen = Some(backend.flow.revision);
+    let maps: Vec<_> = backend.flow.catalog.entries.iter()
+        .flat_map(|entry| entry.manifest().maps.iter().map(move |map| (entry.clone(), map.clone())))
+        .collect();
+    front.set_pack_maps(&maps);
 }

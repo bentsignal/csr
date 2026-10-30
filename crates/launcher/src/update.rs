@@ -33,7 +33,7 @@ pub fn startup() {
         })
         .on_restarted(|version| {
             crate::dialog::notify(
-                "CSGO Rewrite updated",
+                "Counter-Strike Rust updated",
                 &format!("You are now on version {version}."),
             )
         })
@@ -77,10 +77,10 @@ fn source(dev: bool) -> Box<dyn UpdateSource> {
 
 pub fn manager(dev: bool) -> Result<UpdateManager, String> {
     if std::env::var_os("CSR_NO_UPDATE").is_some() {
-        return Err("Update checks are disabled for this session. You can still play.".into());
+        return Err("Update checks are off for this session (CSR_NO_UPDATE).".into());
     }
     if installed_root().is_none() {
-        return Err("This copy runs from source or a portable folder. Install CSGO Rewrite for automatic updates.".into());
+        return Err("Source and portable copies do not update automatically.".into());
     }
     UpdateManager::new_boxed(source(dev), Some(options()), None).map_err(|e| e.to_string())
 }

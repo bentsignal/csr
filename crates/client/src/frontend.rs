@@ -42,6 +42,8 @@ struct Data {
     pause_surface: crate::frontend_pause_surface::Tracker,
     deferred_pause: crate::frontend_pause_surface::DeferredPause,
     flow_roots: HashMap<String, String>,
+    /// Play screen: content-pack maps and the selected map source tab.
+    play: PlayCatalog,
 }
 
 impl Data {
@@ -51,7 +53,40 @@ impl Data {
             state: self.state, menu_open: self.menu_open, controls_open: false, pack_maps_open: false, loading: self.loading.clone(),
             loading_map: self.loading_map.clone(), player_name: self.player_name.clone(),
             movie_ready: HashSet::new(), home_bootstrapped: false, home_retired: false,
-            pause_surface: Default::default(), flow_roots: Default::default(), deferred_pause: Default::default() }
+            pause_surface: Default::default(), flow_roots: Default::default(), play: self.play.clone(), deferred_pause: Default::default() }
+    }
+}
+
+#[derive(Clone, Default)]
+struct PlayCatalog {
+    /// The installed catalog before content-pack maps were added.
+    base: Option<kv::Block>,
+    packs: Vec<(packs::CatalogEntry, packs::MapDef)>,
+    source: crate::frontend_game::Source,
+}
+
+impl Data {
+    /// Offer exactly these installed pack maps on the play screen.
+    fn set_pack_maps(&mut self, maps: &[(packs::CatalogEntry, packs::MapDef)]) {
+        if self.play.packs == maps && self.play.base.is_some() { return; }
+        let base = self.play.base.get_or_insert_with(|| self.game_modes.clone()).clone();
+        let mut modes = base;
+        let names: Vec<String> = maps.iter().map(|(_, map)| map.name.clone()).collect();
+        crate::frontend_game::add_pack_maps(&mut modes, &names);
+        self.game_modes = modes;
+        self.play.packs = maps.to_vec();
+    }
+
+    /// Just the content-pack map groups and maps, in the movie's catalog form.
+    fn pack_catalog(&self) -> Value {
+        let mut catalog = kv::Block::new();
+        for section in ["mapgroups", "maps"] {
+            let entries = self.game_modes.block(section).map(|block| block.entries.iter()
+                .filter(|(name, _)| name.starts_with("mg_csrpack_") || name.starts_with(crate::frontend_game::PACK_MAP))
+                .cloned().collect()).unwrap_or_default();
+            catalog.set(section, kv::Value::Block(kv::Block { entries }));
+        }
+        keyvalues(&catalog, &self.localization)
     }
 }
 
@@ -204,7 +239,42 @@ impl QuitConfirmation {
     fn cancel(&mut self) { self.active = false; self.shown = false; }
 }
 
-fn show_single_player(path: &str, calls: &mut Calls) {
+/// Home sections with no counterpart in this game (web news, Steam friends,
+/// promo banners, streams, missions, Overwatch). Hidden on every Home show.
+const HIDDEN_HOME: [&str; 6] = ["Blog", "BannerPanel", "FriendsListerPanel", "StreamPanel", "MissionsPanel", "OverwatchPanel"];
+const PLAY_BUTTON: &str = "_global.MainMenuMovie.Panel.SelectPanel.MainMenuTopBar.PlayButton";
+/// PLAY opens the play screen directly; its original dropdown listed modes
+/// (matchmaking, Wingman, Workshop, training) that this game does not have.
+const PLAY_COMMAND: &str = "OpenCreateSinglePlayerGameDialog";
+
+/// Home overrides, appended after every Home `showPanel`.
+fn home_commands() -> Vec<scaleform::Command> {
+    let mut commands = vec![scaleform::Command::Call {
+        path: "_global.csrBindings".into(),
+        function: "redirectButton".into(),
+        args: vec![PLAY_BUTTON.into(), PLAY_COMMAND.into()],
+    }];
+    commands.extend(HIDDEN_HOME.iter().map(|panel| scaleform::Command::Set {
+        path: format!("_global.MainMenuMovie.Panel.{panel}"),
+        property: "_visible".into(),
+        value: false.into(),
+    }));
+    commands
+}
+
+fn apply_home(calls: &mut Calls) {
+    for command in home_commands() {
+        match command {
+            scaleform::Command::Call { path, function, args } => calls.call(&path, &function, args),
+            scaleform::Command::Set { path, property, value } => calls.set(&path, &property, value),
+            scaleform::Command::RequestElement(_) => {}
+        }
+    }
+}
+
+fn show_single_player(path: &str, source: crate::frontend_game::Source, packs_catalog: Value, calls: &mut Calls) {
+    // Rebound tabs act as their originals while this setup selects them.
+    calls.set("_global.csrBindings", "playTabsBusy", true.into());
     calls.call("_global.csrBindings", "releaseOwnedLifecycle", vec![Value::String(path.to_string())]);
     calls.set(path, "_visible", true.into());
     calls.call(
@@ -226,6 +296,41 @@ fn show_single_player(path: &str, calls: &mut Calls) {
     calls.call(&format!("{modes}.ModeCompetitive"), "Action", vec![]);
     for mode in ["ModeCasual", "ModeWingman", "ModeWargames"] {
         calls.call(&format!("{modes}.{mode}"), "setDisabled", vec![true.into()]);
+    }
+    play_tabs(path, source, packs_catalog, calls);
+    calls.set("_global.csrBindings", "playTabsBusy", false.into());
+}
+
+/// The play screen's own navigation, built from the panel's authored tab
+/// buttons: map sources (official / content packs) and the online entry
+/// points (play with friends, community servers). The Steam friends and
+/// missions column beside it has no counterpart in this game.
+fn play_tabs(path: &str, source: crate::frontend_game::Source, packs_catalog: Value, calls: &mut Calls) {
+    for panel in ["Friends", "MissionsPanel"] {
+        calls.set(&format!("{path}.Panel.{panel}"), "_visible", false.into());
+    }
+    let packs = source == crate::frontend_game::Source::Packs;
+    // Official and content-pack maps share one catalog; show this source's.
+    calls.call("_global.csrBindings", "filterMapSource", vec![path.into(), packs.into(), packs_catalog]);
+    let chooser = format!("{path}.Panel.Panel.ModeChooser");
+    calls.set(&format!("{chooser}.Title"), "text", "Play".into());
+    for clone in ["CsrTabFriends", "CsrTabServers"] {
+        calls.call("_global.csrBindings", "cloneTab", vec![format!("{chooser}.TabWorkshopBtn").into(), clone.into()]);
+    }
+    // Authored tabs are 110.7 wide on a 111.2 pitch; four fit before the close box.
+    let tabs: [(&str, &str, f64, &str, &str, &str, &str); 4] = [
+        ("TabDefaultBtn", "Official Maps", 110.0, "StartSinglePlayer", "CsrMapSource", "official", ""),
+        ("TabWorkshopBtn", "Content Packs", 221.2, "StartSinglePlayer", "CsrMapSource", "packs", ""),
+        ("CsrTabFriends", "Play with Friends", 332.4, "MainMenu", "BasePanelRunCommand", "CsrPlayWithFriends", "bHidePanel"),
+        ("CsrTabServers", "Server Browser", 443.6, "MainMenu", "BasePanelRunCommand", "OpenServerBrowser", "bHidePanel"),
+    ];
+    for (name, label, x, api, method, a0, a1) in tabs {
+        calls.call("_global.csrBindings", "playTab", vec![
+            format!("{chooser}.{name}").into(), label.into(), x.into(), api.into(), method.into(), a0.into(), a1.into(),
+        ]);
+    }
+    for (name, selected) in [("TabDefaultBtn", !packs), ("TabWorkshopBtn", packs), ("CsrTabFriends", false), ("CsrTabServers", false)] {
+        calls.call("_global.csrBindings", "selectTab", vec![format!("{chooser}.{name}").into(), selected.into()]);
     }
 }
 
@@ -369,6 +474,7 @@ impl Bridge {
             }
         }
         calls.call("_global.MainMenuMovie", "showPanel", vec![]);
+        apply_home(calls);
         self.push_action(Action::LobbyHome);
     }
 }
@@ -382,10 +488,14 @@ impl Engine for Bridge {
         if let Some(path) = self.roots.get("MainMenu") {
             calls.call(path, if show_home { "onUIShow" } else { "onUIHide" }, vec![]);
             calls.set(path, "_visible", show_home.into());
+            if show_home { apply_home(calls); }
         }
         !active || self.actions.lock().unwrap().resume()
     }
     fn image(&mut self, url: &str) -> Option<Vec<u8>> {
+        if url.strip_prefix("img://pack-card/").and_then(crate::frontend_game::pack_index).is_some() {
+            return Some(crate::frontend_game::pack_card());
+        }
         if let Some(name) = url.strip_prefix("img://classic-card/") {
             let map = workshop::find(name).filter(|m| m.menu_supported())?;
             return workshop::Store::current().preview_bytes(map);
@@ -612,6 +722,22 @@ impl Engine for Bridge {
                 _ => None,
             };
             match method {
+                "CsrMapSource" => {
+                    let source = if text == Some("packs") { crate::frontend_game::Source::Packs } else { crate::frontend_game::Source::Official };
+                    self.data.lock().unwrap().play.source = source;
+                    self.offline.query(None);
+                    if let Some(path) = self.roots.get("StartSinglePlayer").cloned() {
+                        // Show the authored map-grid pane, then reload the
+                        // catalog for this source through the original init.
+                        calls.set("_global.csrBindings", "playTabsBusy", true.into());
+                        calls.call("_global.csrBindings", "originalAction",
+                            vec![format!("{path}.Panel.Panel.ModeChooser.TabDefaultBtn").into()]);
+                        let catalog = self.data.lock().unwrap().pack_catalog();
+                        play_tabs(&path, source, catalog, calls);
+                        calls.set("_global.csrBindings", "playTabsBusy", false.into());
+                    }
+                    return Some(Value::Undefined);
+                }
                 "SetCustomBotDifficulty" => {
                     self.offline.difficulty(match args {
                         [Value::Number(value)] => Some(*value),
@@ -699,7 +825,16 @@ impl Engine for Bridge {
             let mut data = self.data.lock().unwrap();
             if object == "MainMenu" && data.home_retired { return Some(Value::Undefined); }
             data.movie_ready.insert(object.into());
-            if object == "MainMenu" { data.home_bootstrapped = true; }
+            if object == "MainMenu" {
+                data.home_bootstrapped = true;
+                drop(data);
+                apply_home(calls);
+                // Load the play screen hidden behind Home: its shared map art
+                // takes seconds to import, so PLAY must not wait for it.
+                for element in ["StartSinglePlayer", "LobbyScreen"] {
+                    if self.requested.insert(element.into()) { calls.request_element(element); }
+                }
+            }
         }
         if method == "OnLoadFinished" && !object.starts_with("CScaleformComponent_") {
             self.data.lock().unwrap().movie_ready.remove(object);
@@ -793,7 +928,8 @@ impl Engine for Bridge {
                     self.data.lock().unwrap().state,
                     AppState::Menu | AppState::Browser
                 ) {
-                    show_single_player(path, calls);
+                    let (source, catalog) = { let data = self.data.lock().unwrap(); (data.play.source, data.pack_catalog()) };
+                    show_single_player(path, source, catalog, calls);
                     self.page_ready(object, calls);
                 } else {
                     calls.set(path, "_visible", false.into());
@@ -879,11 +1015,26 @@ impl Engine for Bridge {
                     let mut lobby = self.lobby.lock().unwrap();
                     if lobby.begin(&data.game_modes) {
                         data.pause_surface.await_page("LobbyBrowser");
-                        self.push_action(Action::Notice(crate::frontend_lobby::ADDRESS_NOTICE.into()));
+
                         if data.movie_ready.contains("LobbyBrowser") {
                             if let Some(path) = self.roots.get("LobbyBrowser") { lobby.show_browser(path, &data.player_name, calls); }
                             data.pause_surface.page_ready("LobbyBrowser", calls.require_raster());
                         } else if self.requested.insert("LobbyBrowser".into()) { calls.request_element("LobbyBrowser"); }
+                    }
+                }
+                // The play screen's Play with Friends tab: straight into an owned
+                // lobby (map choice, then host). There is no Steam friends list,
+                // so the original lobby browser would only ever be empty.
+                "CsrPlayWithFriends" => {
+                    let mut data = self.data.lock().unwrap();
+                    if data.state != AppState::Menu { return None; }
+                    let mut lobby = self.lobby.lock().unwrap();
+                    if lobby.begin(&data.game_modes) && lobby.open_lobby() {
+                        data.pause_surface.await_page("LobbyScreen");
+                        if data.movie_ready.contains("LobbyScreen") {
+                            if let Some(path) = self.roots.get("LobbyScreen") { lobby.show(path, &data.player_name, calls); }
+                            data.pause_surface.page_ready("LobbyScreen", calls.require_raster());
+                        } else if self.requested.insert("LobbyScreen".into()) { calls.request_element("LobbyScreen"); }
                     }
                 }
                 "ShowLobbyUI" => {
@@ -906,7 +1057,8 @@ impl Engine for Bridge {
                         if let Some(path) = self.roots.get(element) { calls.set(path, "_visible", false.into()); }
                     }
                     if self.data.lock().unwrap().movie_ready.contains("StartSinglePlayer") {
-                        if let Some(path) = self.roots.get("StartSinglePlayer") { show_single_player(path, calls); }
+                        let (source, catalog) = { let data = self.data.lock().unwrap(); (data.play.source, data.pack_catalog()) };
+                        if let Some(path) = self.roots.get("StartSinglePlayer") { show_single_player(path, source, catalog, calls); }
                         self.page_ready("StartSinglePlayer", calls);
                     } else if self.requested.insert("StartSinglePlayer".into()) {
                         calls.request_element("StartSinglePlayer");
@@ -1225,6 +1377,16 @@ impl Frontend {
         let data=self.data.lock().unwrap();
         data.state==AppState::Menu && data.pack_maps_open && data.movie_ready.contains("StartSinglePlayer")
     }
+    /// Installed content-pack maps for the play screen (both cached workers).
+    pub(crate) fn set_pack_maps(&self, maps: &[(packs::CatalogEntry, packs::MapDef)]) {
+        self.data.lock().unwrap().set_pack_maps(maps);
+        if let Some(parked) = &self.parked { parked.data.lock().unwrap().set_pack_maps(maps); }
+    }
+    /// The installed pack map behind a launched `csrpack_<n>` catalog key.
+    pub(crate) fn pack_map(&self, map: &str) -> Option<(packs::CatalogEntry, packs::MapDef)> {
+        let index = crate::frontend_game::pack_index(map)?;
+        self.data.lock().unwrap().play.packs.get(index).cloned()
+    }
     pub(crate) fn home_bootstrapped(&self) -> bool { self.data.lock().unwrap().home_bootstrapped }
     pub(crate) fn pause_presented(&self) -> bool {
         self.worker_kind == WorkerKind::Match && self.pause_surface_visible()
@@ -1371,7 +1533,7 @@ pub(crate) fn setup(
         player_name: "You".into(),
         movie_ready: HashSet::new(), home_bootstrapped: false, home_retired: false,
         pause_surface: Default::default(),
-        flow_roots: Default::default(), deferred_pause: Default::default(),
+        flow_roots: Default::default(), play: Default::default(), deferred_pause: Default::default(),
     }));
     let lobby = Arc::new(Mutex::new(crate::frontend_lobby::Scene::new(
         crate::frontend_lobby::Catalog::installed(&options.0, &menu.maps),
@@ -1579,7 +1741,9 @@ pub(crate) fn update(
             path, property: "_visible".into(), value: false.into(),
         }); }
         restore.push(scaleform::Command::Set { path: base.clone(), property: "_visible".into(), value: true.into() });
+        let home = base == "_global.MainMenuMovie";
         restore.push(scaleform::Command::Call { path: base, function: "showPanel".into(), args: vec![] });
+        if home { restore.extend(home_commands()); }
         front.send(Input::Present { commands: restore, revision: front.pause_presentation.revision() });
     }
     let loading_selection = if scene == AppState::Loading { loader.loading_map() } else { None };
@@ -1772,7 +1936,7 @@ pub(crate) fn update(
         front.send(Input::Present { commands: vec![
             scaleform::Command::Set { path: "_global.MainMenuMovie".into(), property: "_visible".into(), value: true.into() },
             scaleform::Command::Call { path: "_global.MainMenuMovie".into(), function: "showPanel".into(), args: vec![] },
-        ], revision: front.pause_presentation.revision() });
+        ].into_iter().chain(home_commands()).collect(), revision: front.pause_presentation.revision() });
         info!(generation = front.worker_generation, "Classic UI Home Ready; awaiting fresh presentation");
         if let Some(started) = front.home_return_started {
             info!(generation = front.worker_generation,
@@ -1915,6 +2079,7 @@ pub(crate) fn update(
                     function: "showPanel".into(),
                     args: vec![],
                 });
+                scene_commands.extend(home_commands());
             }
         }
         front.send(Input::Present {
@@ -1974,7 +2139,9 @@ pub(crate) fn update(
         // between the 55px navigation bar and 155px panels holds our notice.
         node.top = if owned_lobby_notice { percent(7) } else { Val::Auto };
         node.bottom = if owned_lobby_notice { Val::Auto } else { px(24.0) };
-        node.display = if !menu.classic_controls && (loading || (visible && !menu.status.is_empty())) {
+        // The original loading screen owns its status; only Home messages
+        // (e.g. a failed load) use this bar. Escape still cancels a load.
+        node.display = if !menu.classic_controls && !loading && visible && !menu.status.is_empty() {
             Display::Flex
         } else {
             Display::None
@@ -1988,11 +2155,7 @@ pub(crate) fn update(
         node.display = if radar_status { Display::None } else { Display::Flex };
     }
     if let Ok(mut node) = nodes.get_mut(front.cancel) {
-        node.display = if loading {
-            Display::Flex
-        } else {
-            Display::None
-        };
+        node.display = Display::None;
     }
     if let Ok(mut text) = texts.get_mut(front.notice_text) {
         text.0 = if loading {
@@ -2020,6 +2183,8 @@ pub(crate) fn update(
                 front.ready |= name == "MainMenu";
                 front.loaded.insert(name.clone());
                 info!("Classic UI loaded {name}");
+                // Diagnostics: CSR_UI_INSPECT="path;path" logs movie API shapes.
+                if name == "MainMenu" { if let Ok(paths) = std::env::var("CSR_UI_INSPECT") { for path in paths.split(';').filter(|p| !p.is_empty()) { front.send(Input::Inspect(path.into())); } } }
             }
             Some(scaleform::Event::Failed(error)) => {
                 error!("Classic UI: {error}");
@@ -2035,7 +2200,7 @@ pub(crate) fn update(
                         front.flow_observation = Some((id, properties.clone()));
                     }
                 }
-                debug!("UI API {path}: {properties:?}")
+                if std::env::var_os("CSR_UI_INSPECT").is_some() || std::env::var_os("CSR_TEST_CLICKS").is_some() { info!("UI API {path}: {properties:?}") } else { debug!("UI API {path}: {properties:?}") }
             }
             None => break,
         }
@@ -2131,6 +2296,23 @@ pub(crate) fn update(
             }
             Action::Launch(selection, difficulty) => {
                 if matches!(scene, AppState::Menu | AppState::Browser) {
+                    if let Some((entry, map)) = front.pack_map(&selection.map) {
+                        // A pack map runs as its pack's practice session.
+                        let Ok(id) = map.id.parse::<content::ContentId>() else {
+                            menu.status = "This content pack map is invalid.".into();
+                            continue;
+                        };
+                        let mut selected = options.0.clone();
+                        selected.map = id.to_string();
+                        selected.direct = true;
+                        selected.deathmatch = true;
+                        selected.bots = 0;
+                        menu.status.clear();
+                        *request.0.lock().unwrap() = Some(crate::menu::MapRequest {
+                            options: selected, pack: Some((packs::Installed::current(), entry, id)),
+                        });
+                        continue;
+                    }
                     let mut selected = options.0.clone();
                     selected.map = selection.map;
                     selected.deathmatch = selection.deathmatch;
@@ -2467,7 +2649,7 @@ mod tests {
             state: AppState::Match, menu_open: true, controls_open: false, pack_maps_open: false, loading: String::new(),
             loading_map: None, player_name: "Fixture".into(), movie_ready: Default::default(),
             home_bootstrapped: false, home_retired: false,
-            pause_surface: Default::default(), flow_roots: Default::default(), deferred_pause: Default::default(),
+            pause_surface: Default::default(), flow_roots: Default::default(), play: Default::default(), deferred_pause: Default::default(),
         }, catalog);
         Frontend {
             worker_kind: WorkerKind::Home, parked: None, next_worker_generation: 12,
@@ -2729,7 +2911,7 @@ mod tests {
             inventory: InventoryView::new(&fs), fs, settings: Settings::default(),
             localization: Default::default(), game_modes: modes.clone(),
             state: AppState::Menu, menu_open: true, controls_open: false, pack_maps_open: false, loading: String::new(), loading_map: None, player_name: "You".into(), movie_ready: HashSet::new(), home_bootstrapped: false, home_retired: false, pause_surface: Default::default(),
-        flow_roots: Default::default(), deferred_pause: Default::default(),
+        flow_roots: Default::default(), play: Default::default(), deferred_pause: Default::default(),
         }));
         let mut scene = Scene::new(Catalog::installed(&crate::ClientOptions::default(), &["de_dust2".into()]));
         assert!(scene.begin(&modes)); assert!(scene.open_lobby());
@@ -2822,7 +3004,7 @@ mod tests {
                     state, menu_open: true, controls_open: false, pack_maps_open: false, loading: String::new(), loading_map: None,
                     player_name: "Fixture".into(), movie_ready: Default::default(),
                     home_bootstrapped: false, home_retired: false,
-                    pause_surface: Default::default(), flow_roots: Default::default(), deferred_pause: Default::default(),
+                    pause_surface: Default::default(), flow_roots: Default::default(), play: Default::default(), deferred_pause: Default::default(),
                 }));
                 let mut bridge = Bridge { dispatch_epoch: None,
                     data: data.clone(), actions: Default::default(), seen: Default::default(),
@@ -2869,7 +3051,7 @@ mod tests {
             state: AppState::Menu, menu_open: true, controls_open: false, pack_maps_open: false, loading: String::new(),
             loading_map: None, player_name: "You".into(), movie_ready: Default::default(),
             home_bootstrapped: true, home_retired: false,
-            pause_surface: Default::default(), flow_roots: Default::default(), deferred_pause: Default::default(),
+            pause_surface: Default::default(), flow_roots: Default::default(), play: Default::default(), deferred_pause: Default::default(),
         }));
         let mut bridge = Bridge {
             dispatch_epoch: None, data: data.clone(), actions: Default::default(),
@@ -2954,7 +3136,7 @@ mod tests {
             localization: Default::default(), game_modes: Default::default(),
             state: AppState::Menu, menu_open: true, controls_open: false, pack_maps_open: false, loading: String::new(),
             loading_map: None, player_name: "You".into(), movie_ready: Default::default(), home_bootstrapped: false, home_retired: false,
-            pause_surface: Default::default(), flow_roots: Default::default(), deferred_pause: Default::default(),
+            pause_surface: Default::default(), flow_roots: Default::default(), play: Default::default(), deferred_pause: Default::default(),
         }));
         let mut bridge = Bridge { dispatch_epoch: None,
             data: data.clone(), actions: Default::default(), seen: Default::default(),
@@ -2991,7 +3173,7 @@ mod tests {
             state: AppState::Menu, menu_open: true, controls_open: false, pack_maps_open: false, loading: String::new(),
             loading_map: None, player_name: "You".into(), movie_ready: Default::default(),
             home_bootstrapped: false, home_retired: false,
-            pause_surface: Default::default(), flow_roots: Default::default(), deferred_pause: Default::default(),
+            pause_surface: Default::default(), flow_roots: Default::default(), play: Default::default(), deferred_pause: Default::default(),
         }));
         let mut bridge = Bridge {
             dispatch_epoch: None, data: data.clone(), actions: Default::default(),
@@ -3053,7 +3235,7 @@ mod tests {
             player_name: "You".into(),
         movie_ready: HashSet::new(), home_bootstrapped: false, home_retired: false,
         pause_surface: Default::default(),
-        flow_roots: Default::default(), deferred_pause: Default::default(),
+        flow_roots: Default::default(), play: Default::default(), deferred_pause: Default::default(),
         }));
         let actions = Arc::new(Mutex::new(ActionQueue::default()));
         let mut bridge = Bridge { dispatch_epoch: None,

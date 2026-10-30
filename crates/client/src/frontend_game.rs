@@ -324,7 +324,7 @@ pub(super) fn offline_selection(root: &kv::Block, text: &str) -> Result<Selectio
         || !root
             .block("maps")
             .is_some_and(|maps| maps.get(map).is_some())
-        || (!deathmatch && !map.starts_with("de_"))
+        || (!deathmatch && !map.starts_with("de_") && pack_index(map).is_none())
     {
         return Err("Choose an installed map supported by this mode.".into());
     }
@@ -334,6 +334,72 @@ pub(super) fn offline_selection(root: &kv::Block, text: &str) -> Result<Selectio
     })
 }
 
+/// Synthetic map groups for installed content-pack maps. Their catalog key
+/// (`csrpack_<index>`) is resolved back to the pack on launch, never a path.
+pub(crate) const PACK_MAP: &str = "csrpack_";
+const PACK_GROUP: &str = "mg_csrpack_";
+
+/// The play screen's map source tabs.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum Source {
+    #[default]
+    Official,
+    Packs,
+}
+
+/// Index into the installed pack maps for a launched catalog key.
+pub(crate) fn pack_index(map: &str) -> Option<usize> {
+    map.strip_prefix(PACK_MAP)?.parse().ok()
+}
+
+/// Add each pack map (display name) as a one-map group offered by both
+/// implemented modes. Cards reuse an installed card's geometry with a neutral
+/// photo (`csr-pack-card`), so the original tile layout is untouched.
+pub(crate) fn add_pack_maps(root: &mut kv::Block, names: &[String]) {
+    let base_image = root.block("mapgroups").and_then(|groups| groups.iter()
+        .find_map(|(_, group)| group.as_block()?.str("imagename").filter(|i| i.starts_with("map-")).map(str::to_owned)));
+    let Some(base_image) = base_image else { return };
+    for (index, title) in names.iter().enumerate() {
+        let key = format!("{PACK_MAP}{index}");
+        let group_name = format!("{PACK_GROUP}{index}");
+        let mut map = kv::Block::new();
+        map.set("name", kv::Value::Str(key.clone()));
+        map.set("nameID", kv::Value::Str(title.clone()));
+        let mut group = kv::Block::new();
+        group.set("name", kv::Value::Str(group_name.clone()));
+        group.set("nameID", kv::Value::Str(title.clone()));
+        group.set("imagename", kv::Value::Str(format!("csr-pack-card|{key}|{base_image}")));
+        group.set("maps", kv::Value::Block(kv::Block { entries: vec![(key.clone(), kv::Value::Str(String::new()))] }));
+        for (section, name, value) in [("maps", &key, map), ("mapgroups", &group_name, group)] {
+            if root.get(section).is_none() { root.set(section, kv::Value::Block(kv::Block::new())); }
+            if let Some(block) = root.get_mut(section).and_then(kv::Value::as_block_mut) { block.set(name, kv::Value::Block(value)); }
+        }
+        for (kind, mode) in [("classic", "competitive"), ("gungame", "deathmatch")] {
+            let Some(groups) = root.get_mut("gameTypes").and_then(kv::Value::as_block_mut)
+                .and_then(|types| types.get_mut(kind)).and_then(kv::Value::as_block_mut)
+                .and_then(|kind| kind.get_mut("gameModes")).and_then(kv::Value::as_block_mut)
+                .and_then(|modes| modes.get_mut(mode)).and_then(kv::Value::as_block_mut)
+                .and_then(|mode| mode.get_mut("mapgroupsSP")).and_then(kv::Value::as_block_mut) else { continue };
+            groups.set(&group_name, kv::Value::Str(String::new()));
+        }
+    }
+}
+
+
+/// Photo for a pack map without preview art: a dark slate card with a faint
+/// diagonal weave, matching the classic cards' neutral backing.
+pub(crate) fn pack_card() -> Vec<u8> {
+    let (w, h) = (256u32, 144u32);
+    let image = image::RgbaImage::from_fn(w, h, |x, y| {
+        let t = y as f32 / h as f32;
+        let weave = if (x + y) % 12 < 1 || (x + h - y) % 12 < 1 { 6. } else { 0. };
+        let v = (34. - 12. * t + weave) as u8;
+        image::Rgba([v, v.saturating_add(3), v.saturating_add(7), 255])
+    });
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    let _ = image.write_to(&mut bytes, image::ImageFormat::Png);
+    bytes.into_inner()
+}
 pub(super) fn mode_name(root: &kv::Block, game_type: f64, game_mode: f64) -> &str {
     let Some(types) = root.block("gameTypes") else {
         return "";

@@ -24,6 +24,7 @@ mod art;
 mod cs2_config;
 mod dialog;
 mod desktop;
+mod desktop_ui;
 mod fileassoc;
 mod mapcmd;
 mod packcmd;
@@ -88,7 +89,7 @@ fn main() {
     if desktop::requested(&args) {
         dialog::hide_own_console();
         if let Err(e) = setup::prepare_data().and_then(|_| desktop::run(&args)) {
-            dialog::message("CSGO Rewrite Launcher", &e);
+            dialog::message(desktop::TITLE, &e);
             std::process::exit(1);
         }
         return;

@@ -67,9 +67,9 @@ wall penetration and multiplayer networking are still unfinished.
    artwork.
 
 The launcher checks for updates automatically; **Refresh** checks again.
-Downloads show progress. Choose **Apply update** or **Update & play** when
-ready. **Stable** is the default for friends; **Dev** gets changes from master
-after CI passes. The **Content packs** tab installs and removes private packs.
+Downloads show progress; when an update is ready, **Update & play** installs it
+and starts the game. **Stable** is the default for friends; **Dev** gets changes from master
+after CI passes. The **Content packs** page installs and removes private packs.
 Your progress is kept in
 `%LocalAppData%\CSGO-Rewrite\userdata` and survives updates. CS:GO files are
 never included; they are read from your own install. See

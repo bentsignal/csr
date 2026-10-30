@@ -253,6 +253,33 @@ mod tests {
         w.respawn(id);assert!(w.player(id).unwrap().equipped_mechanic.is_none());
     }
     #[test]
+    fn buy_menu_equips_a_pack_tool_through_the_authoritative_purchase(){
+        use crate::{BuyError, Purchase};
+        let (mut w,id)=world(false);
+        let key=crate::rules::mechanic_key("mod_mode_test");
+        assert_ne!(key,crate::rules::mechanic_key("mod_mode_other"));
+        assert_eq!(w.buy_cost(id,Purchase::Mechanic(key)),Err(BuyError::NotAllowedNow),"ordinary buy rules still apply");
+        w.mode=crate::GameMode::Special;
+        assert_eq!(w.buy_cost(id,Purchase::Mechanic(key^1)),Err(BuyError::Unknown));
+        let bot=w.add_bot("Bot",crate::Team::CounterTerrorist);
+        assert_eq!(w.buy_cost(bot,Purchase::Mechanic(key)),Err(BuyError::Unknown),"bots never receive pack tools");
+        let money=w.player(id).unwrap().money;
+        assert_eq!(w.buy_cost(id,Purchase::Mechanic(key)),Ok(0));
+        let mut replay=w.clone();
+        w.step(&[(id,TickInput{buy:Purchase::Mechanic(key),..Default::default()})]);
+        replay.step(&[(id,TickInput{buy:Purchase::Mechanic(key),..Default::default()})]);
+        assert_eq!(w.state_hash(),replay.state_hash());
+        let p=w.player(id).unwrap();
+        assert_eq!(p.equipped_mechanic.as_ref().map(|e|e.id.as_str()),Some("mod_mode_test"));
+        assert_eq!(p.money,money);
+        assert!(w.events.iter().any(|e|matches!(e,crate::GameEvent::Purchase{player,item:Purchase::Mechanic(k)} if *player==id && *k==key)));
+        assert_eq!(w.buy_cost(id,Purchase::Mechanic(key)),Err(BuyError::AlreadyOwned));
+        // The purchased tool is the ordinary inventory tool: one click rides.
+        w.step(&[(id,TickInput{buttons:buttons::ATTACK,..Default::default()})]);
+        assert!(w.player(id).unwrap().mechanic.is_some());
+        assert_eq!(w.buy_cost(id,Purchase::Mechanic(key)),Err(BuyError::AlreadyOwned),"already riding it");
+    }
+    #[test]
     fn held_fire_cannot_activate_a_newly_selected_tool_until_release(){
         let (mut w,id)=world(false);
         w.player_mut(id).unwrap().last_input.buttons=buttons::ATTACK;

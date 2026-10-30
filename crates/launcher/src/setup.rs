@@ -164,6 +164,16 @@ pub fn csgo_game_dir(picked: &Path) -> Result<PathBuf, String> {
     ))
 }
 
+/// The CS:GO Legacy game folder already known without asking: the saved
+/// choice, `CSR_GAME_DIR` or the Steam libraries. Never shows a dialog.
+pub fn known_game_dir(data: &Path) -> Option<PathBuf> {
+    read_paths(data)
+        .into_iter()
+        .find(|(k, _)| k == "csgo")
+        .and_then(|(_, v)| csgo_game_dir(Path::new(&v)).ok())
+        .or_else(vfs::find_csgo_dir)
+}
+
 fn read_paths(data: &Path) -> Vec<(String, String)> {
     std::fs::read_to_string(data.join(PATHS_FILE))
         .unwrap_or_default()
