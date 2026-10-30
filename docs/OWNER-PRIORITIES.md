@@ -16,6 +16,17 @@ packs. No Skate creator, runtime executable or built-in Skate course belongs
 in the base installer. Keep original assets private and retain GPL notices
 with the optional downloads. Finish through the normal Dev updater.
 
+### October 29: flat buy menu instead of the buy wheel
+
+Owner exception to the CS:GO-not-CS2 rule, for this layout only: replace the
+buy wheel with a flat 2D grid like Counter-Strike 2's buy menu, because it is
+easier to read and to extend with content-pack items. Do not adopt CS2
+loadouts: every item the team may buy under the current rules stays
+purchasable, laid out at once in category columns with one click (or the old
+two-key number scheme) to buy. Use only CS:GO Legacy art, strings, fonts and
+sounds read at runtime; no CS2 assets or files. Content packs get their own
+pages (tabs), starting with the Skate pack's skateboard.
+
 ## October 26: Skate crossover pivot
 
 ### October 28 follow-up: rideable transitions and bigger transfers

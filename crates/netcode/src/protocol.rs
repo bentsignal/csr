@@ -18,8 +18,9 @@ use sim::{GameEvent, PlayerId, Snapshot, Team, TickInput};
 // v37 retains a validated CS return placement with each movement mode.
 // v38 retains explicit transfer grounding, contacted audio material and native
 // trick/marker HUD state. Cosmetic PCM remains outside replicated snapshots.
-pub const VERSION: u32 = 38;
-pub const PROTOCOL_ID: u64 = 0x4353_5257_0000_0026;
+// v39 adds the buy-menu purchase of a pack inventory tool (Purchase::Mechanic).
+pub const VERSION: u32 = 39;
+pub const PROTOCOL_ID: u64 = 0x4353_5257_0000_0027;
 pub const CONTROL: u8 = 0;
 pub const INPUT: u8 = 1;
 pub const SNAPSHOT: u8 = 2;

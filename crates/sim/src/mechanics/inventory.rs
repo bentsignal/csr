@@ -33,11 +33,15 @@ pub(crate) fn cycle(player: &mut Player, modules: &[Arc<Module>], forward: bool,
         }
         return;
     }
+    equip(player, &tools[next - guns], time);
+}
+/// Puts a tool in hand, retaining the CS weapon. Refused mid-throw.
+pub(crate) fn equip(player: &mut Player, module: &Module, time: f32) -> bool {
     if player.active_weapon().is_some_and(|w| {
         w.grenade_throw
             .is_some_and(|s| s.phase == crate::utility::ThrowPhase::Throwing)
     }) {
-        return;
+        return false;
     }
     if let Some(w) = player.weapons.get_mut(player.active) {
         w.grenade_throw = None;
@@ -47,11 +51,12 @@ pub(crate) fn cycle(player: &mut Player, modules: &[Arc<Module>], forward: bool,
         w.reset_zoom(time);
     }
     player.equipped_mechanic = Some(Equipped {
-        id: tools[next - guns].id.clone(),
-        archive_hash:tools[next-guns].archive_hash.clone(),
+        id: module.id.clone(),
+        archive_hash: module.archive_hash.clone(),
         used: false,
     });
     player.plant_start = None;
+    true
 }
 pub(crate) fn use_equipped(
     player: &mut Player,

@@ -84,6 +84,13 @@ Historical map/symptom examples do not narrow an outcome's scope.**
   still read/translate CS2 config/keybinds; that narrow exception does not
   authorize CS2 assets/UI or leaked/SDK code. See
   [docs/PLAYTEST-2026-10-18.md](docs/PLAYTEST-2026-10-18.md).
+  **Owner exception (2026-10-29):** the in-game buy menu follows CS2's flat
+  2D grid layout instead of CS:GO's buy wheel (columns by category, every
+  purchasable item visible at once, one click to buy, extra pages for
+  content-pack items). CS2 loadout restrictions are not adopted: anything the
+  rules allow stays buyable. The menu still uses only CS:GO Legacy art,
+  strings, fonts and sounds read at runtime and our own layout code; this
+  covers that layout only, never CS2 assets, files or other CS2 UI.
 - **Friction is a bug.** Players may not be technical. Setup must feel like
   magic: install CS:GO Legacy on Steam, run our installer, play. No
   terminals, config files, manual copying or long setup. Anything a player
