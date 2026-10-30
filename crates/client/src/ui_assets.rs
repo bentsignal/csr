@@ -15,7 +15,7 @@ impl UiAssets {
 }
 
 /// VFONT1 wraps an sfnt font with a salted byte stream. Decode in memory only.
-fn decode_font(mut bytes: Vec<u8>) -> Option<Vec<u8>> {
+pub fn decode_font(mut bytes: Vec<u8>) -> Option<Vec<u8>> {
     let trailer = bytes.len().checked_sub(7)?;
     if &bytes[trailer + 1..] != b"VFONT1" { return None; }
     let salt_len = bytes[trailer] as usize;

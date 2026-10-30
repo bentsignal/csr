@@ -153,7 +153,9 @@ need not be perfect. Preserve clean-room boundaries, sim authority and owner dat
 - `cargo run --release -p launcher -- probe de_dust2` (expects `failures: 0`)
 - `cargo run --release -p launcher -- sim de_dust2` (expects `failures: 0`)
 - Visual changes: `csr play de_dust2 --screenshot shot.png --camera x y z pitch yaw`,
-  then look at the image. Menu work: compare against `docs/reference/` at
+  then look at the image. Desktop launcher: `CSR_LAUNCHER_FAKE=ready` (also
+  `checking|downloading|running|error|packs|installing|empty`) with
+  `CSR_LAUNCHER_SCREENSHOT=shot.png` and optionally `CSR_LAUNCHER_SCALE=1.5`. Menu work: compare against `docs/reference/` at
   the same resolution (1920x1080 for the home screen).
 - Audio: `cargo run -p launcher --example soundcheck` decodes every weapon
   sound (Bevy panics on undecodable audio).

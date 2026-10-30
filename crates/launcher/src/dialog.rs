@@ -29,6 +29,20 @@ pub fn ps_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "''"))
 }
 
+/// A native Open File dialog above other windows; `None` if cancelled.
+/// `filter` uses the Windows Forms syntax (`Name (*.ext)|*.ext`). Blocks
+/// the calling thread, so UI callers run it on a worker.
+pub fn pick_file(title: &str, filter: &str) -> Option<std::path::PathBuf> {
+    let script = format!(
+        "$d=New-Object System.Windows.Forms.OpenFileDialog; $d.Title={}; $d.Filter={}; \
+         $top=New-Object System.Windows.Forms.Form -Property @{{TopMost=$true}}; \
+         if($d.ShowDialog($top) -eq [System.Windows.Forms.DialogResult]::OK){{[Console]::Out.Write($d.FileName)}}",
+        ps_quote(title),
+        ps_quote(filter)
+    );
+    powershell(&script).filter(|p| !p.is_empty()).map(std::path::PathBuf::from)
+}
+
 /// A plain message with an OK button.
 pub fn message(title: &str, text: &str) {
     if choose(title, text, &["OK"]).is_none() {
