@@ -1,5 +1,33 @@
 # Current owner priorities
 
+## October 29 (later): usable menus, Counter-Strike Rust launcher
+
+Goal: something friends can install and use, ahead of multiplayer testing.
+Keep the original CS:GO look but make the menus work for this game:
+
+- PLAY opens one screen, not the matchmaking dropdown: offline matches with
+  bots on every implemented mode, content-pack maps/modes, play with friends
+  (host a private match) and the community server browser. No News, no
+  Workshop/Wingman/matchmaking/weapons-course entries that do not exist.
+  Keep Watch and Awards for now.
+- Remove home-made UI that is not original CS:GO (e.g. the bottom-right
+  content packs widget, Cancel buttons on the loading screen).
+- Menus must feel responsive; the classic menu was laggy.
+- Rebrand to Counter-Strike Rust (CSR): launcher without the native Windows
+  title bar, classy Counter-Strike styling (no turquoise, no taglines),
+  placeholder logo. Keep the Stable/Dev tracks and Update & play.
+- Next after this: multiplayer with friends and an easy self-hosting path
+  (own machine or cloud); decentralized server list, a few official servers
+  at most, no centralized competitive matchmaking.
+
+Landed: PLAY opens CS:GO's own mode-and-map panel with its tab buttons as
+Official Maps / Content Packs / Play with Friends / Server Browser; pack maps
+are tiles on Content Packs; Play with Friends opens the owned lobby (host);
+both panels are preloaded behind Home. Home hides News, banner, Steam
+friends, streams, missions and Overwatch. The launcher is a frameless Bevy
+window branded Counter-Strike Rust. Installer/Steam shortcut names and the
+`CSGORewrite` identity are unchanged so existing installs keep working.
+
 ## October 29: normal player entry and optional packs
 
 Start at the real home screen, including Dev builds. Keep F8 available for
