@@ -321,7 +321,7 @@ fn play_tabs(path: &str, source: crate::frontend_game::Source, packs_catalog: Va
     let tabs: [(&str, &str, f64, &str, &str, &str, &str); 4] = [
         ("TabDefaultBtn", "Official Maps", 110.0, "StartSinglePlayer", "CsrMapSource", "official", ""),
         ("TabWorkshopBtn", "Content Packs", 221.2, "StartSinglePlayer", "CsrMapSource", "packs", ""),
-        ("CsrTabFriends", "Play with Friends", 332.4, "MainMenu", "BasePanelRunCommand", "ShowJoinPartyUI:competitive", ""),
+        ("CsrTabFriends", "Play with Friends", 332.4, "MainMenu", "BasePanelRunCommand", "CsrPlayWithFriends", "bHidePanel"),
         ("CsrTabServers", "Server Browser", 443.6, "MainMenu", "BasePanelRunCommand", "OpenServerBrowser", "bHidePanel"),
     ];
     for (name, label, x, api, method, a0, a1) in tabs {
@@ -831,7 +831,9 @@ impl Engine for Bridge {
                 apply_home(calls);
                 // Load the play screen hidden behind Home: its shared map art
                 // takes seconds to import, so PLAY must not wait for it.
-                if self.requested.insert("StartSinglePlayer".into()) { calls.request_element("StartSinglePlayer"); }
+                for element in ["StartSinglePlayer", "LobbyScreen"] {
+                    if self.requested.insert(element.into()) { calls.request_element(element); }
+                }
             }
         }
         if method == "OnLoadFinished" && !object.starts_with("CScaleformComponent_") {
@@ -1013,11 +1015,26 @@ impl Engine for Bridge {
                     let mut lobby = self.lobby.lock().unwrap();
                     if lobby.begin(&data.game_modes) {
                         data.pause_surface.await_page("LobbyBrowser");
-                        self.push_action(Action::Notice(crate::frontend_lobby::ADDRESS_NOTICE.into()));
+
                         if data.movie_ready.contains("LobbyBrowser") {
                             if let Some(path) = self.roots.get("LobbyBrowser") { lobby.show_browser(path, &data.player_name, calls); }
                             data.pause_surface.page_ready("LobbyBrowser", calls.require_raster());
                         } else if self.requested.insert("LobbyBrowser".into()) { calls.request_element("LobbyBrowser"); }
+                    }
+                }
+                // The play screen's Play with Friends tab: straight into an owned
+                // lobby (map choice, then host). There is no Steam friends list,
+                // so the original lobby browser would only ever be empty.
+                "CsrPlayWithFriends" => {
+                    let mut data = self.data.lock().unwrap();
+                    if data.state != AppState::Menu { return None; }
+                    let mut lobby = self.lobby.lock().unwrap();
+                    if lobby.begin(&data.game_modes) && lobby.open_lobby() {
+                        data.pause_surface.await_page("LobbyScreen");
+                        if data.movie_ready.contains("LobbyScreen") {
+                            if let Some(path) = self.roots.get("LobbyScreen") { lobby.show(path, &data.player_name, calls); }
+                            data.pause_surface.page_ready("LobbyScreen", calls.require_raster());
+                        } else if self.requested.insert("LobbyScreen".into()) { calls.request_element("LobbyScreen"); }
                     }
                 }
                 "ShowLobbyUI" => {
@@ -2122,7 +2139,9 @@ pub(crate) fn update(
         // between the 55px navigation bar and 155px panels holds our notice.
         node.top = if owned_lobby_notice { percent(7) } else { Val::Auto };
         node.bottom = if owned_lobby_notice { Val::Auto } else { px(24.0) };
-        node.display = if !menu.classic_controls && (loading || (visible && !menu.status.is_empty())) {
+        // The original loading screen owns its status; only Home messages
+        // (e.g. a failed load) use this bar. Escape still cancels a load.
+        node.display = if !menu.classic_controls && !loading && visible && !menu.status.is_empty() {
             Display::Flex
         } else {
             Display::None
@@ -2136,11 +2155,7 @@ pub(crate) fn update(
         node.display = if radar_status { Display::None } else { Display::Flex };
     }
     if let Ok(mut node) = nodes.get_mut(front.cancel) {
-        node.display = if loading {
-            Display::Flex
-        } else {
-            Display::None
-        };
+        node.display = Display::None;
     }
     if let Ok(mut text) = texts.get_mut(front.notice_text) {
         text.0 = if loading {
@@ -2185,7 +2200,7 @@ pub(crate) fn update(
                         front.flow_observation = Some((id, properties.clone()));
                     }
                 }
-                if (std::env::var_os("CSR_UI_INSPECT").is_some() || std::env::var_os("CSR_TEST_CLICKS").is_some()) { info!("UI API {path}: {properties:?}") } else { debug!("UI API {path}: {properties:?}") }
+                if std::env::var_os("CSR_UI_INSPECT").is_some() || std::env::var_os("CSR_TEST_CLICKS").is_some() { info!("UI API {path}: {properties:?}") } else { debug!("UI API {path}: {properties:?}") }
             }
             None => break,
         }

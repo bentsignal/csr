@@ -385,25 +385,6 @@ pub(crate) fn add_pack_maps(root: &mut kv::Block, names: &[String]) {
     }
 }
 
-/// The catalog as presented for one source tab: official groups, or only
-/// content-pack groups. Launch validation always uses the full catalog.
-pub(crate) fn for_source(root: &kv::Block, source: Source) -> kv::Block {
-    let mut view = root.clone();
-    if let Some(types) = view.get_mut("gameTypes").and_then(kv::Value::as_block_mut) {
-        for (_, kind) in &mut types.entries {
-            let Some(modes) = kind.as_block_mut().and_then(|k| k.get_mut("gameModes")).and_then(kv::Value::as_block_mut) else { continue };
-            for (_, mode) in &mut modes.entries {
-                for field in ["mapgroupsSP", "mapgroupsMP"] {
-                    if let Some(groups) = mode.as_block_mut().and_then(|m| m.get_mut(field)).and_then(kv::Value::as_block_mut) {
-                        groups.entries.retain(|(name, _)| name.starts_with(PACK_GROUP) == (source == Source::Packs));
-                    }
-                }
-            }
-        }
-    }
-    view
-}
-
 
 /// Photo for a pack map without preview art: a dark slate card with a faint
 /// diagonal weave, matching the classic cards' neutral backing.

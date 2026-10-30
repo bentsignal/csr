@@ -370,7 +370,7 @@ pub fn run(opts: ClientOptions) -> i32 {
             .set(WindowPlugin {
                 close_when_requested: false,
                 primary_window: Some(Window {
-                    title: "CSGO Rewrite".into(),
+                    title: "Counter-Strike Rust".into(),
                     resolution,
                     mode: window_mode,
                     present_mode: input_latency::present_mode(video_settings.vsync),
