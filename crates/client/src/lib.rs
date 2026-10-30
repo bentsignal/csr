@@ -245,7 +245,7 @@ impl Plugin for CsgoPlugin {
             .add_observer(session::own_entity::<bevy::audio::AudioPlayer>)
             .insert_resource(Time::<Fixed>::from_hz(sim::DEFAULT_TICK_RATE as f64))
             .add_systems(Startup, (ui_assets::load, case_ui::setup, menu_scene::setup, menu::setup, frontend::setup, server_browser::setup, host_sharing_ui::setup).chain())
-            .add_systems(Update, (frontend::update, host_sharing_ui::update, pack_ui::update, server_browser::update, server_browser::input, server_browser::draw, pack_ui::scroll, pack_ui::draw, frontend::input, frontend::cancel_loading).chain())
+            .add_systems(Update, (frontend::update, host_sharing_ui::update, pack_ui::update, pack_ui::sync_play_maps, server_browser::update, server_browser::input, server_browser::draw, pack_ui::scroll, pack_ui::draw, frontend::input, frontend::cancel_loading).chain())
             .add_systems(Last, (hosting::gate_exit, host_sharing_ui::gate_exit, server_browser::gate_exit, pack_ui::gate_exit).chain().after(bevy::window::ExitSystems))
             .add_systems(Update, (menu::apply, audio::update, menu_music::update, menu_music::update_gain).chain().after(player::update_camera))
             .add_systems(Last, audio::prune)
@@ -402,6 +402,9 @@ pub fn run(opts: ClientOptions) -> i32 {
     input_latency::install_frame_log(&mut app);
     #[cfg(feature = "targeted-render-trace")]
     targeted_render_trace::install(&mut app);
+    if opts.screenshot.is_some() && std::env::var_os("CSR_TEST_CLICKS").is_some() {
+        app.add_systems(Update, frontend_flow::scripted_clicks.after(frontend::update));
+    }
     if frontend_flow::enabled() {
         if frontend_acceptance::enabled() {
             frontend_acceptance::install(&mut app);

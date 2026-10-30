@@ -96,6 +96,186 @@ _global.csrBindings.samplePauseSurface = function(owner, epoch, serial, pausePat
 
 // Our epoch labels identify stale owned-menu callbacks. Keep only the live
 // alias, without placing each reopen generation in the ordinary API cache.
+// Point a top-bar button straight at one panel command (e.g. PLAY opens the
+// play screen) instead of its original dropdown. Idempotent; re-applied
+// whenever the select panel is shown.
+_global.csrBindings.redirectButton = function(path, command) {
+    var button = _global.csrResolve(path);
+    if (button == undefined) {
+        return false;
+    }
+    button.Action = function() {
+        var select = _global.MainMenuMovie.Panel.SelectPanel;
+        if (select.CloseAnyOpenMenus != undefined) {
+            select.CloseAnyOpenMenus();
+        }
+        _global.csrApi("MainMenu").BasePanelRunCommand(command);
+    };
+    return true;
+};
+
+// Play screen tabs. Relabel/rebind an authored tab button (keeping its
+// original Action for the panel's own pane switch), or clone one so added
+// tabs share its exact art, fonts and states.
+_global.csrBindings.playTab = function(path, label, x, api, method, a0, a1) {
+    var b = _global.csrResolve(path);
+    if (b == undefined) {
+        return false;
+    }
+    if (b.csrOriginalAction == undefined) {
+        b.csrOriginalAction = b.Action;
+    }
+    // A duplicated button shares its source's text-box bookkeeping, so its
+    // authored SetText never settles; write its label field directly.
+    if (label != "" && b.csrClone == true && b.ButtonText.Text != undefined) {
+        b.ButtonText.Text.text = label;
+    } else if (label != "" && b.SetText != undefined) {
+        b.SetText(label);
+    }
+    if (x >= 0) {
+        b._x = x;
+    }
+    b.Action = function() {
+        // The panel's own (re)initialization selects tabs programmatically;
+        // while the host is setting it up, behave exactly like the original.
+        if (_global.csrBindings.playTabsBusy == true) {
+            if (this.csrOriginalAction != undefined) {
+                this.csrOriginalAction.call(this);
+            }
+            return;
+        }
+        var target = _global.csrApi(api);
+        if (a1 != undefined && a1 != "") {
+            target[method](a0, a1);
+        } else {
+            target[method](a0);
+        }
+    };
+    return true;
+};
+_global.csrBindings.cloneTab = function(sourcePath, name) {
+    var source = _global.csrResolve(sourcePath);
+    if (source == undefined) {
+        return false;
+    }
+    var parent = source._parent;
+    if (parent[name] == undefined) {
+        source.duplicateMovieClip(name, parent.getNextHighestDepth());
+        if (parent[name] != undefined) {
+            parent[name].csrClone = true;
+        }
+    }
+    return parent[name] != undefined;
+};
+_global.csrBindings.originalAction = function(path) {
+    var b = _global.csrResolve(path);
+    if (b == undefined || b.csrOriginalAction == undefined) {
+        return false;
+    }
+    b.csrOriginalAction.call(b);
+    return true;
+};
+// Re-read the (host-filtered) game modes catalog and rebuild the current
+// mode's tiles through the panel's own mode button.
+_global.csrBindings.filterMapSource = function(rootPath, packs, packCatalog) {
+    var root = _global.csrResolve(rootPath);
+    var p = root.Panel.Panel;
+    if (root == undefined || p == undefined || p.dialog.dialogData == undefined) {
+        return false;
+    }
+    var data = p.dialog.dialogData;
+    // Installed pack maps can arrive after the movie read its catalog; merge
+    // the host's current pack groups/maps (replacing any earlier set).
+    var packGroups = new Array();
+    if (packCatalog != undefined) {
+        for (var name in data.mapgroups) {
+            if (String(name).indexOf("mg_csrpack_") == 0) {
+                delete data.mapgroups[name];
+            }
+        }
+        for (var group in packCatalog.mapgroups) {
+            data.mapgroups[group] = packCatalog.mapgroups[group];
+            packGroups.push(String(group));
+        }
+        for (var map in packCatalog.maps) {
+            data.maps[map] = packCatalog.maps[map];
+        }
+    }
+    // Each mode's derived group table, keeping its full original order once.
+    var types = data.gameTypes;
+    for (var t in types) {
+        var modes = types[t].gameModes;
+        for (var m in modes) {
+            var groups = modes[m].activeMapGroups;
+            if (groups == undefined || groups.ordername == undefined) {
+                continue;
+            }
+            if (groups.csrAll == undefined) {
+                groups.csrAll = new Array();
+                var n = 0;
+                while (groups.ordername[n] != undefined) {
+                    if (String(groups.ordername[n]).indexOf("mg_csrpack_") != 0) {
+                        groups.csrAll.push(String(groups.ordername[n]));
+                    }
+                    n = n + 1;
+                }
+            }
+            if (packCatalog != undefined) {
+                var authored = new Array();
+                for (var a = 0; a < groups.csrAll.length; a++) {
+                    if (groups.csrAll[a].indexOf("mg_csrpack_") != 0) {
+                        authored.push(groups.csrAll[a]);
+                    }
+                }
+                groups.csrAll = authored;
+                // Packs offer their maps in both implemented modes.
+                if ((t == "classic" && m == "competitive") || (t == "gungame" && m == "deathmatch")) {
+                    for (var g = 0; g < packGroups.length; g++) {
+                        groups.csrAll.push(packGroups[g]);
+                    }
+                }
+            }
+            for (var key in groups) {
+                if (String(key).indexOf("mg_") == 0) {
+                    delete groups[key];
+                }
+            }
+            groups.order = new Array();
+            groups.ordername = new Array();
+            var index = 0;
+            for (var j = 0; j < groups.csrAll.length; j++) {
+                var name = groups.csrAll[j];
+                if ((name.indexOf("mg_csrpack_") == 0) == (packs == true)) {
+                    groups[name] = String(index);
+                    groups.order[index] = String(index);
+                    groups.ordername[index] = name;
+                    index = index + 1;
+                }
+            }
+        }
+    }
+    // Rebuild the current mode's tiles through its own button.
+    var mode = String(p.strCurrentPanelMode);
+    var button = p.ModeChooser.TabDefault["Mode" + mode.charAt(0).toUpperCase() + mode.substr(1)];
+    if (button == undefined) {
+        button = p.ModeChooser.TabDefault.ModeCompetitive;
+    }
+    if (button != undefined && button.Action != undefined) {
+        button.Action();
+    }
+    return true;
+};
+_global.csrBindings.selectTab = function(path, selected) {
+    var b = _global.csrResolve(path);
+    if (b == undefined) {
+        return false;
+    }
+    if (b.Selected != undefined) {
+        b.Selected._visible = selected;
+    }
+    return true;
+};
+
 _global.csrBindings.validOwnedName = function(name, prefix) {
     if (typeof name != "string" || name.indexOf(prefix) != 0) {
         return false;
@@ -555,8 +735,12 @@ if (_global.csrClassicAttachOriginal == undefined) {
 _global.csrClassicAttachOriginal = MovieClip.prototype.attachMovie;
 MovieClip.prototype.attachMovie = function(linkage, name, depth, init) {
     var parts = String(linkage).split("|");
-    if (parts.length != 3 || parts[0] != "csr-classic-card" ||
-        _global.csrClassicCardMaps[parts[1]] !== true ||
+    // Content-pack cards (`csr-pack-card|csrpack_<n>|base`) use the same
+    // neutral backing; a pack without a preview keeps it.
+    var pack = parts.length == 3 && parts[0] == "csr-pack-card" &&
+        parts[1].indexOf("csrpack_") == 0 && !isNaN(Number(parts[1].substr(8)));
+    if (parts.length != 3 || (!pack && (parts[0] != "csr-classic-card" ||
+        _global.csrClassicCardMaps[parts[1]] !== true)) ||
         parts[2].indexOf("map-") != 0 || parts[2].indexOf("-overall") != parts[2].length - 8) {
         return _global.csrClassicAttachOriginal.apply(this, arguments);
     }
@@ -577,7 +761,7 @@ MovieClip.prototype.attachMovie = function(linkage, name, depth, init) {
     holder.endFill();
     var photo = holder.createEmptyMovieClip("Image", 1);
     var context = {card: card, holder: holder, photo: photo, bounds: bounds,
-        width: width, height: height, attempts: 0, url: "img://classic-card/" + parts[1],
+        width: width, height: height, attempts: 0, url: (pack ? "img://pack-card/" : "img://classic-card/") + parts[1],
         loader: new MovieClipLoader()};
     card.csrArchivePhotoContext = context;
     context.retry = function() {

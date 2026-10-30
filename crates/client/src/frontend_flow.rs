@@ -418,3 +418,26 @@ pub(crate) fn update(
         _ => {}
     }
 }
+
+/// Screenshot-only scripted Home input: `CSR_TEST_CLICKS="secs:x,y;secs:@path"`
+/// clicks at 1920x1080 reference coordinates (or logs a clip's API with
+/// `@path`), timed from the Home movie's Ready.
+pub(crate) fn scripted_clicks(front: Res<Frontend>, window: Single<&Window>, mut state: Local<(Option<Instant>, usize)>) {
+    let Ok(script) = std::env::var("CSR_TEST_CLICKS") else { return };
+    if !front.home_bootstrapped() { return; }
+    let start = *state.0.get_or_insert_with(Instant::now);
+    let steps: Vec<(f64, &str)> = script.split(';').filter_map(|step| {
+        let (time, what) = step.split_once(':')?;
+        Some((time.trim().parse().ok()?, what.trim()))
+    }).collect();
+    while let Some(&(time, what)) = steps.get(state.1) {
+        if start.elapsed().as_secs_f64() < time { break; }
+        state.1 += 1;
+        if let Some(path) = what.strip_prefix('@') {
+            front.send(scaleform::Input::Inspect(path.into()));
+        } else if let Some((x, y)) = what.split_once(',').and_then(|(x, y)| Some((x.parse().ok()?, y.parse().ok()?))) {
+            info!("scripted click at ({x}, {y})");
+            click(&front, &window, x, y);
+        }
+    }
+}
