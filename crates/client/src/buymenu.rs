@@ -527,7 +527,8 @@ fn build(menu: &mut BuyMenu, b: &mut Builder, loc: &Localization, team: Team, im
     let root = b.node(None, (
         Node { position_type: PositionType::Absolute, width: percent(100), height: percent(100), flex_direction: FlexDirection::Column, align_items: AlignItems::Center, ..default() },
         BackgroundColor(BACKDROP),
-        GlobalZIndex(30),
+        // Above the classic combat HUD (90), below the pause menu (100).
+        GlobalZIndex(95),
     ));
     let content = b.node(Some(root), Node { width: b.px(CONTENT_WIDTH), flex_direction: FlexDirection::Column, padding: UiRect::top(b.px(44.0)), ..default() });
 

@@ -825,7 +825,14 @@ impl Engine for Bridge {
             let mut data = self.data.lock().unwrap();
             if object == "MainMenu" && data.home_retired { return Some(Value::Undefined); }
             data.movie_ready.insert(object.into());
-            if object == "MainMenu" { data.home_bootstrapped = true; drop(data); apply_home(calls); }
+            if object == "MainMenu" {
+                data.home_bootstrapped = true;
+                drop(data);
+                apply_home(calls);
+                // Load the play screen hidden behind Home: its shared map art
+                // takes seconds to import, so PLAY must not wait for it.
+                if self.requested.insert("StartSinglePlayer".into()) { calls.request_element("StartSinglePlayer"); }
+            }
         }
         if method == "OnLoadFinished" && !object.starts_with("CScaleformComponent_") {
             self.data.lock().unwrap().movie_ready.remove(object);
